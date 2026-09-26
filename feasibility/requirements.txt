@@ -1,0 +1,7 @@
+# SandboxAI feasibility test - Python 3.11
+# On Windows with RTX 4060 Ti, install torch with CUDA first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+godot-rl==0.8.2
+stable-baselines3>=2.3,<3
+gymnasium>=0.29
+psutil
