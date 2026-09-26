@@ -131,6 +131,10 @@ source and reproduced in the CI sandbox:
 - `feasibility/godot_overlays/` (new): export presets for FPS and
   VirtualCamera (Windows `.exe` + Linux `.x86_64`, embedded PCK) and the
   VirtualCamera 84x84 camera (SubViewport 36x36 → 84x84, obs shape [3,84,84]).
+  The VirtualCamera presets also exclude the orphan `Model.tscn`, which
+  references `res://90s_dad/scene.gltf` — a file never committed upstream
+  (VERIFIED: nothing references `Model.tscn`; without the exclusion every
+  export logs a resource-not-found error).
 - `feasibility/export_envs.py` (new): runs the required two-pass headless
   import and exports `build\fps_windows.exe` / `build\virtualcamera_windows.exe`
   (the launchable RL environments godot-rl expects). Auto-finds the Godot
@@ -149,9 +153,11 @@ source and reproduced in the CI sandbox:
 
 ### MEASURED results
 
-CI sandbox (Debian 12, 2 weak vCPUs, **no GPU**; Godot 4.3 built from source
-at the same commit `77dcf97d8` — headless editor binary, OpenXR disabled;
-slower than official builds, treat as a lower bound; NOT the target machine):
+All rows MEASURED in the CI sandbox (Debian 12, 2 weak vCPUs, **no GPU**;
+Godot 4.3 built from source at the same commit as official 4.3-stable,
+`77dcf97d8`, OpenXR disabled) — a lower bound, NOT the target machine.
+
+Editor-binary runs (project run through the editor binary via wrapper):
 
 | Test | steps/sec | notes |
 |---|---|---|
@@ -159,12 +165,18 @@ slower than official builds, treat as a lower bound; NOT the target machine):
 | FPS raycast, 2 instances (16 agents) | 483 total / 241 per inst | RSS 284 MB, ~1.9x scaling |
 | PPO 28,672 steps, 2 instances | 393 incl. learner (SB3 fps ~398) | 73 s, MultiInputPolicy, saved to logs/ |
 
+Exported-binary runs (release template build — **the canonical reference**,
+this is the exact launch path Windows uses):
+
+| Test (exported binary) | steps/sec | notes |
+|---|---|---|
+| FPS raycast, 1 instance (8 agents) | 299 total / 37 calls | Godot RSS 118 MB |
+| FPS raycast, 2 instances (16 agents) | 464 total / 232 per inst | RSS 235 MB |
+| PPO 28,672 steps, 2 instances | 480 incl. learner (~490 SB3 fps) | 60 s |
+| VirtualCamera 84x84, connection + obs space | n/a (pixels need GPU) | connects; `obs = Dict('camera_2d': Box(0,255,(3,84,84),uint8))`, 16 agents/instance |
+
 Previous-session numbers from the same sandbox class (246 / 471 / ~410 fps,
 ~140 MB per instance, ~580 MB Python side) are consistent with the above.
-
-PENDING (this session, exported-binary runs — see `feasibility/README.md`
-results table): FPS raycast + PPO against the **exported** Linux binary, which
-is the exact launch path the Windows machine will use.
 
 ### NOT yet measured (UNKNOWN — the current next step)
 - **All Windows / RTX 4060 Ti numbers.** The owner must run Tests A-C on the

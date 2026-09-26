@@ -68,6 +68,11 @@ def head_sha(path: Path) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
+def have_commit(path: Path, sha: str) -> bool:
+    proc = run_git(["cat-file", "-e", f"{sha}^{{commit}}"], cwd=path, check=False)
+    return proc.returncode == 0
+
+
 def clone_pinned() -> None:
     print(f"cloning {REPO_URL} at pinned commit {PINNED_SHA[:12]} ...")
     run_git(["clone", "--no-checkout", REPO_URL, str(DEST)])
@@ -124,9 +129,18 @@ def main() -> None:
     else:
         sha = head_sha(DEST)
         if sha != PINNED_SHA:
-            print(f"examples checkout is at {sha}, fetching pinned {PINNED_SHA[:12]} ...")
-            run_git(["fetch", "origin", PINNED_SHA], cwd=DEST)
-            run_git(["checkout", PINNED_SHA], cwd=DEST)
+            print(f"examples checkout is at {sha}, syncing to pinned {PINNED_SHA[:12]} ...")
+            if not have_commit(DEST, PINNED_SHA):
+                # The pinned SHA is an ancestor of upstream main; fetching
+                # the default branch makes it available. (GitHub does not
+                # serve `git fetch origin <sha>` directly.)
+                run_git(["fetch", "origin"], cwd=DEST)
+                if not have_commit(DEST, PINNED_SHA):
+                    # shallow clone? complete the history first
+                    run_git(["fetch", "--unshallow", "origin"], cwd=DEST, check=False)
+            # --force discards local edits inside the third-party clone;
+            # the SandboxAI overlay is re-applied deterministically below.
+            run_git(["checkout", "--force", PINNED_SHA], cwd=DEST)
         else:
             print("examples already at pinned commit.")
 

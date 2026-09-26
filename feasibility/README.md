@@ -128,8 +128,9 @@ high port: `--port 51008` (upstream issue #225).
 ## Results
 
 MEASURED values only — no estimates in this table. "CI sandbox" = Debian 12,
-2 vCPU, no GPU, Godot 4.3 built from source (headless, OpenXR disabled —
-slower than official builds, treat as a lower bound).
+2 vCPU, no GPU, Godot 4.3 built from source at the same commit as the official
+4.3-stable release (`77dcf97d8`; headless editor + release template, OpenXR
+disabled) — treat as a lower bound, NOT the target machine.
 
 | Test | Machine | steps/sec | notes |
 |---|---|---|---|
@@ -139,10 +140,10 @@ slower than official builds, treat as a lower bound).
 | FPS raycast, 1 instance (8 agents), editor-run | CI sandbox (this session) | 255 total / 32 calls | Godot RSS 141 MB |
 | FPS raycast, 2 instances (16 agents), editor-run | CI sandbox (this session) | 483 total / 241 per inst | RSS 284 MB combined |
 | PPO raycast, 28,672 steps, 2 instances, editor-run | CI sandbox (this session) | 393 incl. learner (SB3 fps ~398) | 73 s; model saved to logs/ |
-| FPS raycast, 1 instance, exported binary | CI sandbox (this session) | *fill in* | |
-| FPS raycast, 2 instances, exported binary | CI sandbox (this session) | *fill in* | |
-| PPO raycast, exported binary | CI sandbox (this session) | *fill in* | |
-| VirtualCamera 84x84, headless (no --viz) | CI sandbox (this session) | fails by design | `get_data` on null texture — rendering must stay enabled |
+| FPS raycast, 1 instance (8 agents), exported binary | CI sandbox (this session) | 299 total / 37 calls | Godot RSS 118 MB |
+| FPS raycast, 2 instances (16 agents), exported binary | CI sandbox (this session) | 464 total / 232 per inst | RSS 235 MB combined |
+| PPO raycast, 28,672 steps, 2 instances, exported binary | CI sandbox (this session) | 480 incl. learner (SB3 fps ~490) | 60 s; model saved to logs/ |
+| VirtualCamera 84x84, exported binary, headless (no --viz) | CI sandbox (this session) | connects, obs verified | `obs=Dict('camera_2d': Box(0,255,(3,84,84),uint8))`, 16 agents/instance; pixel capture fails under the dummy renderer (`texture_2d_get` null) — by design, rendering must stay enabled |
 | VirtualCamera 84x84 | CI sandbox | not possible | no GPU/GL — must run on the 4060 Ti |
 | FPS raycast, 1 instance | Windows 4060 Ti | *fill in* | |
 | FPS raycast, 4 instances | Windows 4060 Ti | *fill in* | |
