@@ -1,7 +1,14 @@
-# SandboxAI feasibility test - Python 3.11
-# On Windows with RTX 4060 Ti, install torch with CUDA first:
+# SandboxAI feasibility test - Python 3.11 (pinned, verified combination)
+#
+# On Windows with the RTX 4060 Ti, install PyTorch with CUDA FIRST and
+# separately (it comes from a different package index):
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# (verified with torch 2.6.0+cu124 on Windows; the Linux CI sandbox used a
+#  CPU-only torch - the godot-rl bridge itself is torch-version agnostic)
+#
+# Godot 4.3-stable is also required (single .exe, no install):
+#   https://github.com/godotengine/godot/releases/tag/4.3-stable
 godot-rl==0.8.2
-stable-baselines3>=2.3,<3
-gymnasium>=0.29
-psutil
+stable-baselines3==2.4.0
+gymnasium==1.0.0
+psutil>=5.9

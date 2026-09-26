@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import os
 import time
 
 from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
@@ -19,6 +20,8 @@ def main() -> None:
     p.add_argument("--timesteps", type=int, default=50_000)
     p.add_argument("--n_parallel", type=int, default=1)
     p.add_argument("--speedup", type=int, default=30)
+    p.add_argument("--port", type=int, default=11008,
+                   help="base TCP port (use e.g. 51008 if Windows blocks low ports)")
     p.add_argument("--viz", action="store_true")
     args = p.parse_args()
 
@@ -28,6 +31,7 @@ def main() -> None:
             n_parallel=args.n_parallel,
             show_window=args.viz,
             speedup=args.speedup,
+            port=args.port,
         )
     )
 
