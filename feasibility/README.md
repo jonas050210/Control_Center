@@ -46,6 +46,18 @@ examples commit.
 
 ## Setup (one-time, Windows 11)
 
+Preferred: the bootstrap script does everything below (venv, torch cu124,
+pinned requirements, pinned examples clone + overlay, Godot 4.3 export
+template download/install, import + export). Safe to re-run, skips what is
+already done; `-SkipTemplates` skips the ~1.2 GB template download:
+
+```powershell
+cd <repo>
+powershell -ExecutionPolicy Bypass -File setup_windows.ps1
+```
+
+Manual equivalent:
+
 ```powershell
 cd <repo>
 py -3.11 -m venv .venv
@@ -56,7 +68,8 @@ pip install -r feasibility\requirements.txt
 # Godot 4.3 single exe already in repo root (Godot_v4.3-stable_win64.exe /
 # Godot_v4.3-stable_win64_console.exe). Export templates must be installed
 # ONCE: start the editor -> Editor / Manage Export Templates... ->
-# Download and Install (4.3.stable official).
+# Download and Install (4.3.stable official). (setup_windows.ps1 does this
+# automatically.)
 
 # clone the pinned examples + apply SandboxAI overlay (export presets, 84x84 camera):
 python feasibility\setup_examples.py
@@ -69,7 +82,8 @@ and must not be used with 4.3). It then copies `feasibility/godot_overlays/`
 over the checkout:
 
 - `examples/FPS/export_presets.cfg` (new) — Windows + Linux export presets
-- `examples/VirtualCamera/export_presets.cfg` (new) — same
+- `examples/VirtualCamera/export_presets.cfg` (new) — same (also excludes
+  the orphan `Model.tscn` upstream artifact)
 - `examples/VirtualCamera/VirtualCamera.tscn` — SubViewport 36x36 -> **84x84**
 
 ## Export the environments
@@ -87,6 +101,17 @@ what broke the first manual attempt) and then exports:
 - `build\fps_windows.exe` (Test A/B: raycast observations, 8 agents)
 - `build\virtualcamera_windows.exe` (Test C: 84x84 RGB camera observations)
 
+Notes on robustness (implemented, VERIFIED in the CI sandbox):
+
+- The benchmark/training scripts check the required TCP ports BEFORE
+  launching any game and exit with a clear message (including the
+  `--port 51008` fallback) if a port is taken.
+- All scripts clean up game processes on every exit path (normal, Ctrl+C,
+  exceptions). Even a hard kill of Python leaves nothing behind (the game
+  detects the disconnect and quits itself).
+- `--env_path` and model/log output paths resolve relative to the repo
+  root, so the documented commands work from any working directory.
+
 ## Test A — raycast benchmark (no rendering needed)
 
 ```powershell
@@ -95,8 +120,8 @@ python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 3
 ```
 
 Measures: total env steps/sec (8 agents per instance), Python-side step
-calls/sec, per-instance throughput, system RAM, Godot process RSS, GPU VRAM
-(via `nvidia-smi`, when present).
+calls/sec, per-instance throughput, system RAM, Godot process RSS, GPU name
+and VRAM (via `nvidia-smi` — present automatically with the NVIDIA driver).
 
 ## Test B — short PPO training (SB3, MultiInputPolicy)
 
@@ -152,6 +177,14 @@ disabled) — treat as a lower bound, NOT the target machine.
 
 RAM in the CI sandbox (previous session): ~140 MB per headless Godot FPS
 instance, ~580 MB Python/SB3 side.
+
+The exported-binary rows are the canonical reference (exact Windows launch
+path). All CI-sandbox numbers are CPU-bound lockstep measurements on 2 weak
+vCPUs with no GPU; the Windows machine should be several times faster per
+instance — do not extrapolate, measure. Re-verified after the hardening pass
+(fresh `build/`, fresh `logs/`): 311 steps/s (1 instance), 563 steps/s
+(2 instances), PPO 8,192 steps at 483 steps/s incl. learner — consistent
+with the table within run-to-run noise.
 
 ## Linux dev note (not needed on Windows)
 

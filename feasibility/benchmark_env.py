@@ -3,7 +3,7 @@
 Connects to an exported godot_rl_agents environment, sends random actions and
 measures environment steps/sec, RAM and (if nvidia-smi is present) VRAM.
 
-Usage (from the repo root, venv active):
+Usage (repo root, venv active; also works from other directories):
   python feasibility/benchmark_env.py --env_path build\\fps_windows.exe
   python feasibility/benchmark_env.py --env_path build\\fps_windows.exe --n_parallel 4
   python feasibility/benchmark_env.py --env_path build\\virtualcamera_windows.exe --viz
@@ -17,6 +17,9 @@ Usage (from the repo root, venv active):
   --viz keeps the game window visible - REQUIRED for pixel observations
   (RGBCameraSensor3D) because godot-rl otherwise passes --headless
   --disable-render-loop, which disables rendering entirely.
+
+  GPU name / VRAM reporting requires nvidia-smi on PATH (installed with
+  the NVIDIA driver). Ports used: --port .. --port+n_parallel-1.
 """
 
 import argparse
@@ -28,6 +31,8 @@ import numpy as np
 import psutil
 
 from godot_rl.wrappers.stable_baselines_wrapper import StableBaselinesGodotEnv
+
+from gdrl_common import check_ports_free, kill_env_processes, resolve_env_path
 
 
 def gpu_mem_mb() -> tuple[float | None, str | None]:
@@ -71,54 +76,70 @@ def main() -> None:
     p.add_argument("--viz", action="store_true", help="show the game window (required for pixel obs)")
     args = p.parse_args()
 
-    env = StableBaselinesGodotEnv(
-        env_path=args.env_path,
-        n_parallel=args.n_parallel,
-        show_window=args.viz,
-        speedup=args.speedup,
-        port=args.port,
-    )
-    n = env.num_envs
-    print(f"connected: num_envs={n} (agents x instances), obs_space={env.observation_space}")
+    env_path = resolve_env_path(args.env_path)
+    check_ports_free(args.port, args.n_parallel)
 
-    action_space = env.envs[0].action_space
+    try:
+        env = StableBaselinesGodotEnv(
+            env_path=env_path,
+            n_parallel=args.n_parallel,
+            show_window=args.viz,
+            speedup=args.speedup,
+            port=args.port,
+        )
+    except Exception:
+        kill_env_processes(env_path)
+        raise
 
-    def random_actions():
-        return np.stack([action_space.sample() for _ in range(n)])
+    try:
+        n = env.num_envs
+        print(f"connected: num_envs={n} (agents x instances), obs_space={env.observation_space}")
 
-    # warmup
-    for _ in range(10):
-        env.step(random_actions())
+        action_space = env.envs[0].action_space
 
-    vram, gpu_name = gpu_mem_mb()
-    ram0 = psutil.virtual_memory().used / 1e6
-    gram0 = godot_ram_mb(env)
-    steps = 0
-    t0 = time.perf_counter()
-    while time.perf_counter() - t0 < args.seconds:
-        env.step(random_actions())
-        steps += n
-    dt = time.perf_counter() - t0
+        def random_actions():
+            return np.stack([action_space.sample() for _ in range(n)])
 
-    ram1 = psutil.virtual_memory().used / 1e6
-    gram1 = godot_ram_mb(env)
-    vram1, _ = gpu_mem_mb()
-    print("-" * 60)
-    print(f"instances (godot processes):        {args.n_parallel}")
-    print(f"agents per instance:                {n // args.n_parallel}")
-    print(f"env steps/sec (total, all agents):  {steps / dt:,.0f}")
-    print(f"python-side step calls/sec:         {steps / n / dt:,.0f}")
-    print(f"env steps/sec per instance:         {steps / args.n_parallel / dt:,.0f}")
-    print(f"system RAM used during run:         {ram1:,.0f} MB (delta {ram1 - ram0:+,.0f} MB)")
-    if gram1 is not None:
-        base = f" (delta {gram1 - (gram0 or gram1):+,.0f} MB)" if gram0 is not None else ""
-        print(f"godot process(es) RSS:              {gram1:,.0f} MB{base}")
-    if gpu_name is not None:
-        print(f"gpu:                                {gpu_name}")
-    if vram1 is not None:
-        print(f"GPU VRAM used:                      {vram1:,.0f} MB (start of run {vram:,.0f} MB)")
-    print("-" * 60)
-    env.close()
+        # warmup
+        for _ in range(10):
+            env.step(random_actions())
+
+        vram, gpu_name = gpu_mem_mb()
+        ram0 = psutil.virtual_memory().used / 1e6
+        gram0 = godot_ram_mb(env)
+        steps = 0
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < args.seconds:
+            env.step(random_actions())
+            steps += n
+        dt = time.perf_counter() - t0
+
+        ram1 = psutil.virtual_memory().used / 1e6
+        gram1 = godot_ram_mb(env)
+        vram1, _ = gpu_mem_mb()
+        print("-" * 60)
+        print(f"instances (godot processes):        {args.n_parallel}")
+        print(f"agents per instance:                {n // args.n_parallel}")
+        print(f"env steps/sec (total, all agents):  {steps / dt:,.0f}")
+        print(f"python-side step calls/sec:         {steps / n / dt:,.0f}")
+        print(f"env steps/sec per instance:         {steps / args.n_parallel / dt:,.0f}")
+        print(f"system RAM used during run:         {ram1:,.0f} MB (delta {ram1 - ram0:+,.0f} MB)")
+        if gram1 is not None:
+            base = f" (delta {gram1 - (gram0 or gram1):+,.0f} MB)" if gram0 is not None else ""
+            print(f"godot process(es) RSS:              {gram1:,.0f} MB{base}")
+        if gpu_name is not None:
+            print(f"gpu:                                {gpu_name}")
+        if vram1 is not None:
+            print(f"GPU VRAM used:                      {vram1:,.0f} MB (start of run {vram:,.0f} MB)")
+        print("-" * 60)
+    finally:
+        # close the connection, then make sure no game process is left over
+        # (covers normal exit, Ctrl+C and mid-run exceptions)
+        try:
+            env.close()
+        except Exception:
+            pass
+        kill_env_processes(env_path)
 
 
 if __name__ == "__main__":

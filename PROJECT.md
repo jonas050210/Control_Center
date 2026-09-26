@@ -5,8 +5,8 @@
 > keep results labeled VERIFIED / MEASURED / ESTIMATED / UNKNOWN and never
 > invent measurements.
 
-Last updated: 2026-09-26 (after Windows-launch fix + re-verification of the M0
-feasibility kit).
+Last updated: 2026-09-26 (M0 hardening pass: bootstrap script, process
+cleanup, port pre-check, fresh-clone bug fixes; see section 5).
 
 ## 1. What this project is
 
@@ -151,6 +151,34 @@ source and reproduced in the CI sandbox:
 - Removed the broken `run_fps.bat` guidance from the docs (a `.bat` can never
   satisfy godot-rl on Windows).
 
+### Hardening pass (this session, all VERIFIED by tests in the CI sandbox)
+
+- `setup_windows.ps1` (repo root, new): one-command Windows bootstrap —
+  checks `py -3.11`, creates `.venv`, installs torch cu124 (only if missing)
+  + pinned requirements, runs `setup_examples.py`, downloads and installs
+  the Godot 4.3 export templates automatically (skippable with
+  `-SkipTemplates`), then runs `export_envs.py`. Safe to re-run.
+- `feasibility/gdrl_common.py` (new): shared helpers —
+  `check_ports_free()` fails fast (with the `--port 51008` hint) BEFORE any
+  game process is launched (previously a blocked port left orphaned game
+  processes); `kill_env_processes()` safety net that terminates leftover
+  game processes (matched precisely: process name == env exe, or an
+  interpreter running exactly that script file — never matches a process
+  that merely mentions the path, e.g. our own `--env_path`); and
+  `resolve_env_path()` so the documented commands work from any cwd.
+- `benchmark_env.py` / `train_ppo.py`: try/finally cleanup on every exit
+  path (normal, Ctrl+C, exceptions); model now saved to
+  `<repo>/logs/ppo_feasibility.zip` regardless of cwd — this fixed a real
+  fresh-clone crash (`model.save("logs/...")` with no `logs/` directory),
+  which an earlier edit had silently failed to persist.
+- `export_envs.py`: `build/` is created automatically, explicit errors for
+  bad `--godot`/`GODOT_BIN` paths, friendly timeout handling.
+- Process-cleanup verification (CI sandbox): port occupied → clean error,
+  zero leaked processes; env that never connects (the original Windows
+  failure mode) → exception re-raised + full process tree killed; SIGINT
+  mid-run → clean close; even a hard SIGKILL of Python leaves nothing
+  behind (the game detects the disconnect and quits on its own).
+
 ### MEASURED results
 
 All rows MEASURED in the CI sandbox (Debian 12, 2 weak vCPUs, **no GPU**;
@@ -207,18 +235,20 @@ Previous-session numbers from the same sandbox class (246 / 471 / ~410 fps,
 
 ```
 PROJECT.md                    <- this file (single source of truth)
-README.md                     <- stub
-.gitignore                    <- excludes .venv/, tools/, examples/, logs/, build/
+README.md                     <- short overview + quickstart
+setup_windows.ps1             <- ONE-COMMAND Windows bootstrap (fresh clone -> exported envs)
+.gitignore                    <- excludes .venv/, tools/, /examples/, logs/, build/
 feasibility/
   README.md                   <- RUNBOOK: setup + Tests A/B/C + results table
   requirements.txt            <- pinned Python deps (Python 3.11)
+  gdrl_common.py              <- shared helpers (port pre-check, process cleanup, path resolution)
   setup_examples.py           <- clone pinned examples + apply overlay
   export_envs.py              <- headless import + export env executables
   benchmark_env.py            <- env steps/sec + RAM/VRAM benchmark
   train_ppo.py                <- short SB3 PPO training run
   godot_overlays/examples/    <- files copied over the examples clone:
         FPS/export_presets.cfg          (Windows + Linux export presets)
-        VirtualCamera/export_presets.cfg
+        VirtualCamera/export_presets.cfg (also excludes the orphan Model.tscn)
         VirtualCamera/VirtualCamera.tscn (SubViewport 36x36 -> 84x84)
 ```
 
@@ -228,18 +258,17 @@ clone of godot_rl_agents_examples), `build/` (exported env binaries),
 
 ## 7. Exact commands (Windows 11, from the repo root)
 
-One-time setup:
+One-time setup — single command from a fresh clone:
 
 ```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\activate
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-pip install -r feasibility\requirements.txt
-# Export templates, once: start Godot_v4.3-stable_win64.exe ->
-#   Editor / Manage Export Templates... -> Download and Install (4.3.stable)
-python feasibility\setup_examples.py
-python feasibility\export_envs.py
+powershell -ExecutionPolicy Bypass -File setup_windows.ps1
 ```
+
+(equivalent manual steps: `py -3.11 -m venv .venv` → activate →
+`pip install torch --index-url https://download.pytorch.org/whl/cu124` →
+`pip install -r feasibility\requirements.txt` → install Godot 4.3 export
+templates via the editor → `python feasibility\setup_examples.py` →
+`python feasibility\export_envs.py`)
 
 Test A — raycast benchmark (FPS example, 8 agents/instance):
 
@@ -302,12 +331,13 @@ python feasibility\train_ppo.py --env_path build\virtualcamera_windows.exe --viz
 
 ## 11. For the next AI session
 
-- **State**: The feasibility kit is complete and re-verified on Linux,
-  including the export pipeline. The Windows runbook (`feasibility/README.md`)
-  is ready. Windows numbers are still UNKNOWN.
-- **Immediate task**: the owner runs Tests A-C on the Windows 11 / RTX 4060 Ti
-  machine with the exact commands in section 7 and fills in the results table
-  in `feasibility/README.md`.
+- **State**: M0 is complete and hardened. Fresh-clone flow validated
+  end-to-end in the CI sandbox (setup → import → export → benchmark → PPO),
+  including process-cleanup and port-conflict edge cases. The Windows
+  bootstrap (`setup_windows.ps1`) is ready. Windows numbers UNKNOWN.
+- **Immediate task**: the owner runs `setup_windows.ps1` once, then Tests
+  A-C on the Windows 11 / RTX 4060 Ti machine with the exact commands in
+  section 7 and fills in the results table in `feasibility/README.md`.
 - **Then**: with real numbers, decide pixel-RL vs hybrid-obs strategy and
   green-light M1 (minimal greybox sandbox env in Godot).
 - **Don'ts**: don't build the full TTK-inspired sandbox yet; don't add

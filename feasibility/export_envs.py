@@ -7,7 +7,7 @@ an `.exe` that CreateProcess can execute - a renamed .bat does NOT work).
 This script produces those binaries with the Godot 4.3 export presets that
 `feasibility/setup_examples.py` copied into the example projects:
 
-  fps           -> build/fps_windows.exe          (Test A/B: raycast + PPO)
+  fps           -> build/fps_windows.exe           (Test A/B: raycast + PPO)
   virtualcamera -> build/virtualcamera_windows.exe (Test C: 84x84 pixels)
 
 Usage (from the repo root, with the venv active):
@@ -16,13 +16,18 @@ Usage (from the repo root, with the venv active):
   python feasibility/export_envs.py --platform windows       # force platform
   python feasibility/export_envs.py --import-only            # no export (dev)
 
+On Windows, `setup_windows.ps1` (repo root) runs this for you as the last
+step of the one-command bootstrap.
+
 Godot binary resolution order:
   --godot <path>  >  GODOT_BIN env var  >  Godot exe in the repo root.
 
 Export templates must be installed ONCE per machine (any Godot 4.3):
-  open the editor -> Editor/Manage Export Templates... -> Download and Install
-  (or place them in %APPDATA%\\Godot\\export_templates\\4.3.stable\\ on Windows,
-   ~/.local/share/godot/export_templates/4.3.stable/ on Linux).
+  - automatic:  run setup_windows.ps1 (downloads + installs them), or
+  - manually:   open the editor -> Editor/Manage Export Templates... ->
+                Download and Install (4.3.stable official)
+  (installed location: %APPDATA%\\Godot\\export_templates\\4.3.stable\\ on
+   Windows, ~/.local/share/godot/export_templates/4.3.stable/ on Linux).
 """
 
 from __future__ import annotations
@@ -58,15 +63,24 @@ GODOT_NAMES = [
 
 
 def find_godot(explicit: str | None) -> Path:
-    candidates: list[Path] = []
-    if explicit:
-        candidates.append(Path(explicit))
-    if os.environ.get("GODOT_BIN"):
-        candidates.append(Path(os.environ["GODOT_BIN"]))
-    candidates += [ROOT / n for n in GODOT_NAMES]
-    for c in candidates:
-        if c.is_file():
-            return c.resolve()
+    def resolve_or_error(candidate: str | None, what: str) -> Path | None:
+        if not candidate:
+            return None
+        p = Path(candidate)
+        if p.is_file():
+            return p.resolve()
+        sys.exit(f"ERROR: {what} points to a non-existent file: {candidate}")
+
+    godot = (
+        resolve_or_error(explicit, "--godot")
+        or resolve_or_error(os.environ.get("GODOT_BIN"), "GODOT_BIN")
+    )
+    if godot:
+        return godot
+    for name in GODOT_NAMES:
+        p = ROOT / name
+        if p.is_file():
+            return p.resolve()
     sys.exit(
         "Could not find a Godot 4.3 executable.\n"
         "Pass --godot <path> or set GODOT_BIN, or place one of these in the repo root:\n  "
@@ -78,7 +92,13 @@ def run_godot(godot: Path, args: list[str], timeout: int = 900) -> subprocess.Co
     cmd = [str(godot), "--headless", *args]
     print(f"+ {' '.join(cmd)}")
     t0 = time.perf_counter()
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        sys.exit(
+            f"Godot did not finish within {timeout}s for:\n  {' '.join(cmd)}\n"
+            "This is unexpected for import/export; check antivirus interference or a hung editor process."
+        )
     dt = time.perf_counter() - t0
     out = (proc.stdout + "\n" + proc.stderr).strip()
     if out:
@@ -102,14 +122,16 @@ def import_project(godot: Path, project: Path) -> None:
 
 def export_project(godot: Path, project: Path, preset: str, out_name: str) -> Path:
     out_path = BUILD / out_name
+    BUILD.mkdir(parents=True, exist_ok=True)
     print(f'\n== exporting {project.name} [{preset}] -> {out_path} ==')
     proc = run_godot(godot, ["--path", str(project), "--export-release", preset, str(out_path)])
     out = (proc.stdout + "\n" + proc.stderr).lower()
     if "no export template found" in out:
         sys.exit(
             "Export templates for Godot 4.3 are not installed.\n"
-            "Fix: open the Godot editor once -> Editor/Manage Export Templates... -> "
-            "Download and Install (4.3.stable), then re-run this script."
+            "Fix: run setup_windows.ps1 (installs them automatically), or open the Godot\n"
+            "editor once -> Editor/Manage Export Templates... -> Download and Install\n"
+            "(4.3.stable), then re-run this script."
         )
     if proc.returncode != 0 or not out_path.is_file():
         sys.exit(f"Export failed for {project.name} (exit {proc.returncode}).")
