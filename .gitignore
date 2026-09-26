@@ -1,0 +1,8 @@
+# local tooling / downloads (not part of the repo)
+.venv/
+tools/
+examples/
+logs/
+*.zip
+*.tgz
+__pycache__/
