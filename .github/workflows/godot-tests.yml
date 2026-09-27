@@ -4,8 +4,6 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-  repository_dispatch:
-    types: [run-godot-tests]
 
 jobs:
   headless-tests:
@@ -14,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Godot 4.7.2 console build
+      - name: Download Godot 4.7.2 Windows build
         shell: pwsh
         run: |
           Invoke-WebRequest `

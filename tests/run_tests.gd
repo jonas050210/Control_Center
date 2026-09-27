@@ -31,7 +31,13 @@ func _run_all_tests() -> int:
 	for script_path in test_scripts:
 		var script: GDScript = load(script_path) as GDScript
 		if script == null:
-			print("SKIP  %s (failed to load)" % script_path)
+			# A test script failing to parse or load is a suite failure, not a skip.
+			# Otherwise headless validation could report success without executing a
+			# broken test module.
+			total += 1
+			failed += 1
+			print("FAIL  %s (failed to load)" % script_path)
+			failure_lines.append("%s -> failed to load" % script_path)
 			continue
 		var instance: Object = script.new()
 		for method_info in instance.get_method_list():
