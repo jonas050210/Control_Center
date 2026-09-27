@@ -5,10 +5,12 @@ class_name SandboxScenarioDirector
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var seed_value: int = 42
 var active_scenario: String = ""
+var arena: SandboxArenaEnvironment
 var scenario_names: Array[String] = ["doorway_ambush", "crossing_target", "cover_transition", "close_range", "long_range", "multi_target", "flank", "defensive_hold"]
 
 func configure(seed: int, requested: String = "") -> void:
 	seed_value = seed; rng.seed = seed
+	arena = get_tree().current_scene as SandboxArenaEnvironment
 	active_scenario = requested if requested != "" else scenario_names[rng.randi_range(0, scenario_names.size() - 1)]
 	apply_scenario()
 
@@ -29,6 +31,9 @@ func apply_scenario() -> void:
 			"defensive_hold": enemy.behavior = "stationary"
 		if active_scenario == "close_range": enemy.global_position = Vector3(0, 0.9, -5.0 + index * 2.0)
 		elif active_scenario == "long_range": enemy.global_position = Vector3(-10.0 + index * 8.0, 0.9, -15.0)
+		if arena and not arena.is_valid_spawn(enemy.global_position, 0.45):
+			var fallback: Vector3 = Vector3(-12.0 + index * 6.0, 0.9, 12.0)
+			if arena.is_valid_spawn(fallback, 0.45): enemy.global_position = fallback
 
 func state() -> Dictionary:
 	return {"scenario": active_scenario, "seed": seed_value, "enemy_count": get_tree().get_nodes_in_group("targets").size()}

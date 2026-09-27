@@ -11,7 +11,11 @@ def replay_to_records(replay: dict[str, Any], *, observation_dir: str | Path | N
     for event in events:
         if event.get("type") not in {"action", "step", "shot"}:
             continue
-        record = {"frame": int(event.get("frame", 0)), "time_ms": float(event.get("time_ms", 0.0)), "action": event.get("action", {}), "event": event.get("type", "")}
+        raw_action = event.get("action", {})
+        if isinstance(raw_action, list):
+            names = ["move_x", "move_y", "jump", "crouch", "sprint", "reload", "fire", "ads", "mouse_dx_bin", "mouse_dy_bin"]
+            raw_action = {name: value for name, value in zip(names, raw_action)}
+        record = {"frame": int(event.get("frame", 0)), "time_ms": float(event.get("time_ms", 0.0)), "action": raw_action, "event": event.get("type", "")}
         if "observation" in event: record["observation"] = event["observation"]
         if observation_dir and "observation_file" in event:
             record["observation_path"] = str(Path(observation_dir) / str(event["observation_file"]))

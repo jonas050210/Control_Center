@@ -94,7 +94,9 @@ func get_state_info() -> Dictionary:
 func set_action(action: Array) -> void:
 	if action.size() < 10: push_error("Sandbox action must contain 10 values"); return
 	step_count += 1
-	if episode_logger: episode_logger.tick()
+	if episode_logger:
+		episode_logger.tick()
+		episode_logger.record("action", {"action": action.duplicate(), "health": player.health, "ammo": player.ammo})
 	player.advance_simulation_timers(0.05)
 	var health_before: float = player.health
 	for node: Node in get_tree().get_nodes_in_group("targets"):
