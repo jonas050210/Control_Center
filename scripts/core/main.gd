@@ -9,6 +9,7 @@ extends Node3D
 
 @export var environment_count: int = SandboxConfig.DEFAULT_ENVIRONMENT_COUNT
 @export var enemy_count_per_environment: int = SandboxConfig.ENEMY_COUNT_DEFAULT
+@export_range(1, 5) var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS
 @export var human_controls_environment_zero: bool = true
 
 var simulation_manager: SimulationManager
@@ -22,6 +23,7 @@ func _ready() -> void:
 	simulation_manager.name = "SimulationManager"
 	simulation_manager.environment_count = environment_count
 	simulation_manager.enemy_count_per_environment = enemy_count_per_environment
+	simulation_manager.curriculum_level = curriculum_level
 	add_child(simulation_manager)  # _ready() on the child calls build() immediately
 
 	_setup_controllers()

@@ -1,0 +1,18 @@
+import subprocess
+import sys
+import unittest
+
+
+class CliTests(unittest.TestCase):
+    def test_help_lists_workflow_commands(self):
+        result = subprocess.run([sys.executable, "-m", "sandboxai", "--help"], capture_output=True, text=True, check=True)
+        for command in ("train", "evaluate", "record", "bc-train", "resume", "benchmark", "inspect-dataset"):
+            self.assertIn(command, result.stdout)
+
+    def test_install_is_dependency_only_and_does_not_launch_godot(self):
+        result = subprocess.run([sys.executable, "-m", "sandboxai", "install"], capture_output=True, text=True, check=True)
+        self.assertIn("pip install", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

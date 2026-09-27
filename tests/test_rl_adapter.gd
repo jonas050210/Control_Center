@@ -20,6 +20,16 @@ func test_reset_returns_one_observation_per_environment() -> SandboxTest:
 	return t
 
 
+func test_reset_returns_flat_observation_vectors() -> SandboxTest:
+	var t := SandboxTest.new("rl_adapter_reset_returns_flat_observation_vectors")
+	var adapter := _make_adapter(2)
+	var observations: Array = adapter.reset(7)
+	t.assert_true(observations[0] is Array)
+	t.assert_eq(observations[0].size(), Observation.FIELD_COUNT)
+	adapter.simulation_manager.free()
+	return t
+
+
 func test_step_accepts_discrete_int_actions() -> SandboxTest:
 	var t := SandboxTest.new("rl_adapter_step_accepts_discrete_int_actions")
 	var adapter := _make_adapter(2)
@@ -30,6 +40,17 @@ func test_step_accepts_discrete_int_actions() -> SandboxTest:
 	t.assert_true(result.has("infos"))
 	t.assert_eq(result.observations.size(), 2)
 	t.assert_eq(result.rewards.size(), 2)
+	adapter.simulation_manager.free()
+	return t
+
+
+func test_done_flag_is_preserved_after_vector_auto_reset() -> SandboxTest:
+	var t := SandboxTest.new("rl_adapter_done_flag_preserved_after_auto_reset")
+	var adapter := _make_adapter(1)
+	(adapter.simulation_manager.environments[0] as EnvironmentCore).max_steps = 1
+	var result: Dictionary = adapter.step([Action.Discrete.IDLE])
+	t.assert_true(result.dones[0])
+	t.assert_true(adapter.is_done()[0])
 	adapter.simulation_manager.free()
 	return t
 

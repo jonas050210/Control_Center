@@ -97,3 +97,7 @@ const PENALTY_USELESS_SHOT: float = -0.1  # shot fired that could not possibly h
 # Observation mode currently active (see ObservationMode enum above).
 # ---------------------------------------------------------------------------
 const ACTIVE_OBSERVATION_MODE: int = ObservationMode.STRUCTURED
+## Vision hooks only: no RGB capture or image-processing dependency is enabled.
+const RGB_OBSERVATION_ENABLED: bool = false
+const RGB_FRAME_STACK: int = 1
+const OBSERVATION_MODALITIES: Array = ["structured"]

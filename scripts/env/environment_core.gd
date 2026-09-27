@@ -1,16 +1,9 @@
 ## EnvironmentCore
 ##
-## The heart of one independent RL environment instance: an agent, one or
-## more enemies, episode bookkeeping and reward calculation. This class has
-## NO Node/scene-tree dependency at all, which is what makes it possible to
-## run dozens of these purely as data objects (for fast/headless training)
-## while an optional `EnvironmentView` (Node3D) renders a subset of them for
-## human play / debugging.
-##
-## Exposes the standard RL-style interface requested by the milestone:
-##   reset(seed) -> Observation
-##   step(action) -> Dictionary{observation, reward, done, info}
-##   get_observations() / get_rewards() / is_done()
+## The render-independent RL environment. All gameplay state is local to this
+## object graph, so one instance can be reset or stepped without affecting
+## another instance. The public contract is reset(seed) -> Observation and
+## step(Action) -> {observation, reward, done, info}.
 class_name EnvironmentCore
 extends RefCounted
 
@@ -18,6 +11,7 @@ var env_id: int = 0
 var arena_half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
 var max_steps: int = SandboxConfig.MAX_EPISODE_STEPS
 var enemy_count: int = SandboxConfig.ENEMY_COUNT_DEFAULT
+var curriculum: CurriculumConfig = CurriculumConfig.new()
 
 var agent: AgentState = AgentState.new()
 var enemies: Array = []  # Array[EnemyState]
@@ -31,7 +25,8 @@ var _has_reset: bool = false
 func _init(p_env_id: int = 0, p_enemy_count: int = SandboxConfig.ENEMY_COUNT_DEFAULT) -> void:
 	env_id = p_env_id
 	enemy_count = maxi(1, p_enemy_count)
-	for i in range(enemy_count):
+	curriculum = CurriculumConfig.new(CurriculumConfig.Level.ENEMY_ATTACKS, enemy_count)
+	for _i in range(enemy_count):
 		enemies.append(EnemyState.new())
 
 
@@ -40,9 +35,17 @@ func _init(p_env_id: int = 0, p_enemy_count: int = SandboxConfig.ENEMY_COUNT_DEF
 # ---------------------------------------------------------------------------
 
 
-## Deterministically (re)starts an episode. Passing the same `seed_value`
-## always produces the same initial agent/enemy configuration and therefore
-## the same first observation.
+func set_curriculum_level(level: int) -> void:
+	curriculum.level = clampi(
+		level, CurriculumConfig.Level.STATIONARY_TARGET, CurriculumConfig.Level.AGENT_VS_AGENT
+	)
+	for enemy in enemies:
+		var state: EnemyState = enemy
+		state.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
+
+
+## Deterministically (re)starts an episode. Passing the same seed produces
+## the same spawn positions and first observation.
 func reset(seed_value: int = -1) -> Observation:
 	if seed_value >= 0:
 		rng.seed = seed_value
@@ -50,7 +53,7 @@ func reset(seed_value: int = -1) -> Observation:
 		rng.randomize()
 
 	agent.reset(SandboxConfig.AGENT_SPAWN_POSITION, SandboxConfig.AGENT_SPAWN_YAW_DEG)
-
+	agent.weapon.hit_radius = SandboxConfig.WEAPON_HIT_RADIUS * curriculum.target_radius_scale()
 	var spread: float = 2.5
 	for i in range(enemies.size()):
 		var enemy: EnemyState = enemies[i]
@@ -61,6 +64,9 @@ func reset(seed_value: int = -1) -> Observation:
 			SandboxConfig.ENEMY_SPAWN_POSITION + Vector3(lateral + jitter_x, 0.0, jitter_z)
 		)
 		enemy.reset(spawn)
+		enemy.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
+		enemy.move_speed = SandboxConfig.ENEMY_MOVE_SPEED
+		enemy.attack_damage = SandboxConfig.ENEMY_ATTACK_DAMAGE
 
 	episode.start_new_episode()
 	_has_reset = true
@@ -68,15 +74,14 @@ func reset(seed_value: int = -1) -> Observation:
 	return _last_observation
 
 
-## Advances the simulation by exactly one deterministic tick given a
-## structured Action. Returns a dictionary with the standard RL step
-## outputs: observation, reward, done, info.
 func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary:
 	if not _has_reset:
 		reset(SandboxConfig.DEFAULT_RANDOM_SEED)
 
 	if episode.done:
-		return _make_step_result(0.0, {"already_done": true})
+		return _make_step_result(0.0, {"already_done": true, "metrics": get_metrics()})
+	if action == null:
+		action = Action.idle()
 
 	var alive_before: bool = agent.alive
 	var prev_enemy: EnemyState = _nearest_alive_enemy(agent.position)
@@ -89,17 +94,19 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var hit: bool = false
 	var kill: bool = false
 	var useless_shot: bool = false
+	var shot_fired: bool = false
+	var damage_dealt: float = 0.0
 
 	if action.shoot:
-		var fired: bool = agent.weapon.try_fire()
-		if not fired:
+		shot_fired = agent.weapon.try_fire()
+		if not shot_fired:
 			useless_shot = true
 		else:
 			var any_alive: bool = false
 			var eye: Vector3 = agent.get_eye_position()
 			var forward: Vector3 = agent.get_forward_vector()
-			for e in enemies:
-				var enemy: EnemyState = e
+			for enemy_value in enemies:
+				var enemy: EnemyState = enemy_value
 				if not enemy.alive:
 					continue
 				any_alive = true
@@ -107,23 +114,36 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 					var applied: float = enemy.take_damage(agent.weapon.damage)
 					if applied > 0.0:
 						hit = true
-					if not enemy.alive:
-						kill = true
-						episode.total_kills += 1
-					break
-			if not any_alive:
-				useless_shot = true
+						damage_dealt += applied
+						episode.record_damage_dealt(applied)
+						if not enemy.alive:
+							kill = true
+							episode.record_kill()
+						break
+			# A fired miss is also useless for shaping purposes. A blocked shot
+			# cannot be distinguished from a miss in the analytic hit-test.
+			useless_shot = not hit or not any_alive
+		if shot_fired:
+			episode.record_shot(hit)
 
 	var damage_taken: float = 0.0
-	for e in enemies:
-		var enemy: EnemyState = e
-		var dmg: float = enemy.update_ai(dt, agent.position, arena_half_extent)
-		if dmg > 0.0:
-			damage_taken += agent.take_damage(dmg)
+	for enemy_value in enemies:
+		var enemy: EnemyState = enemy_value
+		var damage: float = enemy.update_ai(
+			dt,
+			agent.position,
+			arena_half_extent,
+			curriculum.enemy_movement_enabled(),
+			curriculum.enemy_attacks_enabled()
+		)
+		if damage > 0.0:
+			damage_taken += agent.take_damage(damage)
+	if damage_taken > 0.0:
+		episode.record_damage_taken(damage_taken)
 
 	var died: bool = alive_before and not agent.alive
 	if died:
-		episode.total_deaths += 1
+		episode.record_death()
 
 	var next_enemy: EnemyState = _nearest_alive_enemy(agent.position)
 	var positioning_delta: float = 0.0
@@ -136,8 +156,10 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"hit": hit,
 		"kill": kill,
 		"damage_taken": damage_taken,
+		"damage_dealt": damage_dealt,
 		"died": died,
 		"useless_shot": useless_shot,
+		"shot_fired": shot_fired,
 		"positioning_delta": positioning_delta,
 		"alive": agent.alive,
 	}
@@ -155,12 +177,13 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	elif episode.is_timeout(max_steps):
 		done = true
 		reason = "timeout"
-
 	if done:
 		episode.mark_done(reason)
 
 	_last_observation = Observation.build(agent, enemies, arena_half_extent)
-	return _make_step_result(reward, {"events": events, "done_reason": episode.done_reason})
+	return _make_step_result(
+		reward, {"events": events, "done_reason": episode.done_reason, "metrics": get_metrics()}
+	)
 
 
 func get_observations() -> Observation:
@@ -175,6 +198,11 @@ func get_rewards() -> float:
 
 func is_done() -> bool:
 	return episode.done
+
+
+func get_metrics() -> Dictionary:
+	var won: bool = episode.done_reason == "all_enemies_eliminated"
+	return episode.to_metrics(SandboxConfig.SIMULATION_DT, enemies.size(), won)
 
 
 # ---------------------------------------------------------------------------
@@ -194,35 +222,32 @@ func _make_step_result(reward: float, info: Dictionary) -> Dictionary:
 func _nearest_alive_enemy(from_position: Vector3) -> EnemyState:
 	var best: EnemyState = null
 	var best_dist: float = INF
-	for e in enemies:
-		var enemy: EnemyState = e
+	for enemy_value in enemies:
+		var enemy: EnemyState = enemy_value
 		if enemy.alive:
-			var d: float = enemy.position.distance_squared_to(from_position)
-			if d < best_dist:
-				best_dist = d
+			var distance: float = enemy.position.distance_squared_to(from_position)
+			if distance < best_dist:
+				best_dist = distance
 				best = enemy
 	return best
 
 
 func _all_enemies_dead() -> bool:
-	for e in enemies:
-		var enemy: EnemyState = e
+	for enemy_value in enemies:
+		var enemy: EnemyState = enemy_value
 		if enemy.alive:
 			return false
 	return true
 
 
-## Public accessor for the nearest alive enemy relative to the agent (used
-## by AI controllers and by the debug overlay). Returns null if no enemy is
-## alive.
 func get_primary_enemy() -> EnemyState:
 	return _nearest_alive_enemy(agent.position)
 
 
 func get_alive_enemy_count() -> int:
 	var count: int = 0
-	for e in enemies:
-		var enemy: EnemyState = e
+	for enemy_value in enemies:
+		var enemy: EnemyState = enemy_value
 		if enemy.alive:
 			count += 1
 	return count

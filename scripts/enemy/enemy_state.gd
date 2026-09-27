@@ -39,7 +39,13 @@ func get_chest_position() -> Vector3:
 
 ## Advances the enemy AI by one tick. Returns the amount of damage the
 ## enemy dealt to the agent this tick (0 if it did not attack).
-func update_ai(dt: float, agent_position: Vector3, arena_half_extent: float) -> float:
+func update_ai(
+	dt: float,
+	agent_position: Vector3,
+	arena_half_extent: float,
+	enable_movement: bool = true,
+	enable_attack: bool = true
+) -> float:
 	if attack_cooldown_remaining > 0.0:
 		attack_cooldown_remaining = maxf(0.0, attack_cooldown_remaining - dt)
 
@@ -55,11 +61,15 @@ func update_ai(dt: float, agent_position: Vector3, arena_half_extent: float) -> 
 		ai_state = AIState.IDLE
 		return 0.0
 
-	if distance <= attack_range:
+	if enable_attack and distance <= attack_range:
 		ai_state = AIState.ATTACK
 		if attack_cooldown_remaining <= 0.0:
 			attack_cooldown_remaining = attack_cooldown_time
 			return attack_damage
+		return 0.0
+
+	if not enable_movement:
+		ai_state = AIState.IDLE
 		return 0.0
 
 	ai_state = AIState.CHASE

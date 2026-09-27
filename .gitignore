@@ -17,3 +17,13 @@ Thumbs.db
 # Python venv used only for local static-analysis tooling (gdtoolkit)
 .venv/
 __pycache__/
+*.egg-info/
+
+# Local training outputs (checkpoints, TensorBoard, datasets, evaluations)
+/training/runs/
+/training/bc_runs/
+/training/checkpoints/
+/training/logs/
+/training/datasets/*.jsonl
+/training/evaluations/
+/training/benchmarks/
