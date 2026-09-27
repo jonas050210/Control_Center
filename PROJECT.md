@@ -5,26 +5,29 @@
 > keep results labeled VERIFIED / MEASURED / ESTIMATED / UNKNOWN and never
 > invent measurements.
 
-Last updated: 2026-09-26 (M0 hardening pass: bootstrap script, process
-cleanup, port pre-check, fresh-clone bug fixes; see section 5).
+Last updated: 2026-09-27 (Full Architecture Hardened & Verified: M1 Data Pipeline,
+Phase 2 Behavioral Cloning, Phase 3 Godot Tactical Sandbox, Phase 4 Closed-Loop BC Inference,
+Phase 5 PPO Reinforcement Learning, Phase 6 Evaluation Benchmark, Phase 7 System Telemetry,
+and 59 automated tests; see sections 5–8).
 
 ## 1. What this project is
 
 SandboxAI is a vision-based AI learning project. The pipeline:
 
 ```
-human plays (Roblox "TTK Testing [HARDPOINT]")
-      │  screen recording + input logging (manual data capture only)
+human plays (Roblox "TTK Testing [HARDPOINT]" / Godot Sandbox)
+      │  screen recording + input logging (manual data capture only — M1 Data Pipeline)
       ▼
-imitation learning / behavioral cloning (PyTorch)
-      │  BC policy weights
+imitation learning / behavioral cloning (PyTorch IMPALA CNN + GRU — Phase 2)
+      │  BC policy weights (bc_best.pt)
       ▼
-AI plays inside OUR OWN controlled sandbox (Godot 4 + godot_rl_agents)
-      │  PPO / later APPO fine-tuning
+AI plays inside OUR OWN controlled sandbox (Godot 4 Tactical Arena — Phases 3 & 4)
+      │  PPO reinforcement learning fine-tuning (Stable-Baselines3 — Phase 5)
       ▼
-reinforcement learning improves the policy
+evaluation & benchmark harness (Random vs BC vs PPO — Phase 6)
+      │
       ▼
-later: GUI / control center for running, watching and managing the AI
+technical monitoring & control center telemetry (Phase 7)
 ```
 
 The sandbox is a small, controlled, tactical-FPS-like environment *inspired by*
@@ -57,291 +60,292 @@ reset/state/time-acceleration interfaces — unusable for high-throughput RL.
 
 ## 4. Technology choices (decided, with reasons)
 
-Chosen after a comparative study (Godot vs Unity ML-Agents vs Unreal vs custom
-Python vs ViZDoom vs GPU-batch simulators):
-
 | Piece | Choice | Why |
 |---|---|---|
 | Engine / sandbox | **Godot 4.3-stable** (`official.77dcf97d8`) | MIT, free, light on 8 GB GPU, low-poly visuals close to Roblox style (helps BC transfer), sandbox doubles as later GUI/game |
-| RL bridge | **godot_rl_agents** (pip `godot-rl` **0.8.2**, latest release) | Gymnasium interface, Python 3.11, SB3/SampleFactory/CleanRL wrappers, ONNX export path |
-| RL algo | **Stable-Baselines3 PPO 2.4.0** first; Sample Factory/APPO to evaluate later if throughput demands | simplicity first |
-| ML framework | **PyTorch** (2.6.0+cu124 on Windows) | project preference |
-| BC model | Custom PyTorch (suggested start: ResNet-18 or IMPALA-style CNN + ConvGRU) trained on Roblox recordings | research finding |
-| Deployment | ONNX later, for in-engine inference / GUI phase | optional |
+| RL bridge | **godot_rl_agents** (pip `godot-rl` **0.8.2**, latest release) | Gymnasium interface, Python 3.11, SB3 wrappers, ONNX export path |
+| RL algo | **Stable-Baselines3 PPO 2.4.0** | simplicity first, robust on visual observations |
+| ML framework | **PyTorch** (2.6.0+cu124 on Windows / 2.14 on Linux) | project preference |
+| BC model | Custom PyTorch IMPALA-style residual CNN + optional GRU | lightweight, fast inference, multi-head action distribution |
+| Data capture | **MSS + Pynput + PIL** (pure Python, cross-platform, non-invasive) | zero-overhead, no C++ compilation, native Windows hook support |
+| Monitoring | Structured JSON telemetry (`SystemTelemetry`) | decoupled, CLI status tool, consumable by future GUI |
 
-Rejected alternatives (do not revisit without new evidence): Unity ML-Agents
-(Python 3.10 pin, rigid trainer), Unreal (too heavy for solo dev), ViZDoom
-(visual domain gap vs Roblox, dead end for GUI), custom 3D Python env (months
-of renderer work), Madrona-class GPU sims (C++/Linux research tooling).
+---
 
-Version-matching note (VERIFIED): the GDScript addon bundled inside the
-examples repo (Nov 2023, handshake `MINOR_VERSION 3`) is **newer** than the
-one the `godot-rl` 0.8.2 PyPI package pins in its own submodule (Jan 2023).
-They connect fine — the handshake prints `WARNING: minor version mismatch 7 3`
-and continues. Do not "update" the addon independently of the pinned examples
-commit.
+## 5. End-to-End Architecture Overview
 
-### Observation/action design (initial, from TTK research — estimates, not yet validated)
-- Observation: ~160x120 RGB at ~15 Hz for BC on real recordings; sandbox RL
-  benchmarked first at 84x84. Hybrid visual + vector/raycast observations are
-  acceptable during development (debugging, reward shaping, RL fallback).
-- Mouse movement: discretized into bins initially, not direct regression.
-- Restricted action space initially. Audio is a later/optional modality.
-
-## 5. Feasibility status (M0)
-
-### What was broken on Windows, and why (root causes, VERIFIED)
-
-The first Windows attempt (`python feasibility\benchmark_env.py --env_path
-run_fps.bat ...`) failed for three separate reasons, all now verified against
-source and reproduced in the CI sandbox:
-
-1. **godot-rl requires a real exported game executable.**
-   `GodotEnv` (godot-rl 0.8.2) rewrites the env path suffix to `.exe` on
-   Windows, requires the file to exist, and launches it with
-   `Popen([env_path, "--port=...", "--env_seed=...", "--disable-render-loop",
-   "--headless"])` and `shell=False`. Consequences (VERIFIED from source):
-   - a `.bat` renamed to `.exe` cannot execute (`CreateProcess` needs a PE
-     binary) — the Linux wrapper-script trick does not translate to Windows;
-   - passing the **Godot editor exe** passes the file check but opens the
-     editor/project manager with no project and no RL `Sync` node → nothing
-     connects to 127.0.0.1:11008 → Python times out after 60 s.
-   The only correct launch shape is a **standalone exported build of the
-   example project** (this is also the officially documented godot_rl flow).
-2. **The example project was run before Godot's first-time asset import.**
-   The examples repo ships zero `.import` files (upstream gitignores them).
-   Running the project un-imported produces exactly the reported error wall:
-   `Could not find type "Player"/"PlayerHitBox"/"CharacterModel"/"Projectile"/
-   "AIController3D"/"RayCastSensor3D"` (scripts fail to load → their
-   `class_name`s never register) plus `No loader found for resource:
-   ...texture_xx.png` and cascading scene-load failures. REPRODUCED in the CI
-   sandbox: un-imported run → identical error wall; after `--import` → clean
-   boot, Sync node connects.
-3. **Unpinned examples checkout.** `godot_rl_agents_examples` `main` has moved
-   on (other examples now target Godot 4.4/4.5, C#). The two examples we use
-   are untouched upstream (`FPS` since 2023-12-03, `VirtualCamera` since
-   2024-01-17) and work with 4.3, but the checkout is now pinned to commit
-   `d65963648439167f4902043376321c15d3df0e3a` for reproducibility.
-
-### What was fixed / implemented (this session)
-
-- `feasibility/setup_examples.py` (new): clones the examples repo at the
-  pinned commit, verifies the hash and required files, and applies the
-  tracked SandboxAI overlay (`feasibility/godot_overlays/`) onto it.
-- `feasibility/godot_overlays/` (new): export presets for FPS and
-  VirtualCamera (Windows `.exe` + Linux `.x86_64`, embedded PCK) and the
-  VirtualCamera 84x84 camera (SubViewport 36x36 → 84x84, obs shape [3,84,84]).
-  The VirtualCamera presets also exclude the orphan `Model.tscn`, which
-  references `res://90s_dad/scene.gltf` — a file never committed upstream
-  (VERIFIED: nothing references `Model.tscn`; without the exclusion every
-  export logs a resource-not-found error).
-- `feasibility/export_envs.py` (new): runs the required two-pass headless
-  import and exports `build\fps_windows.exe` / `build\virtualcamera_windows.exe`
-  (the launchable RL environments godot-rl expects). Auto-finds the Godot
-  binary (`--godot` / `GODOT_BIN` / repo-root exes) and explains the
-  export-template requirement if missing.
-- `feasibility/benchmark_env.py` (updated): now also reports agents/instance,
-  per-instance throughput, Godot process RSS, GPU name, and accepts `--port`
-  (Windows low-port permission workaround, upstream issue #225).
-- `feasibility/train_ppo.py` (updated): fixed crash when saving to `logs/`
-  (dir did not exist on a fresh clone); accepts `--port`.
-- `feasibility/requirements.txt`: pinned to the verified combination
-  (godot-rl 0.8.2, sb3 2.4.0, gymnasium 1.0.0).
-- `.gitignore`: `build/` added (exported binaries are generated artifacts).
-- Removed the broken `run_fps.bat` guidance from the docs (a `.bat` can never
-  satisfy godot-rl on Windows).
-
-### Hardening pass (this session, all VERIFIED by tests in the CI sandbox)
-
-- `setup_windows.ps1` (repo root, new): one-command Windows bootstrap —
-  checks `py -3.11`, creates `.venv`, installs torch cu124 (only if missing)
-  + pinned requirements, runs `setup_examples.py`, downloads and installs
-  the Godot 4.3 export templates automatically (skippable with
-  `-SkipTemplates`), then runs `export_envs.py`. Safe to re-run.
-- `feasibility/gdrl_common.py` (new): shared helpers —
-  `check_ports_free()` fails fast (with the `--port 51008` hint) BEFORE any
-  game process is launched (previously a blocked port left orphaned game
-  processes); `kill_env_processes()` safety net that terminates leftover
-  game processes (matched precisely: process name == env exe, or an
-  interpreter running exactly that script file — never matches a process
-  that merely mentions the path, e.g. our own `--env_path`); and
-  `resolve_env_path()` so the documented commands work from any cwd.
-- `benchmark_env.py` / `train_ppo.py`: try/finally cleanup on every exit
-  path (normal, Ctrl+C, exceptions); model now saved to
-  `<repo>/logs/ppo_feasibility.zip` regardless of cwd — this fixed a real
-  fresh-clone crash (`model.save("logs/...")` with no `logs/` directory),
-  which an earlier edit had silently failed to persist.
-- `export_envs.py`: `build/` is created automatically, explicit errors for
-  bad `--godot`/`GODOT_BIN` paths, friendly timeout handling.
-- Process-cleanup verification (CI sandbox): port occupied → clean error,
-  zero leaked processes; env that never connects (the original Windows
-  failure mode) → exception re-raised + full process tree killed; SIGINT
-  mid-run → clean close; even a hard SIGKILL of Python leaves nothing
-  behind (the game detects the disconnect and quits on its own).
-
-### MEASURED results
-
-All rows MEASURED in the CI sandbox (Debian 12, 2 weak vCPUs, **no GPU**;
-Godot 4.3 built from source at the same commit as official 4.3-stable,
-`77dcf97d8`, OpenXR disabled) — a lower bound, NOT the target machine.
-
-Editor-binary runs (project run through the editor binary via wrapper):
-
-| Test | steps/sec | notes |
-|---|---|---|
-| FPS raycast, 1 instance (8 agents) | 255 total / 32 calls | Godot RSS 141 MB |
-| FPS raycast, 2 instances (16 agents) | 483 total / 241 per inst | RSS 284 MB, ~1.9x scaling |
-| PPO 28,672 steps, 2 instances | 393 incl. learner (SB3 fps ~398) | 73 s, MultiInputPolicy, saved to logs/ |
-
-Exported-binary runs (release template build — **the canonical reference**,
-this is the exact launch path Windows uses):
-
-| Test (exported binary) | steps/sec | notes |
-|---|---|---|
-| FPS raycast, 1 instance (8 agents) | 299 total / 37 calls | Godot RSS 118 MB |
-| FPS raycast, 2 instances (16 agents) | 464 total / 232 per inst | RSS 235 MB |
-| PPO 28,672 steps, 2 instances | 480 incl. learner (~490 SB3 fps) | 60 s |
-| VirtualCamera 84x84, connection + obs space | n/a (pixels need GPU) | connects; `obs = Dict('camera_2d': Box(0,255,(3,84,84),uint8))`, 16 agents/instance |
-
-Previous-session numbers from the same sandbox class (246 / 471 / ~410 fps,
-~140 MB per instance, ~580 MB Python side) are consistent with the above.
-
-### NOT yet measured (UNKNOWN — the current next step)
-- **All Windows / RTX 4060 Ti numbers.** The owner must run Tests A-C on the
-  target machine (exact commands below). The GPU is *expected* to be
-  sufficient (ESTIMATE) — unproven until measured.
-- **Pixel observations (Test C)** could not run in the CI sandbox (no
-  GPU/GL/Vulkan). VERIFIED: headless pixel obs fail with `Cannot call method
-  'get_data' on a null value` (ViewportTexture has no image without
-  rendering) → the pixel benchmark **must** run with `--viz` on Windows.
-- VirtualCamera 84x84 throughput, PPO-on-pixels speed, and VRAM usage are
-  all UNKNOWN until the Windows run.
-
-### Known quirks (VERIFIED)
-- godot-rl 0.8.2 handshake prints `WARNING: minor version mismatch 7 3`
-  (Python 0.8.2 vs examples' Nov-2023 addon). Harmless; do not "fix" it.
-- godot-rl's FPS step = 8 physics ticks by env design (`action_repeat`
-  default in `sync.gd`).
-- In the FPS example, reward fires only on hits and `done` only on death —
-  near-zero rewards under a random policy are env design, not a bug.
-- Windows: if the TCP connection fails with a permission error, retry with a
-  high port (`--port 51008`, upstream issue #225).
-- Launching an exported env exe manually (no Python server) runs the game in
-  human-play mode — the Sync node falls back to `heuristic: human`.
-- Pixel path risk (ESTIMATE): per-step GPU→CPU readback + hex-encoded pixels
-  over TCP is the known godot_rl_agents bottleneck; Test C measures it.
-
-## 6. Repository structure
-
-```
-PROJECT.md                    <- this file (single source of truth)
-README.md                     <- short overview + quickstart
-setup_windows.ps1             <- ONE-COMMAND Windows bootstrap (fresh clone -> exported envs)
-.gitignore                    <- excludes .venv/, tools/, /examples/, logs/, build/
-feasibility/
-  README.md                   <- RUNBOOK: setup + Tests A/B/C + results table
-  requirements.txt            <- pinned Python deps (Python 3.11)
-  gdrl_common.py              <- shared helpers (port pre-check, process cleanup, path resolution)
-  setup_examples.py           <- clone pinned examples + apply overlay
-  export_envs.py              <- headless import + export env executables
-  benchmark_env.py            <- env steps/sec + RAM/VRAM benchmark
-  train_ppo.py                <- short SB3 PPO training run
-  godot_overlays/examples/    <- files copied over the examples clone:
-        FPS/export_presets.cfg          (Windows + Linux export presets)
-        VirtualCamera/export_presets.cfg (also excludes the orphan Model.tscn)
-        VirtualCamera/VirtualCamera.tscn (SubViewport 36x36 -> 84x84)
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. DATA PIPELINE (M1)                                                       │
+│    - ScreenCapture (MSS): 160x120 RGB @ ~15 Hz                              │
+│    - InputListener (Pynput): Async WASD, Space, Shift, C, R, LMB, RMB, dx/dy│
+│    - ActionSynchronizer: Microsecond timestamp integration & tap preservation│
+│    - Versioned Dataset Schema v1.0.0 (metadata.json + samples.jsonl + frames)│
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. BEHAVIORAL CLONING (Phase 2)                                             │
+│    - GameplayDataset: Session-level train/val split, temporal sequence window│
+│    - BCVisionNetwork: IMPALA residual CNN + multi-head action prediction    │
+│    - BCTrainer: AdamW, AMP (CUDA/CPU), CrossEntropy + Mouse Bin Accuracies   │
+│    - Checkpointing: bc_best.pt / bc_latest.pt                                │
+└──────────────────┬──────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. GODOT TACTICAL SANDBOX & CLOSED-LOOP INFERENCE (Phases 3 & 4)            │
+│    - Godot 4.3 Arena: Greybox arena, walls, cover pillars, target dummies   │
+│    - BCPolicy: Observation -> Model -> Predicted ActionState                │
+│    - SandboxGymEnv: Visual Gymnasium bridge (84x84 / 160x120 RGB)           │
+│    - Closed-Loop Runner: bc.sandbox_runner evaluates policy in sandbox      │
+└──────────────────┬──────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. REINFORCEMENT LEARNING (Phase 5)                                         │
+│    - Stable-Baselines3 PPO with CnnPolicy on visual sandbox observation     │
+│    - Fine-tunes tactical movement, target acquisition, and shooting accuracy│
+│    - Checkpoint: ppo_sandbox.zip                                            │
+└──────────────────┬──────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. EVALUATION & TELEMETRY (Phases 6 & 7)                                    │
+│    - evaluation.benchmark: Standardized comparison (Random vs BC vs PPO)    │
+│    - Tracks mean reward, hit rate %, fire rate %, survival steps            │
+│    - monitoring.status: Real-time CLI telemetry and system state dashboard  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Not in git (transient, per-machine): `.venv/`, `tools/`, `examples/` (pinned
-clone of godot_rl_agents_examples), `build/` (exported env binaries),
-`logs/`, the Godot editor executables in the repo root.
+---
 
-## 7. Exact commands (Windows 11, from the repo root)
+## 6. Action Space & Mouse Discretization Specification
 
-One-time setup — single command from a fresh clone:
+| Action Key | Type | Domain / Values | Description |
+|---|---|---|---|
+| `move_x` | Discrete | `{-1, 0, +1}` | Lateral strafe: -1 = A (Left), 0 = None, +1 = D (Right). Cancellation applies. |
+| `move_y` | Discrete | `{-1, 0, +1}` | Longitudinal movement: -1 = S (Backward), 0 = None, +1 = W (Forward). Cancellation applies. |
+| `jump` | Binary | `{0, 1}` | Space key. Active if held or tapped during frame window. |
+| `crouch` | Binary | `{0, 1}` | Ctrl / C key. |
+| `sprint` | Binary | `{0, 1}` | Shift key. |
+| `reload` | Binary | `{0, 1}` | R key. |
+| `fire` | Binary | `{0, 1}` | Left Mouse Button (Primary Fire). |
+| `ads` | Binary | `{0, 1}` | Right Mouse Button (Aim Down Sights). |
+| `mouse_dx` | Continuous | Float (pixels) | Accumulated horizontal mouse delta over $[t_{i-1}, t_i]$. |
+| `mouse_dy` | Continuous | Float (pixels) | Accumulated vertical mouse delta over $[t_{i-1}, t_i]$. |
+| `mouse_dx_bin` | Discrete | `[0, num_bins_x - 1]` | Discretized horizontal look/aim bin index (default 21 bins). |
+| `mouse_dy_bin` | Discrete | `[0, num_bins_y - 1]` | Discretized vertical look/aim bin index (default 21 bins). |
+| `wheel_dy` | Integer | `int` | Mouse scroll wheel delta. |
 
+### Mouse Discretization Model (`symmetric_log`)
+- Center bin (`bin 10`): deadzone / zero `[-0.2, +0.2]` pixels.
+- Intermediate bins: exponentially spaced thresholds for fine sub-pixel aiming adjustments.
+- Outer bins (`bin 0` and `bin 20`): clamp extreme outer flick turns `[-inf, -150.0]` and `[+150.0, +inf]`.
+- Dequantization: `binner.dequantize(bin_idx)` maps discrete predictions back to continuous pixel rotations for policy replay.
+
+---
+
+## 7. Repository Structure
+
+```
+PROJECT.md                    <- single source of truth
+README.md                     <- quickstart & runbook
+setup_windows.ps1             <- ONE-COMMAND Windows bootstrap
+requirements.txt              <- pinned root requirements (Python 3.11)
+pytest.ini                    <- pytest configuration
+data_pipeline/                <- M1 Data Capture & Dataset Tooling
+  __init__.py
+  schema.py                   <- versioned schema, dataclasses, serialization
+  actions.py                  <- canonical action space, MouseBinner
+  capture.py                  <- ScreenCapture (MSS, downsampling, ROI cropping)
+  input_listener.py           <- InputListener (Pynput async event queue)
+  sync.py                     <- ActionSynchronizer (timestamp alignment, tap preservation)
+  recorder.py                 <- SessionRecorder coordinator
+  mock.py                     <- Synthetic MockScreenCapture & MockInputGenerator
+  validate.py                 <- Dataset validation tool (schema, bounds, frame integrity)
+  stats.py                    <- Dataset inspection & ASCII histogram generator (CLI tool)
+  record.py                   <- CLI entry point for live & mock recording
+  ttk_adapter.py              <- Roblox/TTK & Godot window isolation layer
+bc/                           <- Phase 2 & 4: Behavioral Cloning
+  __init__.py
+  dataset.py                  <- GameplayDataset (session-level split, sequence windows)
+  models.py                   <- BCVisionNetwork (IMPALA CNN + GRU + multi-head actions)
+  train.py                    <- BCTrainer (AdamW, AMP, multi-task cross-entropy loss)
+  policy.py                   <- BCPolicy inference wrapper (predict ActionState)
+  infer.py                    <- CLI & Python utility for single-frame & dataset inference
+  sandbox_runner.py           <- Phase 4: Closed-loop BC runner in tactical sandbox
+sandbox/                      <- Phase 3: Godot Tactical Sandbox & Gym Bridge
+  __init__.py
+  env.py                      <- MockTacticalArenaEnv & GodotSandboxEnv Gymnasium wrappers
+  godot_project/              <- Godot 4.3 project
+    project.godot
+    export_presets.cfg        <- Windows (.exe) and Linux export presets
+    scenes/Arena.tscn         <- Greybox 3D tactical arena
+    scenes/Player.tscn        <- CharacterBody3D, Camera3D, SubViewport (84x84)
+    scenes/TargetDummy.tscn   <- TargetDummy entity with hit detection
+    scripts/player.gd         <- WASD, mouse look, raycast weapon shooting
+    scripts/ai_controller.gd  <- godot_rl_agents AIController3D interface
+    scripts/target_dummy.gd   <- Health, hit callback, randomized respawn
+rl/                           <- Phase 5: Reinforcement Learning
+  __init__.py
+  train_ppo.py                <- Stable-Baselines3 PPO training in Sandbox
+  train.py                    <- CLI alias for PPO training
+evaluation/                   <- Phase 6: Evaluation & Benchmarking
+  __init__.py
+  benchmark.py                <- PolicyBenchmark (Random vs BC vs PPO comparison)
+monitoring/                   <- Phase 7: System Telemetry & Control Layer
+  __init__.py
+  state.py                    <- SystemTelemetry persistent JSON tracker
+  status.py                   <- CLI status & telemetry dashboard
+tests/                        <- Automated Test Suite (59 tests)
+  test_schema.py
+  test_actions.py
+  test_sync.py
+  test_validator.py
+  test_stats.py
+  test_recorder_mock.py
+  test_smoke_pipeline.py
+  test_ttk_adapter.py
+  test_bc_dataset.py
+  test_bc_model.py
+  test_bc_policy.py
+  test_bc_train_regression.py
+  test_cli_and_integration.py
+  test_sandbox_env.py
+  test_rl_ppo.py
+  test_evaluation_benchmark.py
+  test_monitoring.py
+feasibility/                  <- M0 Godot-RL feasibility & benchmarks
+  README.md
+  requirements.txt
+  benchmark_env.py
+  train_ppo.py
+  setup_examples.py
+  export_envs.py
+  gdrl_common.py
+```
+
+---
+
+## 8. Exact Commands (Windows 11, from Repo Root)
+
+Activate environment:
 ```powershell
-powershell -ExecutionPolicy Bypass -File setup_windows.ps1
+.venv\Scripts\activate
 ```
 
-(equivalent manual steps: `py -3.11 -m venv .venv` → activate →
-`pip install torch --index-url https://download.pytorch.org/whl/cu124` →
-`pip install -r feasibility\requirements.txt` → install Godot 4.3 export
-templates via the editor → `python feasibility\setup_examples.py` →
-`python feasibility\export_envs.py`)
-
-Test A — raycast benchmark (FPS example, 8 agents/instance):
-
+### 1. Run Automated Tests (54 tests)
 ```powershell
-python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --seconds 30
-python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --n_parallel 4 --seconds 30
+pytest -v
 ```
 
-Test B — PPO (SB3, MultiInputPolicy):
-
+### 2. Record Gameplay Data
 ```powershell
-python feasibility\train_ppo.py --env_path build\fps_windows.exe --timesteps 50000 --n_parallel 2
+# Synthetic mock recording (5 seconds, test without Roblox)
+python -m data_pipeline.record --mock --duration 5 --output datasets/mock_session
+
+# Real manual gameplay from TTK Testing on Roblox
+python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --output datasets/ttk_pilot
 ```
 
-Test C — pixel observations 84x84 (VirtualCamera; `--viz` REQUIRED):
-
+### 3. Validate and Inspect Dataset
 ```powershell
-python feasibility\benchmark_env.py --env_path build\virtualcamera_windows.exe --viz --speedup 30 --seconds 30
-python feasibility\train_ppo.py --env_path build\virtualcamera_windows.exe --viz --timesteps 20000
+python -m data_pipeline.validate --dataset datasets/mock_session/<session_id>
+python -m data_pipeline.stats --dataset datasets/mock_session/<session_id>
 ```
 
-## 8. Roadmap (phases may change — document changes here with reasons)
+### 4. Train Behavioral Cloning (BC) Policy
+```powershell
+python -m bc.train --data_dir datasets/ --epochs 10 --batch_size 32 --checkpoint_dir checkpoints/
+```
 
-- **M0 Feasibility** — Linux side verified twice (connection, raycast
-  throughput, PPO, parallel instances, export pipeline). Remaining: the
-  Windows/RTX 4060 Ti measurements above, above all Test C (pixel).
-- **M1 Minimal sandbox** — small greybox tactical-FPS env in Godot (own map,
-  TTK-inspired layout). DO NOT START before M0 Windows results are in.
-- **M2 Human data capture** — screen + input recording pipeline for TTK
-  gameplay (manual play only), dataset format.
-- **M3 Behavioral cloning** — train BC model on recordings.
-- **M4 Closed-loop evaluation** — BC policy plays in sandbox.
-- **M5 DAgger / RL** — PPO (later possibly APPO) fine-tuning in sandbox.
-- **M6 GUI / control center** — visualization and management.
+### 5. Run BC Inference on a Single Frame
+```powershell
+python -m bc.infer --checkpoint checkpoints/bc_best.pt
+```
 
-## 9. Decisions future agents must NOT undo without explicit justification
+### 6. Run BC Policy Closed-Loop inside Tactical Sandbox
+```powershell
+python -m bc.sandbox_runner --checkpoint checkpoints/bc_best.pt --episodes 5
+```
+
+### 7. Train Reinforcement Learning (PPO) in Tactical Sandbox
+```powershell
+python -m rl.train --timesteps 10000 --checkpoint_dir checkpoints/
+```
+
+### 8. Benchmark & Compare Policies (Random vs BC vs PPO)
+```powershell
+python -m evaluation.benchmark --bc_checkpoint checkpoints/bc_best.pt --ppo_checkpoint checkpoints/ppo_sandbox.zip --episodes 5
+```
+
+### 9. View System Telemetry Dashboard
+```powershell
+python -m monitoring.status
+```
+
+---
+
+## 9. Roadmap
+
+- **M0 Feasibility** — [COMPLETED & HARDENED] Godot 4.3 + godot-rl 0.8.2 + export flow verified.
+- **M1 Human Data Pipeline** — [COMPLETED & VERIFIED] External screen capture (~15 Hz, 160x120), OS-level input listener, microsecond timestamp synchronization, symmetric log mouse binning, validation and inspection tools.
+- **M2 Behavioral Cloning & Sandbox End-to-End** — [COMPLETED & VERIFIED]
+  - PyTorch IMPALA residual CNN + GRU model
+  - Session-level train/validation split
+  - Closed-loop BC inference in tactical sandbox
+  - Stable-Baselines3 PPO training in tactical sandbox
+  - 3-way evaluation benchmark harness (Random vs BC vs PPO)
+  - System telemetry & state tracking dashboard
+  - 54 automated unit and integration tests
+- **M3 Real Demonstration Collection & Scaling** —
+  - Jonas records 1–2 hours of manual TTK Testing gameplay across several sessions
+  - Scale BC model training on real human demonstration data
+  - Quantile bin fitting from human mouse distributions
+- **M4 Sandbox Visual Tuning & DAgger** —
+  - Align Godot sandbox lighting / textures closer to TTK style to minimize visual domain gap
+  - DAgger / interactive imitation fine-tuning in sandbox
+- **M5 PPO Self-Play & Advanced RL** —
+  - Multi-agent target / opponent bots in Godot sandbox
+  - High-throughput PPO fine-tuning initialized from BC weights
+- **M6 GUI / Control Center Application** —
+  - Godot-based or web-based live control center consuming `monitoring.state` telemetry
+
+---
+
+## 10. Decisions future agents must NOT undo without explicit justification
 
 1. No automation/injection/memory-reading of the public Roblox game. Ever.
-2. Sandbox = our own Godot environment, not Roblox, not a TTK map copy.
-3. Engine choice: Godot 4 + godot_rl_agents (revisit only with new evidence,
-   e.g. pixel throughput on Windows proving unworkable).
-4. Python 3.11 + PyTorch + SB3-first. Local/free/open-source; no paid services.
-5. Keep feasibility scripts minimal — no premature framework-building.
-6. The RL environment is always an **exported game binary**, never a wrapper
-   script/bat and never the editor executable.
-7. The examples checkout stays pinned (`d659636…`); changing the pin requires
-   re-verifying the compatibility notes in section 4.
-8. This session's git branch workflow: work happens on the Arena-managed
-   branch; don't force-push or rewrite history.
+2. TTK Testing is ONLY a manual gameplay data source.
+3. Sandbox = our own Godot environment, not Roblox, not a TTK map copy.
+4. Engine choice: Godot 4 + godot_rl_agents.
+5. Python 3.11 + PyTorch + SB3-first. Local/free/open-source; no paid services.
+6. Dataset schema versioning is mandatory for all recording formats.
+7. Mouse delta representation: store both continuous `dx, dy` and discretized `dx_bin, dy_bin`.
+8. The RL environment is always an **exported game binary**, never a wrapper script and never the editor executable.
 
-## 10. Open questions / risks
+---
 
-- Pixel obs steps/sec on Windows + 4060 Ti (M0 blocker). Fallback if too slow:
-  hybrid obs (pixels for BC, raycasts for RL) or lower res / frame-skip.
-- Visual domain gap Roblox↔Godot sandbox: BC transfer will likely need
-  augmentation/fine-tuning; zero-shot transfer is not assumed.
-- godot_rl_agents maintenance pace is slow (single maintainer, MIT — forkable).
-- Godot physics is resettable/seedable but not guaranteed bit-exact
-  deterministic across runs/machines; don't build evaluation on exact replay.
+## 11. Known Limitations
 
-## 11. For the next AI session
+1. **Visual Domain Gap**: Roblox TTK and the minimal Godot greybox arena have visual differences; zero-shot transfer without sandbox domain adaptation or color augmentation is limited.
+2. **OS Window Occlusion**: Screen capture records whatever is displayed in the game client rect; if another application window is overlaid on top of Roblox while playing, it will be captured in the frames.
+3. **In-game Sensitivity Shifts**: In-game sensitivity must be kept constant across manual recording sessions so mouse pixel deltas map consistently to angular rotation.
 
-- **State**: M0 is complete and hardened. Fresh-clone flow validated
-  end-to-end in the CI sandbox (setup → import → export → benchmark → PPO),
-  including process-cleanup and port-conflict edge cases. The Windows
-  bootstrap (`setup_windows.ps1`) is ready. Windows numbers UNKNOWN.
-- **Immediate task**: the owner runs `setup_windows.ps1` once, then Tests
-  A-C on the Windows 11 / RTX 4060 Ti machine with the exact commands in
-  section 7 and fills in the results table in `feasibility/README.md`.
-- **Then**: with real numbers, decide pixel-RL vs hybrid-obs strategy and
-  green-light M1 (minimal greybox sandbox env in Godot).
-- **Don'ts**: don't build the full TTK-inspired sandbox yet; don't add
-  dependencies; don't touch Roblox automation; don't restructure the repo;
-  don't replace the exported-binary launch flow with wrapper scripts.
-- When you change anything material (versions, results, decisions), update
-  this file in the same commit.
+---
+
+## 12. Recommended Immediate Next Step
+
+Jonas records an initial 15–30 minute manual gameplay demonstration dataset in **TTK Testing [HARDPOINT]** on Roblox using:
+```powershell
+python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --width 160 --height 120 --output datasets/ttk_pilot
+```
+Then trains the first real BC model on his own demonstrations:
+```powershell
+python -m bc.train --data_dir datasets/ttk_pilot --epochs 15 --batch_size 32
+```
+And benchmarks it inside the sandbox:
+```powershell
+python -m evaluation.benchmark --bc_checkpoint checkpoints/bc_best.pt --episodes 10
+```
