@@ -82,19 +82,37 @@ func reset(seed_value: int = -1) -> Observation:
 
 	agent.reset(SandboxConfig.AGENT_SPAWN_POSITION, SandboxConfig.AGENT_SPAWN_YAW_DEG)
 	agent.weapon.hit_radius = SandboxConfig.WEAPON_HIT_RADIUS * curriculum.target_radius_scale()
+
+	var spawn_variety: bool = curriculum.spawn_variety_enabled()
+	var strafing: bool = curriculum.strafing_enabled()
+	var angle_spread_deg: float = curriculum.spawn_angle_spread_deg()
+	var distance_range: Vector2 = curriculum.spawn_distance_range()
 	var spread: float = 2.5
 	for i in range(enemies.size()):
 		var enemy: EnemyState = enemies[i]
-		var lateral: float = (i - (enemies.size() - 1) / 2.0) * spread
-		var jitter_x: float = rng.randf_range(-0.5, 0.5)
-		var jitter_z: float = rng.randf_range(-0.5, 0.5)
-		var spawn: Vector3 = (
-			SandboxConfig.ENEMY_SPAWN_POSITION + Vector3(lateral + jitter_x, 0.0, jitter_z)
-		)
+		var spawn: Vector3
+		if spawn_variety:
+			spawn = _random_spawn_position(angle_spread_deg, distance_range)
+		else:
+			# Legacy fixed layout: enemies lined up directly ahead of the
+			# agent with only small positional jitter (curriculum level 1).
+			var lateral: float = (i - (enemies.size() - 1) / 2.0) * spread
+			var jitter_x: float = rng.randf_range(-0.5, 0.5)
+			var jitter_z: float = rng.randf_range(-0.5, 0.5)
+			spawn = SandboxConfig.ENEMY_SPAWN_POSITION + Vector3(lateral + jitter_x, 0.0, jitter_z)
 		enemy.reset(spawn)
 		enemy.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
-		enemy.move_speed = SandboxConfig.ENEMY_MOVE_SPEED
+		enemy.move_speed = SandboxConfig.ENEMY_MOVE_SPEED * curriculum.enemy_speed_scale()
 		enemy.attack_damage = SandboxConfig.ENEMY_ATTACK_DAMAGE
+		enemy.attack_cooldown_time = (
+			SandboxConfig.ENEMY_ATTACK_COOLDOWN * curriculum.enemy_cooldown_scale()
+		)
+		if strafing:
+			enemy.strafe_direction = 1.0 if rng.randf() > 0.5 else -1.0
+			enemy.strafe_phase = rng.randf_range(0.0, TAU)
+		else:
+			enemy.strafe_direction = 1.0
+			enemy.strafe_phase = 0.0
 
 	episode.start_new_episode()
 	_has_reset = true
@@ -196,7 +214,8 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 			agent.position,
 			arena_half_extent,
 			curriculum.enemy_movement_enabled(),
-			curriculum.enemy_attacks_enabled()
+			curriculum.enemy_attacks_enabled(),
+			curriculum.strafing_enabled()
 		)
 		if damage > 0.0:
 			damage_taken += agent.take_damage(damage)
@@ -310,6 +329,25 @@ func _make_step_result(reward: float, info: Dictionary) -> Dictionary:
 		"done": episode.done,
 		"info": info,
 	}
+
+
+## Deterministically (given the environment's seeded RNG) picks a spawn
+## position at a random distance/angle around the agent's spawn point, so
+## enemies are not always directly ahead. `angle_spread_deg` is the half-width
+## of the horizontal arc around the agent's forward-facing direction
+## (0deg = enemy spawn's original -Z direction). Results are clamped inside
+## the arena walls.
+func _random_spawn_position(angle_spread_deg: float, distance_range: Vector2) -> Vector3:
+	var angle_deg: float = rng.randf_range(-angle_spread_deg, angle_spread_deg)
+	var distance: float = rng.randf_range(distance_range.x, distance_range.y)
+	var base_direction := Vector3(0.0, 0.0, -1.0)  # matches AGENT_SPAWN_YAW_DEG == 0 forward
+	var rotated: Vector3 = base_direction.rotated(Vector3.UP, deg_to_rad(angle_deg))
+	var spawn: Vector3 = SandboxConfig.AGENT_SPAWN_POSITION + rotated * distance
+	var limit: float = arena_half_extent - SandboxConfig.ENEMY_RADIUS
+	spawn.x = clampf(spawn.x, -limit, limit)
+	spawn.z = clampf(spawn.z, -limit, limit)
+	spawn.y = 0.0
+	return spawn
 
 
 func _nearest_alive_enemy(from_position: Vector3) -> EnemyState:

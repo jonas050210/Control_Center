@@ -49,19 +49,14 @@ Human, stub AI, external PPO and demonstrations all pass through `Action`.
 
 ## Observation contract
 
-`Observation.to_array()` always returns 17 float32-compatible values:
-
-| Index | Value |
-| --- | --- |
-| 0–2 | agent position normalized by arena extent |
-| 3–5 | agent velocity normalized by move speed |
-| 6–8 | agent forward unit vector |
-| 9 | agent health / max health |
-| 10–12 | primary enemy relative position / max arena distance |
-| 13 | primary enemy distance / max arena distance |
-| 14 | primary enemy health / max health |
-| 15 | weapon-ready flag |
-| 16 | in-combat flag |
+`Observation.to_array()` always returns 33 float32-compatible values: the
+original 17-field single-enemy contract (agent state + primary/nearest-alive
+enemy + weapon-ready/in-combat flags), plus 16 additive fields (the primary
+enemy's aim bearing, an alive-enemy-count fraction, and two more
+individually-tracked enemies). See
+[`docs/OBSERVATION_ACTION_CONTRACT.md`](OBSERVATION_ACTION_CONTRACT.md) for
+the full field-by-field table and normalization rules — it is the canonical
+reference; this section only summarizes it.
 
 The primary enemy is the nearest alive target, with a stable dead-target
 fallback. RGB and temporal stacking are interfaces only; there are no image
@@ -149,16 +144,33 @@ start is reported.
 `CurriculumConfig` changes existing `EnemyState` behavior instead of making
 parallel hardcoded environments:
 
-1. stationary large target, no attacks
-2. moving target, no attacks
-3. moving target with attacks
-4. multiple configured enemies
+1. stationary target, fixed spawn directly ahead, no movement/attacks
+2. one moving enemy, varied spawn distance/angle
+3. moving + attacking enemy, spawn variety, strafing while engaging
+4. 3+ enemies, spawn variety, strafing, faster/more aggressive
 5. agent-vs-agent hook
+
+See [`docs/CURRICULUM_AND_COMBAT.md`](CURRICULUM_AND_COMBAT.md) for the full
+per-level table, the multi-enemy spawn-variety algorithm, and the
+deterministic strafing/movement-pattern design.
 
 `SelfPlayEnvironmentCore` has two `AgentState` slots, independent RNG seeds,
 mirrored observations, per-agent rewards and per-agent metrics. Python's
 `SelfPlayCoordinator` can load a frozen opponent checkpoint. This is a
 foundation for population/self-play training, not a population algorithm.
+
+## Debug GUI, benchmarking and the future Roblox boundary
+
+- [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](DEBUG_GUI_AND_BENCHMARKING.md)
+  documents the optional, presentation-only `DebugOverlay` (telemetry +
+  pause/reset/enemy-count/curriculum controls, never used by headless
+  training) and how to run/interpret `sandboxai benchmark`.
+- [`docs/OBSERVATION_ACTION_CONTRACT.md`](OBSERVATION_ACTION_CONTRACT.md) is
+  the canonical Observation/Action reference, kept independent of any
+  specific game engine.
+- [`docs/ROBLOX_ADAPTER.md`](ROBLOX_ADAPTER.md) defines the abstract
+  `GameAdapter` interface boundary a future Roblox Player adapter would
+  implement. No Roblox integration exists yet.
 
 ## Files
 
@@ -176,12 +188,13 @@ scripts/
   input/      human and stub controllers
 python/sandboxai/
   config.py       Training/BC/evaluation configuration
+  contract.py     Observation/Action contract description + GameAdapter hook
   godot_env.py    subprocess, Gymnasium and SB3 adapters
   ppo.py          PPO, evaluation callbacks, checkpoints
   dataset.py      demonstrations and action validation
   bc.py           PyTorch behavior cloning and compatible warm start
   evaluation.py   frozen evaluation and JSON/CSV summaries
-  benchmark.py    throughput measurements
+  benchmark.py    throughput measurements and scaling analysis
   telemetry.py    structured metrics/resource snapshots
   self_play.py    policy slots and frozen-opponent lifecycle
   cli.py          complete command line
@@ -193,11 +206,28 @@ python/sandboxai/
   implemented yet.
 - Self-play is a two-slot/match foundation. It does not yet implement a
   population scheduler, league or opponent sampling algorithm.
-- The analytic arena has no physics collision response, recoil, ammo or
-  complex FPS navigation.
+- The analytic arena has no physics collision response, recoil, ammo,
+  verticality/elevation, navmesh-based obstacle avoidance, or complex FPS
+  navigation. Enemy movement (including the new strafing pattern) is
+  straight-line/sinusoidal blending, not pathfinding.
+- Only the 3 nearest alive enemies are individually reported in the
+  observation vector even if more exist and fight simultaneously (see
+  `docs/OBSERVATION_ACTION_CONTRACT.md`).
+- No Roblox integration exists. `python/sandboxai/contract.py` defines the
+  abstract adapter boundary a future implementation would need to satisfy;
+  see `docs/ROBLOX_ADAPTER.md` for exactly what is and is not implemented.
 - Godot itself must be installed locally; the repository cannot verify live
-  Godot behavior on a machine without that executable.
+  Godot behavior on a machine without that executable. This milestone's
+  Python-side changes were validated with a scripted fake Godot bridge
+  (`python/tests/test_ppo_smoke.py`, `test_godot_env.py`) instead.
+- Benchmarking in this milestone was implemented and unit-tested
+  (`python/tests/test_benchmark.py`) but not run against a real Godot
+  process or GPU — no Godot executable or NVIDIA GPU was available in the
+  development environment. Run `sandboxai benchmark` on the target machine
+  before relying on its throughput numbers for a training-scale decision.
 
-The next useful milestone is a short verified PPO run on the target machine,
-followed by improving the structured multi-enemy observation and adding
-curriculum-aware self-play evaluation before introducing RGB input.
+The next useful milestone is training against the new multi-enemy
+curriculum (levels 3–4) on the target machine, validating the benchmark
+sweep to pick a practical environment count, and then starting the real
+external Roblox Player adapter implementation against the contract in
+`docs/ROBLOX_ADAPTER.md`.

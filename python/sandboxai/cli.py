@@ -134,14 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--dataset", required=True)
 
     benchmark = sub.add_parser("benchmark", help="measure headless Godot throughput")
-    benchmark.add_argument("--env-counts", default="1,4,8,16")
-    benchmark.add_argument("--steps", type=int, default=10000)
+    benchmark.add_argument("--env-counts", default="1,2,4,8,16,24,32,48,64")
+    benchmark.add_argument("--steps", type=int, default=2000)
     benchmark.add_argument("--enemy-count", type=int, default=1)
     benchmark.add_argument("--seed", type=int, default=1234)
     benchmark.add_argument("--curriculum-level", type=int, default=3)
     benchmark.add_argument("--godot-executable", default="godot")
     benchmark.add_argument("--project-path", default="")
     benchmark.add_argument("--output-dir", default="training/benchmarks/latest")
+    benchmark.add_argument("--max-seconds-per-config", type=float, default=20.0)
 
     smoke = sub.add_parser("smoke-test", help="run end-to-end sanity verification of the Python & ML stack")
     smoke.add_argument("--device", default="cpu", choices=["cpu", "cuda", "auto"])
@@ -296,11 +297,22 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({key: value for key, value in result.items() if key != "episodes_detail"}, indent=2, default=str))
         return 0
     if args.command == "benchmark":
-        from .benchmark import benchmark_simulation
+        from .benchmark import benchmark_simulation, summarize_scaling
         project = _resolve_project_path(args.project_path)
         counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
-        result = benchmark_simulation(project, args.godot_executable, counts, args.steps, args.enemy_count, args.seed, args.curriculum_level, args.output_dir)
+        result = benchmark_simulation(
+            project,
+            args.godot_executable,
+            counts,
+            args.steps,
+            args.enemy_count,
+            args.seed,
+            args.curriculum_level,
+            args.output_dir,
+            args.max_seconds_per_config,
+        )
         print(json.dumps(result, indent=2, default=str))
+        print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))
         return 0
     raise RuntimeError(f"unhandled command {args.command}")
 
