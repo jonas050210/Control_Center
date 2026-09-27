@@ -91,7 +91,16 @@ const REWARD_POSITIONING_SCALE: float = 0.05  # per meter closed toward the enem
 const REWARD_POSITIONING_MAX: float = 0.05
 const PENALTY_DAMAGE_TAKEN_PER_HP: float = -0.05
 const PENALTY_DEATH: float = -10.0
-const PENALTY_USELESS_SHOT: float = -0.1  # shot fired that could not possibly hit / on cooldown
+## Trigger pulls that could not possibly connect: the weapon is still on
+## cooldown (nothing fires) or no alive target exists (a shot fired at
+## nothing). Kept 10x harsher than a genuine miss so trigger discipline is
+## learned before aim.
+const PENALTY_USELESS_SHOT: float = -0.1
+## A shot actually fired at a live target that failed to connect. Deliberately
+## cheap: while aim is still being learned, misses must not erase the value of
+## the +1/+10 hit and kill rewards, otherwise the trigger becomes net-negative
+## and PPO converges to never shooting at all.
+const PENALTY_MISSED_SHOT: float = -0.01
 
 # ---------------------------------------------------------------------------
 # Observation mode currently active (see ObservationMode enum above).

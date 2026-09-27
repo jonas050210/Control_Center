@@ -17,10 +17,16 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##   kill: bool                -- that hit (or a prior one) killed an enemy this tick
 ##   damage_taken: float       -- HP lost by the agent this tick (>= 0)
 ##   died: bool                -- the agent died this tick
-##   useless_shot: bool        -- trigger pulled without landing a hit: a
-##                                 miss, a shot while on cooldown, or no
-##                                 alive target (both environment cores
-##                                 penalize every non-connecting shot)
+##   useless_shot: bool        -- trigger pull that could not possibly
+##                                 connect: weapon still on cooldown (nothing
+##                                 fired) or no alive target to hit. Penalized
+##                                 with PENALTY_USELESS_SHOT to teach trigger
+##                                 discipline.
+##   missed_shot: bool         -- weapon actually fired at a live target but
+##                                 the ray did not connect. Penalized with the
+##                                 much cheaper PENALTY_MISSED_SHOT so that
+##                                 exploring aim keeps a positive expected
+##                                 value while learning.
 ##   positioning_delta: float  -- meters the agent closed toward the enemy
 ##                                 this tick while not already at an
 ##                                 effective engagement range (can be
@@ -45,6 +51,9 @@ static func compute(events: Dictionary) -> float:
 
 	if events.get("useless_shot", false):
 		reward += SandboxConfig.PENALTY_USELESS_SHOT
+
+	if events.get("missed_shot", false):
+		reward += SandboxConfig.PENALTY_MISSED_SHOT
 
 	var positioning_delta: float = float(events.get("positioning_delta", 0.0))
 	if positioning_delta != 0.0:

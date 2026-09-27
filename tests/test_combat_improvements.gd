@@ -61,6 +61,83 @@ func test_reward_breakdown_tracking() -> SandboxTest:
 	return t
 
 
+## Regression: a real miss at a live target is a genuine aiming attempt
+## (missed_shot, cheap), NOT an impossible "useless" pull. The two outcomes
+## must be distinguishable or shooting is punished as if it were spam and
+## PPO learns to never pull the trigger.
+func test_genuine_miss_is_missed_shot_not_useless() -> SandboxTest:
+	var t := SandboxTest.new("genuine_miss_is_missed_shot_not_useless")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(3)
+	env.reset(10)
+	# Agent aligned with nothing: enemy straight ahead, agent rotated away.
+	env.agent.position = Vector3(0.0, 0.0, 5.0)
+	env.agent.yaw_deg = 90.0
+	env.agent.pitch_deg = 0.0
+	env.enemies[0].position = Vector3(0.0, 0.0, -5.0)
+	env.agent.weapon.cooldown_remaining = 0.0
+	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))
+	t.assert_false(result.info.events.hit, "shot should not connect")
+	t.assert_true(result.info.events.shot_fired, "weapon was ready and must have fired")
+	t.assert_true(result.info.events.missed_shot, "real miss must count as missed_shot")
+	t.assert_false(result.info.events.useless_shot, "real miss must NOT count as useless_shot")
+	var breakdown: Dictionary = env.episode.get_reward_breakdown()
+	t.assert_almost_eq(breakdown.penalty_missed_shot, -0.01, 0.002)
+	t.assert_almost_eq(breakdown.penalty_useless_shot, 0.0, 0.0001)
+	return t
+
+
+func test_cooldown_pull_is_useless_shot_and_does_not_fire() -> SandboxTest:
+	var t := SandboxTest.new("cooldown_pull_is_useless_shot_and_does_not_fire")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(3)
+	env.reset(10)
+	env.agent.position = Vector3(0.0, 0.0, 5.0)
+	env.agent.yaw_deg = 0.0
+	env.enemies[0].position = Vector3(0.0, 0.0, 0.0)
+	env.agent.weapon.cooldown_remaining = 0.0
+	env.step(Action.from_discrete(Action.Discrete.SHOOT))  # fires, starts cooldown
+	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))  # still on cooldown
+	t.assert_false(result.info.events.shot_fired, "second pull cannot fire during cooldown")
+	t.assert_true(result.info.events.useless_shot, "cooldown pull is an impossible shot")
+	t.assert_false(result.info.events.missed_shot, "nothing fired, so it cannot be a miss")
+	var breakdown: Dictionary = env.episode.get_reward_breakdown()
+	t.assert_almost_eq(breakdown.penalty_useless_shot, -0.1, 0.001)
+	t.assert_eq(env.episode.shots_fired, 1, "only the first pull actually fired")
+	return t
+
+
+func test_shoot_with_no_alive_target_is_useless_not_missed() -> SandboxTest:
+	var t := SandboxTest.new("shoot_with_no_alive_target_is_useless_not_missed")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(1)  # enemy never moves/attacks: controlled conditions
+	env.reset(10)
+	env.enemies[0].position = Vector3(0.0, 0.0, -5.0)
+	env.enemies[0].alive = false
+	env.agent.weapon.cooldown_remaining = 0.0
+	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))
+	t.assert_true(result.info.events.shot_fired)
+	t.assert_true(result.info.events.useless_shot, "firing at nothing is an impossible shot")
+	t.assert_false(result.info.events.missed_shot, "no live target means no genuine miss")
+	return t
+
+
+## Regression: positioning reward must reflect the agent's own motion only.
+## A standing-still agent must not collect reward just because an enemy is
+## walking toward it (enemy movement is resolved AFTER the agent moves).
+func test_stationary_agent_gains_no_positioning_from_enemy_approach() -> SandboxTest:
+	var t := SandboxTest.new("stationary_agent_gains_no_positioning_from_enemy_approach")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(2)  # enemy moves, does not attack
+	env.reset(3)
+	var result: Dictionary = env.step(Action.idle())
+	t.assert_almost_eq(result.info.events.positioning_delta, 0.0, 0.0001,
+		"idle agent must not be paid for the enemy's own approach")
+	var breakdown: Dictionary = env.episode.get_reward_breakdown()
+	t.assert_almost_eq(breakdown.reward_positioning, 0.0, 0.0001)
+	return t
+
+
 func test_health_check_reports_healthy() -> SandboxTest:
 	var t := SandboxTest.new("health_check_reports_healthy")
 	var env := EnvironmentCore.new(0, 2)

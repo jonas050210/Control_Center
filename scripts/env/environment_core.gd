@@ -127,9 +127,20 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 
 	agent.apply_action(action, dt, arena_half_extent)
 
+	# Positioning reward: closure caused by the agent's OWN motion only,
+	# measured immediately after the agent moved and before enemies advance.
+	# (Measuring after enemy movement let a standing-still agent farm reward
+	# for letting an enemy walk up to it.) Only measured against the same
+	# enemy while it is still alive, preventing false penalties when an
+	# enemy is killed and the target switches.
+	var positioning_delta: float = 0.0
+	if prev_enemy != null and prev_enemy.alive and prev_distance > SandboxConfig.ENEMY_ATTACK_RANGE:
+		positioning_delta = prev_distance - agent.position.distance_to(prev_enemy.position)
+
 	var hit: bool = false
 	var kill: bool = false
 	var useless_shot: bool = false
+	var missed_shot: bool = false
 	var shot_fired: bool = false
 	var damage_dealt: float = 0.0
 
@@ -168,7 +179,12 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 						kill = true
 						episode.record_kill()
 
-			useless_shot = not hit or not any_alive
+			# A real miss against a live target is a genuine aiming attempt
+			# (cheap PENALTY_MISSED_SHOT); only pulls that cannot connect at
+			# all are "useless" (main PENALTY_USELESS_SHOT). This keeps the
+			# expected value of shooting positive while aim is being learned.
+			missed_shot = any_alive and not hit
+			useless_shot = not any_alive
 		if shot_fired:
 			episode.record_shot(hit)
 
@@ -191,14 +207,6 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	if died:
 		episode.record_death()
 
-	# Positioning reward: only measure against the same enemy if it is still alive,
-	# preventing false penalties when an enemy is killed and the target switches.
-	var positioning_delta: float = 0.0
-	if prev_enemy != null and prev_enemy.alive:
-		var next_distance: float = agent.position.distance_to(prev_enemy.position)
-		if prev_distance > SandboxConfig.ENEMY_ATTACK_RANGE:
-			positioning_delta = prev_distance - next_distance
-
 	var events: Dictionary = {
 		"hit": hit,
 		"kill": kill,
@@ -206,6 +214,7 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"damage_dealt": damage_dealt,
 		"died": died,
 		"useless_shot": useless_shot,
+		"missed_shot": missed_shot,
 		"shot_fired": shot_fired,
 		"positioning_delta": positioning_delta,
 		"alive": agent.alive,

@@ -43,7 +43,11 @@ class TrainingConfig:
     batch_size: int = 256
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    entropy_coefficient: float = 0.0
+    # Non-zero by default: with MultiDiscrete actions a 0 entropy coefficient
+    # lets the policy collapse to a degenerate action (e.g. never shooting)
+    # in the first few updates, after which useful behavior can no longer be
+    # discovered. 0.01 is a gentle standard value for discrete control.
+    entropy_coefficient: float = 0.01
     clip_range: float = 0.2
     total_training_steps: int = 1_000_000
     checkpoint_frequency: int = 100_000

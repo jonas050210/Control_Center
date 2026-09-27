@@ -131,7 +131,9 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"damage_dealt": damage_a,
 		"died": not agent_a.alive,
 		"shot_fired": shot_a,
-		"useless_shot": shot_a and not hit_a,
+		# Cooldown pulls do not fire (shot_a false), so the only remaining
+		# non-connecting outcome is a genuine miss, charged as such.
+		"missed_shot": shot_a and not hit_a,
 		"alive": agent_a.alive,
 	}
 	var events_b := {
@@ -141,7 +143,7 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"damage_dealt": damage_b,
 		"died": not agent_b.alive,
 		"shot_fired": shot_b,
-		"useless_shot": shot_b and not hit_b,
+		"missed_shot": shot_b and not hit_b,
 		"alive": agent_b.alive,
 	}
 

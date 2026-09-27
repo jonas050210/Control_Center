@@ -113,6 +113,13 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                             "survive": sum(float(item.get("reward_breakdown", {}).get("reward_survive", 0.0)) for item in buf) / len(buf),
                             "damage_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_damage", 0.0)) for item in buf) / len(buf),
                             "death_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_death", 0.0)) for item in buf) / len(buf),
+                            # Shot economy: how much reward was lost to real
+                            # misses vs to trigger pulls that could not
+                            # connect. Watching these two columns is the
+                            # fastest way to tell whether shooting is being
+                            # explored and becoming profitable.
+                            "missed_shot_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_missed_shot", 0.0)) for item in buf) / len(buf),
+                            "useless_shot_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_useless_shot", 0.0)) for item in buf) / len(buf),
                         }
                     self.episode_metrics_buffer.clear()
                 telemetry.write(payload)
