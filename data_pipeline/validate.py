@@ -22,7 +22,6 @@ from PIL import Image
 
 from data_pipeline.actions import MouseBinner
 from data_pipeline.schema import (
-    ACTION_SPACE_SPEC,
     DatasetMetadata,
     DatasetSample,
     SCHEMA_VERSION,

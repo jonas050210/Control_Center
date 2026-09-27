@@ -61,6 +61,7 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
         self._socket: Optional[socket.socket] = None
         self._process: Optional[subprocess.Popen[bytes]] = None
         self._recv_buffer = b""
+        self._request_id = 0
         self._last_observation = np.zeros((3, self.height, self.width), dtype=np.uint8)
         self._port = int(port or self._find_free_port())
         self._start(startup_timeout=startup_timeout, headless=headless)
@@ -122,7 +123,10 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
     def _request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if self._socket is None:
             raise GodotBridgeError("Godot bridge is closed")
-        wire = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+        self._request_id += 1
+        request = dict(payload)
+        request["request_id"] = self._request_id
+        wire = (json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8")
         try:
             self._socket.sendall(wire)
             while b"\n" not in self._recv_buffer:
@@ -134,6 +138,8 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
             response = json.loads(line.decode("utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise GodotBridgeError(f"Godot bridge request failed: {exc}") from exc
+        if response.get("request_id", self._request_id) != self._request_id:
+            raise GodotBridgeError(f"Godot bridge response mismatch: expected {self._request_id}, got {response.get('request_id')}")
         if not response.get("ok", False):
             raise GodotBridgeError(str(response.get("error", "unknown Godot bridge error")))
         return response
@@ -164,7 +170,11 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
         if seed is not None:
             self._seed = int(seed)
             self.action_space.seed(seed)
-        response = self._request({"command": "reset", "seed": self._seed})
+        request: Dict[str, Any] = {"command": "reset", "seed": self._seed}
+        if options:
+            if "map" in options: request["map"] = str(options["map"])
+            if "scenario" in options: request["scenario"] = str(options["scenario"])
+        response = self._request(request)
         return self._decode_observation(response), dict(response.get("info", {}))
 
     def step(
@@ -181,6 +191,17 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
             bool(response.get("truncated", False)),
             dict(response.get("info", {})),
         )
+
+    def replay(self) -> list[Dict[str, Any]]:
+        """Return bounded deterministic episode events from the Godot controller."""
+        response = self._request({"command": "replay"})
+        events = response.get("events", [])
+        return list(events) if isinstance(events, list) else []
+
+    def save_replay(self, path: str = "user://replays") -> str:
+        """Persist the current episode replay inside the Godot process."""
+        response = self._request({"command": "save_replay", "path": path})
+        return str(response.get("path", ""))
 
     def render(self) -> np.ndarray:
         return np.transpose(self._last_observation, (1, 2, 0))

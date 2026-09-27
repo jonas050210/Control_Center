@@ -9,9 +9,8 @@ from __future__ import annotations
 import math
 import random
 import time
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
-import numpy as np
 from PIL import Image, ImageDraw
 
 from data_pipeline.capture import CaptureSource

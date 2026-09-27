@@ -1,6 +1,8 @@
 extends CharacterBody3D
 class_name SandboxPlayer
 
+const WEAPON_CONFIG: Script = preload("res://scripts/weapon_config.gd")
+
 signal shot_fired(hit_target: bool, killed_target: bool)
 signal ammo_changed(magazine: int, reserve: int)
 signal health_changed(health: float)
@@ -34,6 +36,12 @@ var reload_timer: float = 0.0
 var fire_timer: float = 0.0
 var is_ads: bool = false
 var is_crouching: bool = false
+var weapon_catalog: Dictionary = {}
+var current_weapon_id: String = "rifle"
+var current_weapon: SandboxWeapon
+var muzzle_flash_timer: float = 0.0
+var damage_feedback_timer: float = 0.0
+var episode_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 func _ready() -> void:
 	add_to_group("players")
@@ -42,6 +50,8 @@ func _ready() -> void:
 	obs_viewport.world_3d = get_viewport().world_3d
 	obs_camera.global_transform = camera.global_transform
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	weapon_catalog = SandboxWeapon.catalog()
+	equip_weapon(current_weapon_id)
 
 func _process(_delta: float) -> void:
 	if hud_status:
@@ -49,6 +59,12 @@ func _process(_delta: float) -> void:
 		hud_status.text = "HEALTH %03d    AMMO %02d / %02d%s    HITS %d  KILLS %d" % [int(health), ammo, reserve_ammo, reload_text, target_hit_count, kill_count]
 	if hud_help:
 		hud_help.visible = not agent_controlled
+	muzzle_flash_timer = maxf(0.0, muzzle_flash_timer - get_process_delta_time())
+	damage_feedback_timer = maxf(0.0, damage_feedback_timer - get_process_delta_time())
+	if hud_status and damage_feedback_timer > 0.0: hud_status.modulate = Color(1.0, 0.35, 0.35)
+	elif hud_status: hud_status.modulate = Color.WHITE
+	var view_model: MeshInstance3D = get_node_or_null("CameraPivot/Camera3D/ViewModel") as MeshInstance3D
+	if view_model: view_model.visible = muzzle_flash_timer <= 0.0 or fmod(muzzle_flash_timer * 60.0, 2.0) > 0.5
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -62,6 +78,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		apply_rotation_input(event.relative.x * mouse_sensitivity, event.relative.y * mouse_sensitivity)
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		shoot()
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_1: switch_weapon("pistol")
+		elif event.keycode == KEY_2: switch_weapon("smg")
+		elif event.keycode == KEY_3: switch_weapon("rifle")
+		elif event.keycode == KEY_4: switch_weapon("shotgun")
+		elif event.keycode == KEY_5: switch_weapon("marksman")
 
 func _physics_process(delta: float) -> void:
 	obs_camera.global_transform = camera.global_transform
@@ -139,6 +161,38 @@ func set_ads(enabled: bool) -> void:
 	camera.fov = 55.0 if enabled else 75.0
 	obs_camera.fov = camera.fov
 
+func equip_weapon(weapon_id: String) -> bool:
+	if not weapon_catalog.has(weapon_id): return false
+	current_weapon_id = weapon_id
+	current_weapon = weapon_catalog[weapon_id] as SandboxWeapon
+	_configure_weapon_model(weapon_id)
+	magazine_size = current_weapon.magazine_size
+	starting_reserve = current_weapon.reserve_ammo
+	reload_seconds = current_weapon.reload_seconds
+	fire_interval = current_weapon.fire_interval
+	ammo = magazine_size; reserve_ammo = starting_reserve
+	return true
+
+func _configure_weapon_model(weapon_id: String) -> void:
+	var view_model: MeshInstance3D = get_node_or_null("CameraPivot/Camera3D/ViewModel") as MeshInstance3D
+	if view_model == null: return
+	var mesh: BoxMesh = BoxMesh.new()
+	match weapon_id:
+		"pistol": mesh.size = Vector3(0.16, 0.18, 0.55)
+		"smg": mesh.size = Vector3(0.19, 0.22, 0.78)
+		"rifle": mesh.size = Vector3(0.16, 0.20, 1.05)
+		"shotgun": mesh.size = Vector3(0.22, 0.24, 1.15)
+		"marksman": mesh.size = Vector3(0.18, 0.20, 1.28)
+	var material: StandardMaterial3D = StandardMaterial3D.new()
+	material.albedo_color = {"pistol": Color(0.08, 0.08, 0.09), "smg": Color(0.12, 0.16, 0.18), "rifle": Color(0.08, 0.13, 0.10), "shotgun": Color(0.20, 0.10, 0.05), "marksman": Color(0.16, 0.14, 0.12)}.get(weapon_id, Color.DIM_GRAY)
+	material.metallic = 0.55; material.roughness = 0.3; mesh.material = material
+	view_model.mesh = mesh
+	view_model.position = Vector3(0.38, -0.32, -0.62 if weapon_id != "shotgun" else -0.58)
+
+func switch_weapon(weapon_id: String) -> bool:
+	if reload_timer > 0.0: return false
+	return equip_weapon(weapon_id)
+
 func start_reload() -> bool:
 	if reload_timer > 0.0 or ammo >= magazine_size or reserve_ammo <= 0:
 		return false
@@ -162,15 +216,18 @@ func shoot() -> bool:
 	ammo_changed.emit(ammo, reserve_ammo)
 	last_shot_hit = false
 	var killed := false
-	weapon_ray.force_raycast_update()
-	if weapon_ray.is_colliding():
-		var collider := weapon_ray.get_collider()
-		if collider != null and collider.has_method("take_damage"):
-			killed = bool(collider.take_damage(50.0 if is_ads else 40.0))
-			last_shot_hit = true
-			target_hit_count += 1
-			if killed:
-				kill_count += 1
+	muzzle_flash_timer = 0.08
+	var pellet_count: int = current_weapon.pellets if current_weapon else 1
+	for pellet: int in range(pellet_count):
+		weapon_ray.rotation = Vector3(deg_to_rad(randf_range(-current_weapon.spread_degrees, current_weapon.spread_degrees) if current_weapon else 0.0), deg_to_rad(randf_range(-current_weapon.spread_degrees, current_weapon.spread_degrees) if current_weapon else 0.0), 0.0)
+		weapon_ray.force_raycast_update()
+		if weapon_ray.is_colliding():
+			var collider: Object = weapon_ray.get_collider()
+			if collider != null and collider.has_method("take_damage"):
+				var damage_amount: float = current_weapon.damage if current_weapon else 40.0
+				var did_kill: bool = bool(collider.take_damage(damage_amount))
+				last_shot_hit = true; killed = killed or did_kill; target_hit_count += 1
+				if did_kill: kill_count += 1
 	# Small deterministic recoil; AI learns to correct through pitch actions.
 	camera.rotate_x(deg_to_rad(0.4 if is_ads else 0.9))
 	shot_fired.emit(last_shot_hit, killed)
@@ -178,6 +235,7 @@ func shoot() -> bool:
 
 func take_damage(amount: float) -> void:
 	health = maxf(0.0, health - amount)
+	damage_feedback_timer = 0.35
 	health_changed.emit(health)
 
 func reset_player(spawn_pos: Vector3 = Vector3.ZERO) -> void:
