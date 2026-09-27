@@ -26,7 +26,12 @@ func _init(p_env_id: int = 0, p_enemy_count: int = SandboxConfig.ENEMY_COUNT_DEF
 	env_id = p_env_id
 	enemy_count = maxi(1, p_enemy_count)
 	curriculum = CurriculumConfig.new(CurriculumConfig.Level.ENEMY_ATTACKS, enemy_count)
-	for _i in range(enemy_count):
+	_rebuild_enemies(enemy_count)
+
+
+func _rebuild_enemies(count: int) -> void:
+	enemies.clear()
+	for _i in range(count):
 		enemies.append(EnemyState.new())
 
 
@@ -39,6 +44,11 @@ func set_curriculum_level(level: int) -> void:
 	curriculum.level = clampi(
 		level, CurriculumConfig.Level.STATIONARY_TARGET, CurriculumConfig.Level.AGENT_VS_AGENT
 	)
+	var target_count: int = curriculum.effective_enemy_count()
+	if enemies.size() != target_count:
+		enemy_count = target_count
+		_rebuild_enemies(enemy_count)
+
 	for enemy in enemies:
 		var state: EnemyState = enemy
 		state.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
@@ -51,6 +61,11 @@ func reset(seed_value: int = -1) -> Observation:
 		rng.seed = seed_value
 	else:
 		rng.randomize()
+
+	var target_count: int = curriculum.effective_enemy_count()
+	if enemies.size() != target_count:
+		enemy_count = target_count
+		_rebuild_enemies(enemy_count)
 
 	agent.reset(SandboxConfig.AGENT_SPAWN_POSITION, SandboxConfig.AGENT_SPAWN_YAW_DEG)
 	agent.weapon.hit_radius = SandboxConfig.WEAPON_HIT_RADIUS * curriculum.target_radius_scale()
@@ -79,7 +94,15 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		reset(SandboxConfig.DEFAULT_RANDOM_SEED)
 
 	if episode.done:
-		return _make_step_result(0.0, {"already_done": true, "metrics": get_metrics()})
+		return _make_step_result(
+			0.0,
+			{
+				"already_done": true,
+				"done_reason": episode.done_reason,
+				"TimeLimit.truncated": episode.done_reason == "timeout",
+				"metrics": get_metrics()
+			}
+		)
 	if action == null:
 		action = Action.idle()
 
@@ -105,23 +128,33 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 			var any_alive: bool = false
 			var eye: Vector3 = agent.get_eye_position()
 			var forward: Vector3 = agent.get_forward_vector()
+
+			# Find the closest alive enemy along the ray trajectory
+			var best_hit_enemy: EnemyState = null
+			var best_hit_distance: float = INF
+
 			for enemy_value in enemies:
 				var enemy: EnemyState = enemy_value
 				if not enemy.alive:
 					continue
 				any_alive = true
-				if agent.weapon.ray_hits_sphere(eye, forward, enemy.get_chest_position()):
-					var applied: float = enemy.take_damage(agent.weapon.damage)
-					if applied > 0.0:
-						hit = true
-						damage_dealt += applied
-						episode.record_damage_dealt(applied)
-						if not enemy.alive:
-							kill = true
-							episode.record_kill()
-						break
-			# A fired miss is also useless for shaping purposes. A blocked shot
-			# cannot be distinguished from a miss in the analytic hit-test.
+				var hit_dist: float = agent.weapon.ray_hit_distance(
+					eye, forward, enemy.get_chest_position()
+				)
+				if hit_dist >= 0.0 and hit_dist < best_hit_distance:
+					best_hit_distance = hit_dist
+					best_hit_enemy = enemy
+
+			if best_hit_enemy != null:
+				var applied: float = best_hit_enemy.take_damage(agent.weapon.damage)
+				if applied > 0.0:
+					hit = true
+					damage_dealt += applied
+					episode.record_damage_dealt(applied)
+					if not best_hit_enemy.alive:
+						kill = true
+						episode.record_kill()
+
 			useless_shot = not hit or not any_alive
 		if shot_fired:
 			episode.record_shot(hit)
@@ -145,10 +178,11 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	if died:
 		episode.record_death()
 
-	var next_enemy: EnemyState = _nearest_alive_enemy(agent.position)
+	# Positioning reward: only measure against the same enemy if it is still alive,
+	# preventing false penalties when an enemy is killed and the target switches.
 	var positioning_delta: float = 0.0
-	if next_enemy != null and prev_enemy != null:
-		var next_distance: float = agent.position.distance_to(next_enemy.position)
+	if prev_enemy != null and prev_enemy.alive:
+		var next_distance: float = agent.position.distance_to(prev_enemy.position)
 		if prev_distance > SandboxConfig.ENEMY_ATTACK_RANGE:
 			positioning_delta = prev_distance - next_distance
 
@@ -165,6 +199,7 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	}
 	var reward: float = RewardSystem.compute(events)
 	episode.record_step(reward)
+	episode.record_reward_breakdown(events)
 
 	var done: bool = false
 	var reason: String = ""
@@ -182,7 +217,13 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 
 	_last_observation = Observation.build(agent, enemies, arena_half_extent)
 	return _make_step_result(
-		reward, {"events": events, "done_reason": episode.done_reason, "metrics": get_metrics()}
+		reward,
+		{
+			"events": events,
+			"done_reason": episode.done_reason,
+			"TimeLimit.truncated": episode.done_reason == "timeout",
+			"metrics": get_metrics()
+		}
 	)
 
 
@@ -203,6 +244,36 @@ func is_done() -> bool:
 func get_metrics() -> Dictionary:
 	var won: bool = episode.done_reason == "all_enemies_eliminated"
 	return episode.to_metrics(SandboxConfig.SIMULATION_DT, enemies.size(), won)
+
+
+func health_check() -> Dictionary:
+	var healthy: bool = true
+	var issues: Array = []
+
+	if is_nan(agent.position.x) or is_nan(agent.position.y) or is_nan(agent.position.z):
+		healthy = false
+		issues.append("agent position has NaN")
+	if is_nan(agent.health) or agent.health < 0.0 or agent.health > agent.max_health:
+		healthy = false
+		issues.append("agent health invalid: %f" % agent.health)
+
+	for i in range(enemies.size()):
+		var enemy: EnemyState = enemies[i]
+		if is_nan(enemy.position.x) or is_nan(enemy.position.z):
+			healthy = false
+			issues.append("enemy %d position has NaN" % i)
+		if is_nan(enemy.health) or enemy.health < 0.0:
+			healthy = false
+			issues.append("enemy %d health invalid: %f" % [i, enemy.health])
+
+	return {
+		"healthy": healthy,
+		"env_id": env_id,
+		"agent_alive": agent.alive,
+		"alive_enemies": get_alive_enemy_count(),
+		"total_enemies": enemies.size(),
+		"issues": issues,
+	}
 
 
 # ---------------------------------------------------------------------------

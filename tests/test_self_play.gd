@@ -3,6 +3,8 @@
 class_name TestSelfPlay
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_self_play_reset_has_two_observations() -> SandboxTest:
 	var t := SandboxTest.new("self_play_reset_has_two_observations")

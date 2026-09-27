@@ -3,6 +3,8 @@
 class_name TestSimulationManager
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_build_creates_requested_environment_count() -> SandboxTest:
 	var t := SandboxTest.new("sim_manager_builds_requested_environment_count")

@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import time
 from typing import Any
+
+from .config import find_godot_executable
 
 try:
     import numpy as np  # type: ignore
-except ImportError:  # pragma: no cover - dependency error is reported at construction
+except ImportError:  # pragma: no cover
     np = None
 
 try:
@@ -28,12 +31,16 @@ class GodotProcessTransport:
         enemy_count: int = 1,
         seed: int = 1234,
         curriculum_level: int = 3,
+        request_timeout: float = 30.0,
     ) -> None:
         project = Path(project_path).expanduser().resolve()
         if not project.exists():
             raise FileNotFoundError(f"Godot project path does not exist: {project}")
+        executable = find_godot_executable(godot_executable)
+        self.executable = executable
+        self.request_timeout = request_timeout
         command = [
-            godot_executable,
+            executable,
             "--headless",
             "--path",
             str(project),
@@ -62,7 +69,7 @@ class GodotProcessTransport:
             )
         except OSError as exc:
             raise RuntimeError(
-                f"Could not launch Godot executable {godot_executable!r}. "
+                f"Could not launch Godot executable {executable!r}. "
                 "Install Godot 4.7.2 and put it on PATH or pass --godot-executable."
             ) from exc
         self._closed = False
@@ -79,9 +86,12 @@ class GodotProcessTransport:
         assert self.process.stdout is not None
         self.process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
         self.process.stdin.flush()
-        # Godot can emit a startup informational line. Only protocol JSON is
+        # Godot can emit startup informational lines. Only protocol JSON is
         # accepted; a malformed protocol response is a hard error.
+        start_time = time.monotonic()
         while True:
+            if time.monotonic() - start_time > self.request_timeout:
+                raise TimeoutError(f"Godot bridge request timed out after {self.request_timeout}s")
             line = self.process.stdout.readline()
             if not line:
                 stderr = self.process.stderr.read() if self.process.stderr else ""
@@ -133,6 +143,14 @@ class GodotBatchClient:
         response = self.transport.request({"cmd": "reset", "seed": -1 if seed is None else int(seed)})
         return np.asarray(response["observations"], dtype=np.float32), response.get("infos", [])
 
+    def reset_indices(self, indices: list[int], seed: int | None = None):
+        response = self.transport.request({
+            "cmd": "reset_indices",
+            "indices": indices,
+            "seed": -1 if seed is None else int(seed),
+        })
+        return response.get("results", [])
+
     def step(self, actions):
         if hasattr(actions, "tolist"):
             actions = actions.tolist()
@@ -142,6 +160,18 @@ class GodotBatchClient:
         dones = np.asarray(response["dones"], dtype=np.bool_)
         infos = response.get("infos", [{} for _ in range(self.environment_count)])
         return observations, rewards, dones, infos
+
+    def health_check(self):
+        return self.transport.request({"cmd": "health_check"}).get("health", [])
+
+    def reward_breakdown(self):
+        return self.transport.request({"cmd": "reward_breakdown"}).get("breakdowns", [])
+
+    def set_curriculum(self, level: int):
+        return self.transport.request({"cmd": "set_curriculum", "level": int(level)})
+
+    def ping(self):
+        return self.transport.request({"cmd": "ping"})
 
     def close(self) -> None:
         self.transport.close()
@@ -177,6 +207,7 @@ if gym is not None:
             done = bool(dones[0])
             terminated = done and reason != "timeout"
             truncated = done and reason == "timeout"
+            info["TimeLimit.truncated"] = truncated
             return observations[0], float(rewards[0]), terminated, truncated, info
 
         def close(self):
@@ -230,6 +261,8 @@ if VecEnv is not None:
                     info = infos[index]
                     if "terminal_observation" in info:
                         info["terminal_observation"] = np.asarray(info["terminal_observation"], dtype=np.float32)
+                    reason = str(info.get("done_reason", info.get("metrics", {}).get("done_reason", "")))
+                    info["TimeLimit.truncated"] = (reason == "timeout")
             return observations, rewards, dones, infos
 
         def close(self):
@@ -245,6 +278,12 @@ if VecEnv is not None:
                 raise AttributeError(f"Godot environment attribute is not mutable: {attr_name}")
 
         def env_method(self, method_name: str, *method_args, indices=None, **method_kwargs):
+            if method_name == "health_check":
+                return self.client.health_check()
+            if method_name == "reward_breakdown":
+                return self.client.reward_breakdown()
+            if method_name == "set_curriculum":
+                return self.client.set_curriculum(*method_args)
             raise AttributeError(f"Godot bridge has no remote env method {method_name}")
 
         def env_is_wrapped(self, wrapper_class, indices=None):

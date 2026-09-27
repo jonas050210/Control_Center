@@ -53,6 +53,9 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
     telemetry = JsonlTelemetry(logs / "training.jsonl")
     best_score = float("-inf")
     best_path = checkpoints / "best_eval.zip"
+    eval_patience_counter = 0
+    stop_training = False
+
     if (evaluations / "best.json").exists():
         best_score = float(json.loads((evaluations / "best.json").read_text(encoding="utf-8")).get("mean_reward", best_score))
 
@@ -62,6 +65,7 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             self.started = time.perf_counter()
             self.last_telemetry_step = 0
             self.episode_count = 0
+            self.episode_metrics_buffer: list[dict[str, Any]] = []
 
         def _on_training_start(self) -> None:
             telemetry.write(
@@ -70,20 +74,20 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                     "environment_count": config.environment_count,
                     "device": device,
                     "total_training_steps": config.total_training_steps,
+                    "net_arch": list(config.net_arch),
+                    "learning_rate": config.learning_rate,
                 }
             )
 
         def _on_step(self) -> bool:
-            nonlocal best_score
             infos = self.locals.get("infos", [])
-            episode_metrics = []
             for info in infos:
                 if not isinstance(info, dict):
                     continue
                 metrics = info.get("metrics", {})
                 if info.get("done_reason") or info.get("terminal_observation") is not None:
                     self.episode_count += 1
-                    episode_metrics.append(metrics)
+                    self.episode_metrics_buffer.append(metrics)
             if self.num_timesteps - self.last_telemetry_step >= max(config.environment_count, 1) * 100:
                 elapsed = max(time.perf_counter() - self.started, 1e-9)
                 payload: dict[str, Any] = {
@@ -96,14 +100,24 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                     "current_checkpoint": str(checkpoints),
                     **resource_snapshot(),
                 }
-                if episode_metrics:
-                    payload["mean_episode_reward"] = sum(float(item.get("episode_reward", 0.0)) for item in episode_metrics) / len(episode_metrics)
-                    payload["mean_kills"] = sum(float(item.get("kills", 0.0)) for item in episode_metrics) / len(episode_metrics)
-                    payload["mean_accuracy"] = sum(float(item.get("accuracy", 0.0)) for item in episode_metrics) / len(episode_metrics)
-                    payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in episode_metrics) / len(episode_metrics)
+                if self.episode_metrics_buffer:
+                    buf = self.episode_metrics_buffer
+                    payload["mean_episode_reward"] = sum(float(item.get("episode_reward", 0.0)) for item in buf) / len(buf)
+                    payload["mean_kills"] = sum(float(item.get("kills", 0.0)) for item in buf) / len(buf)
+                    payload["mean_accuracy"] = sum(float(item.get("accuracy", 0.0)) for item in buf) / len(buf)
+                    payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in buf) / len(buf)
+                    if config.reward_breakdown_logging:
+                        payload["reward_breakdown"] = {
+                            "hits": sum(float(item.get("reward_breakdown", {}).get("reward_hits", 0.0)) for item in buf) / len(buf),
+                            "kills": sum(float(item.get("reward_breakdown", {}).get("reward_kills", 0.0)) for item in buf) / len(buf),
+                            "survive": sum(float(item.get("reward_breakdown", {}).get("reward_survive", 0.0)) for item in buf) / len(buf),
+                            "damage_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_damage", 0.0)) for item in buf) / len(buf),
+                            "death_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_death", 0.0)) for item in buf) / len(buf),
+                        }
+                    self.episode_metrics_buffer.clear()
                 telemetry.write(payload)
                 self.last_telemetry_step = self.num_timesteps
-            return True
+            return not stop_training
 
         def _on_training_end(self) -> None:
             telemetry.write({"event": "training_end", "timesteps": self.num_timesteps, "episodes": self.episode_count})
@@ -114,7 +128,7 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             self.next_evaluation = config.evaluation_frequency
 
         def _on_step(self) -> bool:
-            nonlocal best_score
+            nonlocal best_score, eval_patience_counter, stop_training
             if self.num_timesteps < self.next_evaluation:
                 return True
             eval_kwargs = _env_kwargs(config)
@@ -131,13 +145,20 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
             if reward > best_score:
                 best_score = reward
+                eval_patience_counter = 0
                 self.model.save(best_path)
                 (evaluations / "best.json").write_text(
                     json.dumps({"mean_reward": reward, "timesteps": self.num_timesteps, "checkpoint": str(best_path)}, indent=2) + "\n",
                     encoding="utf-8",
                 )
+            else:
+                eval_patience_counter += 1
+                if config.early_stopping_patience > 0 and eval_patience_counter >= config.early_stopping_patience:
+                    stop_training = True
+            if config.min_eval_reward is not None and reward >= config.min_eval_reward:
+                stop_training = True
             self.next_evaluation += config.evaluation_frequency
-            return True
+            return not stop_training
 
     checkpoint_callback = CheckpointCallback(
         save_freq=max(1, config.checkpoint_frequency // config.environment_count),

@@ -3,6 +3,8 @@
 class_name TestDemonstrationRecorder
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_recorder_saves_and_loads_transition_contract() -> SandboxTest:
 	var t := SandboxTest.new("demonstration_recorder_round_trip")

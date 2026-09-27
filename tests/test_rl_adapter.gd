@@ -3,6 +3,8 @@
 class_name TestRLAdapter
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func _make_adapter(env_count: int = 2) -> RLAdapter:
 	var sim := SimulationManager.new()

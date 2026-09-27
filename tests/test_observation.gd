@@ -2,6 +2,8 @@
 class_name TestObservation
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_observation_array_has_documented_field_count() -> SandboxTest:
 	var t := SandboxTest.new("observation_array_has_documented_field_count")

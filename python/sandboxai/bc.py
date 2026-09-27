@@ -119,6 +119,8 @@ def train_behavior_cloning(
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
     start_epoch = 0
     best_validation = float("inf")
+    patience_counter = 0
+
     if resume_checkpoint:
         checkpoint = torch.load(Path(resume_checkpoint), map_location=device, weights_only=False)
         model.load_state_dict(checkpoint["model_state_dict"])
@@ -190,7 +192,12 @@ def train_behavior_cloning(
             _atomic_torch_save(checkpoint, destination / "latest.pt")
             if validation_value < best_validation:
                 best_validation = validation_value
+                patience_counter = 0
                 _atomic_torch_save(checkpoint, destination / "best.pt")
+            else:
+                patience_counter += 1
+                if config.early_stopping_patience > 0 and patience_counter >= config.early_stopping_patience:
+                    break
             if (epoch + 1) % config.checkpoint_frequency == 0:
                 _atomic_torch_save(checkpoint, destination / f"epoch_{epoch + 1:05d}.pt")
 
@@ -198,7 +205,7 @@ def train_behavior_cloning(
         "output_dir": str(destination),
         "latest_checkpoint": str(destination / "latest.pt"),
         "best_checkpoint": str(destination / "best.pt"),
-        "epochs": config.epochs,
+        "epochs": epoch + 1,
         "validation_loss": best_validation,
     }
 

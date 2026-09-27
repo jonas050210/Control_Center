@@ -4,6 +4,8 @@
 class_name TestEnvironmentCore
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_environment_creation_has_agent_and_enemies() -> SandboxTest:
 	var t := SandboxTest.new("environment_creation_has_agent_and_enemies")

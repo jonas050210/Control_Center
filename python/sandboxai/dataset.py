@@ -1,8 +1,9 @@
-"""Human demonstration storage and validation."""
+"""Human demonstration storage, validation and inspection."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import time
 from typing import Any, Iterable
@@ -37,7 +38,7 @@ def action_to_multidiscrete(action: Any) -> list[int]:
     values = list(action)
     if len(values) < 5:
         raise ValueError(f"action needs at least 5 fields, got {len(values)}")
-    # Godot demonstrations use -1, 0, +1. External PPO uses 0, 1, 2.
+    # Godot demonstrations use 7 values with -1, 0, +1 axes. External PPO uses 5 values with 0, 1, 2.
     first = [int(values[index]) for index in range(4)]
     if len(values) >= 7 or any(value < 0 for value in first):
         if not all(-1 <= value <= 1 for value in first):
@@ -93,12 +94,33 @@ class DemonstrationDataset:
             raise ValueError(f"unsupported demonstration schema: {self.metadata.get('schema')}")
         if not self.transitions:
             raise ValueError("demonstration dataset contains no transitions")
+
+        expected_dim: int | None = None
         for index, transition in enumerate(self.transitions):
             for field in ("observation", "action", "next_observation", "reward", "done"):
                 if field not in transition:
-                    raise ValueError(f"transition {index} is missing {field}")
-            if not transition["observation"] or not transition["next_observation"]:
+                    raise ValueError(f"transition {index} is missing field {field!r}")
+            obs = transition["observation"]
+            next_obs = transition["next_observation"]
+            if not obs or not next_obs:
                 raise ValueError(f"transition {index} has an empty observation")
+            if expected_dim is None:
+                expected_dim = len(obs)
+            if len(obs) != expected_dim or len(next_obs) != expected_dim:
+                raise ValueError(f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})")
+
+            # Check for non-finite values
+            for val in obs:
+                if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
+                    raise ValueError(f"transition {index} observation contains invalid number: {val}")
+            for val in next_obs:
+                if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
+                    raise ValueError(f"transition {index} next_observation contains invalid number: {val}")
+
+            rew = transition["reward"]
+            if not isinstance(rew, (int, float)) or math.isnan(rew) or math.isinf(rew):
+                raise ValueError(f"transition {index} reward contains invalid number: {rew}")
+
             action_to_multidiscrete(transition["action"])
 
     def save(self, path: str | Path) -> Path:
@@ -151,15 +173,13 @@ class DemonstrationDataset:
         return DemonstrationDataset(train, dict(self.metadata)), DemonstrationDataset(validation, dict(self.metadata))
 
     def summary(self) -> dict[str, Any]:
-        # Dataset inspection should remain useful even before the optional
-        # numerical training dependencies are installed.
         observation_dim = len(self.transitions[0]["observation"]) if self.transitions else 0
         try:
             _observations, actions, _next, rewards, dones = self.arrays()
             action_dim = int(actions.shape[1])
             reward_sum = float(rewards.sum())
             terminal_transitions = int(dones.sum())
-        except RuntimeError:
+        except (RuntimeError, ImportError):
             encoded_actions = [action_to_multidiscrete(item["action"]) for item in self.transitions]
             action_dim = len(encoded_actions[0]) if encoded_actions else 0
             reward_sum = sum(float(item["reward"]) for item in self.transitions)

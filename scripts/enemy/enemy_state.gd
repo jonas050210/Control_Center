@@ -1,9 +1,8 @@
 ## EnemyState
 ##
-## Pure simulation state + minimal deterministic AI for a single enemy
-## target. No pathfinding, no perception cones, no complex behavior tree —
-## just idle / chase / attack, which is enough to give the agent a
-## meaningful combat target for milestone 1.
+## Pure simulation state + deterministic AI for a single enemy target.
+## Supports configurable difficulty parameters, idle/chase/attack/dead states,
+## and deterministic hit resolution.
 class_name EnemyState
 extends RefCounted
 
@@ -25,12 +24,43 @@ var attack_cooldown_time: float = SandboxConfig.ENEMY_ATTACK_COOLDOWN
 var attack_cooldown_remaining: float = 0.0
 
 
+func _init(
+	p_max_health: float = SandboxConfig.ENEMY_MAX_HEALTH,
+	p_move_speed: float = SandboxConfig.ENEMY_MOVE_SPEED,
+	p_attack_damage: float = SandboxConfig.ENEMY_ATTACK_DAMAGE,
+	p_attack_cooldown: float = SandboxConfig.ENEMY_ATTACK_COOLDOWN,
+	p_attack_range: float = SandboxConfig.ENEMY_ATTACK_RANGE
+) -> void:
+	max_health = maxf(1.0, p_max_health)
+	health = max_health
+	move_speed = maxf(0.0, p_move_speed)
+	attack_damage = maxf(0.0, p_attack_damage)
+	attack_cooldown_time = maxf(0.01, p_attack_cooldown)
+	attack_range = maxf(0.1, p_attack_range)
+	alive = true
+	ai_state = AIState.IDLE
+	attack_cooldown_remaining = 0.0
+
+
 func reset(spawn_position: Vector3 = SandboxConfig.ENEMY_SPAWN_POSITION) -> void:
 	position = spawn_position
 	health = max_health
 	alive = true
 	ai_state = AIState.IDLE
 	attack_cooldown_remaining = 0.0
+
+
+func configure_difficulty(
+	speed_scale: float = 1.0,
+	damage_scale: float = 1.0,
+	health_scale: float = 1.0,
+	cooldown_scale: float = 1.0
+) -> void:
+	max_health = SandboxConfig.ENEMY_MAX_HEALTH * maxf(0.1, health_scale)
+	health = max_health
+	move_speed = SandboxConfig.ENEMY_MOVE_SPEED * maxf(0.0, speed_scale)
+	attack_damage = SandboxConfig.ENEMY_ATTACK_DAMAGE * maxf(0.0, damage_scale)
+	attack_cooldown_time = SandboxConfig.ENEMY_ATTACK_COOLDOWN * maxf(0.1, cooldown_scale)
 
 
 func get_chest_position() -> Vector3:
@@ -73,8 +103,9 @@ func update_ai(
 		return 0.0
 
 	ai_state = AIState.CHASE
-	var dir: Vector3 = to_agent.normalized()
-	position += dir * move_speed * dt
+	if distance > 0.0001:
+		var dir: Vector3 = to_agent / distance
+		position += dir * move_speed * dt
 	var limit: float = arena_half_extent - radius
 	position.x = clampf(position.x, -limit, limit)
 	position.z = clampf(position.z, -limit, limit)
@@ -92,3 +123,16 @@ func take_damage(amount: float) -> float:
 		alive = false
 		ai_state = AIState.DEAD
 	return applied
+
+
+func to_dict() -> Dictionary:
+	return {
+		"position": position,
+		"health": health,
+		"max_health": max_health,
+		"alive": alive,
+		"ai_state": ai_state,
+		"move_speed": move_speed,
+		"attack_damage": attack_damage,
+		"attack_cooldown_remaining": attack_cooldown_remaining,
+	}

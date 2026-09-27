@@ -1,8 +1,9 @@
-"""Two-policy/frozen-opponent foundation for future population training."""
+"""Two-policy/frozen-opponent foundation for multi-agent training and evaluation."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+import random
 from typing import Any
 
 
@@ -38,13 +39,35 @@ class SelfPlayCoordinator:
     makes it difficult to accidentally update a frozen opponent.
     """
 
-    def __init__(self, learning_slot: PolicySlot, opponent_slot: PolicySlot) -> None:
+    def __init__(
+        self,
+        learning_slot: PolicySlot,
+        opponent_slot: PolicySlot,
+        opponent_pool: list[str] | None = None,
+    ) -> None:
         if learning_slot.name == opponent_slot.name:
             raise ValueError("self-play slots need distinct names")
         self.learning_slot = learning_slot
         self.opponent_slot = opponent_slot
         self.opponent_slot.frozen = True
+        self.opponent_pool: list[str] = list(opponent_pool or [])
+        if opponent_slot.checkpoint and opponent_slot.checkpoint not in self.opponent_pool:
+            self.opponent_pool.append(opponent_slot.checkpoint)
         self.metrics: dict[str, list[dict[str, Any]]] = {learning_slot.name: [], opponent_slot.name: []}
+
+    def add_to_pool(self, checkpoint_path: str | Path) -> None:
+        path_str = str(checkpoint_path)
+        if path_str not in self.opponent_pool:
+            self.opponent_pool.append(path_str)
+
+    def sample_opponent(self, device: str = "cpu", rng: random.Random | None = None) -> PolicySlot:
+        if not self.opponent_pool:
+            return self.opponent_slot
+        picker = rng or random
+        chosen = picker.choice(self.opponent_pool)
+        self.opponent_slot.checkpoint = chosen
+        self.opponent_slot.load(device)
+        return self.opponent_slot
 
     def load_opponent(self, device: str = "cpu") -> Any:
         return self.opponent_slot.load(device)
@@ -68,5 +91,7 @@ class SelfPlayCoordinator:
                 "matches": len(rows),
                 "win_rate": wins / len(rows) if rows else 0.0,
                 "mean_reward": sum(float(row.get("episode_reward", 0.0)) for row in rows) / len(rows) if rows else 0.0,
+                "mean_kills": sum(float(row.get("kills", 0.0)) for row in rows) / len(rows) if rows else 0.0,
+                "mean_accuracy": sum(float(row.get("accuracy", 0.0)) for row in rows) / len(rows) if rows else 0.0,
             }
         return output

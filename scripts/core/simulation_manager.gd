@@ -173,14 +173,10 @@ func get_observations() -> Array:
 
 
 func get_rewards() -> Array:
-	# Keep the reward from the most recent batch even when auto-reset has
-	# already cleared the new episode's EpisodeState counters.
 	return _last_step_rewards.duplicate()
 
 
 func is_done_all() -> Array:
-	# This reports the done flags from the latest transition, including a
-	# terminal transition that was immediately auto-reset for vector training.
 	return _last_step_dones.duplicate()
 
 
@@ -189,6 +185,20 @@ func get_metrics() -> Array:
 	for env in environments:
 		metrics.append((env as EnvironmentCore).get_metrics())
 	return metrics
+
+
+func get_reward_breakdowns() -> Array:
+	var breakdowns: Array = []
+	for env in environments:
+		breakdowns.append((env as EnvironmentCore).episode.get_reward_breakdown())
+	return breakdowns
+
+
+func health_check_all() -> Array:
+	var reports: Array = []
+	for env in environments:
+		reports.append((env as EnvironmentCore).health_check())
+	return reports
 
 
 func set_curriculum_level(level: int) -> void:

@@ -15,6 +15,10 @@ func _init(p_test_name: String) -> void:
 	test_name = p_test_name
 
 
+func fail(message: String = "") -> void:
+	failures.append("explicit failure: %s" % message)
+
+
 func assert_true(condition: bool, message: String = "") -> void:
 	if not condition:
 		failures.append("expected true but was false. %s" % message)
@@ -28,6 +32,11 @@ func assert_false(condition: bool, message: String = "") -> void:
 func assert_eq(actual, expected, message: String = "") -> void:
 	if actual != expected:
 		failures.append("expected %s but got %s. %s" % [str(expected), str(actual), message])
+
+
+func assert_ne(actual, expected, message: String = "") -> void:
+	if actual == expected:
+		failures.append("expected not %s but got equal. %s" % [str(expected), message])
 
 
 func assert_almost_eq(
@@ -59,9 +68,19 @@ func assert_gt(actual: float, threshold: float, message: String = "") -> void:
 		failures.append("expected %s > %s. %s" % [str(actual), str(threshold), message])
 
 
+func assert_gte(actual: float, threshold: float, message: String = "") -> void:
+	if not (actual >= threshold):
+		failures.append("expected %s >= %s. %s" % [str(actual), str(threshold), message])
+
+
 func assert_lt(actual: float, threshold: float, message: String = "") -> void:
 	if not (actual < threshold):
 		failures.append("expected %s < %s. %s" % [str(actual), str(threshold), message])
+
+
+func assert_lte(actual: float, threshold: float, message: String = "") -> void:
+	if not (actual <= threshold):
+		failures.append("expected %s <= %s. %s" % [str(actual), str(threshold), message])
 
 
 func assert_null(value, message: String = "") -> void:

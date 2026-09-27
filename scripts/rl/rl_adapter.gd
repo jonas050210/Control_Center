@@ -18,7 +18,7 @@ static func action_space_info() -> Dictionary:
 		"type": "multi_discrete",
 		"nvec": Action.MULTI_DISCRETE_NVECS.duplicate(),
 		"dimension": Action.MULTI_DISCRETE_SIZE,
-		# Kept for backwards compatibility with Agent 1's single-discrete API.
+		# Kept for backwards compatibility with single-discrete API.
 		"discrete_choices": Action.DISCRETE_COUNT,
 		"fields": ["move_axis", "strafe_axis", "look_yaw_axis", "look_pitch_axis", "shoot"],
 		"continuous_reserved": ["look_delta.x", "look_delta.y"],
@@ -72,6 +72,8 @@ func step(actions: Array) -> Dictionary:
 		var info: Dictionary = result.info.duplicate(true)
 		if result.has("terminal_observation"):
 			info["terminal_observation"] = _observation_to_array(result.terminal_observation)
+		var done_reason: String = str(info.get("done_reason", ""))
+		info["TimeLimit.truncated"] = done_reason == "timeout"
 		infos.append(info)
 
 	return {
@@ -101,12 +103,29 @@ func get_metrics() -> Array:
 	return simulation_manager.get_metrics()
 
 
+func get_reward_breakdowns() -> Array:
+	return simulation_manager.get_reward_breakdowns()
+
+
+func health_check() -> Array:
+	return simulation_manager.health_check_all()
+
+
 func _resolve_action(action_value) -> Action:
 	if action_value is Action:
 		return action_value
 	if typeof(action_value) == TYPE_INT or typeof(action_value) == TYPE_FLOAT:
 		return Action.from_discrete(int(action_value))
 	if action_value is Array:
+		if action_value.size() >= 7:
+			return Action.new(
+				int(action_value[0]),
+				int(action_value[1]),
+				int(action_value[2]),
+				int(action_value[3]),
+				bool(action_value[4]),
+				Vector2(float(action_value[5]), float(action_value[6]))
+			)
 		return Action.from_multidiscrete(action_value)
 	if action_value is Dictionary:
 		return Action.new(

@@ -49,7 +49,10 @@ def evaluate_model(
             steps = 0
             last_info: dict[str, Any] = {}
             while not done:
-                action, _state = model.predict(observation, deterministic=True)
+                prediction = model.predict(observation, deterministic=True)
+                action = prediction[0] if isinstance(prediction, tuple) else prediction
+                if hasattr(action, "cpu"):
+                    action = action.cpu().numpy()
                 observation, reward, terminated, truncated, info = env.step(action)
                 total_reward += float(reward)
                 steps += 1
