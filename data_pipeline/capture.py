@@ -102,9 +102,11 @@ class ScreenCapture(CaptureSource):
         if self._sct is None or self._bbox is None:
             self.start()
 
-        # Capture frame with monotonic timestamp
-        t_capture = time.perf_counter()
+        # Timestamp at the midpoint of the screen-copy interval. This is a
+        # better synchronization estimate than timestamping only before MSS.
+        t_before = time.perf_counter()
         raw_sct = self._sct.grab(self._bbox)
+        t_capture = (t_before + time.perf_counter()) * 0.5
 
         # raw_sct.rgb returns raw RGB bytes (BGRA is converted by mss)
         img = Image.frombytes("RGB", raw_sct.size, raw_sct.rgb)

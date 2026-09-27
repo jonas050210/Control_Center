@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data_pipeline.recorder import SessionRecorder
-from data_pipeline.schema import MouseConfig
+from data_pipeline.schema import DatasetMetadata, MouseConfig
 from data_pipeline.stats import format_inspection_report, inspect_dataset
 from data_pipeline.validate import validate_dataset
 
@@ -105,13 +105,23 @@ def main() -> None:
         "--bin_strategy",
         type=str,
         default="symmetric_log",
-        choices=["symmetric_log", "uniform", "quantile"],
-        help="Mouse delta discretization binning strategy",
+        choices=["symmetric_log", "uniform"],
+        help="Mouse delta discretization used during online recording",
     )
     parser.add_argument(
         "--no_validate",
         action="store_true",
         help="Skip automatic validation upon session completion",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing an existing custom session directory",
+    )
+    parser.add_argument(
+        "--state_file",
+        default="logs/system_state.json",
+        help="Persistent telemetry state file",
     )
 
     args = parser.parse_args()
@@ -148,9 +158,15 @@ def main() -> None:
         image_format=args.format,
         jpeg_quality=args.quality,
         mouse_config=mouse_config,
-        window_title=args.window or ("Roblox" if args.source == "ttk_testing" else None),
+        window_title=args.window or (
+            "Roblox" if args.source == "ttk_testing" else (
+                "SandboxAI" if args.source == "godot_sandbox" else None
+            )
+        ),
         roi=args.roi,
         is_mock=args.mock,
+        overwrite=args.overwrite,
+        telemetry_state_file=args.state_file,
     )
 
     print(f"[INFO] Recording session: {recorder.session_id}")

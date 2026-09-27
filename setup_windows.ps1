@@ -1,4 +1,4 @@
-# SandboxAI M0 bootstrap (Windows 11, Python 3.11, RTX 4060 Ti)
+# SandboxAI local platform bootstrap (Windows 11, Python 3.11, RTX 4060 Ti)
 #
 # One-time setup from a FRESH CLONE, run from the repo root:
 #   powershell -ExecutionPolicy Bypass -File setup_windows.ps1
@@ -7,20 +7,20 @@
 #   1. checks the Python 3.11 launcher
 #   2. creates .venv (if missing) and upgrades pip
 #   3. installs PyTorch with CUDA 12.4 (if missing) + pinned requirements
-#   4. clones the pinned godot_rl_agents_examples + SandboxAI overlay
+#   4. optionally installs historical godot-rl examples (-IncludeFeasibility)
 #   5. downloads + installs the Godot 4.3 export templates (if missing, ~1.2 GB)
-#   6. imports assets and exports build\fps_windows.exe / build\virtualcamera_windows.exe
+#   6. imports/exports the SandboxAI arena (plus M0 references when requested)
 #
 # Skips any step that is already done; safe to re-run.
-# Requires the Godot 4.3 executables in the repo root (already the case) and
-# git on PATH.  Use -SkipTemplates to skip step 5 (e.g. manual template install).
+# Requires a Godot 4.3 executable in the repo root or on PATH and git on PATH.
+# Use -SkipTemplates to skip step 5 (e.g. manual template install).
 #
 # NOTE: we deliberately use $ErrorActionPreference = 'Continue' (the default):
 # with 'Stop', stderr output of native tools (python/pip/py) can abort the
 # script on EXPECTED failures (e.g. the torch pre-check before installing).
 # Every step instead checks $LASTEXITCODE / Test-Path explicitly.
 
-param([switch]$SkipTemplates)
+param([switch]$SkipTemplates, [switch]$IncludeFeasibility)
 
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -66,14 +66,20 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------- 3b. pinned deps
-Step "pinned requirements (data pipeline, godot-rl, sb3, gymnasium)"
+Step "SandboxAI runtime requirements (capture, BC, SB3, Gymnasium)"
 & $py -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Fail "requirements install failed" }
 
-# -------------------------------------------------- 4. examples (pinned)
-Step "godot_rl_agents_examples (pinned commit + SandboxAI overlay)"
-& $py feasibility\setup_examples.py
-if ($LASTEXITCODE -ne 0) { Fail "setup_examples.py failed - is git installed and on PATH?" }
+# ---------------------------------------- 4. optional historical feasibility stack
+if ($IncludeFeasibility) {
+    Step "historical godot-rl feasibility stack"
+    & $py -m pip install -r feasibility\requirements.txt
+    if ($LASTEXITCODE -ne 0) { Fail "feasibility requirements install failed" }
+    & $py feasibility\setup_examples.py
+    if ($LASTEXITCODE -ne 0) { Fail "setup_examples.py failed - is git installed and on PATH?" }
+} else {
+    Info "historical M0 feasibility examples skipped (use -IncludeFeasibility to install them)"
+}
 
 # ------------------------------------------- 5. Godot export templates
 Step "Godot 4.3 export templates"
@@ -109,8 +115,18 @@ if ($SkipTemplates) {
 
 # ------------------------------------------------------- 6. import/export
 Step "import assets + export environments"
-& $py feasibility\export_envs.py
-if ($LASTEXITCODE -ne 0) { Fail "export_envs.py failed (see output above)" }
+if ($IncludeFeasibility) {
+    & $py feasibility\export_envs.py
+    if ($LASTEXITCODE -ne 0) { Fail "feasibility export failed (see output above)" }
+}
+
+$godotConsole = Get-ChildItem -Path $root -Filter "*Godot*console*.exe" | Select-Object -First 1
+$godotGui = Get-ChildItem -Path $root -Filter "Godot*.exe" | Where-Object { $_.Name -notmatch "console" } | Select-Object -First 1
+$godotOnPath = Get-Command godot4, godot -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$godotExe = if ($godotConsole) { $godotConsole.FullName } elseif ($godotGui) { $godotGui.FullName } elseif ($godotOnPath) { $godotOnPath.Path } else { $null }
+if (-not $godotExe) { Fail "Godot 4 executable not found in repository root or PATH" }
+& $py -m sandbox.export --godot $godotExe --preset "Windows Desktop"
+if ($LASTEXITCODE -ne 0) { Fail "SandboxAI arena export failed (see output above)" }
 
 # ------------------------------------------------------------------ done
 Step "GPU"
@@ -121,12 +137,14 @@ if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
 }
 
 Write-Host ""
-Write-Host "Bootstrap complete. Benchmarks (run from the repo root, venv active):" -ForegroundColor Green
+Write-Host "Bootstrap complete. Start here (run from the repo root, venv active):" -ForegroundColor Green
 Write-Host "  .venv\Scripts\activate"
-Write-Host "  python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --seconds 30"
-Write-Host "  python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --n_parallel 4 --seconds 30"
-Write-Host "  python feasibility\train_ppo.py --env_path build\fps_windows.exe --timesteps 50000 --n_parallel 2"
-Write-Host "  python feasibility\benchmark_env.py --env_path build\virtualcamera_windows.exe --viz --speedup 30 --seconds 30"
-Write-Host "  python feasibility\train_ppo.py --env_path build\virtualcamera_windows.exe --viz --timesteps 20000"
-Write-Host ""
-Write-Host "Fill the results table in feasibility\README.md afterwards (see PROJECT.md)." -ForegroundColor Green
+Write-Host "  python -m sandboxai doctor"
+Write-Host "  python -m sandboxai play"
+Write-Host "  python -m sandboxai e2e --data_dir datasets --bc_epochs 10 --rl_timesteps 10000"
+if ($IncludeFeasibility) {
+    Write-Host ""
+    Write-Host "Historical M0 commands:" -ForegroundColor Yellow
+    Write-Host "  python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --seconds 30"
+    Write-Host "  python feasibility\train_ppo.py --env_path build\fps_windows.exe --timesteps 50000 --n_parallel 2"
+}

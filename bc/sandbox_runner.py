@@ -1,8 +1,4 @@
-"""BC Policy Closed-Loop Runner inside the Tactical Sandbox (Phase 4).
-
-Connects a trained Behavioral Cloning policy to the Sandbox environment,
-translates visual observations to actions, and evaluates agent performance.
-"""
+"""Run a BC policy in closed loop inside the controlled FPS sandbox."""
 
 from __future__ import annotations
 
@@ -11,14 +7,15 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-# Ensure repository root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 
 from bc.policy import BCPolicy
+from monitoring.experiments import ExperimentTracker
+from monitoring.state import SystemTelemetry
 from sandbox.env import make_sandbox_env
 
 
@@ -29,116 +26,154 @@ def run_bc_in_sandbox(
     env_path: Optional[str] = None,
     device: str = "cpu",
     deterministic: bool = True,
+    backend: str = "auto",
+    output_report: Optional[Union[str, Path]] = None,
+    experiment_root: Optional[Union[str, Path]] = None,
+    state_file: Optional[Union[str, Path]] = None,
+    base_seed: int = 1000,
 ) -> Dict[str, Any]:
-    """Runs closed-loop evaluation of a BC model inside the Tactical Sandbox."""
-    print("============================================================")
-    print("  SandboxAI: BC Policy -> Sandbox Closed-Loop Runner")
-    print("============================================================")
-    print(f"Checkpoint   : {checkpoint_path}")
-    print(f"Num Episodes : {num_episodes}")
-    print(f"Max Steps/Ep : {max_steps_per_episode}")
-    print(f"Device       : {device}")
-    print("============================================================")
-
     policy = BCPolicy.load_from_checkpoint(checkpoint_path, device=device)
-    env = make_sandbox_env(env_path=env_path, width=policy.target_w, height=policy.target_h)
-
-    episode_rewards: List[float] = []
-    episode_lengths: List[int] = []
-    episode_hits: List[int] = []
-
-    fired_count = 0
-    total_steps = 0
-
-    for ep in range(1, num_episodes + 1):
-        obs, _ = env.reset(seed=ep * 100)
-        policy.reset()
-
-        ep_reward = 0.0
-        ep_step = 0
-        ep_hits = 0
-
-        while ep_step < max_steps_per_episode:
-            # Policy predicts ActionState from visual observation [3, H, W]
-            action_state, raw_dict = policy.predict(obs, deterministic=deterministic)
-
-            # Map to sandbox action format [move_x_idx, move_y_idx, fire, turn_yaw, turn_pitch]
-            move_x_idx = int(raw_dict["move_x"] + 1)  # -1, 0, 1 -> 0, 1, 2
-            move_y_idx = int(raw_dict["move_y"] + 1)
-            fire = int(raw_dict["fire"])
-            yaw_bin = int(raw_dict["mouse_dx_bin"])
-            pitch_bin = int(raw_dict["mouse_dy_bin"])
-
-            env_action = [move_x_idx, move_y_idx, fire, yaw_bin, pitch_bin]
-
-            obs, reward, terminated, truncated, info = env.step(env_action)
-            ep_reward += reward
-            ep_step += 1
-            total_steps += 1
-            if fire == 1:
-                fired_count += 1
-            if info.get("last_shot_hit", False):
-                ep_hits += 1
-
-            if terminated or truncated:
-                break
-
-        episode_rewards.append(ep_reward)
-        episode_lengths.append(ep_step)
-        episode_hits.append(ep_hits)
-
-        print(
-            f"Episode {ep:02d}/{num_episodes:02d} | "
-            f"Reward: {ep_reward:+.2f} | "
-            f"Steps: {ep_step:3d} | "
-            f"Targets Hit: {ep_hits:2d}"
+    env = make_sandbox_env(
+        env_path=env_path,
+        backend=backend,
+        width=policy.target_w,
+        height=policy.target_h,
+        max_steps=max_steps_per_episode,
+    )
+    tracker = (
+        ExperimentTracker(
+            "bc_closed_loop",
+            {
+                "checkpoint": checkpoint_path,
+                "episodes": num_episodes,
+                "steps": max_steps_per_episode,
+                "backend": backend,
+            },
+            experiment_root,
         )
+        if experiment_root
+        else None
+    )
+    telemetry = SystemTelemetry(state_file) if state_file else None
+    if telemetry:
+        telemetry.update_stage("BC_CLOSED_LOOP")
+    episodes: List[Dict[str, Any]] = []
+    started = time.perf_counter()
+    try:
+        for episode_idx in range(num_episodes):
+            observation, _ = env.reset(seed=base_seed + episode_idx * 13)
+            policy.reset()
+            reward_total = 0.0
+            fired = 0
+            final_info: Dict[str, Any] = {}
+            for step in range(max_steps_per_episode):
+                env_action, raw = policy.predict_env_action(
+                    observation, deterministic=deterministic
+                )
+                observation, reward, terminated, truncated, final_info = env.step(env_action)
+                reward_total += reward
+                fired += int(raw["fire"])
+                if telemetry and (step + 1) % 20 == 0:
+                    elapsed = time.perf_counter() - started
+                    telemetry.update_runtime(
+                        fps=0.0,
+                        steps_per_sec=(sum(item["length"] for item in episodes) + step + 1) / max(1e-9, elapsed),
+                        episode_reward=reward_total,
+                        action={key: raw[key] for key in ("move_x", "move_y", "fire", "ads", "mouse_dx_bin", "mouse_dy_bin")},
+                        info={key: final_info.get(key) for key in ("step", "targets_hit", "kills", "health", "ammo")},
+                    )
+                if terminated or truncated:
+                    break
+            record = {
+                "episode": episode_idx,
+                "seed": base_seed + episode_idx * 13,
+                "reward": round(reward_total, 6),
+                "length": step + 1,
+                "hits": int(final_info.get("targets_hit", 0)),
+                "kills": int(final_info.get("kills", 0)),
+                "shots": int(final_info.get("shots_fired", fired)),
+                "accuracy": float(final_info.get("accuracy", 0.0)),
+                "damage_taken": float(final_info.get("damage_taken", 0.0)),
+                "health": float(final_info.get("health", 0.0)),
+            }
+            episodes.append(record)
+            if tracker:
+                tracker.log_metrics(episode_idx, record, phase="closed_loop")
 
-    mean_rew = float(np.mean(episode_rewards))
-    std_rew = float(np.std(episode_rewards))
-    mean_len = float(np.mean(episode_lengths))
-    total_hits = sum(episode_hits)
-    fire_rate = (fired_count / max(1, total_steps) * 100.0) if total_steps > 0 else 0.0
-    hit_rate = (total_hits / max(1, total_steps) * 100.0) if total_steps > 0 else 0.0
+        elapsed = time.perf_counter() - started
+        rewards = [episode["reward"] for episode in episodes]
+        total_steps = sum(episode["length"] for episode in episodes)
+        total_hits = sum(episode["hits"] for episode in episodes)
+        total_shots = sum(episode["shots"] for episode in episodes)
+        result = {
+            "policy_name": "BC",
+            "checkpoint": checkpoint_path,
+            "backend": (
+                "godot" if backend == "godot" or (backend == "auto" and env_path) else "python"
+            ),
+            "episodes_completed": len(episodes),
+            "mean_reward": round(float(np.mean(rewards)), 4),
+            "std_reward": round(float(np.std(rewards)), 4),
+            "mean_length": round(float(np.mean([e["length"] for e in episodes])), 2),
+            "total_hits": total_hits,
+            "total_kills": sum(episode["kills"] for episode in episodes),
+            "hit_rate_pct": round(total_hits / max(1, total_shots) * 100.0, 3),
+            "fire_rate_pct": round(total_shots / max(1, total_steps) * 100.0, 3),
+            "steps_per_sec": round(total_steps / max(1e-9, elapsed), 2),
+            "episode_rewards": rewards,
+            "episodes": episodes,
+        }
+        if output_report:
+            report_path = Path(output_report)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if tracker:
+            if output_report:
+                tracker.add_artifact(output_report, "closed_loop_report")
+            tracker.finish(result)
+            result["run_id"] = tracker.run_id
+        if telemetry:
+            telemetry.update_stage("IDLE")
+        return result
+    except Exception as exc:
+        if tracker:
+            tracker.fail(exc)
+        if telemetry:
+            telemetry.update_stage("FAILED")
+        raise
+    finally:
+        env.close()
 
-    print("\n=== Closed-Loop Evaluation Summary ===")
-    print(f"Mean Reward     : {mean_rew:+.2f} ± {std_rew:.2f}")
-    print(f"Mean Length     : {mean_len:.1f} steps")
-    print(f"Total Targets Hit: {total_hits}")
-    print(f"Fire Rate       : {fire_rate:.1f}%")
 
-    return {
-        "episodes_completed": len(episode_rewards),
-        "mean_reward": round(mean_rew, 3),
-        "std_reward": round(std_rew, 3),
-        "mean_length": round(mean_len, 1),
-        "total_hits": total_hits,
-        "hit_rate_pct": round(hit_rate, 2),
-        "fire_rate_pct": round(fire_rate, 2),
-        "episode_rewards": episode_rewards,
-    }
-
-
-# Alias for convenience
 run_bc_sandbox = run_bc_in_sandbox
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run BC policy in Sandbox environment")
-    parser.add_argument("--checkpoint", "-c", type=str, required=True, help="Path to BC checkpoint")
-    parser.add_argument("--episodes", "-e", type=int, default=5, help="Number of evaluation episodes")
-    parser.add_argument("--env_path", type=str, default=None, help="Path to exported Godot executable (optional)")
-    parser.add_argument("--device", type=str, default="cpu", help="Device (cpu/cuda)")
-    parser.add_argument("--stochastic", action="store_true", help="Use stochastic action sampling")
+    parser = argparse.ArgumentParser(description="Run BC in the controlled sandbox")
+    parser.add_argument("--checkpoint", "-c", required=True)
+    parser.add_argument("--episodes", "-e", type=int, default=5)
+    parser.add_argument("--steps", type=int, default=300)
+    parser.add_argument("--env_path", default=None)
+    parser.add_argument("--backend", choices=["auto", "python", "godot"], default="auto")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--stochastic", action="store_true")
+    parser.add_argument("--output", default="logs/bc_closed_loop.json")
+    parser.add_argument("--experiment_root", default="logs/experiments")
+    parser.add_argument("--state_file", default="logs/system_state.json")
     args = parser.parse_args()
-
-    run_bc_in_sandbox(
+    result = run_bc_in_sandbox(
         checkpoint_path=args.checkpoint,
         num_episodes=args.episodes,
+        max_steps_per_episode=args.steps,
         env_path=args.env_path,
         device=args.device,
         deterministic=not args.stochastic,
+        backend=args.backend,
+        output_report=args.output,
+        experiment_root=args.experiment_root,
+        state_file=args.state_file,
     )
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

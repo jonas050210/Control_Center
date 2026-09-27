@@ -10,7 +10,17 @@ config/name="SandboxAI Tactical Arena"
 config/description="Minimal custom tactical-FPS-style greybox arena for SandboxAI imitation and reinforcement learning."
 config/version="1.0.0"
 run/main_scene="res://scenes/Arena.tscn"
-config/features=PackedStringArray("4.3", "Forward Plus")
+config/features=PackedStringArray("4.3", "GL Compatibility")
+
+[autoload]
+
+RLBridge="*res://scripts/rl_bridge.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/mode=2
 
 [physics]
 
@@ -18,7 +28,8 @@ common/physics_ticks_per_second=60
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
 viewport/size/viewport_width=1280
 viewport/size/viewport_height=720

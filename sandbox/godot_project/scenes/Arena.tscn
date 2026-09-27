@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://arena001"]
+[gd_scene load_steps=14 format=3 uid="uid://arena001"]
 
 [ext_resource type="PackedScene" path="res://scenes/Player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/TargetDummy.tscn" id="2_dummy"]
@@ -35,6 +35,20 @@ roughness = 0.6
 material = SubResource("Mat_Wall")
 size = Vector3(40, 6, 1)
 
+[sub_resource type="BoxShape3D" id="Shape_Wall"]
+size = Vector3(40, 6, 1)
+
+[sub_resource type="StandardMaterial3D" id="Mat_Cover"]
+albedo_color = Color(0.32, 0.36, 0.39, 1)
+roughness = 0.9
+
+[sub_resource type="BoxMesh" id="Mesh_Cover"]
+material = SubResource("Mat_Cover")
+size = Vector3(4, 2.6, 1.5)
+
+[sub_resource type="BoxShape3D" id="Shape_Cover"]
+size = Vector3(4, 2.6, 1.5)
+
 [node name="Arena" type="Node3D"]
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
@@ -59,11 +73,17 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, -20)
 [node name="MeshInstance3D" type="MeshInstance3D" parent="WallNorth"]
 mesh = SubResource("Mesh_Wall")
 
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallNorth"]
+shape = SubResource("Shape_Wall")
+
 [node name="WallSouth" type="StaticBody3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 20)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="WallSouth"]
 mesh = SubResource("Mesh_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallSouth"]
+shape = SubResource("Shape_Wall")
 
 [node name="WallEast" type="StaticBody3D" parent="."]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 20, 2.5, 0)
@@ -71,11 +91,45 @@ transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 20, 2.5, 0)
 [node name="MeshInstance3D" type="MeshInstance3D" parent="WallEast"]
 mesh = SubResource("Mesh_Wall")
 
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallEast"]
+shape = SubResource("Shape_Wall")
+
 [node name="WallWest" type="StaticBody3D" parent="."]
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, -20, 2.5, 0)
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="WallWest"]
 mesh = SubResource("Mesh_Wall")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallWest"]
+shape = SubResource("Shape_Wall")
+
+[node name="CoverCenter" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.3, -5)
+[node name="Mesh" type="MeshInstance3D" parent="CoverCenter"]
+mesh = SubResource("Mesh_Cover")
+[node name="Collision" type="CollisionShape3D" parent="CoverCenter"]
+shape = SubResource("Shape_Cover")
+
+[node name="CoverWest" type="StaticBody3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, -7, 1.3, 2)
+[node name="Mesh" type="MeshInstance3D" parent="CoverWest"]
+mesh = SubResource("Mesh_Cover")
+[node name="Collision" type="CollisionShape3D" parent="CoverWest"]
+shape = SubResource("Shape_Cover")
+
+[node name="CoverEast" type="StaticBody3D" parent="."]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 7, 1.3, 6)
+[node name="Mesh" type="MeshInstance3D" parent="CoverEast"]
+mesh = SubResource("Mesh_Cover")
+[node name="Collision" type="CollisionShape3D" parent="CoverEast"]
+shape = SubResource("Shape_Cover")
+
+[node name="CoverSouth" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 1.3, 9)
+[node name="Mesh" type="MeshInstance3D" parent="CoverSouth"]
+mesh = SubResource("Mesh_Cover")
+[node name="Collision" type="CollisionShape3D" parent="CoverSouth"]
+shape = SubResource("Shape_Cover")
 
 [node name="Player" parent="." instance=ExtResource("1_player")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)

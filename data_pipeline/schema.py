@@ -13,7 +13,7 @@ import platform
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-SCHEMA_VERSION: str = "1.0.0"
+SCHEMA_VERSION: str = "1.1.0"
 
 # Canonical Action Space specification
 ACTION_SPACE_SPEC: Dict[str, Any] = {
@@ -222,12 +222,15 @@ class DatasetMetadata:
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
+            json.dump(self.to_dict(), f, indent=2, allow_nan=False)
 
     @classmethod
     def load(cls, file_path: Union[str, Path]) -> DatasetMetadata:
+        def reject_non_finite(value: str) -> None:
+            raise ValueError(f"Non-finite JSON number is not allowed: {value}")
+
         with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            data = json.load(f, parse_constant=reject_non_finite)
         return cls.from_dict(data)
 
 
