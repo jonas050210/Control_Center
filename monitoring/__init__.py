@@ -1,5 +1,6 @@
-"""SandboxAI Monitoring and Control Layer Package (Phase 7)."""
+"""Persistent telemetry and experiment tracking for SandboxAI."""
 
+from monitoring.experiments import ExperimentTracker
 from monitoring.state import SystemTelemetry
 
-__all__ = ["SystemTelemetry"]
+__all__ = ["SystemTelemetry", "ExperimentTracker"]

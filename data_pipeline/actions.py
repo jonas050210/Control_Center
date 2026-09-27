@@ -52,14 +52,24 @@ class MouseBinner:
         self.num_bins = num_bins
         self.strategy = strategy
 
-        if custom_edges is not None and len(custom_edges) == num_bins + 1:
-            self.edges = [float(e) for e in custom_edges]
+        if custom_edges is not None:
+            if len(custom_edges) != num_bins + 1:
+                raise ValueError(
+                    f"custom_edges must contain num_bins + 1 ({num_bins + 1}) values"
+                )
+            self.edges = [float(edge) for edge in custom_edges]
+            if any(not math.isfinite(edge) for edge in self.edges):
+                raise ValueError("custom_edges must contain only finite values")
+            if any(not self.edges[i] < self.edges[i + 1] for i in range(num_bins)):
+                raise ValueError("custom_edges must be strictly increasing")
         elif strategy == "uniform":
             self.edges = self.generate_uniform_edges(num_bins, max_val=100.0)
         elif strategy == "symmetric_log":
             self.edges = self.generate_symmetric_log_edges(num_bins, max_val=150.0)
         else:
-            self.edges = self.generate_symmetric_log_edges(num_bins, max_val=150.0)
+            raise ValueError(
+                "strategy must be 'symmetric_log' or 'uniform' unless custom_edges are provided"
+            )
 
     @staticmethod
     def generate_symmetric_log_edges(
@@ -69,7 +79,7 @@ class MouseBinner:
 
         For num_bins = 21:
           Bin 10 (center) corresponds to [-0.2, 0.2] (virtually zero).
-          Outer bins expand exponentially up to [-inf, +inf].
+          Outer bins use finite JSON-safe sentinels around exponential edges.
         """
         half_bins = (num_bins - 1) // 2  # e.g., 10 for 21 bins
         # Positive thresholds: from 0.2 to max_val geometrically/exponentially
@@ -80,12 +90,14 @@ class MouseBinner:
         negative_edges = [-p for p in reversed(positive_edges)]
         # Center threshold: [-min_pos, +min_pos]
         # Full edges list has length num_bins + 1
+        # Finite sentinels keep metadata strict JSON while the interior edges
+        # still define the two unbounded outer categories in discretize().
         edges = (
-            [-float("inf")]
+            [-1.0e9]
             + negative_edges[:-1]
             + [-min_pos, min_pos]
             + positive_edges[1:]
-            + [float("inf")]
+            + [1.0e9]
         )
         return edges
 
@@ -100,11 +112,11 @@ class MouseBinner:
         neg = [-p for p in reversed(pos)]
         center_deadzone = step * 0.1
         edges = (
-            [-float("inf")]
+            [-1.0e9]
             + neg
             + [-center_deadzone, center_deadzone]
             + pos
-            + [float("inf")]
+            + [1.0e9]
         )
         return edges
 
@@ -122,8 +134,8 @@ class MouseBinner:
 
         quantiles = np.linspace(0, 1, num_bins + 1)
         edges = np.quantile(arr, quantiles).tolist()
-        edges[0] = -float("inf")
-        edges[-1] = float("inf")
+        edges[0] = -1.0e9
+        edges[-1] = 1.0e9
         # Ensure monotonic uniqueness
         for i in range(1, len(edges) - 1):
             if edges[i] <= edges[i - 1]:
@@ -146,15 +158,12 @@ class MouseBinner:
         left = self.edges[bin_idx]
         right = self.edges[bin_idx + 1]
 
-        left_is_neginf = math.isinf(left) and left < 0
-        right_is_posinf = math.isinf(right) and right > 0
-
-        if left_is_neginf and right_is_posinf:
-            return 0.0
-        if left_is_neginf:
-            return float(right - 10.0)  # reasonable representative outer flick
-        if right_is_posinf:
-            return float(left + 10.0)  # reasonable representative outer flick
+        # Outer categories are conceptually unbounded even though their stored
+        # sentinels are finite for strict JSON compatibility.
+        if bin_idx == 0:
+            return float(right - 10.0)
+        if bin_idx == self.num_bins - 1:
+            return float(left + 10.0)
 
         # If straddling 0, return exactly 0.0
         if left < 0 and right > 0:

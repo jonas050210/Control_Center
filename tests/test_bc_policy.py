@@ -50,6 +50,36 @@ def test_bc_policy_predict_from_pil(tmp_path: Path) -> None:
     assert "move_x" in raw_dict
 
 
+def test_bc_policy_maps_noncanonical_dataset_bins_to_environment_contract() -> None:
+    model = BCVisionNetwork(
+        in_channels=3,
+        num_bins_x=11,
+        num_bins_y=11,
+        latent_dim=32,
+        channel_scales=(8, 8, 8),
+    )
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.zero_()
+        model.head_mouse_dx.bias[5] = 1.0
+        model.head_mouse_dy.bias[5] = 1.0
+    policy = BCPolicy(
+        model,
+        {
+            "target_h": 84,
+            "target_w": 84,
+            "num_bins_x": 11,
+            "num_bins_y": 11,
+            "latent_dim": 32,
+            "channel_scales": (8, 8, 8),
+        },
+    )
+    env_action, raw = policy.predict_env_action(np.zeros((3, 84, 84), dtype=np.uint8))
+    assert tuple(env_action[8:]) == (10, 10)
+    assert raw["mouse_dx_bin"] == 5
+    assert raw["env_mouse_dx_bin"] == 10
+
+
 def test_bc_policy_predict_from_numpy(tmp_path: Path) -> None:
     model = BCVisionNetwork(in_channels=3, num_bins_x=21, num_bins_y=21)
     ckpt_path = tmp_path / "test_model.pt"

@@ -20,6 +20,7 @@ shape = SubResource("CapsuleShape3D_1")
 
 [node name="BodyMesh" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+visible = false
 mesh = SubResource("CapsuleMesh_1")
 
 [node name="CameraPivot" type="Node3D" parent="."]
@@ -44,3 +45,30 @@ fov = 75.0
 script = ExtResource("2_ai")
 player_path = NodePath("..")
 obs_viewport_path = NodePath("../ObsViewport")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Crosshair" type="Label" parent="HUD"]
+offset_left = 635.0
+offset_top = 345.0
+offset_right = 650.0
+offset_bottom = 375.0
+theme_override_colors/font_color = Color(0.65, 1, 0.75, 1)
+theme_override_font_sizes/font_size = 22
+text = "+"
+
+[node name="Status" type="Label" parent="HUD"]
+offset_left = 24.0
+offset_top = 650.0
+offset_right = 430.0
+offset_bottom = 700.0
+theme_override_font_sizes/font_size = 18
+text = "HEALTH 100    AMMO 20 / 60"
+
+[node name="Help" type="Label" parent="HUD"]
+offset_left = 24.0
+offset_top = 20.0
+offset_right = 650.0
+offset_bottom = 48.0
+theme_override_colors/font_color = Color(0.8, 0.84, 0.9, 0.8)
+text = "WASD move · Shift sprint · Ctrl/C crouch · Space jump · RMB ADS · R reload · Esc release · Click recapture"

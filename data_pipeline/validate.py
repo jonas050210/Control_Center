@@ -10,6 +10,7 @@ import argparse
 import dataclasses
 import json
 import logging
+import math
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image
 
+from data_pipeline.actions import MouseBinner
 from data_pipeline.schema import (
     ACTION_SPACE_SPEC,
     DatasetMetadata,
@@ -115,6 +117,16 @@ def validate_dataset(
     schema_version = metadata.schema_version
     if not schema_version:
         errors.append("metadata.json missing 'schema_version'")
+    elif schema_version.split(".")[0] != SCHEMA_VERSION.split(".")[0]:
+        errors.append(
+            f"Unsupported schema major version {schema_version}; validator supports {SCHEMA_VERSION}"
+        )
+
+    recording_status = metadata.summary_stats.get("status", "complete")
+    if recording_status != "complete":
+        errors.append(f"Recording is not complete (status={recording_status})")
+    if (path / ".recording").exists():
+        errors.append("Recording lock marker is present; session may still be active or was interrupted")
 
     if not metadata.session_id:
         errors.append("metadata.json missing 'session_id'")
@@ -124,6 +136,21 @@ def validate_dataset(
     target_fps = metadata.capture_config.target_fps
     num_bins_x = metadata.mouse_config.num_bins_x
     num_bins_y = metadata.mouse_config.num_bins_y
+
+    for axis, num_bins, edges in (
+        ("x", num_bins_x, metadata.mouse_config.bin_edges_x),
+        ("y", num_bins_y, metadata.mouse_config.bin_edges_y),
+    ):
+        try:
+            MouseBinner(
+                num_bins=int(num_bins),
+                strategy=metadata.mouse_config.binning_strategy,
+                custom_edges=edges or None,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"Invalid mouse bin metadata for axis {axis}: {exc}")
+    if not math.isfinite(metadata.mouse_config.sensitivity_scale):
+        errors.append("Mouse sensitivity_scale must be finite")
 
     if target_w <= 0 or target_h <= 0:
         errors.append(f"Invalid frame dimensions in metadata: {target_w}x{target_h}")
@@ -149,6 +176,8 @@ def validate_dataset(
 
     frame_checks_count = 0
     check_all_frames = max_frame_checks is None
+    referenced_frames: set[str] = set()
+    resolved_root = path.resolve()
 
     with open(samples_path, "r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, start=1):
@@ -170,6 +199,11 @@ def validate_dataset(
                 )
             expected_step_idx += 1
             total_steps += 1
+
+            if not sample.is_valid:
+                warnings.append(f"Line {line_num}: Sample is explicitly marked invalid")
+            if not math.isfinite(sample.timestamp) or not math.isfinite(sample.dt):
+                errors.append(f"Line {line_num}: timestamp/dt must be finite")
 
             # Timestamp monotonicity check
             if t_prev is not None:
@@ -209,7 +243,9 @@ def validate_dataset(
                 if flag_val not in (0, 1):
                     errors.append(f"Line {line_num}: Invalid binary flag {flag_name}={flag_val}")
 
-            # Mouse bin checks
+            # Mouse bin and finite continuous delta checks
+            if not math.isfinite(act.mouse_dx) or not math.isfinite(act.mouse_dy):
+                errors.append(f"Line {line_num}: Mouse deltas must be finite")
             if not (0 <= act.mouse_dx_bin < num_bins_x):
                 errors.append(
                     f"Line {line_num}: mouse_dx_bin {act.mouse_dx_bin} out of range [0, {num_bins_x - 1}]"
@@ -220,9 +256,17 @@ def validate_dataset(
                 )
 
             # Frame image check
+            if sample.frame_file in referenced_frames:
+                errors.append(f"Line {line_num}: Duplicate frame reference: {sample.frame_file}")
+            referenced_frames.add(sample.frame_file)
+            frame_path = (path / sample.frame_file).resolve()
+            try:
+                frame_path.relative_to(resolved_root)
+            except ValueError:
+                errors.append(f"Line {line_num}: Frame path escapes dataset directory: {sample.frame_file}")
+                continue
             if check_all_frames or frame_checks_count < max_frame_checks:
                 frame_checks_count += 1
-                frame_path = path / sample.frame_file
                 if not frame_path.exists():
                     errors.append(f"Line {line_num}: Referenced frame not found on disk: {sample.frame_file}")
                 else:
@@ -241,6 +285,22 @@ def validate_dataset(
 
     if total_steps == 0:
         errors.append("Dataset contains 0 valid steps in samples.jsonl")
+    stored_steps = metadata.summary_stats.get("total_steps")
+    if stored_steps not in (None, 0) and int(stored_steps) != total_steps:
+        errors.append(
+            f"metadata total_steps={stored_steps} does not match samples.jsonl count={total_steps}"
+        )
+    frames_dir = path / "frames"
+    if frames_dir.is_dir():
+        disk_frames = {
+            str(frame.relative_to(path)).replace("\\", "/")
+            for frame in frames_dir.rglob("*")
+            if frame.is_file() and ".tmp." not in frame.name
+        }
+        orphan_count = len(disk_frames - referenced_frames)
+        if orphan_count:
+            warnings.append(f"Dataset contains {orphan_count} unreferenced frame file(s)")
+        stats["orphan_frames"] = orphan_count
 
     # Summary statistics calculation
     if dt_list:

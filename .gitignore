@@ -9,6 +9,7 @@ checkpoints/
 *.zip
 *.tgz
 __pycache__/
+*.egg-info/
 
 # exported RL environment binaries (feasibility/export_envs.py)
 build/

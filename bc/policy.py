@@ -1,8 +1,4 @@
-"""Inference Policy wrapper for trained Behavioral Cloning models (M1/M2).
-
-Takes raw frame observations, runs neural policy inference, and maps predicted logits
-to canonical ActionState and environment action commands.
-"""
+"""Stateful real-time inference wrapper for behavioral-cloning checkpoints."""
 
 from __future__ import annotations
 
@@ -11,15 +7,17 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 
 from bc.models import BCVisionNetwork
 from data_pipeline.actions import MouseBinner
 from data_pipeline.schema import ActionState
+from sandbox.actions import SandboxAction
 
 
 class BCPolicy:
-    """Trained Behavioral Cloning policy wrapper for real-time inference in sandbox or evaluations."""
+    """Convert visual observations into the canonical FPS action contract."""
 
     def __init__(
         self,
@@ -28,19 +26,28 @@ class BCPolicy:
         device: Union[str, torch.device] = "cpu",
     ) -> None:
         self.device = torch.device(device)
-        self.model = model.to(self.device)
-        self.model.eval()
-        self.config = config
-
-        self.target_h = config.get("target_h", 120)
-        self.target_w = config.get("target_w", 160)
-        self.num_bins_x = config.get("num_bins_x", 21)
-        self.num_bins_y = config.get("num_bins_y", 21)
-        self.use_gru = config.get("use_gru", False)
-
-        self.binner_x = MouseBinner(num_bins=self.num_bins_x, strategy="symmetric_log")
-        self.binner_y = MouseBinner(num_bins=self.num_bins_y, strategy="symmetric_log")
-
+        self.model = model.to(self.device).eval()
+        self.config = dict(config)
+        self.target_h = int(config.get("target_h", 120))
+        self.target_w = int(config.get("target_w", 160))
+        self.num_bins_x = int(config.get("num_bins_x", 21))
+        self.num_bins_y = int(config.get("num_bins_y", 21))
+        self.use_gru = bool(config.get("use_gru", False))
+        self.seq_len = int(config.get("seq_len", 1))
+        self.binner_x = MouseBinner(
+            num_bins=self.num_bins_x,
+            strategy=str(config.get("mouse_binning_strategy", "symmetric_log")),
+            custom_edges=config.get("mouse_bin_edges_x"),
+        )
+        self.binner_y = MouseBinner(
+            num_bins=self.num_bins_y,
+            strategy=str(config.get("mouse_binning_strategy", "symmetric_log")),
+            custom_edges=config.get("mouse_bin_edges_y"),
+        )
+        # The controlled sandbox has one stable 21-bin contract even when an
+        # offline dataset was recorded with alternate bin edges/counts.
+        self.env_binner_x = MouseBinner(num_bins=21, strategy="symmetric_log")
+        self.env_binner_y = MouseBinner(num_bins=21, strategy="symmetric_log")
         self._hx: Optional[torch.Tensor] = None
 
     @classmethod
@@ -48,65 +55,65 @@ class BCPolicy:
         cls,
         checkpoint_path: Union[str, Path],
         device: Union[str, torch.device] = "cpu",
-    ) -> BCPolicy:
-        """Loads a BCPolicy directly from a saved .pt checkpoint."""
-        ckpt = torch.load(checkpoint_path, map_location=device)
-        config = ckpt.get("config", {})
-
-        latent_dim = config.get("latent_dim", 256)
-        channel_scales = tuple(config.get("channel_scales", (16, 32, 32)))
-
+    ) -> "BCPolicy":
+        path = Path(checkpoint_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"BC checkpoint does not exist: {path}")
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+        if "model_state_dict" not in checkpoint:
+            raise ValueError(f"Not a SandboxAI BC checkpoint: {path}")
+        config = checkpoint.get("config", {})
         model = BCVisionNetwork(
-            in_channels=config.get("in_channels", 3),
-            num_bins_x=config.get("num_bins_x", 21),
-            num_bins_y=config.get("num_bins_y", 21),
-            latent_dim=latent_dim,
-            use_temporal_gru=config.get("use_gru", False),
-            channel_scales=channel_scales,
+            in_channels=int(config.get("in_channels", 3)),
+            num_bins_x=int(config.get("num_bins_x", 21)),
+            num_bins_y=int(config.get("num_bins_y", 21)),
+            latent_dim=int(config.get("latent_dim", 256)),
+            use_temporal_gru=bool(config.get("use_gru", False)),
+            gru_hidden_dim=int(config.get("gru_hidden_dim", config.get("latent_dim", 256))),
+            channel_scales=tuple(config.get("channel_scales", (16, 32, 32))),
         )
-        model.load_state_dict(ckpt["model_state_dict"])
+        model.load_state_dict(checkpoint["model_state_dict"])
         return cls(model=model, config=config, device=device)
 
     def reset(self) -> None:
-        """Resets recurrent hidden states for a new episode."""
         self._hx = None
 
     def preprocess_observation(
-        self,
-        observation: Union[Image.Image, np.ndarray, torch.Tensor],
+        self, observation: Union[Image.Image, np.ndarray, torch.Tensor]
     ) -> torch.Tensor:
-        """Converts raw image input into normalized torch tensor [1, 3, H, W]."""
+        """Normalize and resize HWC/CHW/single-batch RGB observations."""
         if isinstance(observation, Image.Image):
-            img = observation.convert("RGB")
-            if img.size != (self.target_w, self.target_h):
-                img = img.resize((self.target_w, self.target_h), Image.Resampling.BILINEAR)
-            arr = np.array(img, dtype=np.float32) / 255.0
-            tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)  # [1, 3, H, W]
+            image = observation.convert("RGB")
+            if image.size != (self.target_w, self.target_h):
+                image = image.resize((self.target_w, self.target_h), Image.Resampling.BILINEAR)
+            array = np.asarray(image, dtype=np.float32) / 255.0
+            tensor = torch.from_numpy(array.copy()).permute(2, 0, 1).unsqueeze(0)
         elif isinstance(observation, np.ndarray):
-            # Shape can be [H, W, 3] or [3, H, W]
-            arr = observation.astype(np.float32)
-            if arr.max() > 1.0:
-                arr = arr / 255.0
-            if arr.ndim == 3 and arr.shape[-1] == 3:
-                # [H, W, 3] -> [3, H, W]
-                tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-            elif arr.ndim == 3 and arr.shape[0] == 3:
-                # [3, H, W] -> [1, 3, H, W]
-                tensor = torch.from_numpy(arr).unsqueeze(0)
-            elif arr.ndim == 4:
-                # [B, 3, H, W]
-                tensor = torch.from_numpy(arr)
+            array = np.asarray(observation, dtype=np.float32)
+            if array.size and float(array.max()) > 1.0:
+                array = array / 255.0
+            if array.ndim == 3 and array.shape[-1] == 3:
+                tensor = torch.from_numpy(array.copy()).permute(2, 0, 1).unsqueeze(0)
+            elif array.ndim == 3 and array.shape[0] == 3:
+                tensor = torch.from_numpy(array.copy()).unsqueeze(0)
+            elif array.ndim == 4 and array.shape[1] == 3:
+                tensor = torch.from_numpy(array.copy())
             else:
-                raise ValueError(f"Unsupported observation array shape: {observation.shape}")
+                raise ValueError(f"Unsupported observation array shape: {array.shape}")
         elif isinstance(observation, torch.Tensor):
-            tensor = observation.float()
-            if tensor.max() > 1.0:
+            tensor = observation.detach().float()
+            if tensor.numel() and float(tensor.max()) > 1.0:
                 tensor = tensor / 255.0
             if tensor.dim() == 3:
                 tensor = tensor.unsqueeze(0)
+            if tensor.dim() != 4 or tensor.shape[1] != 3:
+                raise ValueError(f"Unsupported observation tensor shape: {tuple(tensor.shape)}")
         else:
-            raise TypeError(f"Unsupported observation type: {type(observation)}")
-
+            raise TypeError(f"Unsupported observation type: {type(observation)!r}")
+        if tensor.shape[-2:] != (self.target_h, self.target_w):
+            tensor = F.interpolate(
+                tensor, size=(self.target_h, self.target_w), mode="bilinear", align_corners=False
+            )
         return tensor.to(self.device)
 
     def predict(
@@ -114,83 +121,82 @@ class BCPolicy:
         observation: Union[Image.Image, np.ndarray, torch.Tensor],
         deterministic: bool = True,
     ) -> Tuple[ActionState, Dict[str, Any]]:
-        """Predicts player actions for a given screen observation.
-
-        Returns:
-            (action_state, raw_action_dict)
-        """
-        obs_tensor = self.preprocess_observation(observation)
-
-        with torch.no_grad():
-            logits_dict, self._hx = self.model(obs_tensor, self._hx)
+        tensor = self.preprocess_observation(observation)
+        with torch.inference_mode():
+            logits, self._hx = self.model(tensor, self._hx)
             extracted = BCVisionNetwork.extract_discrete_actions(
-                logits_dict, deterministic=deterministic
+                logits, deterministic=deterministic
             )
+            confidences = {
+                key: float(F.softmax(value, dim=-1).max(dim=-1).values[0].cpu())
+                for key, value in logits.items()
+                if key != "mouse_continuous"
+            }
 
-        # Map predictions to ActionState
-        move_x = int(extracted["move_x"][0])
-        move_y = int(extracted["move_y"][0])
-        jump = int(extracted["jump"][0])
-        crouch = int(extracted["crouch"][0])
-        sprint = int(extracted["sprint"][0])
-        reload_act = int(extracted["reload"][0])
-        fire = int(extracted["fire"][0])
-        ads = int(extracted["ads"][0])
-        dx_bin = int(extracted["mouse_dx_bin"][0])
-        dy_bin = int(extracted["mouse_dy_bin"][0])
-
-        # Dequantize mouse deltas back to continuous pixel rotations
-        dx_cont = self.binner_x.dequantize(dx_bin)
-        dy_cont = self.binner_y.dequantize(dy_bin)
-
-        active_keys = []
-        if move_x == -1:
-            active_keys.append("a")
-        elif move_x == 1:
-            active_keys.append("d")
-        if move_y == 1:
-            active_keys.append("w")
-        elif move_y == -1:
-            active_keys.append("s")
-        if jump == 1:
-            active_keys.append("space")
-        if crouch == 1:
-            active_keys.append("c")
-        if sprint == 1:
-            active_keys.append("shift")
-        if reload_act == 1:
-            active_keys.append("r")
-
-        action_state = ActionState(
-            move_x=move_x,
-            move_y=move_y,
-            jump=jump,
-            crouch=crouch,
-            sprint=sprint,
-            reload=reload_act,
-            fire=fire,
-            ads=ads,
-            mouse_dx=dx_cont,
-            mouse_dy=dy_cont,
-            mouse_dx_bin=dx_bin,
-            mouse_dy_bin=dy_bin,
-            active_keys=active_keys,
-            mouse_buttons={"left": fire == 1, "right": ads == 1, "middle": False},
-        )
-
-        raw_dict = {
-            "move_x": move_x,
-            "move_y": move_y,
-            "jump": jump,
-            "crouch": crouch,
-            "sprint": sprint,
-            "reload": reload_act,
-            "fire": fire,
-            "ads": ads,
-            "mouse_dx_bin": dx_bin,
-            "mouse_dy_bin": dy_bin,
-            "mouse_dx": dx_cont,
-            "mouse_dy": dy_cont,
+        values = {
+            key: int(extracted[key][0])
+            for key in (
+                "move_x",
+                "move_y",
+                "jump",
+                "crouch",
+                "sprint",
+                "reload",
+                "fire",
+                "ads",
+                "mouse_dx_bin",
+                "mouse_dy_bin",
+            )
         }
+        dx = self.binner_x.dequantize(values["mouse_dx_bin"])
+        dy = self.binner_y.dequantize(values["mouse_dy_bin"])
+        keys = []
+        if values["move_x"] < 0:
+            keys.append("a")
+        elif values["move_x"] > 0:
+            keys.append("d")
+        if values["move_y"] < 0:
+            keys.append("s")
+        elif values["move_y"] > 0:
+            keys.append("w")
+        for enabled, key in (
+            (values["jump"], "space"),
+            (values["crouch"], "c"),
+            (values["sprint"], "shift"),
+            (values["reload"], "r"),
+        ):
+            if enabled:
+                keys.append(key)
+        action_state = ActionState(
+            **values,
+            mouse_dx=dx,
+            mouse_dy=dy,
+            active_keys=keys,
+            mouse_buttons={
+                "left": values["fire"] == 1,
+                "right": values["ads"] == 1,
+                "middle": False,
+            },
+        )
+        raw = {**values, "mouse_dx": dx, "mouse_dy": dy, "confidence": confidences}
+        return action_state, raw
 
-        return action_state, raw_dict
+    def predict_env_action(
+        self,
+        observation: Union[Image.Image, np.ndarray, torch.Tensor],
+        deterministic: bool = True,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        action_state, raw = self.predict(observation, deterministic=deterministic)
+        env_action = SandboxAction.from_action_state(action_state)
+        canonical_dx = self.env_binner_x.discretize(action_state.mouse_dx)
+        canonical_dy = self.env_binner_y.discretize(action_state.mouse_dy)
+        env_action = SandboxAction(
+            **{
+                **env_action.to_dict(),
+                "mouse_dx_bin": canonical_dx,
+                "mouse_dy_bin": canonical_dy,
+            }
+        )
+        raw["env_mouse_dx_bin"] = canonical_dx
+        raw["env_mouse_dy_bin"] = canonical_dy
+        return env_action.to_array(), raw

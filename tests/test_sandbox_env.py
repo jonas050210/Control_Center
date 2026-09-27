@@ -30,12 +30,13 @@ def test_sandbox_env_step_movement_and_firing() -> None:
     assert info["step"] == 1
 
 
-def test_sandbox_env_max_steps_termination() -> None:
+def test_sandbox_env_max_steps_truncation() -> None:
     env = MockTacticalArenaEnv(width=84, height=84, max_steps=10)
     env.reset()
 
-    terminated = False
+    terminated = truncated = False
     for _ in range(10):
-        _, _, terminated, _, _ = env.step([1, 1, 0, 10, 10])
+        _, _, terminated, truncated, _ = env.step([1, 1, 0, 10, 10])
 
-    assert terminated is True
+    assert terminated is False
+    assert truncated is True
