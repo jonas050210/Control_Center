@@ -2,6 +2,11 @@
 class_name TestEnemyState
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

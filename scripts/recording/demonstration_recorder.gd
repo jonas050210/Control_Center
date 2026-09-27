@@ -7,6 +7,11 @@
 class_name DemonstrationRecorder
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+
+
 const SCHEMA_VERSION: int = 1
 
 var recording: bool = false

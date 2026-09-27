@@ -6,6 +6,10 @@
 class_name CurriculumConfig
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 enum Level {
 	STATIONARY_TARGET = 1,
 	MOVING_TARGET = 2,

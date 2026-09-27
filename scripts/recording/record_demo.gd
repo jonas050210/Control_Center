@@ -4,6 +4,12 @@
 ##   --output training/datasets/demo.jsonl
 extends SceneTree
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const DemonstrationRecorder = preload("res://scripts/recording/demonstration_recorder.gd")
+const HumanController = preload("res://scripts/input/human_controller.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 var main_scene: Node
 var recorder: DemonstrationRecorder
 var output_path: String = "training/datasets/human_demo.jsonl"

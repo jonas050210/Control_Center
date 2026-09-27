@@ -8,6 +8,11 @@
 class_name DebugOverlay
 extends CanvasLayer
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 var simulation_manager: SimulationManager
 var focused_env_index: int = 0
 var _label: Label

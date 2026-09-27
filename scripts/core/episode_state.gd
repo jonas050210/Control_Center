@@ -3,6 +3,10 @@
 class_name EpisodeState
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 var step_count: int = 0
 var episode_count: int = 0
 var cumulative_reward: float = 0.0

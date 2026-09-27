@@ -3,6 +3,14 @@
 class_name TestSimulationManager
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+const EnvironmentView = preload("res://scripts/env/environment_view.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

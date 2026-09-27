@@ -9,6 +9,13 @@
 class_name EnvironmentView
 extends Node3D
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const AgentView = preload("res://scripts/agent/agent_view.gd")
+const EnemyView = preload("res://scripts/enemy/enemy_view.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 var core: EnvironmentCore
 var agent_view: AgentView
 var enemy_views: Array = []  # Array[EnemyView]

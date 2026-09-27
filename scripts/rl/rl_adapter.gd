@@ -6,6 +6,13 @@
 class_name RLAdapter
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 var simulation_manager: SimulationManager
 
 

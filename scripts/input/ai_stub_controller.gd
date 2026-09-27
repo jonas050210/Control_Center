@@ -9,6 +9,15 @@
 class_name AIStubController
 extends ControllerBase
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const AgentState = preload("res://scripts/agent/agent_state.gd")
+const ControllerBase = preload("res://scripts/input/controller_base.gd")
+const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 const AIM_TOLERANCE_DEG: float = 5.0
 const APPROACH_DISTANCE_FACTOR: float = 0.6
 

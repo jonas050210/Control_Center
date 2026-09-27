@@ -4,6 +4,15 @@
 class_name SimulationManager
 extends Node
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const ControllerBase = preload("res://scripts/input/controller_base.gd")
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+const EnvironmentView = preload("res://scripts/env/environment_view.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 signal environment_reset(env_index: int)
 signal environment_done(env_index: int, reason: String)
 

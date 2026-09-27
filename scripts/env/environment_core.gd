@@ -7,6 +7,17 @@
 class_name EnvironmentCore
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const AgentState = preload("res://scripts/agent/agent_state.gd")
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const EpisodeState = preload("res://scripts/core/episode_state.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+const RewardSystem = preload("res://scripts/reward/reward_system.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 var env_id: int = 0
 var arena_half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
 var max_steps: int = SandboxConfig.MAX_EPISODE_STEPS

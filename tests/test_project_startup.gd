@@ -5,6 +5,12 @@
 class_name TestProjectStartup
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const HumanController = preload("res://scripts/input/human_controller.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

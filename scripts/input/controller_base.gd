@@ -12,6 +12,11 @@
 class_name ControllerBase
 extends Node
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+
+
 
 ## Returns the Action to apply to `env` for the current tick. The default
 ## implementation is a safe no-op so a controller can be attached without

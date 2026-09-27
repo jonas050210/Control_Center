@@ -2,6 +2,10 @@
 class_name TestWeapon
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
