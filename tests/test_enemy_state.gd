@@ -2,9 +2,12 @@
 class_name TestEnemyState
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_enemy_chases_agent_when_far_away() -> SandboxTest:
-	var t := SandboxTest.new("enemy_chases_agent_when_far")
+
+func test_enemy_chases_agent_when_far_away() -> TestResult:
+	var t := TestResult.new("enemy_chases_agent_when_far")
 	var enemy := EnemyState.new()
 	enemy.reset(Vector3(0.0, 0.0, -8.0))
 	var agent_pos := Vector3(0.0, 0.0, 8.0)
@@ -16,8 +19,8 @@ func test_enemy_chases_agent_when_far_away() -> SandboxTest:
 	return t
 
 
-func test_enemy_attacks_when_within_attack_range() -> SandboxTest:
-	var t := SandboxTest.new("enemy_attacks_when_close")
+func test_enemy_attacks_when_within_attack_range() -> TestResult:
+	var t := TestResult.new("enemy_attacks_when_close")
 	var enemy := EnemyState.new()
 	var close_pos := Vector3(0.0, 0.0, -1.0)
 	enemy.reset(close_pos)
@@ -30,8 +33,8 @@ func test_enemy_attacks_when_within_attack_range() -> SandboxTest:
 	return t
 
 
-func test_enemy_attack_respects_cooldown() -> SandboxTest:
-	var t := SandboxTest.new("enemy_attack_respects_cooldown")
+func test_enemy_attack_respects_cooldown() -> TestResult:
+	var t := TestResult.new("enemy_attack_respects_cooldown")
 	var enemy := EnemyState.new()
 	enemy.reset(Vector3(0.0, 0.0, -1.0))
 	var agent_pos := Vector3.ZERO
@@ -42,8 +45,8 @@ func test_enemy_attack_respects_cooldown() -> SandboxTest:
 	return t
 
 
-func test_enemy_take_damage_and_death() -> SandboxTest:
-	var t := SandboxTest.new("enemy_take_damage_and_death")
+func test_enemy_take_damage_and_death() -> TestResult:
+	var t := TestResult.new("enemy_take_damage_and_death")
 	var enemy := EnemyState.new()
 	enemy.reset()
 	enemy.take_damage(60.0)
@@ -57,8 +60,8 @@ func test_enemy_take_damage_and_death() -> SandboxTest:
 	return t
 
 
-func test_dead_enemy_does_not_move_or_attack() -> SandboxTest:
-	var t := SandboxTest.new("dead_enemy_inert")
+func test_dead_enemy_does_not_move_or_attack() -> TestResult:
+	var t := TestResult.new("dead_enemy_inert")
 	var enemy := EnemyState.new()
 	enemy.reset(Vector3(0.0, 0.0, -1.0))
 	enemy.take_damage(1000.0)

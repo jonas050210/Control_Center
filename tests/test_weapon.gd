@@ -2,9 +2,12 @@
 class_name TestWeapon
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_first_shot_fires_and_starts_cooldown() -> SandboxTest:
-	var t := SandboxTest.new("weapon_first_shot_fires_and_starts_cooldown")
+
+func test_first_shot_fires_and_starts_cooldown() -> TestResult:
+	var t := TestResult.new("weapon_first_shot_fires_and_starts_cooldown")
 	var weapon := WeaponState.new()
 	t.assert_true(weapon.is_ready(), "weapon should start ready")
 	var fired := weapon.try_fire()
@@ -13,8 +16,8 @@ func test_first_shot_fires_and_starts_cooldown() -> SandboxTest:
 	return t
 
 
-func test_second_shot_within_cooldown_window_fails() -> SandboxTest:
-	var t := SandboxTest.new("weapon_second_shot_within_cooldown_fails")
+func test_second_shot_within_cooldown_window_fails() -> TestResult:
+	var t := TestResult.new("weapon_second_shot_within_cooldown_fails")
 	var weapon := WeaponState.new()
 	weapon.try_fire()
 	var second_shot := weapon.try_fire()
@@ -22,8 +25,8 @@ func test_second_shot_within_cooldown_window_fails() -> SandboxTest:
 	return t
 
 
-func test_cooldown_elapses_and_allows_refire() -> SandboxTest:
-	var t := SandboxTest.new("weapon_cooldown_elapses_allows_refire")
+func test_cooldown_elapses_and_allows_refire() -> TestResult:
+	var t := TestResult.new("weapon_cooldown_elapses_allows_refire")
 	var weapon := WeaponState.new()
 	weapon.try_fire()
 	weapon.tick(weapon.cooldown_time + 0.01)
@@ -32,8 +35,8 @@ func test_cooldown_elapses_and_allows_refire() -> SandboxTest:
 	return t
 
 
-func test_ray_hits_sphere_directly_ahead() -> SandboxTest:
-	var t := SandboxTest.new("weapon_ray_hits_sphere_directly_ahead")
+func test_ray_hits_sphere_directly_ahead() -> TestResult:
+	var t := TestResult.new("weapon_ray_hits_sphere_directly_ahead")
 	var weapon := WeaponState.new()
 	var origin := Vector3.ZERO
 	var direction := Vector3(0.0, 0.0, -1.0)
@@ -45,8 +48,8 @@ func test_ray_hits_sphere_directly_ahead() -> SandboxTest:
 	return t
 
 
-func test_ray_misses_target_behind_the_shooter() -> SandboxTest:
-	var t := SandboxTest.new("weapon_ray_misses_target_behind")
+func test_ray_misses_target_behind_the_shooter() -> TestResult:
+	var t := TestResult.new("weapon_ray_misses_target_behind")
 	var weapon := WeaponState.new()
 	var origin := Vector3.ZERO
 	var direction := Vector3(0.0, 0.0, -1.0)
@@ -58,8 +61,8 @@ func test_ray_misses_target_behind_the_shooter() -> SandboxTest:
 	return t
 
 
-func test_ray_misses_target_outside_range() -> SandboxTest:
-	var t := SandboxTest.new("weapon_ray_misses_target_outside_range")
+func test_ray_misses_target_outside_range() -> TestResult:
+	var t := TestResult.new("weapon_ray_misses_target_outside_range")
 	var weapon := WeaponState.new()
 	weapon.range_m = 10.0
 	var hit := weapon.ray_hits_sphere(
@@ -69,8 +72,8 @@ func test_ray_misses_target_outside_range() -> SandboxTest:
 	return t
 
 
-func test_ray_misses_target_off_to_the_side() -> SandboxTest:
-	var t := SandboxTest.new("weapon_ray_misses_off_center_target")
+func test_ray_misses_target_off_to_the_side() -> TestResult:
+	var t := TestResult.new("weapon_ray_misses_off_center_target")
 	var weapon := WeaponState.new()
 	weapon.hit_radius = 0.5
 	var hit := weapon.ray_hits_sphere(

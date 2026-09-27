@@ -2,9 +2,12 @@
 class_name TestAgentState
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_move_forward_advances_position_along_facing_direction() -> SandboxTest:
-	var t := SandboxTest.new("agent_move_forward_advances_position")
+
+func test_move_forward_advances_position_along_facing_direction() -> TestResult:
+	var t := TestResult.new("agent_move_forward_advances_position")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)  # yaw 0 -> forward is -Z
 	var dt := 0.5
@@ -16,8 +19,8 @@ func test_move_forward_advances_position_along_facing_direction() -> SandboxTest
 	return t
 
 
-func test_move_backward_moves_opposite_of_forward() -> SandboxTest:
-	var t := SandboxTest.new("agent_move_backward")
+func test_move_backward_moves_opposite_of_forward() -> TestResult:
+	var t := TestResult.new("agent_move_backward")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)
 	agent.apply_action(
@@ -27,8 +30,8 @@ func test_move_backward_moves_opposite_of_forward() -> SandboxTest:
 	return t
 
 
-func test_strafe_left_and_right_are_perpendicular_to_forward() -> SandboxTest:
-	var t := SandboxTest.new("agent_strafe_left_right")
+func test_strafe_left_and_right_are_perpendicular_to_forward() -> TestResult:
+	var t := TestResult.new("agent_strafe_left_right")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)
 	agent.apply_action(
@@ -45,8 +48,8 @@ func test_strafe_left_and_right_are_perpendicular_to_forward() -> SandboxTest:
 	return t
 
 
-func test_look_left_and_right_change_yaw() -> SandboxTest:
-	var t := SandboxTest.new("agent_look_left_right_changes_yaw")
+func test_look_left_and_right_change_yaw() -> TestResult:
+	var t := TestResult.new("agent_look_left_right_changes_yaw")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)
 	var dt := 0.2
@@ -65,8 +68,8 @@ func test_look_left_and_right_change_yaw() -> SandboxTest:
 	return t
 
 
-func test_look_up_and_down_change_and_clamp_pitch() -> SandboxTest:
-	var t := SandboxTest.new("agent_look_up_down_clamps_pitch")
+func test_look_up_and_down_change_and_clamp_pitch() -> TestResult:
+	var t := TestResult.new("agent_look_up_down_clamps_pitch")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)
 	agent.apply_action(
@@ -87,8 +90,8 @@ func test_look_up_and_down_change_and_clamp_pitch() -> SandboxTest:
 	return t
 
 
-func test_arena_bounds_clamp_agent_inside_walls() -> SandboxTest:
-	var t := SandboxTest.new("agent_arena_bounds_clamp")
+func test_arena_bounds_clamp_agent_inside_walls() -> TestResult:
+	var t := TestResult.new("agent_arena_bounds_clamp")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)  # facing -Z
 	for _i in range(2000):
@@ -101,8 +104,8 @@ func test_arena_bounds_clamp_agent_inside_walls() -> SandboxTest:
 	return t
 
 
-func test_take_damage_reduces_health_and_kills_at_zero() -> SandboxTest:
-	var t := SandboxTest.new("agent_take_damage_and_death")
+func test_take_damage_reduces_health_and_kills_at_zero() -> TestResult:
+	var t := TestResult.new("agent_take_damage_and_death")
 	var agent := AgentState.new()
 	agent.reset()
 	var applied := agent.take_damage(30.0)

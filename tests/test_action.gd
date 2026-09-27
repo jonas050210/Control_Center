@@ -2,9 +2,12 @@
 class_name TestAction
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_idle_default() -> SandboxTest:
-	var t := SandboxTest.new("action_idle_default")
+
+func test_idle_default() -> TestResult:
+	var t := TestResult.new("action_idle_default")
 	var a := Action.idle()
 	t.assert_eq(a.move_axis, 0)
 	t.assert_eq(a.strafe_axis, 0)
@@ -14,8 +17,8 @@ func test_idle_default() -> SandboxTest:
 	return t
 
 
-func test_from_discrete_maps_all_ten_actions() -> SandboxTest:
-	var t := SandboxTest.new("action_from_discrete_maps_all_ten_actions")
+func test_from_discrete_maps_all_ten_actions() -> TestResult:
+	var t := TestResult.new("action_from_discrete_maps_all_ten_actions")
 
 	var forward := Action.from_discrete(Action.Discrete.MOVE_FORWARD)
 	t.assert_eq(forward.move_axis, 1, "move forward")

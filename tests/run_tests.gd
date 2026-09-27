@@ -9,6 +9,10 @@
 ## passed or 1 if anything failed (suitable for CI).
 extends SceneTree
 
+# Explicit dependency: --script can parse this runner before Godot builds the
+# editor-only global script-class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
+
 
 func _initialize() -> void:
 	var exit_code: int = _run_all_tests()
@@ -36,7 +40,7 @@ func _run_all_tests() -> int:
 				continue
 			total += 1
 			var result = instance.call(method_name)
-			if not (result is SandboxTest):
+			if not (result is TestResult):
 				failed += 1
 				failure_lines.append(
 					"%s::%s -> did not return a SandboxTest" % [script_path, method_name]

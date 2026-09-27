@@ -2,9 +2,12 @@
 class_name TestObservation
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_observation_array_has_documented_field_count() -> SandboxTest:
-	var t := SandboxTest.new("observation_array_has_documented_field_count")
+
+func test_observation_array_has_documented_field_count() -> TestResult:
+	var t := TestResult.new("observation_array_has_documented_field_count")
 	var agent := AgentState.new()
 	agent.reset()
 	var enemy := EnemyState.new()
@@ -16,8 +19,8 @@ func test_observation_array_has_documented_field_count() -> SandboxTest:
 	return t
 
 
-func test_observation_picks_nearest_alive_enemy() -> SandboxTest:
-	var t := SandboxTest.new("observation_picks_nearest_alive_enemy")
+func test_observation_picks_nearest_alive_enemy() -> TestResult:
+	var t := TestResult.new("observation_picks_nearest_alive_enemy")
 	var agent := AgentState.new()
 	agent.reset(Vector3.ZERO, 0.0)
 
@@ -37,8 +40,8 @@ func test_observation_picks_nearest_alive_enemy() -> SandboxTest:
 	return t
 
 
-func test_observation_falls_back_to_dead_enemy_when_none_alive() -> SandboxTest:
-	var t := SandboxTest.new("observation_falls_back_when_all_dead")
+func test_observation_falls_back_to_dead_enemy_when_none_alive() -> TestResult:
+	var t := TestResult.new("observation_falls_back_when_all_dead")
 	var agent := AgentState.new()
 	agent.reset()
 	var enemy := EnemyState.new()
@@ -50,8 +53,8 @@ func test_observation_falls_back_to_dead_enemy_when_none_alive() -> SandboxTest:
 	return t
 
 
-func test_agent_health_normalizes_to_unit_range() -> SandboxTest:
-	var t := SandboxTest.new("agent_health_normalizes_to_unit_range")
+func test_agent_health_normalizes_to_unit_range() -> TestResult:
+	var t := TestResult.new("agent_health_normalizes_to_unit_range")
 	var agent := AgentState.new()
 	agent.reset()
 	agent.take_damage(25.0)

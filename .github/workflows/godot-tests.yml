@@ -1,0 +1,28 @@
+name: Godot tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  headless-tests:
+    name: Godot 4.7.2 headless tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 console build
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip" `
+            -OutFile godot.zip
+          Expand-Archive -Path godot.zip -DestinationPath godot
+
+      - name: Run headless Godot suite
+        shell: pwsh
+        run: |
+          $godot = (Get-ChildItem -Path godot -Recurse -Filter Godot_v4.7.2-stable_win64.exe).FullName
+          & $godot --headless --path . --script res://tests/run_tests.gd
+          exit $LASTEXITCODE

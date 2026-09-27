@@ -3,9 +3,12 @@
 class_name TestSimulationManager
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_build_creates_requested_environment_count() -> SandboxTest:
-	var t := SandboxTest.new("sim_manager_builds_requested_environment_count")
+
+func test_build_creates_requested_environment_count() -> TestResult:
+	var t := TestResult.new("sim_manager_builds_requested_environment_count")
 	var sim := SimulationManager.new()
 	sim.create_visuals = false
 	sim.build(5, 1)
@@ -15,8 +18,8 @@ func test_build_creates_requested_environment_count() -> SandboxTest:
 	return t
 
 
-func test_headless_mode_creates_no_views() -> SandboxTest:
-	var t := SandboxTest.new("sim_manager_headless_creates_no_views")
+func test_headless_mode_creates_no_views() -> TestResult:
+	var t := TestResult.new("sim_manager_headless_creates_no_views")
 	var sim := SimulationManager.new()
 	sim.create_visuals = false
 	sim.build(3, 1)
@@ -26,8 +29,8 @@ func test_headless_mode_creates_no_views() -> SandboxTest:
 	return t
 
 
-func test_environments_are_independent_objects_with_no_shared_state() -> SandboxTest:
-	var t := SandboxTest.new("environments_are_independent")
+func test_environments_are_independent_objects_with_no_shared_state() -> TestResult:
+	var t := TestResult.new("environments_are_independent")
 	var sim := SimulationManager.new()
 	sim.create_visuals = false
 	sim.build(3, 1)
@@ -63,8 +66,8 @@ func test_environments_are_independent_objects_with_no_shared_state() -> Sandbox
 	return t
 
 
-func test_resetting_one_environment_does_not_affect_others() -> SandboxTest:
-	var t := SandboxTest.new("resetting_one_env_does_not_affect_others")
+func test_resetting_one_environment_does_not_affect_others() -> TestResult:
+	var t := TestResult.new("resetting_one_env_does_not_affect_others")
 	var sim := SimulationManager.new()
 	sim.create_visuals = false
 	sim.build(2, 1)
@@ -96,8 +99,8 @@ func test_resetting_one_environment_does_not_affect_others() -> SandboxTest:
 	return t
 
 
-func test_batch_get_observations_rewards_done_match_environment_count() -> SandboxTest:
-	var t := SandboxTest.new("batch_accessors_match_environment_count")
+func test_batch_get_observations_rewards_done_match_environment_count() -> TestResult:
+	var t := TestResult.new("batch_accessors_match_environment_count")
 	var sim := SimulationManager.new()
 	sim.create_visuals = false
 	sim.build(4, 1)
@@ -109,8 +112,8 @@ func test_batch_get_observations_rewards_done_match_environment_count() -> Sandb
 	return t
 
 
-func test_run_headless_steps_advances_without_a_provided_action() -> SandboxTest:
-	var t := SandboxTest.new("run_headless_steps_advances_simulation")
+func test_run_headless_steps_advances_without_a_provided_action() -> TestResult:
+	var t := TestResult.new("run_headless_steps_advances_simulation")
 	var sim := SimulationManager.new()
 	sim.create_visuals = false
 	sim.build(2, 1)
@@ -131,8 +134,8 @@ func test_run_headless_steps_advances_without_a_provided_action() -> SandboxTest
 	return t
 
 
-func test_deterministic_base_seed_gives_reproducible_environment_set() -> SandboxTest:
-	var t := SandboxTest.new("deterministic_base_seed_reproducible")
+func test_deterministic_base_seed_gives_reproducible_environment_set() -> TestResult:
+	var t := TestResult.new("deterministic_base_seed_reproducible")
 	var sim_a := SimulationManager.new()
 	sim_a.create_visuals = false
 	sim_a.base_seed = 500

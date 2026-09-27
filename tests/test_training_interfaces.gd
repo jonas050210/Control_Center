@@ -3,9 +3,12 @@
 class_name TestTrainingInterfaces
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_action_multidiscrete_round_trip_has_fixed_dimension() -> SandboxTest:
-	var t := SandboxTest.new("action_multidiscrete_round_trip")
+
+func test_action_multidiscrete_round_trip_has_fixed_dimension() -> TestResult:
+	var t := TestResult.new("action_multidiscrete_round_trip")
 	var original := Action.new(-1, 1, 0, -1, true)
 	var encoded: Array = original.to_multidiscrete()
 	var decoded := Action.from_multidiscrete(encoded)
@@ -18,8 +21,8 @@ func test_action_multidiscrete_round_trip_has_fixed_dimension() -> SandboxTest:
 	return t
 
 
-func test_environment_step_exposes_metrics_and_terminal_reason() -> SandboxTest:
-	var t := SandboxTest.new("environment_step_exposes_metrics")
+func test_environment_step_exposes_metrics_and_terminal_reason() -> TestResult:
+	var t := TestResult.new("environment_step_exposes_metrics")
 	var env := EnvironmentCore.new(0, 1)
 	env.max_steps = 1
 	env.reset(44)
@@ -31,8 +34,8 @@ func test_environment_step_exposes_metrics_and_terminal_reason() -> SandboxTest:
 	return t
 
 
-func test_curriculum_level_changes_enemy_behavior_without_new_environment() -> SandboxTest:
-	var t := SandboxTest.new("curriculum_level_changes_enemy_behavior")
+func test_curriculum_level_changes_enemy_behavior_without_new_environment() -> TestResult:
+	var t := TestResult.new("curriculum_level_changes_enemy_behavior")
 	var env := EnvironmentCore.new(0, 1)
 	env.set_curriculum_level(CurriculumConfig.Level.STATIONARY_TARGET)
 	env.reset(2)

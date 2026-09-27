@@ -2,9 +2,12 @@
 class_name TestEpisodeState
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_start_new_episode_resets_counters() -> SandboxTest:
-	var t := SandboxTest.new("episode_start_resets_counters")
+
+func test_start_new_episode_resets_counters() -> TestResult:
+	var t := TestResult.new("episode_start_resets_counters")
 	var ep := EpisodeState.new()
 	ep.record_step(1.0)
 	ep.record_step(2.0)
@@ -17,8 +20,8 @@ func test_start_new_episode_resets_counters() -> SandboxTest:
 	return t
 
 
-func test_record_step_accumulates_reward() -> SandboxTest:
-	var t := SandboxTest.new("episode_record_step_accumulates_reward")
+func test_record_step_accumulates_reward() -> TestResult:
+	var t := TestResult.new("episode_record_step_accumulates_reward")
 	var ep := EpisodeState.new()
 	ep.record_step(1.0)
 	ep.record_step(-0.5)
@@ -28,8 +31,8 @@ func test_record_step_accumulates_reward() -> SandboxTest:
 	return t
 
 
-func test_is_timeout_threshold() -> SandboxTest:
-	var t := SandboxTest.new("episode_is_timeout_threshold")
+func test_is_timeout_threshold() -> TestResult:
+	var t := TestResult.new("episode_is_timeout_threshold")
 	var ep := EpisodeState.new()
 	for _i in range(10):
 		ep.record_step(0.0)

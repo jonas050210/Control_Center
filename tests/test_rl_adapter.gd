@@ -3,6 +3,9 @@
 class_name TestRLAdapter
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
+
 
 func _make_adapter(env_count: int = 2) -> RLAdapter:
 	var sim := SimulationManager.new()
@@ -11,8 +14,8 @@ func _make_adapter(env_count: int = 2) -> RLAdapter:
 	return RLAdapter.new(sim)
 
 
-func test_reset_returns_one_observation_per_environment() -> SandboxTest:
-	var t := SandboxTest.new("rl_adapter_reset_returns_one_observation_per_environment")
+func test_reset_returns_one_observation_per_environment() -> TestResult:
+	var t := TestResult.new("rl_adapter_reset_returns_one_observation_per_environment")
 	var adapter := _make_adapter(3)
 	var observations: Array = adapter.reset(1)
 	t.assert_eq(observations.size(), 3)
@@ -20,8 +23,8 @@ func test_reset_returns_one_observation_per_environment() -> SandboxTest:
 	return t
 
 
-func test_reset_returns_flat_observation_vectors() -> SandboxTest:
-	var t := SandboxTest.new("rl_adapter_reset_returns_flat_observation_vectors")
+func test_reset_returns_flat_observation_vectors() -> TestResult:
+	var t := TestResult.new("rl_adapter_reset_returns_flat_observation_vectors")
 	var adapter := _make_adapter(2)
 	var observations: Array = adapter.reset(7)
 	t.assert_true(observations[0] is Array)
@@ -30,8 +33,8 @@ func test_reset_returns_flat_observation_vectors() -> SandboxTest:
 	return t
 
 
-func test_step_accepts_discrete_int_actions() -> SandboxTest:
-	var t := SandboxTest.new("rl_adapter_step_accepts_discrete_int_actions")
+func test_step_accepts_discrete_int_actions() -> TestResult:
+	var t := TestResult.new("rl_adapter_step_accepts_discrete_int_actions")
 	var adapter := _make_adapter(2)
 	var result: Dictionary = adapter.step([Action.Discrete.MOVE_FORWARD, Action.Discrete.IDLE])
 	t.assert_true(result.has("observations"))
@@ -44,8 +47,8 @@ func test_step_accepts_discrete_int_actions() -> SandboxTest:
 	return t
 
 
-func test_done_flag_is_preserved_after_vector_auto_reset() -> SandboxTest:
-	var t := SandboxTest.new("rl_adapter_done_flag_preserved_after_auto_reset")
+func test_done_flag_is_preserved_after_vector_auto_reset() -> TestResult:
+	var t := TestResult.new("rl_adapter_done_flag_preserved_after_auto_reset")
 	var adapter := _make_adapter(1)
 	(adapter.simulation_manager.environments[0] as EnvironmentCore).max_steps = 1
 	var result: Dictionary = adapter.step([Action.Discrete.IDLE])
@@ -55,8 +58,8 @@ func test_done_flag_is_preserved_after_vector_auto_reset() -> SandboxTest:
 	return t
 
 
-func test_batch_accessors_delegate_to_simulation_manager() -> SandboxTest:
-	var t := SandboxTest.new("rl_adapter_batch_accessors_delegate")
+func test_batch_accessors_delegate_to_simulation_manager() -> TestResult:
+	var t := TestResult.new("rl_adapter_batch_accessors_delegate")
 	var adapter := _make_adapter(2)
 	adapter.step([Action.Discrete.IDLE, Action.Discrete.IDLE])
 	t.assert_eq(adapter.get_observations().size(), 2)
@@ -66,8 +69,8 @@ func test_batch_accessors_delegate_to_simulation_manager() -> SandboxTest:
 	return t
 
 
-func test_action_and_observation_space_info_are_well_formed() -> SandboxTest:
-	var t := SandboxTest.new("rl_adapter_space_info_well_formed")
+func test_action_and_observation_space_info_are_well_formed() -> TestResult:
+	var t := TestResult.new("rl_adapter_space_info_well_formed")
 	var action_info: Dictionary = RLAdapter.action_space_info()
 	var obs_info: Dictionary = RLAdapter.observation_space_info()
 	t.assert_eq(action_info.discrete_choices, Action.DISCRETE_COUNT)

@@ -3,9 +3,12 @@
 class_name TestSelfPlay
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_self_play_reset_has_two_observations() -> SandboxTest:
-	var t := SandboxTest.new("self_play_reset_has_two_observations")
+
+func test_self_play_reset_has_two_observations() -> TestResult:
+	var t := TestResult.new("self_play_reset_has_two_observations")
 	var match_env := SelfPlayEnvironmentCore.new()
 	var observations: Array = match_env.reset(10, 20)
 	t.assert_eq(observations.size(), 2)
@@ -14,8 +17,8 @@ func test_self_play_reset_has_two_observations() -> SandboxTest:
 	return t
 
 
-func test_self_play_step_returns_per_agent_rewards_and_infos() -> SandboxTest:
-	var t := SandboxTest.new("self_play_step_returns_per_agent_metrics")
+func test_self_play_step_returns_per_agent_rewards_and_infos() -> TestResult:
+	var t := TestResult.new("self_play_step_returns_per_agent_metrics")
 	var match_env := SelfPlayEnvironmentCore.new()
 	match_env.reset(1, 2)
 	var result: Dictionary = match_env.step([Action.idle(), Action.idle()])

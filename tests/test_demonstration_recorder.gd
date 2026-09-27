@@ -3,9 +3,12 @@
 class_name TestDemonstrationRecorder
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_recorder_saves_and_loads_transition_contract() -> SandboxTest:
-	var t := SandboxTest.new("demonstration_recorder_round_trip")
+
+func test_recorder_saves_and_loads_transition_contract() -> TestResult:
+	var t := TestResult.new("demonstration_recorder_round_trip")
 	var recorder := DemonstrationRecorder.new()
 	recorder.start_recording({"source": "test"})
 	var env := EnvironmentCore.new(0, 1)

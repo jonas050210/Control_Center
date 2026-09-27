@@ -4,17 +4,20 @@
 class_name TestEnvironmentCore
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_environment_creation_has_agent_and_enemies() -> SandboxTest:
-	var t := SandboxTest.new("environment_creation_has_agent_and_enemies")
+
+func test_environment_creation_has_agent_and_enemies() -> TestResult:
+	var t := TestResult.new("environment_creation_has_agent_and_enemies")
 	var env := EnvironmentCore.new(0, 2)
 	t.assert_not_null(env.agent, "environment should own an agent")
 	t.assert_eq(env.enemies.size(), 2, "environment should own the requested number of enemies")
 	return t
 
 
-func test_reset_returns_full_health_observation() -> SandboxTest:
-	var t := SandboxTest.new("reset_returns_full_health_observation")
+func test_reset_returns_full_health_observation() -> TestResult:
+	var t := TestResult.new("reset_returns_full_health_observation")
 	var env := EnvironmentCore.new(0, 1)
 	var obs: Observation = env.reset(1)
 	t.assert_almost_eq(obs.agent_health_norm, 1.0, 0.0001, "agent should start at full health")
@@ -25,8 +28,8 @@ func test_reset_returns_full_health_observation() -> SandboxTest:
 	return t
 
 
-func test_reset_after_steps_returns_to_spawn_state() -> SandboxTest:
-	var t := SandboxTest.new("reset_after_steps_returns_to_spawn_state")
+func test_reset_after_steps_returns_to_spawn_state() -> TestResult:
+	var t := TestResult.new("reset_after_steps_returns_to_spawn_state")
 	var env := EnvironmentCore.new(0, 1)
 	env.reset(7)
 	var spawn_position: Vector3 = env.agent.position
@@ -45,8 +48,8 @@ func test_reset_after_steps_returns_to_spawn_state() -> SandboxTest:
 	return t
 
 
-func test_deterministic_reset_same_seed_gives_identical_observation() -> SandboxTest:
-	var t := SandboxTest.new("deterministic_reset_same_seed")
+func test_deterministic_reset_same_seed_gives_identical_observation() -> TestResult:
+	var t := TestResult.new("deterministic_reset_same_seed")
 	var env_a := EnvironmentCore.new(0, 3)
 	var env_b := EnvironmentCore.new(1, 3)
 	var obs_a: Observation = env_a.reset(999)
@@ -66,8 +69,8 @@ func test_deterministic_reset_same_seed_gives_identical_observation() -> Sandbox
 	return t
 
 
-func test_different_seeds_generally_differ() -> SandboxTest:
-	var t := SandboxTest.new("different_seeds_generally_differ")
+func test_different_seeds_generally_differ() -> TestResult:
+	var t := TestResult.new("different_seeds_generally_differ")
 	var env_a := EnvironmentCore.new(0, 1)
 	var env_b := EnvironmentCore.new(1, 1)
 	env_a.reset(1)
@@ -80,8 +83,8 @@ func test_different_seeds_generally_differ() -> SandboxTest:
 	return t
 
 
-func test_step_applies_movement_action() -> SandboxTest:
-	var t := SandboxTest.new("step_applies_movement_action")
+func test_step_applies_movement_action() -> TestResult:
+	var t := TestResult.new("step_applies_movement_action")
 	var env := EnvironmentCore.new(0, 1)
 	env.reset(3)
 	var start_pos: Vector3 = env.agent.position
@@ -96,8 +99,8 @@ func test_step_applies_movement_action() -> SandboxTest:
 	return t
 
 
-func test_shooting_hits_and_kills_enemy() -> SandboxTest:
-	var t := SandboxTest.new("shooting_hits_and_kills_enemy")
+func test_shooting_hits_and_kills_enemy() -> TestResult:
+	var t := TestResult.new("shooting_hits_and_kills_enemy")
 	var env := EnvironmentCore.new(0, 1)
 	env.reset(5)
 	# Force a clean, guaranteed line-of-sight shot regardless of spawn jitter.
@@ -128,8 +131,8 @@ func test_shooting_hits_and_kills_enemy() -> SandboxTest:
 	return t
 
 
-func test_agent_death_ends_episode_and_counts_death() -> SandboxTest:
-	var t := SandboxTest.new("agent_death_ends_episode_and_counts_death")
+func test_agent_death_ends_episode_and_counts_death() -> TestResult:
+	var t := TestResult.new("agent_death_ends_episode_and_counts_death")
 	var env := EnvironmentCore.new(0, 1)
 	env.reset(11)
 	env.agent.position = Vector3(0.0, 0.0, 0.5)
@@ -147,8 +150,8 @@ func test_agent_death_ends_episode_and_counts_death() -> SandboxTest:
 	return t
 
 
-func test_episode_times_out_when_nothing_happens_too_long() -> SandboxTest:
-	var t := SandboxTest.new("episode_times_out")
+func test_episode_times_out_when_nothing_happens_too_long() -> TestResult:
+	var t := TestResult.new("episode_times_out")
 	var env := EnvironmentCore.new(0, 1)
 	env.max_steps = 5
 	env.reset(13)
@@ -164,8 +167,8 @@ func test_episode_times_out_when_nothing_happens_too_long() -> SandboxTest:
 	return t
 
 
-func test_step_after_done_is_a_safe_noop() -> SandboxTest:
-	var t := SandboxTest.new("step_after_done_is_safe_noop")
+func test_step_after_done_is_a_safe_noop() -> TestResult:
+	var t := TestResult.new("step_after_done_is_safe_noop")
 	var env := EnvironmentCore.new(0, 1)
 	env.max_steps = 2
 	env.reset(1)
@@ -179,8 +182,8 @@ func test_step_after_done_is_a_safe_noop() -> SandboxTest:
 	return t
 
 
-func test_get_observations_rewards_done_accessors() -> SandboxTest:
-	var t := SandboxTest.new("accessors_return_current_state")
+func test_get_observations_rewards_done_accessors() -> TestResult:
+	var t := TestResult.new("accessors_return_current_state")
 	var env := EnvironmentCore.new(0, 1)
 	env.reset(2)
 	env.step(Action.idle())

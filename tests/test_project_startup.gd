@@ -5,9 +5,12 @@
 class_name TestProjectStartup
 extends RefCounted
 
+# Explicit dependency: headless --script runs do not populate the editor class cache.
+const TestResult = preload("res://tests/sandbox_test.gd")
 
-func test_main_scene_loads_and_boots_simulation_manager() -> SandboxTest:
-	var t := SandboxTest.new("main_scene_loads_and_boots_simulation_manager")
+
+func test_main_scene_loads_and_boots_simulation_manager() -> TestResult:
+	var t := TestResult.new("main_scene_loads_and_boots_simulation_manager")
 
 	var packed: PackedScene = load("res://scenes/main.tscn") as PackedScene
 	t.assert_not_null(packed, "scenes/main.tscn should load")
