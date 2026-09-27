@@ -14,10 +14,9 @@
 class_name HumanController
 extends ControllerBase
 
-## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
-const Action = preload("res://scripts/core/action.gd")
+## ControllerBase provides the shared Action and EnvironmentCore dependencies.
+## Keep only the explicit base preload here for standalone/headless parsing.
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
-const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 
 
 @export var mouse_sensitivity_deg_per_px: float = 0.15
