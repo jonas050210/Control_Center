@@ -159,6 +159,31 @@ mirrored observations, per-agent rewards and per-agent metrics. Python's
 `SelfPlayCoordinator` can load a frozen opponent checkpoint. This is a
 foundation for population/self-play training, not a population algorithm.
 
+## Control Center
+
+[`docs/CONTROL_CENTER.md`](CONTROL_CENTER.md) documents the interactive
+front-end (`scenes/control_center.tscn` + `scripts/control_center/`). Its
+place in the architecture:
+
+```text
+ControlCenterUI (CanvasLayer, Controls)      presentation only, 10 Hz refresh
+        | snapshots (read)      | method calls (play/pause/reset/select/settings)
+ControlCenterSession (Node)                  orchestration, owns stepping
+        | step_all() / reset_indices() / set_controller()
+SimulationManager -> EnvironmentCore * N     unchanged simulation
+```
+
+- The session sets `auto_tick = false` and advances the batch itself, so
+  pause/step/speed are exact and never use `Engine.time_scale`.
+- HUMAN mode rebinds only the selected environment to the existing
+  `HumanController`; there is no second gameplay implementation.
+- Telemetry is built by `ControlCenterTelemetry` from
+  `DebugOverlay.build_telemetry_dict`, `ObservationInspector` (driven by
+  `Observation.FIELD_SPEC`) and `PerceptionModel`, which keeps ground truth
+  and observation-derived data in separate branches.
+- Nothing is constructed when `DisplayServer.get_name() == "headless"`, so
+  training keeps its exact previous cost.
+
 ## Debug GUI, benchmarking and the future Roblox boundary
 
 - [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](DEBUG_GUI_AND_BENCHMARKING.md)
@@ -186,6 +211,14 @@ scripts/
   recording/  JSONL recorder and graphical human recording entry point
   self_play/  two-agent match foundation
   input/      human and stub controllers
+  debug/      optional presentation-only debug overlay
+  control_center/
+              Control Center data layer (config, session, event log,
+              results, telemetry, observation inspector, perception model,
+              spectator camera, 3D perception overlay)
+    ui/       Control Center presentation layer (status bar, agent panel,
+              perception/observation/results/settings tabs, controls, log,
+              HUD, perception map, shared theme)
 python/sandboxai/
   config.py       Training/BC/evaluation configuration
   contract.py     Observation/Action contract description + GameAdapter hook
@@ -213,6 +246,10 @@ python/sandboxai/
 - Only the 3 nearest alive enemies are individually reported in the
   observation vector even if more exist and fight simultaneously (see
   `docs/OBSERVATION_ACTION_CONTRACT.md`).
+- The Control Center cannot run a trained policy in-engine (no neural
+  network runtime in Godot); its TRAINING mode is a throughput mode, not a
+  trainer. Agent slot 1, field-of-view, line-of-sight, sound and memory
+  models do not exist in the simulation and are reported as unavailable.
 - No Roblox integration exists. `python/sandboxai/contract.py` defines the
   abstract adapter boundary a future implementation would need to satisfy;
   see `docs/ROBLOX_ADAPTER.md` for exactly what is and is not implemented.

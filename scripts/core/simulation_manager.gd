@@ -21,6 +21,14 @@ signal environment_done(env_index: int, reason: String)
 @export var base_seed: int = SandboxConfig.DEFAULT_RANDOM_SEED
 @export var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS
 @export var create_visuals: bool = true
+## When `create_visuals` is true, restricts view creation to these
+## environment indices. Empty (the default) keeps the historical behavior:
+## one EnvironmentView per environment. The Control Center sets this to the
+## single environment it currently renders so a 16-environment session does
+## not allocate 16 arenas' worth of meshes; `ensure_view()` creates the
+## others lazily if the user selects them. Purely presentational — it never
+## changes simulation results.
+@export var visual_environment_indices: PackedInt32Array = PackedInt32Array()
 @export var auto_tick: bool = true
 @export var auto_reset_on_done: bool = true
 @export var view_cell_spacing: float = SandboxConfig.ARENA_HALF_EXTENT * 2.5 + 6.0
@@ -78,16 +86,52 @@ func build(count: int, enemies_per_env: int = SandboxConfig.ENEMY_COUNT_DEFAULT)
 		_last_step_dones.append(false)
 		_last_actions.append(Action.idle())
 
-		var view: EnvironmentView = null
-		if create_visuals:
-			view = EnvironmentView.new()
-			view.name = "Environment_%d" % i
-			add_child(view)
-			view.setup(env)
-			view.position = _cell_offset(i)
-			views.append(view)
-		else:
-			views.append(null)
+		views.append(null)
+		if create_visuals and _should_create_view(i):
+			_create_view(i)
+
+
+## Whether environment `index` gets a view up front. An empty
+## `visual_environment_indices` means "every environment", preserving the
+## original behavior for the existing scenes and tests.
+func _should_create_view(index: int) -> bool:
+	if visual_environment_indices.is_empty():
+		return true
+	return visual_environment_indices.has(index)
+
+
+func _create_view(index: int) -> EnvironmentView:
+	var view := EnvironmentView.new()
+	view.name = "Environment_%d" % index
+	add_child(view)
+	view.setup(environments[index])
+	view.position = _cell_offset(index)
+	views[index] = view
+	return view
+
+
+## Returns the EnvironmentView for `index`, creating it on demand when
+## visuals are enabled but this environment was skipped by
+## `visual_environment_indices`. Returns null in a visual-free (headless)
+## manager. Presentation-only; it does not touch environment state.
+func ensure_view(index: int) -> EnvironmentView:
+	if not create_visuals or index < 0 or index >= environments.size():
+		return null
+	var existing: EnvironmentView = views[index]
+	if existing != null and is_instance_valid(existing):
+		return existing
+	return _create_view(index)
+
+
+## Mirrors one environment's state onto its view, if that view exists.
+## Used by callers that drive stepping themselves (auto_tick = false) and
+## only want to pay the sync cost for the environment actually on screen.
+func sync_view(index: int) -> void:
+	if index < 0 or index >= views.size():
+		return
+	var view: EnvironmentView = views[index]
+	if view != null and is_instance_valid(view):
+		view.sync_from_state()
 
 
 func _clear() -> void:

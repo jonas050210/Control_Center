@@ -75,6 +75,42 @@ def build_record_command(
     ]
 
 
+def build_control_center_command(
+    godot_executable: str,
+    project_path: str | None,
+    mode: str,
+    environment_count: int,
+    enemy_count: int,
+    curriculum_level: int,
+    seed: int,
+    scenario: str = "",
+) -> list[str]:
+    """Build the Godot invocation for the graphical Control Center.
+
+    This launches ``scenes/control_center.tscn`` in a normal (non-headless)
+    Godot window: the Control Center is an operator/inspection tool and is
+    deliberately never part of the headless RL training path. Arguments after
+    ``--`` are read by ``ControlCenterMain._apply_command_line``.
+    """
+    executable = find_godot_executable(godot_executable)
+    project = _resolve_project_path(project_path)
+    command = [
+        executable,
+        "--path",
+        str(project),
+        "res://scenes/control_center.tscn",
+        "--",
+        f"--mode={mode}",
+        f"--env-count={environment_count}",
+        f"--enemy-count={enemy_count}",
+        f"--curriculum-level={curriculum_level}",
+        f"--seed={seed}",
+    ]
+    if scenario:
+        command.append(f"--scenario={scenario}")
+    return command
+
+
 def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
     values: dict[str, Any] = {}
     if args.config:
@@ -118,6 +154,23 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--enemy-count", type=int, default=1)
     record.add_argument("--godot-executable", default="godot")
     record.add_argument("--project-path", default="")
+
+    control_center = sub.add_parser(
+        "control-center",
+        help="open the graphical Control Center (watch the AI, play as a human, inspect the simulation)",
+    )
+    control_center.add_argument("--mode", default="watch", choices=["training", "watch", "human"])
+    control_center.add_argument("--env-count", type=int, default=4, dest="environment_count")
+    control_center.add_argument("--enemy-count", type=int, default=1)
+    control_center.add_argument("--curriculum-level", type=int, default=3)
+    control_center.add_argument("--seed", type=int, default=1234)
+    control_center.add_argument(
+        "--scenario",
+        default="",
+        help="optional scenario preset id (target_practice, duel, three_way, overwhelmed)",
+    )
+    control_center.add_argument("--godot-executable", default="godot")
+    control_center.add_argument("--project-path", default="")
 
     bc = sub.add_parser("bc-train", help="train a PyTorch behavior-cloning policy")
     bc.add_argument("--dataset", required=True)
@@ -255,6 +308,27 @@ def main(argv: list[str] | None = None) -> int:
             args.enemy_count,
         )
         print("Launching Godot demonstration recorder:", " ".join(command))
+        try:
+            return subprocess.call(command)
+        except OSError as exc:
+            print(
+                f"Could not launch Godot executable {command[0]!r}: {exc}. "
+                "Install Godot 4.7.2 and put it on PATH or pass --godot-executable.",
+                file=sys.stderr,
+            )
+            return 1
+    if args.command == "control-center":
+        command = build_control_center_command(
+            args.godot_executable,
+            args.project_path,
+            args.mode,
+            args.environment_count,
+            args.enemy_count,
+            args.curriculum_level,
+            args.seed,
+            args.scenario,
+        )
+        print("Launching SandboxAI Control Center:", " ".join(command))
         try:
             return subprocess.call(command)
         except OSError as exc:
