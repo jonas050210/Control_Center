@@ -11,7 +11,7 @@ import datetime
 import json
 import platform
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Union
 
 SCHEMA_VERSION: str = "1.1.0"
 

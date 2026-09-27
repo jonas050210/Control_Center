@@ -15,7 +15,7 @@ import platform
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 
 def utc_now() -> str:

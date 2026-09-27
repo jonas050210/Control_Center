@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Sequence, Union
 
 # Ensure repository root is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -167,7 +166,7 @@ def format_inspection_report(metrics: Dict[str, Any]) -> str:
     """Formats inspection metrics into a clear human-readable console report."""
     lines = [
         "============================================================",
-        f"  SandboxAI Dataset Inspection Report",
+        "  SandboxAI Dataset Inspection Report",
         "============================================================",
         f"Session ID       : {metrics['session_id']}",
         f"Schema Version   : {metrics['schema_version']}",

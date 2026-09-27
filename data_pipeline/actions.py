@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set
 
 import numpy as np
 
-from data_pipeline.schema import ActionState, MouseConfig
+from data_pipeline.schema import ActionState
 
 # Canonical key bindings
 KEY_MAPPINGS = {

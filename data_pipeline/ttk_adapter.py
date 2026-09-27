@@ -11,7 +11,6 @@ This module does NOT read process memory, inject code, or automate game inputs.
 from __future__ import annotations
 
 import ctypes
-import os
 import platform
 from typing import Any, List, Optional, Tuple
 
