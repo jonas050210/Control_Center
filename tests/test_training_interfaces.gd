@@ -44,7 +44,10 @@ func test_curriculum_level_changes_enemy_behavior_without_new_environment() -> S
 	var env := EnvironmentCore.new(0, 1)
 	env.set_curriculum_level(CurriculumConfig.Level.STATIONARY_TARGET)
 	env.reset(2)
-	var start := env.enemies[0].position
+	# `env.enemies` is an untyped Array, so `env.enemies[0].position` is a
+	# Variant and cannot drive `:=` type inference under Godot 4.7. Declare the
+	# type explicitly.
+	var start: Vector3 = env.enemies[0].position
 	env.step(Action.idle())
 	t.assert_vec_almost_eq(env.enemies[0].position, start, 0.0001)
 	env.set_curriculum_level(CurriculumConfig.Level.MOVING_TARGET)
