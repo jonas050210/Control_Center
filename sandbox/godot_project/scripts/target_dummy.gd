@@ -15,6 +15,7 @@ var patrol_phase: float = 0.0
 var patrol_enabled: bool = true
 var agent_controlled: bool = false
 var fire_timer: float = 1.0
+var is_moving: bool = false
 var player: SandboxPlayer
 
 func _ready() -> void:
@@ -30,7 +31,10 @@ func _physics_process(delta: float) -> void:
 
 func advance_simulation(delta: float) -> void:
 	if patrol_enabled:
+		is_moving = true
 		patrol_phase += delta * 0.65
+	else:
+		is_moving = false
 		global_position.x = spawn_origin.x + sin(patrol_phase) * patrol_radius
 		global_position.z = spawn_origin.z + cos(patrol_phase * 0.83) * patrol_radius
 	if not enemy_enabled or player == null or player.health <= 0.0:
