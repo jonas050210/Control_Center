@@ -66,8 +66,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ------------------------------------------------------- 3b. pinned deps
-Step "pinned requirements (godot-rl 0.8.2, sb3 2.4.0, gymnasium 1.0.0)"
-& $py -m pip install -r feasibility\requirements.txt
+Step "pinned requirements (data pipeline, godot-rl, sb3, gymnasium)"
+& $py -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Fail "requirements install failed" }
 
 # -------------------------------------------------- 4. examples (pinned)

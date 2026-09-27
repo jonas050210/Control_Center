@@ -1,0 +1,16 @@
+# SandboxAI — Root Requirements (Python 3.11)
+#
+# Core Data Pipeline (M1)
+mss>=9.0.0
+pynput>=1.7.6
+numpy>=1.24.0
+Pillow>=10.0.0
+pytest>=7.0.0
+
+# Feasibility & RL Bridge (M0)
+# Note: On Windows with RTX 4060 Ti, install PyTorch with CUDA FIRST:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+godot-rl==0.8.2
+stable-baselines3==2.4.0
+gymnasium==1.0.0
+psutil>=5.9

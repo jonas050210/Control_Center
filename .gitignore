@@ -3,6 +3,8 @@
 tools/
 /examples/
 logs/
+datasets/
+.pytest_cache/
 *.zip
 *.tgz
 __pycache__/
