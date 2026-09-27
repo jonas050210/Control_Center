@@ -69,6 +69,10 @@ func _handle_line(line: String) -> void:
 	if command == "replay":
 		_send({"ok": true, "events": controller.get_replay()})
 		return
+	if command == "save_replay":
+		var replay_path: String = str(request.get("path", "user://replays"))
+		_send({"ok": true, "path": controller.save_replay(replay_path)})
+		return
 	if command == "reset":
 		controller.reset(int(request.get("seed", 42)), str(request.get("map", "")), str(request.get("scenario", "")))
 		_send_state(0.0)

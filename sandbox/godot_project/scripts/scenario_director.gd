@@ -25,7 +25,7 @@ func apply_scenario() -> void:
 			"close_range": enemy.behavior = "aggressive"
 			"long_range": enemy.behavior = "stationary"
 			"multi_target": enemy.behavior = "patrol" if index % 2 == 0 else "stationary"
-			"flank": enemy.behavior = "aggressive" if index == 0 else "patrol"
+			"flank": enemy.behavior = "flank" if index == 0 else "patrol"
 			"defensive_hold": enemy.behavior = "stationary"
 		if active_scenario == "close_range": enemy.global_position = Vector3(0, 0.9, -5.0 + index * 2.0)
 		elif active_scenario == "long_range": enemy.global_position = Vector3(-10.0 + index * 8.0, 0.9, -15.0)

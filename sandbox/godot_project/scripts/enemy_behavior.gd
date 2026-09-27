@@ -54,6 +54,10 @@ func advance_simulation(delta: float) -> void:
 			if player and player.health > 0.0 and global_position.distance_to(player.global_position) < 10.0:
 				if cover_anchor == Vector3.ZERO: cover_anchor = _find_cover_anchor()
 				_navigate_to(cover_anchor if cover_anchor != Vector3.ZERO else global_position + (global_position - player.global_position).normalized() * 4.0, delta)
+		"flank":
+			if player and player.health > 0.0:
+				var side: Vector3 = player.global_transform.basis.x * (1.0 if get_instance_id() % 2 == 0 else -1.0)
+				_navigate_to(player.global_position + side * 8.0, delta)
 	if player == null or not is_instance_valid(player) or player.health <= 0.0: return
 	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(global_position + Vector3.UP, player.global_position + Vector3.UP)
 	query.collide_with_areas = false; query.collide_with_bodies = true

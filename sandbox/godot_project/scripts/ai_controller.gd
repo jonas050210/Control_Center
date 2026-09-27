@@ -81,6 +81,9 @@ func _visible_perception() -> Array[Dictionary]:
 func get_replay() -> Array[Dictionary]:
 	return episode_logger.snapshot() if episode_logger else []
 
+func save_replay(path: String = "user://replays") -> String:
+	return episode_logger.save_json(path) if episode_logger else ""
+
 func get_state_info() -> Dictionary:
 	return {"episode_seed": episode_seed, "step": step_count, "targets_hit": hits, "kills": kills, "shots_fired": shots_fired, "accuracy": float(hits) / float(maxi(1, shots_fired)), "last_shot_hit": player.last_shot_hit, "health": player.health, "ammo": player.ammo, "reserve_ammo": player.reserve_ammo, "reloading": player.reload_timer > 0.0, "damage_taken": damage_taken, "player_pos": [player.global_position.x, player.global_position.z], "perception": _visible_perception(), "tracked_target_id": tracked_target_id, "tracking_confidence": tracking_confidence, "scenario": scenario_director.state() if scenario_director else {}, "telemetry": {"fps": Engine.get_frames_per_second(), "frame_time_ms": 1000.0 / maxf(1.0, Engine.get_frames_per_second())}, "events": episode_logger.snapshot() if episode_logger else []}
 
@@ -110,7 +113,12 @@ func reset(seed_value: int = 42, requested_map: String = "", requested_scenario:
 	if arena: arena.configure(seed_value, requested_map)
 	if scenario_director: scenario_director.configure(seed_value, requested_scenario)
 	if episode_logger: episode_logger.begin(seed_value, "randomized", scenario_director.active_scenario if scenario_director else "none")
-	player.reset_player([Vector3(-3, 0, 0), Vector3(3, 0, 0), Vector3(0, 0, 3), Vector3(0, 0, -1.5)][rng.randi_range(0, 3)])
+	var spawn_candidates: Array[Vector3] = [Vector3(-3, 0, 0), Vector3(3, 0, 0), Vector3(0, 0, 3), Vector3(0, 0, -1.5)]
+	var valid_spawns: Array[Vector3] = []
+	for candidate: Vector3 in spawn_candidates:
+		if arena == null or arena.is_valid_spawn(candidate): valid_spawns.append(candidate)
+	if valid_spawns.is_empty(): valid_spawns.append(Vector3.ZERO)
+	player.reset_player(valid_spawns[rng.randi_range(0, valid_spawns.size() - 1)])
 	var targets: Array[Node] = get_tree().get_nodes_in_group("targets")
 	for index: int in range(targets.size()):
 		var target: SandboxEnemy = targets[index] as SandboxEnemy

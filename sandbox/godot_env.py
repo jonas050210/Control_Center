@@ -192,6 +192,11 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
         events = response.get("events", [])
         return list(events) if isinstance(events, list) else []
 
+    def save_replay(self, path: str = "user://replays") -> str:
+        """Persist the current episode replay inside the Godot process."""
+        response = self._request({"command": "save_replay", "path": path})
+        return str(response.get("path", ""))
+
     def render(self) -> np.ndarray:
         return np.transpose(self._last_observation, (1, 2, 0))
 

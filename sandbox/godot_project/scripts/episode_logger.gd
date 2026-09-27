@@ -18,3 +18,14 @@ func record(kind: String, payload: Dictionary = {}) -> void:
 
 func snapshot() -> Array[Dictionary]:
 	return events.duplicate(true)
+
+func save_json(path: String = "user://replays") -> String:
+	var directory: String = path
+	if not directory.ends_with(".json"):
+		DirAccess.make_dir_recursive_absolute(directory)
+		directory = directory.path_join("episode_%d.json" % started_at_usec)
+	var file: FileAccess = FileAccess.open(directory, FileAccess.WRITE)
+	if file == null: return ""
+	file.store_string(JSON.stringify({"version": 1, "events": events}, "\t"))
+	file.close()
+	return directory

@@ -40,6 +40,8 @@ var weapon_catalog: Dictionary = {}
 var current_weapon_id: String = "rifle"
 var current_weapon: SandboxWeapon
 var muzzle_flash_timer: float = 0.0
+var damage_feedback_timer: float = 0.0
+var episode_rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 func _ready() -> void:
 	add_to_group("players")
@@ -58,6 +60,9 @@ func _process(_delta: float) -> void:
 	if hud_help:
 		hud_help.visible = not agent_controlled
 	muzzle_flash_timer = maxf(0.0, muzzle_flash_timer - get_process_delta_time())
+	damage_feedback_timer = maxf(0.0, damage_feedback_timer - get_process_delta_time())
+	if hud_status and damage_feedback_timer > 0.0: hud_status.modulate = Color(1.0, 0.35, 0.35)
+	elif hud_status: hud_status.modulate = Color.WHITE
 	var view_model: MeshInstance3D = get_node_or_null("CameraPivot/Camera3D/ViewModel") as MeshInstance3D
 	if view_model: view_model.visible = muzzle_flash_timer <= 0.0 or fmod(muzzle_flash_timer * 60.0, 2.0) > 0.5
 
@@ -213,6 +218,7 @@ func shoot() -> bool:
 
 func take_damage(amount: float) -> void:
 	health = maxf(0.0, health - amount)
+	damage_feedback_timer = 0.35
 	health_changed.emit(health)
 
 func reset_player(spawn_pos: Vector3 = Vector3.ZERO) -> void:
