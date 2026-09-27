@@ -24,6 +24,7 @@ var damage_taken: float = 0.0
 var tracked_target_id: int = 0
 var tracking_confidence: float = 0.0
 var tracking_memory_seconds: float = 0.0
+var previous_detection: Dictionary = {}
 @onready var scenario_director: SandboxScenarioDirector = get_tree().current_scene.get_node_or_null("ScenarioDirector") as SandboxScenarioDirector
 @onready var episode_logger: SandboxEpisodeLogger = get_node("../EpisodeLogger") as SandboxEpisodeLogger
 @onready var arena: SandboxArenaEnvironment = get_tree().current_scene as SandboxArenaEnvironment
@@ -75,6 +76,9 @@ func _visible_perception() -> Array[Dictionary]:
 			tracked_target_id = target_id; tracking_confidence = confidence; tracking_memory_seconds = 0.75
 		elif tracking_memory_seconds > 0.0 and target_id == tracked_target_id:
 			tracking_memory_seconds = maxf(0.0, tracking_memory_seconds - 0.05); confidence = tracking_confidence * (tracking_memory_seconds / 0.75)
+		if previous_detection.get(target_id, false) != visible and episode_logger:
+			episode_logger.record("perception", {"target_id": target_id, "detected": visible, "confidence": confidence})
+		previous_detection[target_id] = visible
 		result.append({"id": target_id, "detected": visible, "confidence": confidence, "screen_position": [projected.x, projected.y], "screen_rect": [clampf(projected.x - 0.035, 0.0, 1.0), clampf(projected.y - 0.12, 0.0, 1.0), 0.07, 0.24], "distance": distance, "relative_position": [target.global_position.x - player.global_position.x, target.global_position.y - player.global_position.y, target.global_position.z - player.global_position.z], "moving": target.is_moving, "tracked": target_id == tracked_target_id and visible})
 	return result
 
