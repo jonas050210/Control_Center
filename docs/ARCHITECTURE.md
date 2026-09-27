@@ -1,220 +1,203 @@
-# SandboxAI Architecture (Milestone 1)
+# SandboxAI architecture
 
-## Goals of this milestone
+## Runtime split
 
-Prove SandboxAI can run a small, deterministic, RL-compatible FPS combat
-environment in Godot 4.7.2, controllable by both a human and (eventually)
-an RL policy, with multiple independent parallel environments and a
-headless/fast-simulation path — without building a real game.
+SandboxAI has two deliberately independent runtimes:
 
-## Layering: simulation vs. presentation
+1. **Godot simulation**: deterministic Agent/Enemy/Weapon state, action
+   resolution, reward calculation, episode lifecycle and optional rendering.
+2. **Python ML tooling**: Gymnasium/SB3 PPO, PyTorch BC, evaluation,
+   checkpoints, telemetry, datasets and benchmarking.
 
-The most important design decision in this codebase is the hard split
-between **simulation/RL logic** and **rendering/input**:
+The bridge is newline-delimited JSON over the Godot process's stdin/stdout.
+It avoids a renderer, native plugins, browser networking and machine-specific
+paths. One Godot process owns a batch of independent environments.
 
-| Layer | Extends | Lives in | Depends on scene tree? |
-|---|---|---|---|
-| `AgentState`, `EnemyState`, `WeaponState`, `Action`, `Observation`, `EpisodeState`, `EnvironmentCore`, `RewardSystem` | `RefCounted` | `scripts/{core,agent,enemy,weapon,reward}` | **No** |
-| `AgentView`, `EnemyView`, `EnvironmentView` | `Node3D` | `scripts/{agent,enemy,env}` | Yes (purely to draw) |
-| `SimulationManager` | `Node` | `scripts/core` | Optional (`create_visuals` flag) |
-| `HumanController`, `AIStubController` | `Node` (via `ControllerBase`) | `scripts/input` | Yes (needs input callbacks) |
-
-`EnvironmentCore` — the RL environment — has **zero** dependency on
-`Node`/`Viewport`/rendering. It can be instantiated and stepped with plain
-`EnvironmentCore.new()` calls, which is what makes the automated tests fast
-and simple, and what makes `SimulationManager.create_visuals = false`
-possible: hundreds of environments can be ticked with no Node3D, mesh,
-camera or physics-space overhead at all. `EnvironmentView` (and
-`AgentView`/`EnemyView`) only *read* state to update a transform/visibility
-— deleting them would not change simulation behavior.
-
-## RL interface
-
-`EnvironmentCore` (scripts/env/environment_core.gd) exposes exactly the
-interface requested by the milestone:
-
-```gdscript
-reset(seed_value: int = -1) -> Observation
-step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary # {observation, reward, done, info}
-get_observations() -> Observation
-get_rewards() -> float
-is_done() -> bool
+```
+Godot rl_server.gd
+  -> SimulationManager
+    -> EnvironmentCore[0..N)
+      -> AgentState / EnemyState[] / WeaponState / EpisodeState
+  -> RLAdapter
+  <==== JSON lines ====>
+Python GodotBatchClient
+  -> GodotVecEnv (SB3) / GodotGymEnv (evaluation)
 ```
 
-`SimulationManager` provides the batched version across N environments
-(`reset_all`, `step_all`, `get_observations`, `get_rewards`, `is_done_all`,
-plus `run_headless_steps(n)` for training-speed stepping with no rendering
-involved). `RLAdapter` (scripts/rl/rl_adapter.gd) is a thin façade over
-`SimulationManager` with the exact Gym-style names
-(`reset`/`step`/`get_observations`/`get_rewards`/`is_done`) plus
-`action_space_info()`/`observation_space_info()` so a future Python-side
-wrapper has a single, small surface to bind to. It intentionally does not
-pull in any RL library — that is deliberately deferred to the next
-milestone.
+To inspect the protocol manually, launch the server and send one JSON object
+per line:
 
-## Action space
+```text
+{"cmd":"spaces"}
+{"cmd":"reset","seed":1234}
+{"cmd":"step","actions":[[1,1,1,1,0]]}
+{"cmd":"close"}
+```
 
-`Action` (scripts/core/action.gd) is a small structured object with:
+## Action contract
 
-- `move_axis` (-1/0/1), `strafe_axis` (-1/0/1)
-- `look_yaw_axis` (-1/0/1), `look_pitch_axis` (-1/0/1)
-- `shoot` (bool)
-- `look_delta: Vector2` — **reserved, unused by default**, for a future
-  continuous mouse-aiming mode
+The canonical Godot `Action` has four ternary fields and one binary trigger:
 
-`Action.from_discrete(int)` maps the 10 requested single-choice actions
-(idle, move forward/backward, strafe left/right, look left/right/up/down,
-shoot) onto this struct — this is what `RLAdapter.step()` accepts when
-given raw ints. Because `look_delta` already exists on the struct and
-`AgentState.apply_action()` already adds it straight into yaw/pitch,
-switching to continuous mouse-style aiming later is a matter of *populating
-that field* (as `HumanController` already does from real mouse motion) —
-no reshaping of the interface is required.
+- `move_axis`, `strafe_axis`, `look_yaw_axis`, `look_pitch_axis`: `-1, 0, 1`
+- `shoot`: boolean
+- `look_delta`: optional continuous mouse delta, retained for human logs
 
-## Observation space
+The ML space is `MultiDiscrete([3, 3, 3, 3, 2])`. Each ternary field is
+shifted by one (`-1 -> 0`, `0 -> 1`, `1 -> 2`). `Action.from_discrete()`
+continues to support Agent 1's ten single-choice actions for compatibility.
+Human, stub AI, external PPO and demonstrations all pass through `Action`.
 
-`Observation.build(agent, enemies, arena_half_extent)`
-(scripts/core/observation.gd) produces a 17-float, mostly-normalized
-vector:
+## Observation contract
 
-| Index | Field | Normalization |
-|---|---|---|
-| 0-2 | agent position (x,y,z) | ÷ arena half-extent (÷ wall height for y) |
-| 3-5 | agent velocity | ÷ max move speed |
-| 6-8 | agent forward vector | unit vector, already in [-1,1] |
-| 9 | agent health | ÷ max health |
-| 10-12 | enemy relative position | ÷ arena max diagonal distance |
-| 13 | enemy distance | ÷ arena max diagonal distance |
-| 14 | enemy health | ÷ max health |
-| 15 | weapon ready | 0/1 |
-| 16 | in combat | 0/1 (enemy alive & within weapon range) |
+`Observation.to_array()` always returns 17 float32-compatible values:
 
-`Observation.to_dict()` exposes the same data (plus `enemy_relative_direction`
-and `enemy_alive`) for debugging/logging. `SandboxConfig.ObservationMode`
-(`STRUCTURED` / `HUMAN_INPUT` / `RGB`) exists as an explicit extension
-point: milestone 1 only implements `STRUCTURED`. A future RGB/screen mode
-would add a *new* build method (e.g. `Observation.build_rgb_from_viewport`)
-and a new field on the result, not replace this one — existing structured
-observations keep working while a vision model is developed in parallel.
+| Index | Value |
+| --- | --- |
+| 0–2 | agent position normalized by arena extent |
+| 3–5 | agent velocity normalized by move speed |
+| 6–8 | agent forward unit vector |
+| 9 | agent health / max health |
+| 10–12 | primary enemy relative position / max arena distance |
+| 13 | primary enemy distance / max arena distance |
+| 14 | primary enemy health / max health |
+| 15 | weapon-ready flag |
+| 16 | in-combat flag |
 
-## Reward system
+The primary enemy is the nearest alive target, with a stable dead-target
+fallback. RGB and temporal stacking are interfaces only; there are no image
+processing dependencies or vision weights in this milestone.
 
-All numbers live in `SandboxConfig` and are combined by the stateless
-`RewardSystem.compute(events: Dictionary)`:
+## Environment lifecycle and metrics
 
-| Event | Effect |
-|---|---|
-| `hit` | `+REWARD_HIT` (1.0) |
-| `kill` | `+REWARD_KILL` (10.0) |
-| `damage_taken` (HP) | `HP * PENALTY_DAMAGE_TAKEN_PER_HP` (-0.05/HP) |
-| `died` | `+PENALTY_DEATH` (-10.0) |
-| `useless_shot` (fired on cooldown / no target at all) | `+PENALTY_USELESS_SHOT` (-0.1) |
-| `positioning_delta` (meters closed toward the enemy while not already close) | clamped to ±`REWARD_POSITIONING_MAX` (0.05) |
-| alive & not died | `+REWARD_SURVIVE_TICK` (0.01) |
+`reset(seed)` starts a new episode and seeds a local Godot
+`RandomNumberGenerator`. `step(action, dt)` returns:
 
-Values are deliberately small relative to hit/kill/death so the agent
-cannot farm reward by only "surviving" or "positioning" — combat outcomes
-dominate.
+```gdscript
+{
+  "observation": Observation,
+  "reward": float,
+  "done": bool,
+  "info": {
+    "events": Dictionary,
+    "done_reason": String,
+    "metrics": Dictionary
+  }
+}
+```
 
-## Combat
+Metrics include reward, episode length, kills, deaths, damage dealt,
+damage received, survival time, accuracy, shots fired/hit and win/loss.
+`SimulationManager` can auto-reset a completed environment while preserving
+its terminal observation under `terminal_observation`; this matches vector
+Gym semantics. The Python wrapper returns a fresh reset observation and keeps
+terminal info in the `info` dictionary.
 
-- Weapon: fixed damage (25), fixed range (15m), fixed cooldown (0.5s), no
-  recoil/spread/ammo. `WeaponState.try_fire()` gates on cooldown;
-  `WeaponState.ray_hits_sphere()` is a deterministic ray-vs-sphere test
-  against each alive enemy's "chest" point — this is the "simple
-  raycast/hit test" requested, implemented as plain vector math rather
-  than a `PhysicsDirectSpaceState3D` query so it works identically whether
-  or not the environment has any visual/physics representation at all
-  (needed for the headless/many-environments path).
-- Enemy AI (`EnemyState.update_ai`): idle (out of detection range) → chase
-  (moves toward the agent) → attack (deals fixed damage on a cooldown once
-  within attack range). No pathfinding, no perception cones — deliberately
-  minimal per the milestone scope.
-- Episode ends when the agent dies, all enemies are eliminated, or a step
-  timeout (`SandboxConfig.MAX_EPISODE_STEPS`) is reached; each condition is
-  independently toggleable via `SandboxConfig.END_EPISODE_ON_*` constants.
+The simulation is analytic rather than PhysicsServer-driven. This is
+intentional: it is deterministic and fast in headless mode. Views mirror
+state but never drive it. A `create_visuals=false` manager creates no visual
+nodes and can be used without a window.
 
-## Simulation architecture / multiple environments
+## PPO pipeline
 
-`SimulationManager` owns an `Array[EnvironmentCore]`. Each entry is a fully
-independent object graph — its own `AgentState`, `EnemyState`s,
-`EpisodeState`, and seeded `RandomNumberGenerator` — so stepping or
-resetting one environment can never affect another (see
-`tests/test_simulation_manager.gd`). When `create_visuals` is true, one
-`EnvironmentView` per environment is spawned and placed in a simple grid
-purely for on-screen separation; this placement is cosmetic only; each
-`EnvironmentCore`'s own coordinate space is always centered at the origin,
-so simulation math never has to know about the visual layout.
+`python/sandboxai/ppo.py` creates `GodotVecEnv`, starts `rl_server.gd`, and
+constructs SB3 PPO with:
 
-Two ways to advance simulation time:
+- MLP policy with two 128-unit hidden layers by default
+- `MultiDiscrete` action space
+- configurable learning rate, rollout length, batch size, gamma, GAE lambda,
+  entropy coefficient, clip range, seed, total steps and device
+- TensorBoard and JSONL telemetry
+- periodic SB3 checkpoints
+- isolated evaluation callback and best-evaluation checkpoint
 
-1. **Engine-driven** (`SimulationManager._physics_process`): used for
-   human play / demos, ticks once per physics frame at
-   `SandboxConfig.SIMULATION_DT` (60 Hz).
-2. **Headless/batch** (`SimulationManager.run_headless_steps(n)`): steps
-   every environment `n` times back-to-back with no relation to real time
-   or rendering — the path a future trainer would use for throughput, and
-   the path the automated tests use so they run in milliseconds.
+`TrainingConfig` is the central serializable configuration. `device=auto`
+selects CUDA only when PyTorch reports it available; CPU is the fallback.
+The Godot process receives environment count, enemy count, curriculum level
+and seed explicitly.
 
-Determinism: `EnvironmentCore.reset(seed_value)` seeds a local
-`RandomNumberGenerator`; the same seed always reproduces the same initial
-enemy spawn layout and therefore the same first observation
-(`tests/test_environment_core.gd::test_deterministic_reset_same_seed_gives_identical_observation`).
-`SimulationManager.base_seed` seeds environment *i* with `base_seed + i`,
-so an entire multi-environment run is reproducible from one integer.
+A checkpoint resume loads the SB3 archive with its optimizer state and calls
+`learn(reset_num_timesteps=false)`. The latest checkpoint is written after a
+successful run, while `best_eval.zip` is only replaced by a strictly better
+evaluation.
 
-## Human play vs. AI
+## BC and BC-to-PPO
 
-`HumanController` and `AIStubController` both implement `ControllerBase`
-(`get_action(env) -> Action`) — the exact same method `SimulationManager`
-calls for every environment every tick, whether a human or an AI is behind
-it. `HumanController` reads raw keyboard/mouse state (not the Input Map, to
-keep `project.godot` minimal) and already produces continuous
-`look_delta` from real mouse motion, so the human is, from day one,
-generating the richer/continuous version of the action a discrete AI
-policy would only approximate. This matters for the stated next milestone
-("record human demonstrations for imitation learning"): the action object
-being produced by human play is already exactly the shape any Action
-consumer (RL trainer, imitation learner, self-play opponent) will read —
-adding a demonstration recorder is a matter of logging `(observation,
-action, reward)` tuples around the existing `HumanController.get_action`
-call, not redesigning it.
+`DemonstrationRecorder` in Godot attaches to `SimulationManager` and logs the
+existing human action pipeline. The first JSONL line is dataset metadata;
+remaining lines are transition records:
 
-## Known limitations / deliberate scope cuts
+```json
+{
+  "observation": [...], "action": [...], "next_observation": [...],
+  "reward": 0.01, "done": false, "timestamp": 123.4,
+  "episode_id": 0, "environment_id": 0, "info": {...}
+}
+```
 
-- Movement/AI/hit-testing are analytic (no `PhysicsServer3D` stepping) —
-  intentional for determinism and headless speed; walls are simple AABB
-  clamps rather than real collision response.
-- One "primary" enemy drives the structured observation (nearest alive);
-  `EnvironmentCore` already supports multiple enemies per environment
-  (`enemy_count_per_environment`) for reward/combat purposes, but the
-  observation vector would need a fixed-size multi-enemy slot layout
-  (or padding/masking) to expose more than one at a time to a policy —
-  left for the next milestone once the observation size budget is decided
-  by whatever trainer is chosen.
-- No recoil, ammo, inventory, multiplayer, or complex enemy AI, per the
-  milestone's explicit scope.
-- No RGB/vision observation implementation yet — only the extension point
-  (`SandboxConfig.ObservationMode`) exists.
+`python/sandboxai/dataset.py` validates and loads this format without
+PyTorch. The BC model has a two-layer tanh backbone and five categorical
+heads. Training uses a deterministic train/validation split, Adam,
+checkpointed optimizer state, CSV loss curves and JSONL accuracy metrics.
 
-## Extension points for later milestones
+The BC-to-PPO transfer is explicit and conservative. It copies BC hidden
+layers and concatenated categorical heads only if SB3 parameter names and
+shapes are compatible. A mismatch raises an error; no fake or partial warm
+start is reported.
 
-- **Actual PPO/RL training**: implement a transport (socket or
-  GDExtension) that calls `RLAdapter.reset`/`step` from Python; nothing in
-  `EnvironmentCore` needs to change.
-- **Behavior cloning / human demonstration recording**: wrap
-  `HumanController.get_action()` to also append
-  `(get_observations(), action, reward)` to a buffer/file.
-- **Self-play**: instantiate two `AgentState`/`AgentView` pairs inside one
-  `EnvironmentCore` and swap which one the reward/termination logic treats
-  as "the agent" per side — the state/action/reward classes do not assume a
-  single hardcoded agent identity beyond the current single-agent field, so
-  this is a moderate, contained change to `EnvironmentCore`.
-- **RGB observations**: add a `SubViewport` + `Camera3D` capture path
-  behind `SandboxConfig.ObservationMode.RGB`; this is explicitly designed
-  to sit *alongside* `Observation.build()`, not replace it.
-- **More complex FPS combat / additional environments (e.g. melee /
-  Half-Sword-style)**: `EnvironmentCore`, `AgentState`, `EnemyState` and
-  `WeaponState` are already separate, small, replaceable classes —a melee
-  variant would swap `WeaponState` for a different combat resolver behind
-  the same `EnvironmentCore.step()` contract.
+## Curriculum and self-play
+
+`CurriculumConfig` changes existing `EnemyState` behavior instead of making
+parallel hardcoded environments:
+
+1. stationary large target, no attacks
+2. moving target, no attacks
+3. moving target with attacks
+4. multiple configured enemies
+5. agent-vs-agent hook
+
+`SelfPlayEnvironmentCore` has two `AgentState` slots, independent RNG seeds,
+mirrored observations, per-agent rewards and per-agent metrics. Python's
+`SelfPlayCoordinator` can load a frozen opponent checkpoint. This is a
+foundation for population/self-play training, not a population algorithm.
+
+## Files
+
+```text
+scripts/
+  core/       Action, Observation, config, curriculum, episode, manager
+  env/        EnvironmentCore and optional EnvironmentView
+  agent/      Agent state/view
+  enemy/      Enemy state/view
+  weapon/     Weapon state
+  reward/     Reward calculation
+  rl/         RLAdapter and headless JSON-lines server
+  recording/  JSONL recorder and graphical human recording entry point
+  self_play/  two-agent match foundation
+  input/      human and stub controllers
+python/sandboxai/
+  config.py       Training/BC/evaluation configuration
+  godot_env.py    subprocess, Gymnasium and SB3 adapters
+  ppo.py          PPO, evaluation callbacks, checkpoints
+  dataset.py      demonstrations and action validation
+  bc.py           PyTorch behavior cloning and compatible warm start
+  evaluation.py   frozen evaluation and JSON/CSV summaries
+  benchmark.py    throughput measurements
+  telemetry.py    structured metrics/resource snapshots
+  self_play.py    policy slots and frozen-opponent lifecycle
+  cli.py          complete command line
+```
+
+## Known limits and next milestone
+
+- Only structured observations are trained; RGB and frame stacking are not
+  implemented yet.
+- Self-play is a two-slot/match foundation. It does not yet implement a
+  population scheduler, league or opponent sampling algorithm.
+- The analytic arena has no physics collision response, recoil, ammo or
+  complex FPS navigation.
+- Godot itself must be installed locally; the repository cannot verify live
+  Godot behavior on a machine without that executable.
+
+The next useful milestone is a short verified PPO run on the target machine,
+followed by improving the structured multi-enemy observation and adding
+curriculum-aware self-play evaluation before introducing RGB input.

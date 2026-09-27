@@ -1,117 +1,292 @@
 # SandboxAI
 
-SandboxAI is a **Godot 4.7.2** based reinforcement-learning training
-simulator for a minimal 3D FPS combat environment. Godot is used as the
-*simulation/training environment*, not as a shipped game: the arena is
-intentionally small, deterministic and free of visual polish so it stays
-fast and easy to reason about while the RL/training pipeline around it
-matures.
+SandboxAI is a local, open-source reinforcement-learning research platform
+built around a small Godot 4.7.2 FPS combat simulator. The simulator is the
+canonical test environment: it is deterministic, headless-capable, and
+rendering is not required by the Python trainer.
 
-This is **milestone 1**: prove that SandboxAI can run a controllable FPS
-environment with RL-compatible observations, actions, rewards, resets, and
-multiple independent parallel environments — and that a human can drive the
-exact same agent/action pipeline an AI eventually will.
+The repository now contains a real PPO and Behavior Cloning workflow in
+addition to the original Godot foundation:
+
+```
+HumanController / policy
+          |
+          v
+      RLAdapter  <---- JSON-lines stdio bridge ---->  Python Gymnasium/SB3
+          |
+          v
+  SimulationManager -> EnvironmentCore -> Agent/Enemy/Weapon state
+```
+
+Godot owns simulation state and rewards. Python owns neural networks,
+checkpoints, evaluation, datasets and telemetry. No paid API, cloud service,
+Roblox integration or visual-scene dependency is required.
 
 ## Requirements
 
-- Godot **4.7.2** (standard build, GDScript only — no C#/Mono needed)
-- Nothing else. No plugins, no external engines, no paid services.
+- Godot **4.7.2** (standard build, GDScript only)
+- Python **3.11+**
+- Optional Python training dependencies: PyTorch, Gymnasium,
+  Stable-Baselines3, TensorBoard and psutil
+- Windows 11 or Ubuntu/Linux. CUDA is optional and detected through
+  `torch.cuda.is_available()`; no GPU model is hardcoded.
 
-Developed against the target spec of Windows 11 + RTX 4060 Ti 8GB +
-Python 3.11, but the project itself only needs Godot; a Python RL trainer
-is out of scope for this milestone (see "Next milestone" below).
+The target RTX 4060 Ti 8 GB is appropriate for the compact MLP and structured
+observations, but CPU mode is fully supported.
 
-## Running the demo / human-play mode
+## Installation
 
-1. Open the project folder in Godot 4.7.2 (`project.godot` at the repo root).
-2. Press **Play** (or F5). `scenes/main.tscn` is the main scene.
-3. You control the agent in **environment 0** with:
-   - `W`/`A`/`S`/`D` — move / strafe
-   - Mouse — look (captured by default; press `Esc` to release, click to
-     recapture)
-   - Arrow keys — discrete look left/right/up/down (works even without a
-     mouse)
-   - Left mouse button or `Space` — shoot
-4. Every other environment (3 more by default) is driven by a trivial
-   deterministic `AIStubController` so you can see multiple independent
-   environments running side by side.
-5. A small debug overlay in the top-left shows render FPS, simulation
-   steps/second, agent health, enemy count, kills, deaths, episode count,
-   and current reward.
-
-## Running the automated tests
-
-Tests are plain GDScript (no external test addon) under `tests/`, runnable
-headlessly:
+Install Godot separately and make the executable available as `godot`, or
+pass `--godot-executable` to commands. Then from the repository root:
 
 ```bash
-godot4 --headless --path . --script res://tests/run_tests.gd
+python -m venv .venv
+# Linux/macOS
+source .venv/bin/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -e ".[training,test]"
 ```
 
-(use whatever the Godot 4.7.2 executable is called on your system, e.g.
-`Godot_v4.7.2-stable_win64.exe --headless --path . --script res://tests/run_tests.gd`
-on Windows). The runner discovers every `tests/test_*.gd` file, executes
-every `test_*` method, prints `PASS`/`FAIL` per test and exits with code
-`1` if anything failed (`0` otherwise), so it's CI-friendly.
+For CUDA, install the PyTorch wheel matching the installed NVIDIA driver from
+[pytorch.org](https://pytorch.org/) before installing the remaining extras.
+The application detects CUDA at startup and fails clearly if `--device cuda`
+is requested but unavailable.
 
-> **Note on this sandbox:** the environment this milestone was authored in
-> has no network access to download the actual Godot editor/export
-> binaries (only `git`/PyPI/npm registries are reachable), so the test
-> suite could not be executed inside a running Godot process here. Every
-> script was instead validated with `gdlint`/`gdformat`
-> ([gdtoolkit](https://github.com/Scony/godot-gdscript-toolkit), a real
-> GDScript parser) to catch syntax errors, and every algorithm (movement,
-> rotation, ray/sphere hit-test, reward math) was independently
-> cross-checked with an equivalent Python calculation. Please run the
-> command above on your machine and see the final report/PR description
-> for details.
+## Run the Godot project
 
-## Project layout
+Open the root in Godot 4.7.2 and press **Play**, or run:
 
-```
-project.godot                  Godot project file (Godot 4.7.2)
-scenes/main.tscn                Entry scene (boots everything from code)
-scripts/
-  core/
-    sandbox_config.gd           Centralized tunable constants (arena, agent,
-                                 enemy, weapon, rewards, episode limits)
-    action.gd                   Structured/discrete Action type
-    observation.gd               Structured Observation builder
-    episode_state.gd             Per-environment episode bookkeeping
-    simulation_manager.gd       Owns & ticks N independent environments
-    main.gd                      Boots lighting, SimulationManager,
-                                 controllers, camera, debug overlay
-  env/
-    environment_core.gd          RL environment: reset/step/observations/
-                                 rewards/done (no Node dependency)
-    environment_view.gd          Visual-only arena/agent/enemy mirror
-  agent/
-    agent_state.gd               Agent movement/aim/health logic (pure)
-    agent_view.gd                Agent Node3D + FPS camera (visual only)
-  enemy/
-    enemy_state.gd               Enemy idle/chase/attack AI + health (pure)
-    enemy_view.gd                Enemy Node3D mirror (visual only)
-  weapon/
-    weapon_state.gd               Fire cooldown + ray/sphere hit-test (pure)
-  reward/
-    reward_system.gd              Centralized reward calculation (pure)
-  rl/
-    rl_adapter.gd                 Gym-style façade over SimulationManager
-  input/
-    controller_base.gd            Shared interface for human & AI controllers
-    human_controller.gd           WASD + mouse-look + click -> Action
-    ai_stub_controller.gd         Deterministic heuristic -> Action
-  debug/
-    debug_overlay.gd              Minimal on-screen telemetry
-tests/
-  sandbox_test.gd                Tiny dependency-free assertion helper
-  run_tests.gd                    Headless test runner (SceneTree script)
-  test_*.gd                       One test file per subsystem
-docs/
-  ARCHITECTURE.md                Design notes & extension points
+```bash
+godot --path .
 ```
 
-See `docs/ARCHITECTURE.md` for the full design rationale, the RL
-reset/step/observe/reward/done interface, and how vision/RGB observations,
-human demonstration recording, self-play and PPO training are meant to
-slot in later without reshaping what's here.
+Environment 0 is human-controlled:
+
+- `W/A/S/D`: move and strafe
+- mouse or arrow keys: aim
+- left mouse button or `Space`: shoot
+- `Esc`: release/capture the mouse
+
+The remaining default environments use the deterministic stub controller.
+Human and AI controllers both produce the same `Action` representation used
+by RL and recording.
+
+## Automated tests
+
+Godot tests:
+
+```bash
+godot --headless --path . --script res://tests/run_tests.gd
+```
+
+The runner discovers `tests/test_*.gd`, reports every test, and exits nonzero
+on failure. Python tests (after editable installation, or with `PYTHONPATH`)
+are:
+
+```bash
+PYTHONPATH=python python -m unittest discover -s python/tests -v
+```
+
+Godot is not bundled in this repository. If the executable is unavailable,
+Python tests and static Python compilation can still run, but the Godot test
+suite and live PPO bridge cannot be honestly marked as executed.
+
+## CLI workflow
+
+All normal workflows are exposed by one command. `python -m sandboxai` can be
+used instead of the installed `sandboxai` executable.
+
+```bash
+sandboxai --help
+sandboxai install
+```
+
+### Record human demonstrations
+
+This opens the graphical Godot scene and records transitions from the real
+`HumanController` pipeline. Close the window to save, or provide a duration:
+
+```bash
+sandboxai record --output training/datasets/human_demo.jsonl
+sandboxai record --output training/datasets/demo.jsonl --duration 300
+```
+
+Direct Godot equivalent:
+
+```bash
+godot --path . --script res://scripts/recording/record_demo.gd -- \
+  --output training/datasets/human_demo.jsonl
+```
+
+Each JSONL dataset starts with metadata and then stores compact records with:
+`observation`, `action`, `next_observation`, `reward`, `done`, timestamp,
+episode ID, environment ID and terminal info. The action keeps the two
+continuous mouse-look values for lossless human logs; BC uses the fixed first
+five fields.
+
+Inspect and validate a dataset without PyTorch:
+
+```bash
+sandboxai inspect-dataset --dataset training/datasets/human_demo.jsonl
+```
+
+### Behavior Cloning
+
+```bash
+sandboxai bc-train \
+  --dataset training/datasets/human_demo.jsonl \
+  --epochs 25 --batch-size 512 --device auto \
+  --output-dir training/bc_runs/human_v1
+```
+
+The result contains `latest.pt`, `best.pt`, periodic epoch checkpoints,
+`metrics.jsonl`, `loss.csv` and `config.json`. The model is a small two-hidden-
+layer PyTorch MLP with one categorical head per action field. Validation
+reports component accuracy and exact five-field action accuracy.
+
+Resume BC training:
+
+```bash
+sandboxai bc-train --dataset training/datasets/human_demo.jsonl \
+  --output-dir training/bc_runs/human_v1 \
+  --resume-checkpoint training/bc_runs/human_v1/latest.pt --epochs 50
+```
+
+### PPO training
+
+The trainer starts one Godot headless process containing the requested number
+of independent environments and uses a `MultiDiscrete([3,3,3,3,2])` action
+space. The structured observation is a 17-float `Box`.
+
+```bash
+sandboxai train \
+  --env-count 8 --steps 1000000 \
+  --rollout-length 2048 --batch-size 256 \
+  --learning-rate 0.0003 --gamma 0.99 --gae-lambda 0.95 \
+  --entropy-coefficient 0.0 --clip-range 0.2 \
+  --checkpoint-frequency 100000 --evaluation-frequency 50000 \
+  --seed 1234 --device auto --curriculum-level 3
+```
+
+A JSON config can replace command-line editing:
+
+```bash
+sandboxai train --config training_config.json
+```
+
+To warm-start PPO from BC, request an exact-compatible transfer:
+
+```bash
+sandboxai train --bc-checkpoint training/bc_runs/human_v1/best.pt \
+  --device cuda --steps 500000
+```
+
+The transfer copies only matching MLP hidden layers and categorical action
+heads into SB3 PPO. If names, dimensions or action heads do not match, it
+raises instead of silently pretending that weights transferred.
+
+Resume PPO (SB3 `.zip` checkpoint):
+
+```bash
+sandboxai resume \
+  --checkpoint training/runs/20260927-120000/checkpoints/latest.zip \
+  --steps 500000 --device auto
+```
+
+### Evaluation
+
+Evaluation loads frozen weights and never calls an optimizer or updates model
+parameters:
+
+```bash
+sandboxai evaluate \
+  --checkpoint training/runs/20260927-120000/best_eval.zip \
+  --episodes 100 --device auto \
+  --output-dir training/evaluations/run_01
+```
+
+The evaluation directory includes `summary.json`, `summary.txt` and
+`episodes.csv`. It reports reward, kills, deaths, damage dealt/received,
+survival time, accuracy, shots fired/hit, win rate and loss rate.
+
+### Benchmark simulation throughput
+
+```bash
+sandboxai benchmark --env-counts 1,4,8,16 \
+  --steps 10000 --output-dir training/benchmarks/4060ti
+```
+
+Benchmark output includes environments, total steps, steps/sec,
+episodes/sec and best-effort CPU/process/GPU memory snapshots. It is the
+practical way to choose an environment count before PPO training.
+
+## Checkpoint and output layout
+
+A normal PPO run is structured as:
+
+```
+training/
+  runs/<run-id>/
+    config.json
+    warm_start.json
+    final.zip
+    run_summary.json
+    checkpoints/
+      ppo_<timesteps>_steps.zip
+      latest.zip
+      best_eval.zip
+    logs/
+      training.jsonl
+      tensorboard/
+    evaluations/
+      latest.json
+      best.json
+      step_<timesteps>/summary.json, episodes.csv, summary.txt
+  bc_runs/<run-id>/
+    config.json, latest.pt, best.pt, epoch_*.pt
+    metrics.jsonl, loss.csv
+  datasets/<name>.jsonl
+  evaluations/<name>/
+  benchmarks/<name>/
+```
+
+`latest.zip` is written only after a successful training call. `best_eval.zip`
+is updated only when mean evaluation reward improves. BC checkpoints contain
+model/optimizer state, epoch, architecture, action nvec, dataset path and
+metrics so training can resume.
+
+TensorBoard can be opened with:
+
+```bash
+tensorboard --logdir training/runs/<run-id>/logs/tensorboard
+```
+
+Training JSONL telemetry tracks timesteps, progress, steps/sec,
+episodes, reward, kills, accuracy, win rate, environment count, checkpoint
+location and best-effort resource utilization.
+
+## Environment and extension points
+
+- `EnvironmentCore` is the canonical render-independent FPS test
+  environment. `SimulationManager` owns isolated batches.
+- `RLAdapter` exposes reset, batched step, observations, rewards, done flags,
+  metrics and the fixed action/observation space descriptions.
+- `scripts/rl/rl_server.gd` is the local JSON-lines bridge. The Python side
+  does not call `localhost`, use a browser, or depend on a visual scene.
+- Curriculum levels 1–4 progressively enable stationary targets, moving
+  targets, attacks and multiple configured enemies. Level 5 exposes the
+  self-play slot/match foundation.
+- `SelfPlayEnvironmentCore` provides two controllable `AgentState` slots with
+  per-agent rewards/metrics. `SelfPlayCoordinator` supports a learning slot
+  against a frozen SB3 checkpoint; population algorithms are intentionally
+  not implemented yet.
+- `Observation` remains structured-only today. `ObservationMode.RGB` and the
+  Python configuration leave room for future RGB observations and temporal
+  frame stacking without changing the structured vector contract.
+
+Simulation code never imports PyTorch. Python code never depends on Godot
+render nodes. The only current external process boundary is the lightweight
+JSON-lines bridge, which is portable across Windows and Ubuntu.
