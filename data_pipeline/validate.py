@@ -14,6 +14,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from PIL import Image
 
 from data_pipeline.schema import (

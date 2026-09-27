@@ -5,10 +5,10 @@
 > keep results labeled VERIFIED / MEASURED / ESTIMATED / UNKNOWN and never
 > invent measurements.
 
-Last updated: 2026-09-27 (Full Rough End-to-End Architecture Complete: M1 Data Pipeline,
+Last updated: 2026-09-27 (Full Architecture Hardened & Verified: M1 Data Pipeline,
 Phase 2 Behavioral Cloning, Phase 3 Godot Tactical Sandbox, Phase 4 Closed-Loop BC Inference,
 Phase 5 PPO Reinforcement Learning, Phase 6 Evaluation Benchmark, Phase 7 System Telemetry,
-and 54 automated tests; see sections 5–8).
+and 59 automated tests; see sections 5–8).
 
 ## 1. What this project is
 
@@ -164,8 +164,7 @@ data_pipeline/                <- M1 Data Capture & Dataset Tooling
   recorder.py                 <- SessionRecorder coordinator
   mock.py                     <- Synthetic MockScreenCapture & MockInputGenerator
   validate.py                 <- Dataset validation tool (schema, bounds, frame integrity)
-  stats.py                    <- Dataset inspection & ASCII histogram generator
-  inspect.py                  <- CLI alias for dataset inspection
+  stats.py                    <- Dataset inspection & ASCII histogram generator (CLI tool)
   record.py                   <- CLI entry point for live & mock recording
   ttk_adapter.py              <- Roblox/TTK & Godot window isolation layer
 bc/                           <- Phase 2 & 4: Behavioral Cloning
@@ -174,7 +173,7 @@ bc/                           <- Phase 2 & 4: Behavioral Cloning
   models.py                   <- BCVisionNetwork (IMPALA CNN + GRU + multi-head actions)
   train.py                    <- BCTrainer (AdamW, AMP, multi-task cross-entropy loss)
   policy.py                   <- BCPolicy inference wrapper (predict ActionState)
-  infer.py                    <- CLI tool for single-frame inference
+  infer.py                    <- CLI & Python utility for single-frame & dataset inference
   sandbox_runner.py           <- Phase 4: Closed-loop BC runner in tactical sandbox
 sandbox/                      <- Phase 3: Godot Tactical Sandbox & Gym Bridge
   __init__.py
@@ -199,7 +198,7 @@ monitoring/                   <- Phase 7: System Telemetry & Control Layer
   __init__.py
   state.py                    <- SystemTelemetry persistent JSON tracker
   status.py                   <- CLI status & telemetry dashboard
-tests/                        <- Automated Test Suite (54 tests)
+tests/                        <- Automated Test Suite (59 tests)
   test_schema.py
   test_actions.py
   test_sync.py
@@ -211,6 +210,8 @@ tests/                        <- Automated Test Suite (54 tests)
   test_bc_dataset.py
   test_bc_model.py
   test_bc_policy.py
+  test_bc_train_regression.py
+  test_cli_and_integration.py
   test_sandbox_env.py
   test_rl_ppo.py
   test_evaluation_benchmark.py
@@ -250,8 +251,8 @@ python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --o
 
 ### 3. Validate and Inspect Dataset
 ```powershell
-python -m data_pipeline.validate datasets/mock_session/<session_id>
-python -m data_pipeline.inspect datasets/mock_session/<session_id>
+python -m data_pipeline.validate --dataset datasets/mock_session/<session_id>
+python -m data_pipeline.stats --dataset datasets/mock_session/<session_id>
 ```
 
 ### 4. Train Behavioral Cloning (BC) Policy

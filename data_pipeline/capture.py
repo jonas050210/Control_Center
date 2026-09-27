@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import abc
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from PIL import Image

@@ -57,8 +57,8 @@ if ($LASTEXITCODE -ne 0) { Fail "pip upgrade failed (check your internet connect
 Step "PyTorch (CUDA 12.4)"
 & $py -c "import torch; assert '+cu124' in torch.__version__, torch.__version__"
 if ($LASTEXITCODE -ne 0) {
-    Info "installing torch with CUDA 12.4 (~2.5 GB download, one time)"
-    & $py -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+    Info "installing torch + torchvision with CUDA 12.4 (~2.5 GB download, one time)"
+    & $py -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
     if ($LASTEXITCODE -ne 0) { Fail "torch install failed - check your internet connection" }
 } else {
     $v = & $py -c "import torch; print(torch.__version__)"

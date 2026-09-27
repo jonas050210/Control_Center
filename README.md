@@ -73,8 +73,8 @@ python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --o
 
 #### Validate & Inspect Dataset:
 ```powershell
-python -m data_pipeline.validate datasets/mock_session/<session_id>
-python -m data_pipeline.inspect datasets/mock_session/<session_id>
+python -m data_pipeline.validate --dataset datasets/mock_session/<session_id>
+python -m data_pipeline.stats --dataset datasets/mock_session/<session_id>
 ```
 
 ---
@@ -124,7 +124,7 @@ python -m monitoring.status
 
 ---
 
-### 6. Run Automated Test Suite (54 Tests)
+### 6. Run Automated Test Suite (59 Tests)
 
 ```powershell
 pytest -v

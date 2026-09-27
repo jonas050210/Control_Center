@@ -75,15 +75,14 @@ class SystemTelemetry:
         total_bytes = 0
 
         if d_path.exists():
-            for s_dir in d_path.iterdir():
-                if s_dir.is_dir() and (s_dir / "metadata.json").exists():
-                    total_sessions += 1
-                    try:
-                        with open(s_dir / "metadata.json", "r", encoding="utf-8") as f:
-                            meta = json.load(f)
-                            total_steps += meta.get("summary_stats", {}).get("total_steps", 0)
-                    except Exception:
-                        pass
+            for meta_file in d_path.rglob("metadata.json"):
+                total_sessions += 1
+                try:
+                    with open(meta_file, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                        total_steps += meta.get("summary_stats", {}).get("total_steps", 0)
+                except Exception:
+                    pass
             for p in d_path.rglob("*"):
                 if p.is_file():
                     total_bytes += p.stat().st_size

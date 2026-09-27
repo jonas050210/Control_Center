@@ -19,6 +19,10 @@ func _ready() -> void:
 	if player:
 		player.connect("shot_fired", Callable(self, "_on_player_shot_fired"))
 
+func _exit_tree() -> void:
+	if player and player.is_connected("shot_fired", Callable(self, "_on_player_shot_fired")):
+		player.disconnect("shot_fired", Callable(self, "_on_player_shot_fired"))
+
 func _on_player_shot_fired(hit: bool) -> void:
 	if hit:
 		reward += 1.0  # +1 reward on target hit

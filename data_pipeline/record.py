@@ -6,6 +6,9 @@ import argparse
 import sys
 from pathlib import Path
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from data_pipeline.recorder import SessionRecorder
 from data_pipeline.schema import MouseConfig
 from data_pipeline.stats import format_inspection_report, inspect_dataset
@@ -158,7 +161,10 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\n[INFO] Caught Ctrl+C, finalizing dataset...")
         recorder.request_stop()
-        metadata = recorder.record()
+        if recorder.metadata_file.exists():
+            metadata = DatasetMetadata.load(recorder.metadata_file)
+        else:
+            raise
 
     session_dir = recorder.session_dir
     print(f"\n[INFO] Session saved to: {session_dir}")

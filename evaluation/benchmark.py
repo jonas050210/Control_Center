@@ -13,6 +13,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 
 from bc.policy import BCPolicy
@@ -187,7 +190,7 @@ def run_benchmark(
         out_p.parent.mkdir(parents=True, exist_ok=True)
         with open(out_p, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
-        print(f"[INFO] Benchmark report saved to: {out_report_path}")
+        print(f"[INFO] Benchmark report saved to: {out_p}")
 
     return results
 
@@ -199,7 +202,7 @@ def main() -> None:
     parser.add_argument("--episodes", "-e", type=int, default=5, help="Number of evaluation episodes")
     parser.add_argument("--steps", "-s", type=int, default=300, help="Max steps per episode")
     parser.add_argument("--env_path", type=str, default=None, help="Path to exported Godot executable")
-    parser.add_argument("--output", "-o", type=str, default=None, help="Save JSON report path")
+    parser.add_argument("--output", "-o", "--report", "-r", type=str, default=None, help="Save JSON report path")
     args = parser.parse_args()
 
     run_benchmark(

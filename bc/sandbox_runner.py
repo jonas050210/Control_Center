@@ -13,6 +13,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 
 from bc.policy import BCPolicy
@@ -95,20 +98,29 @@ def run_bc_in_sandbox(
     std_rew = float(np.std(episode_rewards))
     mean_len = float(np.mean(episode_lengths))
     total_hits = sum(episode_hits)
+    fire_rate = (fired_count / max(1, total_steps) * 100.0) if total_steps > 0 else 0.0
+    hit_rate = (total_hits / max(1, total_steps) * 100.0) if total_steps > 0 else 0.0
 
     print("\n=== Closed-Loop Evaluation Summary ===")
     print(f"Mean Reward     : {mean_rew:+.2f} ± {std_rew:.2f}")
     print(f"Mean Length     : {mean_len:.1f} steps")
     print(f"Total Targets Hit: {total_hits}")
-    print(f"Fire Rate       : {fired_count / max(1, total_steps) * 100.0:.1f}%")
+    print(f"Fire Rate       : {fire_rate:.1f}%")
 
     return {
+        "episodes_completed": len(episode_rewards),
         "mean_reward": round(mean_rew, 3),
         "std_reward": round(std_rew, 3),
         "mean_length": round(mean_len, 1),
         "total_hits": total_hits,
+        "hit_rate_pct": round(hit_rate, 2),
+        "fire_rate_pct": round(fire_rate, 2),
         "episode_rewards": episode_rewards,
     }
+
+
+# Alias for convenience
+run_bc_sandbox = run_bc_in_sandbox
 
 
 def main() -> None:

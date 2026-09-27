@@ -41,11 +41,21 @@ def test_full_benchmark_smoke(tmp_path: Path) -> None:
         ckpt_path,
     )
 
+    report_path = tmp_path / "benchmark_report.json"
     results = run_benchmark(
         bc_checkpoint=str(ckpt_path),
         ppo_checkpoint=None,
         num_episodes=2,
         max_steps_per_episode=15,
+        output_report=str(report_path),
     )
     assert "random" in results
     assert "bc" in results
+    assert report_path.exists()
+
+    import json
+    with open(report_path, "r", encoding="utf-8") as f:
+        saved_data = json.load(f)
+    assert "random" in saved_data
+    assert "bc" in saved_data
+

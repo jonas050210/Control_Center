@@ -13,6 +13,9 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 
 from data_pipeline.schema import DatasetMetadata, DatasetSample

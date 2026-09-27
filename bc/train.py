@@ -14,6 +14,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -331,7 +334,10 @@ def train_bc(
     best_val_loss = float("inf")
 
     # Resume checkpoint if specified
-    if resume_path and Path(resume_path).exists():
+    if resume_path:
+        resume_file = Path(resume_path)
+        if not resume_file.exists():
+            raise FileNotFoundError(f"Checkpoint file to resume from not found: {resume_path}")
         print(f"[INFO] Resuming training from: {resume_path}")
         ckpt = torch.load(resume_path, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
@@ -409,6 +415,7 @@ def train_bc(
 
     return {
         "best_val_loss": best_val_loss,
+        "epochs_completed": len(history),
         "history": history,
         "checkpoint_best": str(checkpoint_path / "bc_best.pt"),
         "checkpoint_latest": str(checkpoint_path / "bc_latest.pt"),

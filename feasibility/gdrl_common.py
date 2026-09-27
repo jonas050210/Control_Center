@@ -88,7 +88,8 @@ def kill_env_processes(env_path: str | None) -> None:
 
     godot-rl cannot clean up the game processes it launched when the
     connection fails mid-way; this finds them (see _is_env_process) and
-    kills them. No-op when nothing is left over.
+    terminates them gracefully first, then kills if necessary. No-op when
+    nothing is left over.
     """
     if not env_path:
         return
@@ -101,15 +102,18 @@ def kill_env_processes(env_path: str | None) -> None:
             continue
         try:
             if _is_env_process(proc.info, name, env_file):
-                # kill children first (envs are single processes in normal
-                # use, but a wrapper script may have spawned workers)
+                # Terminate children first
                 for child in proc.children(recursive=True):
                     try:
-                        child.kill()
-                        killed.append(child.pid)
+                        child.terminate()
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
-                proc.kill()
+                proc.terminate()
+                # Wait briefly for clean engine shutdown before force killing
+                try:
+                    proc.wait(timeout=0.5)
+                except psutil.TimeoutExpired:
+                    proc.kill()
                 killed.append(proc.pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue

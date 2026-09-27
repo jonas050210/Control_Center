@@ -12,6 +12,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import gymnasium as gym
 import numpy as np
 from stable_baselines3 import PPO
@@ -46,10 +49,12 @@ def train_ppo_sandbox(
     print(f"Checkpoint     : {save_file}")
     print("============================================================")
 
-    def _env_factory():
-        return make_sandbox_env(env_path=env_path, width=84, height=84, seed=seed)
+    def _make_env_fn(env_idx: int):
+        def _thunk():
+            return make_sandbox_env(env_path=env_path, width=84, height=84, seed=seed + env_idx * 100)
+        return _thunk
 
-    vec_env = DummyVecEnv([_env_factory for _ in range(n_envs)])
+    vec_env = DummyVecEnv([_make_env_fn(i) for i in range(n_envs)])
 
     model = PPO(
         "CnnPolicy",
