@@ -1,0 +1,19 @@
+# Godot 4 editor/import cache (regenerated automatically, must not be versioned)
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+*.translation
+
+# Build output
+/build/
+/export/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
+# Python venv used only for local static-analysis tooling (gdtoolkit)
+.venv/
+__pycache__/
