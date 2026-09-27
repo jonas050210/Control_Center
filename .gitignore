@@ -1,8 +1,11 @@
 # local tooling / downloads (not part of the repo)
 .venv/
 tools/
-examples/
+/examples/
 logs/
 *.zip
 *.tgz
 __pycache__/
+
+# exported RL environment binaries (feasibility/export_envs.py)
+build/
