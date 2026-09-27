@@ -1,9 +1,12 @@
 """Gymnasium/SB3 adapters for the headless Godot JSON-lines bridge."""
 from __future__ import annotations
 
+from collections import deque
 import json
 from pathlib import Path
+import queue
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -73,29 +76,69 @@ class GodotProcessTransport:
                 "Install Godot 4.7.2 and put it on PATH or pass --godot-executable."
             ) from exc
         self._closed = False
+        # Both output pipes are drained by daemon threads. Draining stderr is
+        # not optional: a long training run in which Godot logs warnings would
+        # otherwise fill the OS pipe buffer and deadlock the whole bridge.
+        # Reading stdout through a queue makes request_timeout enforceable
+        # portably (select() does not work on pipes on Windows).
+        self._stdout_lines: queue.Queue[str | None] = queue.Queue()
+        self._stderr_tail: deque[str] = deque(maxlen=200)
+        self._stdout_thread = threading.Thread(target=self._pump_stdout, daemon=True)
+        self._stderr_thread = threading.Thread(target=self._pump_stderr, daemon=True)
+        self._stdout_thread.start()
+        self._stderr_thread.start()
         try:
             self.spaces = self.request({"cmd": "spaces"})
         except Exception:
             self.close()
             raise
 
+    def _pump_stdout(self) -> None:
+        try:
+            assert self.process.stdout is not None
+            for line in self.process.stdout:
+                self._stdout_lines.put(line)
+        except ValueError:  # stream closed while shutting down
+            pass
+        finally:
+            self._stdout_lines.put(None)  # EOF sentinel
+
+    def _pump_stderr(self) -> None:
+        try:
+            assert self.process.stderr is not None
+            for line in self.process.stderr:
+                self._stderr_tail.append(line)
+        except ValueError:  # stream closed while shutting down
+            pass
+
+    def stderr_tail(self) -> str:
+        return "".join(self._stderr_tail)[-2000:]
+
     def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self._closed or self.process.poll() is not None:
             raise RuntimeError("Godot bridge process is not running")
         assert self.process.stdin is not None
-        assert self.process.stdout is not None
-        self.process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
-        self.process.stdin.flush()
+        try:
+            self.process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            self.process.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            raise RuntimeError(f"Godot bridge pipe is broken. {self.stderr_tail()}") from exc
         # Godot can emit startup informational lines. Only protocol JSON is
         # accepted; a malformed protocol response is a hard error.
-        start_time = time.monotonic()
+        deadline = time.monotonic() + self.request_timeout
         while True:
-            if time.monotonic() - start_time > self.request_timeout:
-                raise TimeoutError(f"Godot bridge request timed out after {self.request_timeout}s")
-            line = self.process.stdout.readline()
-            if not line:
-                stderr = self.process.stderr.read() if self.process.stderr else ""
-                raise RuntimeError(f"Godot bridge exited without a response. {stderr[-2000:]}")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Godot bridge request timed out after {self.request_timeout}s. "
+                    f"{self.stderr_tail()}"
+                )
+            try:
+                line = self._stdout_lines.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                raise RuntimeError(f"Godot bridge exited without a response. {self.stderr_tail()}")
             try:
                 response = json.loads(line)
             except json.JSONDecodeError:
@@ -114,14 +157,23 @@ class GodotProcessTransport:
                     self.process.stdin.write(json.dumps({"cmd": "close"}) + "\n")
                     self.process.stdin.flush()
                 self.process.wait(timeout=3.0)
-            except (BrokenPipeError, subprocess.TimeoutExpired):
+            except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
                 self.process.kill()
-        if self.process.stdin:
-            self.process.stdin.close()
-        if self.process.stdout:
-            self.process.stdout.close()
-        if self.process.stderr:
-            self.process.stderr.close()
+                try:
+                    self.process.wait(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    pass
+        # The process has exited (or been killed), so the pump threads see
+        # EOF and finish; join briefly before closing their streams.
+        for worker in (getattr(self, "_stdout_thread", None), getattr(self, "_stderr_thread", None)):
+            if worker is not None:
+                worker.join(timeout=2.0)
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 
     def __enter__(self) -> "GodotProcessTransport":
         return self
@@ -208,7 +260,14 @@ if gym is not None:
             terminated = done and reason != "timeout"
             truncated = done and reason == "timeout"
             info["TimeLimit.truncated"] = truncated
-            return observations[0], float(rewards[0]), terminated, truncated, info
+            observation = observations[0]
+            if done and "terminal_observation" in info:
+                # The bridge auto-resets on episode end and returns the new
+                # episode's first observation; Gymnasium semantics require
+                # step() to return the TERMINAL observation instead, with the
+                # caller invoking reset() to start the next episode.
+                observation = np.asarray(info["terminal_observation"], dtype=np.float32)
+            return observation, float(rewards[0]), terminated, truncated, info
 
         def close(self):
             self.client.close()
@@ -248,7 +307,15 @@ if VecEnv is not None:
             self.reset_infos: list[dict[str, Any]] = [{} for _ in range(self.num_envs)]
 
         def reset(self):
-            observations, self.reset_infos = self.client.reset()
+            # Honor seeds requested through VecEnv.seed() (SB3 calls it when a
+            # training seed is configured); otherwise keep the bridge's own
+            # deterministic seeded stream by not re-seeding.
+            seed = None
+            pending = getattr(self, "_seeds", None)
+            if pending and pending[0] is not None:
+                seed = int(pending[0])
+            observations, self.reset_infos = self.client.reset(seed)
+            self._reset_seeds()
             return observations
 
         def step_async(self, actions):

@@ -14,15 +14,16 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
 
+## Maximum accepted length (in bytes) of one incoming JSON request line.
+## A "step" request grows linearly with the environment count; 1 MiB gives
+## enormous headroom while staying cheap to allocate per read.
+const STDIN_BUFFER_SIZE: int = 1 << 20
+
 var simulation_manager: SimulationManager
 var adapter: RLAdapter
-var stdin: FileAccess
-var stdout: FileAccess
 
 
 func _initialize() -> void:
-	stdin = OS.get_stdin()
-	stdout = OS.get_stdout()
 	var options: Dictionary = _parse_user_args(OS.get_cmdline_user_args())
 	simulation_manager = SimulationManager.new()
 	simulation_manager.create_visuals = false
@@ -40,19 +41,32 @@ func _initialize() -> void:
 	_serve_stdio()
 
 
+## Godot 4.7 exposes standard input only through
+## `OS.read_string_from_stdin()` (there is no `OS.get_stdin()` FileAccess).
+## On Unix it reads one line (fgets); on Windows one ReadFile chunk, which for
+## this strict request/response protocol is one line but is defensively split
+## anyway. Responses go through `print()`; the project enables
+## `application/run/flush_stdout_on_print` so every line is flushed
+## immediately in both debug and release builds.
 func _serve_stdio() -> void:
-	while not stdin.eof_reached():
-		var line: String = stdin.get_line()
-		if line.strip_edges().is_empty():
-			if stdin.eof_reached():
-				break
-			continue
-		var request = JSON.parse_string(line)
-		var response: Dictionary = _handle_request(request)
-		stdout.store_line(JSON.stringify(response))
-		stdout.flush()
-		if bool(response.get("close", false)):
+	var closing: bool = false
+	while not closing:
+		var chunk: String = OS.read_string_from_stdin(STDIN_BUFFER_SIZE)
+		if chunk.strip_edges().is_empty():
+			# EOF (the Python side closed the pipe or died) or a blank line,
+			# which the protocol never sends. Shut down instead of spinning.
 			break
+		for line in chunk.split("\n", false):
+			if line.strip_edges().is_empty():
+				continue
+			var request = JSON.parse_string(line)
+			var response: Dictionary = _handle_request(request)
+			print(JSON.stringify(response))
+			if bool(response.get("close", false)):
+				closing = true
+				break
+	if simulation_manager != null and is_instance_valid(simulation_manager):
+		simulation_manager.free()
 	quit(0)
 
 

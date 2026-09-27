@@ -38,6 +38,43 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bc-checkpoint", default=None)
 
 
+def _resolve_project_path(project_path: str | None) -> Path:
+    if project_path:
+        return Path(project_path).expanduser().resolve()
+    # python/sandboxai/cli.py -> repository root
+    return Path(__file__).resolve().parents[2]
+
+
+def build_record_command(
+    godot_executable: str,
+    project_path: str | None,
+    output: str,
+    duration: float,
+    enemy_count: int,
+) -> list[str]:
+    """Build the Godot invocation for the graphical demonstration recorder.
+
+    The output path is resolved to an absolute path so the recording is saved
+    predictably regardless of the Godot process working directory.
+    """
+    executable = find_godot_executable(godot_executable)
+    project = _resolve_project_path(project_path)
+    return [
+        executable,
+        "--path",
+        str(project),
+        "--script",
+        "res://scripts/recording/record_demo.gd",
+        "--",
+        "--output",
+        str(Path(output).expanduser().resolve()),
+        "--duration",
+        str(duration),
+        "--enemy-count",
+        str(enemy_count),
+    ]
+
+
 def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
     values: dict[str, Any] = {}
     if args.config:
@@ -155,7 +192,6 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
         try:
             import gymnasium as gym
             from stable_baselines3 import PPO
-            dummy_env = gym.make("CartPole-v1")
             # Create a MultiDiscrete mock policy to test weight transfer
             action_space = gym.spaces.MultiDiscrete([3, 3, 3, 3, 2])
             obs_space = gym.spaces.Box(-1.0, 1.0, shape=(17,))
@@ -191,6 +227,24 @@ def main(argv: list[str] | None = None) -> int:
         from .dataset import DemonstrationDataset
         print(json.dumps(DemonstrationDataset.load(args.dataset).summary(), indent=2, default=str))
         return 0
+    if args.command == "record":
+        command = build_record_command(
+            args.godot_executable,
+            args.project_path,
+            args.output,
+            args.duration,
+            args.enemy_count,
+        )
+        print("Launching Godot demonstration recorder:", " ".join(command))
+        try:
+            return subprocess.call(command)
+        except OSError as exc:
+            print(
+                f"Could not launch Godot executable {command[0]!r}: {exc}. "
+                "Install Godot 4.7.2 and put it on PATH or pass --godot-executable.",
+                file=sys.stderr,
+            )
+            return 1
     if args.command == "bc-train":
         from .bc import train_behavior_cloning
         config = BCConfig(
@@ -243,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "benchmark":
         from .benchmark import benchmark_simulation
-        project = Path(args.project_path).expanduser().resolve() if args.project_path else Path(__file__).resolve().parents[2]
+        project = _resolve_project_path(args.project_path)
         counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
         result = benchmark_simulation(project, args.godot_executable, counts, args.steps, args.enemy_count, args.seed, args.curriculum_level, args.output_dir)
         print(json.dumps(result, indent=2, default=str))

@@ -145,6 +145,9 @@ def train_behavior_cloning(
         validation_observations = torch.as_tensor(validation_arrays[0], dtype=torch.float32)
         validation_actions = torch.as_tensor(validation_arrays[1], dtype=torch.long)
         generator = torch.Generator().manual_seed(config.seed)
+        # Tracks the number of completed epochs; stays at start_epoch when the
+        # resume checkpoint already reached config.epochs (empty loop below).
+        completed_epochs = start_epoch
         for epoch in range(start_epoch, config.epochs):
             model.train()
             permutation = torch.randperm(train_observations.shape[0], generator=generator)
@@ -164,6 +167,7 @@ def train_behavior_cloning(
                 validation_loss, component_accuracy, exact_accuracy = _metrics_from_logits(
                     model(validation_observations.to(device)), validation_actions.to(device)
                 )
+            completed_epochs = epoch + 1
             train_loss = train_loss_total / max(train_batches, 1)
             validation_value = float(validation_loss.item())
             row = {
@@ -205,7 +209,7 @@ def train_behavior_cloning(
         "output_dir": str(destination),
         "latest_checkpoint": str(destination / "latest.pt"),
         "best_checkpoint": str(destination / "best.pt"),
-        "epochs": epoch + 1,
+        "epochs": completed_epochs,
         "validation_loss": best_validation,
     }
 

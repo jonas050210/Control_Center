@@ -94,6 +94,23 @@ func _build_arena() -> void:
 		add_child(wall_mesh)
 
 
+## Recreates the per-enemy views from the core's CURRENT enemy list. Needed
+## after a curriculum-level change rebuilds `core.enemies`, which would
+## otherwise leave these views mirroring orphaned EnemyState objects.
+func rebind_enemy_views() -> void:
+	if core == null:
+		return
+	for enemy_view in enemy_views:
+		if enemy_view != null and is_instance_valid(enemy_view):
+			(enemy_view as EnemyView).queue_free()
+	enemy_views.clear()
+	for enemy_state in core.enemies:
+		var enemy_view := EnemyView.new()
+		add_child(enemy_view)
+		enemy_view.setup(enemy_state)
+		enemy_views.append(enemy_view)
+
+
 func sync_from_state() -> void:
 	if agent_view != null:
 		agent_view.sync()
