@@ -42,6 +42,9 @@ class CliTests(unittest.TestCase):
     def test_smoke_test_command(self):
         result = subprocess.run([sys.executable, "-m", "sandboxai", "smoke-test", "--device", "cpu"], capture_output=True, text=True, check=True)
         self.assertIn("all_passed", result.stdout)
+        # A failing smoke test must exit non-zero, not report success.
+        self.assertIn('"all_passed": true', result.stdout)
+        self.assertNotIn("sb3_weight_transfer_error", result.stdout)
 
 
 if __name__ == "__main__":

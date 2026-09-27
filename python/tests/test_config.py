@@ -17,6 +17,26 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingConfig(curriculum_level=6).validate()
 
+    def test_negative_entropy_coefficient_rejected(self):
+        # Negative entropy actively rewards determinism; it must fail at
+        # config load instead of silently collapsing the policy.
+        with self.assertRaises(ValueError):
+            TrainingConfig(entropy_coefficient=-0.01).validate()
+
+    def test_invalid_evaluation_episodes_and_torch_threads_rejected(self):
+        with self.assertRaises(ValueError):
+            TrainingConfig(evaluation_episodes=0).validate()
+        with self.assertRaises(ValueError):
+            TrainingConfig(torch_threads=-1).validate()
+
+    def test_invalid_net_arch_rejected(self):
+        with self.assertRaises(ValueError):
+            TrainingConfig(net_arch=(128, 0)).validate()
+
+    def test_valid_torch_threads_is_accepted(self):
+        config = TrainingConfig(torch_threads=4).validate()
+        self.assertEqual(config.torch_threads, 4)
+
     def test_entropy_coefficient_defaults_to_nonzero(self):
         # Regression: with MultiDiscrete actions, a 0 entropy coefficient lets
         # PPO collapse into a degenerate action distribution (e.g. never

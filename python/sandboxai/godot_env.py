@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from .config import find_godot_executable
+from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
 try:
     import numpy as np  # type: ignore
@@ -190,6 +191,20 @@ class GodotBatchClient:
             raise RuntimeError("numpy is required by the Python environment adapter")
         self.environment_count = int(kwargs.get("environment_count", 1))
         self.observation_dim = int(self.transport.spaces["observation_space"]["size"])
+        # The observation dimension is read from the bridge so the Python
+        # side never hardcodes it — but it must still match the documented
+        # contract (contract.OBSERVATION_FIELD_COUNT), otherwise the Godot
+        # and Python halves of the contract have drifted apart and any
+        # trained policy / BC checkpoint would be silently incompatible.
+        if self.observation_dim != OBSERVATION_FIELD_COUNT:
+            self.close()
+            raise RuntimeError(
+                "Godot bridge reports a %d-float observation space, but the Python "
+                "contract (python/sandboxai/contract.py) defines %d floats. The two "
+                "halves of the observation contract are out of sync; update "
+                "contract.py (and the docs) to match scripts/core/observation.gd."
+                % (self.observation_dim, OBSERVATION_FIELD_COUNT)
+            )
 
     def reset(self, seed: int | None = None):
         response = self.transport.request({"cmd": "reset", "seed": -1 if seed is None else int(seed)})
@@ -245,7 +260,7 @@ if gym is not None:
                 shape=(self.client.observation_dim,),
                 dtype=np.float32,
             )
-            self.action_space = spaces.MultiDiscrete(np.asarray([3, 3, 3, 3, 2], dtype=np.int64))
+            self.action_space = spaces.MultiDiscrete(np.asarray(ACTION_NVEC, dtype=np.int64))
 
         def reset(self, *, seed: int | None = None, options: dict | None = None):
             super().reset(seed=seed)
@@ -301,7 +316,7 @@ if VecEnv is not None:
                 shape=(self.client.observation_dim,),
                 dtype=np.float32,
             )
-            action_space = spaces.MultiDiscrete(np.asarray([3, 3, 3, 3, 2], dtype=np.int64))
+            action_space = spaces.MultiDiscrete(np.asarray(ACTION_NVEC, dtype=np.int64))
             super().__init__(self.environment_count, observation_space, action_space)
             self.actions = None
             self.reset_infos: list[dict[str, Any]] = [{} for _ in range(self.num_envs)]

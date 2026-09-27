@@ -8,8 +8,12 @@ implemented twice, once per language, and both must be kept in sync by hand:
 - Python: `python/sandboxai/contract.py` (`OBSERVATION_SPEC`, `ACTION_SPEC`),
   used as the documented target for a future external adapter (see
   `docs/ROBLOX_ADAPTER.md`). `python/tests/test_contract.py` checks the
-  Python side is internally consistent; it cannot automatically detect drift
-  from the Godot side because they are different languages/runtimes.
+  Python side is internally consistent, and additionally parses the Godot
+  sources to fail loudly if `Observation.FIELD_COUNT`, the `to_array()`
+  index layout, `Action.MULTI_DISCRETE_NVECS` or the tracked-enemy budget
+  drift apart from the Python contract. Semantic drift (a field whose
+  *meaning* changes without touching the constants) still cannot be caught
+  automatically across the two languages.
 
 The intended data flow (also in `docs/ARCHITECTURE.md`) is:
 

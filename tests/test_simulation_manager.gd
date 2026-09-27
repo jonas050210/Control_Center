@@ -165,6 +165,39 @@ func test_get_last_actions_mirrors_last_step_all_input() -> SandboxTest:
 	return t
 
 
+## Regression: reset_indices() seeds by ENVIRONMENT index (like reset_all),
+## so the same environment receives the same seed for a given seed base no
+## matter which other environments are reset in the same call.
+func test_reset_indices_seeding_is_index_based_not_offset_based() -> SandboxTest:
+	var t := SandboxTest.new("reset_indices_seeding_is_index_based")
+	var sim_a := SimulationManager.new()
+	sim_a.create_visuals = false
+	sim_a.build(3, 1)
+	var sim_b := SimulationManager.new()
+	sim_b.create_visuals = false
+	sim_b.build(3, 1)
+
+	sim_a.reset_indices([1], 500)
+	sim_b.reset_indices([0, 1, 2], 500)
+	t.assert_vec_almost_eq(
+		sim_a.environments[1].enemies[0].position,
+		sim_b.environments[1].enemies[0].position,
+		0.00001,
+		"env 1 must get seed base+1 whether it is reset alone or with others"
+	)
+	sim_a.reset_indices([2], 500)
+	t.assert_vec_almost_eq(
+		sim_a.environments[2].enemies[0].position,
+		sim_b.environments[2].enemies[0].position,
+		0.00001,
+		"env 2 must get seed base+2 whether it is reset alone or with others"
+	)
+
+	sim_a.free()
+	sim_b.free()
+	return t
+
+
 func test_deterministic_base_seed_gives_reproducible_environment_set() -> SandboxTest:
 	var t := SandboxTest.new("deterministic_base_seed_reproducible")
 	var sim_a := SimulationManager.new()

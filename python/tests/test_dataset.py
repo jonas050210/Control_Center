@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.dataset import DemonstrationDataset, DemonstrationRecorder, action_to_multidiscrete
 
 
@@ -12,7 +13,7 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(action_to_multidiscrete(9), [1, 1, 1, 1, 1])
         recorder = DemonstrationRecorder({"source": "test"})
         recorder.start()
-        recorder.append([0.0] * 17, [0, 0, 0, 0, 0, 0, 0], [0.1] * 17, 1.0, True, episode_id=2)
+        recorder.append([0.0] * OBSERVATION_FIELD_COUNT, [0, 0, 0, 0, 0, 0, 0], [0.1] * OBSERVATION_FIELD_COUNT, 1.0, True, episode_id=2)
         recorder.stop()
         with tempfile.TemporaryDirectory() as directory:
             path = recorder.save(Path(directory) / "demo.jsonl")
@@ -30,11 +31,11 @@ class DatasetTests(unittest.TestCase):
     def test_nan_observation_fails_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "nan.jsonl"
-            bad_obs = [0.0] * 16 + [float("nan")]
+            bad_obs = [0.0] * (OBSERVATION_FIELD_COUNT - 1) + [float("nan")]
             record = {
                 "observation": bad_obs,
                 "action": [0, 0, 0, 0, 0, 0, 0],
-                "next_observation": [0.0] * 17,
+                "next_observation": [0.0] * OBSERVATION_FIELD_COUNT,
                 "reward": 0.0,
                 "done": False,
             }
@@ -46,7 +47,7 @@ class DatasetTests(unittest.TestCase):
         recorder = DemonstrationRecorder({"source": "split_test"})
         recorder.start()
         for i in range(10):
-            recorder.append([0.1 * i] * 17, [0, 0, 0, 0, 0, 0, 0], [0.1 * (i + 1)] * 17, 0.5, i == 9)
+            recorder.append([0.1 * i] * OBSERVATION_FIELD_COUNT, [0, 0, 0, 0, 0, 0, 0], [0.1 * (i + 1)] * OBSERVATION_FIELD_COUNT, 0.5, i == 9)
         recorder.stop()
         with tempfile.TemporaryDirectory() as directory:
             path = recorder.save(Path(directory) / "split_demo.jsonl")

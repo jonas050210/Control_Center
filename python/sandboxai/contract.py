@@ -19,6 +19,9 @@ with ``Observation.FIELD_COUNT`` / the field table documented at the top of
 scripts/core/observation.gd whenever that file changes. There is no build
 step that generates one from the other (they are two different languages),
 so this is a manual, but small and explicit, contract to maintain.
+``python/tests/test_contract.py`` (GodotSourceDriftTests) narrows the gap by
+statically parsing the Godot sources and failing when the declared
+constants or the ``to_array()`` index layout no longer match this module.
 """
 from __future__ import annotations
 

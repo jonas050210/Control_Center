@@ -57,7 +57,12 @@ func build(count: int, enemies_per_env: int = SandboxConfig.ENEMY_COUNT_DEFAULT)
 		curriculum_level >= CurriculumConfig.Level.MULTIPLE_ENEMIES
 		and curriculum_level < CurriculumConfig.Level.AGENT_VS_AGENT
 	):
-		enemy_count_per_environment = maxi(2, enemy_count_per_environment)
+		# Keep the manager's recorded per-environment count consistent with
+		# what the environments will actually contain (CurriculumConfig
+		# enforces the same minimum via effective_enemy_count()).
+		enemy_count_per_environment = maxi(
+			CurriculumConfig.MULTIPLE_ENEMIES_MIN_COUNT, enemy_count_per_environment
+		)
 	policy_slots = [
 		{"slot": 0, "controller": null, "frozen_checkpoint": "", "seed": base_seed},
 		{"slot": 1, "controller": null, "frozen_checkpoint": "", "seed": base_seed + 1000003},
@@ -119,13 +124,16 @@ func reset_all(seed_base_value: int = -1) -> Array:
 
 
 ## Resets only selected environments, preserving all other trajectories.
+## Seeding is by ENVIRONMENT index (seed_base + index), matching reset_all(),
+## so the same environment always receives the same seed for a given seed
+## base regardless of which other environments are reset in the same call.
 func reset_indices(indices: Array, seed_base_value: int = -1) -> Array:
 	var observations: Array = []
 	for offset in range(indices.size()):
 		var index: int = int(indices[offset])
 		if index < 0 or index >= environments.size():
 			continue
-		var seed_value: int = (seed_base_value + offset) if seed_base_value >= 0 else -1
+		var seed_value: int = (seed_base_value + index) if seed_base_value >= 0 else -1
 		var env: EnvironmentCore = environments[index]
 		env.reset(seed_value)
 		_last_step_rewards[index] = 0.0
@@ -145,15 +153,22 @@ func step_all(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Array:
 		var action: Action = (
 			actions[i] if i < actions.size() and actions[i] != null else Action.idle()
 		)
-		var pre_observation: PackedFloat32Array = env.get_observations().to_array()
+		# The pre-step observation is only needed by an attached recorder.
+		# Building the 33-float array for every environment on every step
+		# would be pure wasted work on the headless training path, where no
+		# recorder ever exists, so it is computed lazily here.
+		var recorder = recorders.get(i)
+		var pre_observation: PackedFloat32Array = (
+			env.get_observations().to_array()
+			if recorder != null and recorder.has_method("record_transition")
+			else PackedFloat32Array()
+		)
 		var result: Dictionary = env.step(action, dt)
 		_last_step_rewards[i] = float(result.get("reward", 0.0))
 		_last_step_dones[i] = bool(result.get("done", false))
 		_last_actions[i] = action
-		if recorders.has(i) and recorders[i] != null:
-			var recorder = recorders[i]
-			if recorder.has_method("record_transition"):
-				recorder.record_transition(i, pre_observation, action, result)
+		if recorder != null and recorder.has_method("record_transition"):
+			recorder.record_transition(i, pre_observation, action, result)
 		if result.done:
 			environment_done.emit(i, env.episode.done_reason)
 			if auto_reset_on_done:

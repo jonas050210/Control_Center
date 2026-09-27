@@ -149,21 +149,28 @@ static func build(agent: AgentState, enemies: Array, arena_half_extent: float) -
 
 
 ## Returns every alive enemy, nearest-to-agent first. Deterministic given a
-## deterministic enemy list (stable sort by squared distance).
+## deterministic enemy list: entries are sorted by squared distance with the
+## original enemy index as an explicit tie-breaker, so two enemies at the
+## exact same distance always resolve in list order regardless of the
+## engine's sort-stability guarantees (which Godot does not document).
 static func _rank_alive_enemies(enemies: Array, agent_position: Vector3) -> Array:
 	var alive_list: Array = []
-	for e in enemies:
-		var enemy: EnemyState = e
+	for i in range(enemies.size()):
+		var enemy: EnemyState = enemies[i]
 		if enemy.alive:
-			alive_list.append(enemy)
+			alive_list.append(
+				{"enemy": enemy, "index": i, "dist_sq": enemy.position.distance_squared_to(agent_position)}
+			)
 	alive_list.sort_custom(
 		func(a, b):
-			return (
-				(a as EnemyState).position.distance_squared_to(agent_position)
-				< (b as EnemyState).position.distance_squared_to(agent_position)
-			)
+			if (a as Dictionary).dist_sq != (b as Dictionary).dist_sq:
+				return (a as Dictionary).dist_sq < (b as Dictionary).dist_sq
+			return (a as Dictionary).index < (b as Dictionary).index
 	)
-	return alive_list
+	var ranked: Array = []
+	for entry in alive_list:
+		ranked.append((entry as Dictionary).enemy)
+	return ranked
 
 
 ## Stable fallback used only when no enemy is alive, so a fully "dead"
@@ -212,40 +219,46 @@ static func _horizontal_bearing_norm(agent: AgentState, target_position: Vector3
 ## [31]    tertiary_enemy_health_norm
 ## [32]    tertiary_enemy_alive (0/1)
 func to_array() -> PackedFloat32Array:
+	# Pre-allocated once and assigned by index: this runs once per
+	# environment per simulation step on the training hot path, and
+	# sequential append() calls would otherwise reallocate the packed array
+	# as it grows. The assignment order below is the contract — see the
+	# field table in the comment block above.
 	var arr := PackedFloat32Array()
-	arr.append(agent_position_norm.x)
-	arr.append(agent_position_norm.y)
-	arr.append(agent_position_norm.z)
-	arr.append(agent_velocity_norm.x)
-	arr.append(agent_velocity_norm.y)
-	arr.append(agent_velocity_norm.z)
-	arr.append(agent_forward.x)
-	arr.append(agent_forward.y)
-	arr.append(agent_forward.z)
-	arr.append(agent_health_norm)
-	arr.append(enemy_relative_position_norm.x)
-	arr.append(enemy_relative_position_norm.y)
-	arr.append(enemy_relative_position_norm.z)
-	arr.append(enemy_distance_norm)
-	arr.append(enemy_health_norm)
-	arr.append(1.0 if weapon_ready else 0.0)
-	arr.append(1.0 if in_combat else 0.0)
-	arr.append(enemy_bearing_norm)
-	arr.append(alive_enemy_count_norm)
-	arr.append(secondary_enemy_relative_position_norm.x)
-	arr.append(secondary_enemy_relative_position_norm.y)
-	arr.append(secondary_enemy_relative_position_norm.z)
-	arr.append(secondary_enemy_distance_norm)
-	arr.append(secondary_enemy_bearing_norm)
-	arr.append(secondary_enemy_health_norm)
-	arr.append(1.0 if secondary_enemy_alive else 0.0)
-	arr.append(tertiary_enemy_relative_position_norm.x)
-	arr.append(tertiary_enemy_relative_position_norm.y)
-	arr.append(tertiary_enemy_relative_position_norm.z)
-	arr.append(tertiary_enemy_distance_norm)
-	arr.append(tertiary_enemy_bearing_norm)
-	arr.append(tertiary_enemy_health_norm)
-	arr.append(1.0 if tertiary_enemy_alive else 0.0)
+	arr.resize(FIELD_COUNT)
+	arr[0] = agent_position_norm.x
+	arr[1] = agent_position_norm.y
+	arr[2] = agent_position_norm.z
+	arr[3] = agent_velocity_norm.x
+	arr[4] = agent_velocity_norm.y
+	arr[5] = agent_velocity_norm.z
+	arr[6] = agent_forward.x
+	arr[7] = agent_forward.y
+	arr[8] = agent_forward.z
+	arr[9] = agent_health_norm
+	arr[10] = enemy_relative_position_norm.x
+	arr[11] = enemy_relative_position_norm.y
+	arr[12] = enemy_relative_position_norm.z
+	arr[13] = enemy_distance_norm
+	arr[14] = enemy_health_norm
+	arr[15] = 1.0 if weapon_ready else 0.0
+	arr[16] = 1.0 if in_combat else 0.0
+	arr[17] = enemy_bearing_norm
+	arr[18] = alive_enemy_count_norm
+	arr[19] = secondary_enemy_relative_position_norm.x
+	arr[20] = secondary_enemy_relative_position_norm.y
+	arr[21] = secondary_enemy_relative_position_norm.z
+	arr[22] = secondary_enemy_distance_norm
+	arr[23] = secondary_enemy_bearing_norm
+	arr[24] = secondary_enemy_health_norm
+	arr[25] = 1.0 if secondary_enemy_alive else 0.0
+	arr[26] = tertiary_enemy_relative_position_norm.x
+	arr[27] = tertiary_enemy_relative_position_norm.y
+	arr[28] = tertiary_enemy_relative_position_norm.z
+	arr[29] = tertiary_enemy_distance_norm
+	arr[30] = tertiary_enemy_bearing_norm
+	arr[31] = tertiary_enemy_health_norm
+	arr[32] = 1.0 if tertiary_enemy_alive else 0.0
 	return arr
 
 

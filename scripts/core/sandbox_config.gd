@@ -70,9 +70,13 @@ const ENEMY_COUNT_DEFAULT: int = 1
 ## curriculum level enables spawn-position variety (see
 ## CurriculumConfig.spawn_variety_enabled()).
 const ENEMY_SPAWN_MIN_DISTANCE: float = 4.0
-## Kept comfortably inside the arena walls even for spawn angles pointing
-## sideways/behind the agent's spawn point (which is offset from the arena
-## center), so spawn variety never needs post-hoc wall clamping to be usable.
+## Maximum sampled spawn distance from the agent's spawn point. NOTE: the
+## agent's spawn point is offset from the arena center, so wide spawn angles
+## can place the sampled point outside the walls; EnvironmentCore clamps
+## those spawns back inside, which shortens the effective distance below
+## this value (see _random_spawn_position). The clamp keeps every spawn
+## valid; it just means the sampled 4-13 m range is an upper envelope, not
+## a guarantee, for angles far off the forward axis.
 const ENEMY_SPAWN_MAX_DISTANCE: float = 13.0
 ## Enemy lateral (strafe) speed as a fraction of its forward move speed.
 const ENEMY_STRAFE_SPEED_SCALE: float = 0.6

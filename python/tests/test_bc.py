@@ -6,13 +6,14 @@ except ImportError:
     torch = None
 
 from sandboxai.bc import create_bc_policy
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 
 
 @unittest.skipUnless(torch is not None, "PyTorch is optional in the static test environment")
 class BehaviorCloningTests(unittest.TestCase):
     def test_model_creation_and_action_shape(self):
-        model = create_bc_policy(17)
-        output = model.predict(torch.zeros((3, 17)))
+        model = create_bc_policy(OBSERVATION_FIELD_COUNT)
+        output = model.predict(torch.zeros((3, OBSERVATION_FIELD_COUNT)))
         self.assertEqual(tuple(output.shape), (3, 5))
 
     def test_resume_from_completed_run_returns_cleanly(self):
@@ -28,9 +29,9 @@ class BehaviorCloningTests(unittest.TestCase):
         recorder = DemonstrationRecorder({"source": "bc_resume_test"})
         recorder.start()
         for i in range(12):
-            recorder.append([0.01 * (i + j) for j in range(17)],
+            recorder.append([0.01 * (i + j) for j in range(OBSERVATION_FIELD_COUNT)],
                             [0, 0, 0, 0, i % 2, 0.0, 0.0],
-                            [0.01 * (i + j + 1) for j in range(17)],
+                            [0.01 * (i + j + 1) for j in range(OBSERVATION_FIELD_COUNT)],
                             0.1, i == 11)
         recorder.stop()
         with tempfile.TemporaryDirectory() as tmp:
