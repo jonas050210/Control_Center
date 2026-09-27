@@ -15,13 +15,16 @@ var agent_controlled: bool = false
 var is_moving: bool = false
 var player: SandboxPlayer
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var reaction_timer: float = 0.0
+var aim_quality: float = 0.7
+var target_visible: bool = false
 
 func _ready() -> void:
 	health = max_health; spawn_origin = global_position; add_to_group("targets")
 	player = get_tree().get_first_node_in_group("players") as SandboxPlayer
 
 func configure_seed(value: int) -> void:
-	rng.seed = value; patrol_phase = rng.randf_range(0.0, TAU); fire_timer = rng.randf_range(0.7, 1.5)
+	rng.seed = value; patrol_phase = rng.randf_range(0.0, TAU); fire_timer = rng.randf_range(0.7, 1.5); reaction_timer = rng.randf_range(0.15, 0.65); aim_quality = rng.randf_range(0.55, 0.92)
 
 func _physics_process(delta: float) -> void:
 	if agent_controlled: return
@@ -42,13 +45,16 @@ func advance_simulation(delta: float) -> void:
 				var away: Vector3 = global_position - player.global_position; away.y = 0.0
 				if away.length() > 0.1: global_position += away.normalized() * move_speed * delta; is_moving = true
 	if player == null or not is_instance_valid(player) or player.health <= 0.0: return
-	fire_timer -= delta
-	if fire_timer > 0.0 or global_position.distance_to(player.global_position) > 22.0: return
-	fire_timer = rng.randf_range(0.8, 1.6)
 	var query: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(global_position + Vector3.UP, player.global_position + Vector3.UP)
 	query.collide_with_areas = false; query.collide_with_bodies = true
-	var result: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
-	if result.get("collider") == player and rng.randf() < 0.35: player.take_damage(enemy_damage)
+	var visibility: Dictionary = get_world_3d().direct_space_state.intersect_ray(query)
+	target_visible = visibility.get("collider") == player
+	if not target_visible: reaction_timer = minf(0.65, reaction_timer + delta); return
+	reaction_timer = maxf(0.0, reaction_timer - delta)
+	fire_timer -= delta
+	if reaction_timer > 0.0 or fire_timer > 0.0 or global_position.distance_to(player.global_position) > 22.0: return
+	fire_timer = rng.randf_range(0.8, 1.6)
+	if target_visible and rng.randf() < aim_quality: player.take_damage(enemy_damage)
 
 func take_damage(amount: float) -> bool:
 	health -= amount; var killed: bool = health <= 0.0; target_hit.emit(self, killed)

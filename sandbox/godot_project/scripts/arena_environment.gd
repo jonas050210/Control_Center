@@ -24,13 +24,32 @@ func _build_original_layout() -> void:
 		"research_complex": [Vector3(-8, 1.2, -8), Vector3(8, 1.2, -8), Vector3(-5, 3.5, 2), Vector3(5, 3.5, 6), Vector3(0, 1.2, 10)],
 		"compound": [Vector3(-10, 1.2, -5), Vector3(0, 1.2, -10), Vector3(10, 1.2, -2), Vector3(-5, 1.2, 8), Vector3(7, 2.8, 8)]
 	}
+	if map_id == "research_complex":
+		for step: int in range(5): _add_box(Vector3(-10.0 + step * 0.8, step * 0.35, 4.0), Vector3(2.0, 0.7, 4.0), Color(0.24, 0.30, 0.35))
+	if map_id == "compound":
+		_add_box(Vector3(0, 2.5, -12), Vector3(8, 5, 1), Color(0.30, 0.22, 0.16))
 	for position: Vector3 in layouts.get(map_id, layouts["facility"]):
+		var body: StaticBody3D = StaticBody3D.new()
+		body.position = position
+		add_child(body)
 		var cover: MeshInstance3D = MeshInstance3D.new()
 		var mesh: BoxMesh = BoxMesh.new()
-		mesh.size = Vector3(3.2, 2.4 if position.y < 2.0 else 4.5, 1.4)
+		var cover_size: Vector3 = Vector3(3.2, 2.4 if position.y < 2.0 else 4.5, 1.4)
+		mesh.size = cover_size
+		var collision: CollisionShape3D = CollisionShape3D.new()
+		var shape: BoxShape3D = BoxShape3D.new()
+		shape.size = cover_size
+		collision.shape = shape
+		body.add_child(collision)
 		var material: StandardMaterial3D = StandardMaterial3D.new()
 		material.albedo_color = Color(0.20, 0.28, 0.32) if map_id != "compound" else Color(0.34, 0.25, 0.18)
-		material.roughness = 0.82; mesh.material = material; cover.mesh = mesh; cover.position = position; add_child(cover)
+		material.roughness = 0.82; mesh.material = material; cover.mesh = mesh; body.add_child(cover)
+
+func _add_box(position: Vector3, size: Vector3, color: Color) -> void:
+	var body: StaticBody3D = StaticBody3D.new(); body.position = position; add_child(body)
+	var mesh_instance: MeshInstance3D = MeshInstance3D.new(); var mesh: BoxMesh = BoxMesh.new(); mesh.size = size
+	var material: StandardMaterial3D = StandardMaterial3D.new(); material.albedo_color = color; material.roughness = 0.8; mesh.material = material; mesh_instance.mesh = mesh; body.add_child(mesh_instance)
+	var collider: CollisionShape3D = CollisionShape3D.new(); var shape: BoxShape3D = BoxShape3D.new(); shape.size = size; collider.shape = shape; body.add_child(collider)
 
 func configure(seed_value: int, requested_map: String = "") -> void:
 	episode_seed = seed_value; rng.seed = seed_value

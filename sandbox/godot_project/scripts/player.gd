@@ -57,6 +57,9 @@ func _process(_delta: float) -> void:
 		hud_status.text = "HEALTH %03d    AMMO %02d / %02d%s    HITS %d  KILLS %d" % [int(health), ammo, reserve_ammo, reload_text, target_hit_count, kill_count]
 	if hud_help:
 		hud_help.visible = not agent_controlled
+	muzzle_flash_timer = maxf(0.0, muzzle_flash_timer - get_process_delta_time())
+	var view_model: MeshInstance3D = get_node_or_null("CameraPivot/Camera3D/ViewModel") as MeshInstance3D
+	if view_model: view_model.visible = muzzle_flash_timer <= 0.0 or fmod(muzzle_flash_timer * 60.0, 2.0) > 0.5
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
@@ -70,6 +73,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		apply_rotation_input(event.relative.x * mouse_sensitivity, event.relative.y * mouse_sensitivity)
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		shoot()
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_1: switch_weapon("pistol")
+		elif event.keycode == KEY_2: switch_weapon("smg")
+		elif event.keycode == KEY_3: switch_weapon("rifle")
+		elif event.keycode == KEY_4: switch_weapon("shotgun")
+		elif event.keycode == KEY_5: switch_weapon("marksman")
 
 func _physics_process(delta: float) -> void:
 	obs_camera.global_transform = camera.global_transform
@@ -185,15 +194,18 @@ func shoot() -> bool:
 	ammo_changed.emit(ammo, reserve_ammo)
 	last_shot_hit = false
 	var killed := false
-	weapon_ray.force_raycast_update()
-	if weapon_ray.is_colliding():
-		var collider := weapon_ray.get_collider()
-		if collider != null and collider.has_method("take_damage"):
-			killed = bool(collider.take_damage(50.0 if is_ads else 40.0))
-			last_shot_hit = true
-			target_hit_count += 1
-			if killed:
-				kill_count += 1
+	muzzle_flash_timer = 0.08
+	var pellet_count: int = current_weapon.pellets if current_weapon else 1
+	for pellet: int in range(pellet_count):
+		weapon_ray.rotation = Vector3(deg_to_rad(randf_range(-current_weapon.spread_degrees, current_weapon.spread_degrees) if current_weapon else 0.0), deg_to_rad(randf_range(-current_weapon.spread_degrees, current_weapon.spread_degrees) if current_weapon else 0.0), 0.0)
+		weapon_ray.force_raycast_update()
+		if weapon_ray.is_colliding():
+			var collider: Object = weapon_ray.get_collider()
+			if collider != null and collider.has_method("take_damage"):
+				var damage_amount: float = current_weapon.damage if current_weapon else 40.0
+				var did_kill: bool = bool(collider.take_damage(damage_amount))
+				last_shot_hit = true; killed = killed or did_kill; target_hit_count += 1
+				if did_kill: kill_count += 1
 	# Small deterministic recoil; AI learns to correct through pitch actions.
 	camera.rotate_x(deg_to_rad(0.4 if is_ads else 0.9))
 	shot_fired.emit(last_shot_hit, killed)
