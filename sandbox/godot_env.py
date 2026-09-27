@@ -61,6 +61,7 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
         self._socket: Optional[socket.socket] = None
         self._process: Optional[subprocess.Popen[bytes]] = None
         self._recv_buffer = b""
+        self._request_id = 0
         self._last_observation = np.zeros((3, self.height, self.width), dtype=np.uint8)
         self._port = int(port or self._find_free_port())
         self._start(startup_timeout=startup_timeout, headless=headless)
@@ -122,7 +123,10 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
     def _request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if self._socket is None:
             raise GodotBridgeError("Godot bridge is closed")
-        wire = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+        self._request_id += 1
+        request = dict(payload)
+        request["request_id"] = self._request_id
+        wire = (json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8")
         try:
             self._socket.sendall(wire)
             while b"\n" not in self._recv_buffer:
@@ -134,6 +138,8 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
             response = json.loads(line.decode("utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise GodotBridgeError(f"Godot bridge request failed: {exc}") from exc
+        if response.get("request_id", self._request_id) != self._request_id:
+            raise GodotBridgeError(f"Godot bridge response mismatch: expected {self._request_id}, got {response.get('request_id')}")
         if not response.get("ok", False):
             raise GodotBridgeError(str(response.get("error", "unknown Godot bridge error")))
         return response

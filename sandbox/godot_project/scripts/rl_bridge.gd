@@ -9,6 +9,7 @@ var max_steps: int = 500
 var server: TCPServer = TCPServer.new()
 var peer: StreamPeerTCP
 var receive_buffer: String = ""
+var current_request_id: int = 0
 var controller: SandboxAIController
 
 func _ready() -> void:
@@ -59,6 +60,7 @@ func _handle_line(line: String) -> void:
 	if not request is Dictionary:
 		_send({"ok": false, "error": "request must be a JSON object"})
 		return
+	current_request_id = int(request.get("request_id", 0))
 	var command: String = str(request.get("command", ""))
 	if command == "hello":
 		_send({"ok": true, "protocol": 1, "action_dims": [3,3,2,2,2,2,2,2,21,21]})
@@ -99,4 +101,6 @@ func _send_state(step_reward: float) -> void:
 
 func _send(payload: Dictionary) -> void:
 	if peer == null: return
-	peer.put_data((JSON.stringify(payload) + "\n").to_utf8_buffer())
+	var response: Dictionary = payload.duplicate()
+	response["request_id"] = current_request_id
+	peer.put_data((JSON.stringify(response) + "\n").to_utf8_buffer())
