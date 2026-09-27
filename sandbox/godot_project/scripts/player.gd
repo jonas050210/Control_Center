@@ -1,6 +1,8 @@
 extends CharacterBody3D
 class_name SandboxPlayer
 
+const WEAPON_CONFIG: Script = preload("res://scripts/weapon_config.gd")
+
 signal shot_fired(hit_target: bool, killed_target: bool)
 signal ammo_changed(magazine: int, reserve: int)
 signal health_changed(health: float)
@@ -34,6 +36,10 @@ var reload_timer: float = 0.0
 var fire_timer: float = 0.0
 var is_ads: bool = false
 var is_crouching: bool = false
+var weapon_catalog: Dictionary = {}
+var current_weapon_id: String = "rifle"
+var current_weapon: SandboxWeapon
+var muzzle_flash_timer: float = 0.0
 
 func _ready() -> void:
 	add_to_group("players")
@@ -42,6 +48,8 @@ func _ready() -> void:
 	obs_viewport.world_3d = get_viewport().world_3d
 	obs_camera.global_transform = camera.global_transform
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	weapon_catalog = SandboxWeapon.catalog()
+	equip_weapon(current_weapon_id)
 
 func _process(_delta: float) -> void:
 	if hud_status:
@@ -138,6 +146,21 @@ func set_ads(enabled: bool) -> void:
 	is_ads = enabled
 	camera.fov = 55.0 if enabled else 75.0
 	obs_camera.fov = camera.fov
+
+func equip_weapon(weapon_id: String) -> bool:
+	if not weapon_catalog.has(weapon_id): return false
+	current_weapon_id = weapon_id
+	current_weapon = weapon_catalog[weapon_id] as SandboxWeapon
+	magazine_size = current_weapon.magazine_size
+	starting_reserve = current_weapon.reserve_ammo
+	reload_seconds = current_weapon.reload_seconds
+	fire_interval = current_weapon.fire_interval
+	ammo = magazine_size; reserve_ammo = starting_reserve
+	return true
+
+func switch_weapon(weapon_id: String) -> bool:
+	if reload_timer > 0.0: return false
+	return equip_weapon(weapon_id)
 
 func start_reload() -> bool:
 	if reload_timer > 0.0 or ammo >= magazine_size or reserve_ammo <= 0:
