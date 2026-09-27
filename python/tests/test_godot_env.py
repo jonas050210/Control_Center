@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.godot_env import GodotProcessTransport, GodotGymEnv, GodotVecEnv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +20,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FAKE_BRIDGE_SOURCE = r'''
 import json, os, sys
 
-OBS_DIM = 17
+OBS_DIM = __OBS_DIM__
 
 def out(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
@@ -70,7 +71,7 @@ for line in sys.stdin:
         break
     else:
         out({"ok": False, "error": "unknown command"})
-'''
+'''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
 
 
 @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
@@ -96,7 +97,7 @@ class FakeBridgeTestCase(unittest.TestCase):
 
     def test_roundtrip_and_spaces(self):
         with self.make_transport() as transport:
-            self.assertEqual(transport.spaces["observation_space"]["size"], 17)
+            self.assertEqual(transport.spaces["observation_space"]["size"], OBSERVATION_FIELD_COUNT)
             self.assertTrue(transport.request({"cmd": "ping"}).get("pong"))
 
     def test_large_stderr_output_does_not_deadlock(self):
@@ -126,7 +127,7 @@ class FakeBridgeTestCase(unittest.TestCase):
         env = GodotGymEnv(project_path=PROJECT_ROOT, godot_executable=self.executable)
         try:
             observation, _info = env.reset(seed=7)
-            self.assertEqual(observation.shape, (17,))
+            self.assertEqual(observation.shape, (OBSERVATION_FIELD_COUNT,))
             terminated = truncated = False
             steps = 0
             while not (terminated or truncated):

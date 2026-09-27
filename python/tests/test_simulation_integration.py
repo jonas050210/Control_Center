@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 import numpy as np
 
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.dataset import (
     ACTION_NVECS,
     DemonstrationDataset,
@@ -52,8 +53,8 @@ class SimulationIntegrationTests(unittest.TestCase):
         # 3 episodes of 10 steps
         for ep in range(3):
             for step in range(10):
-                obs = [float(ep * 10 + step) / 100.0] * 17
-                next_obs = [float(ep * 10 + step + 1) / 100.0] * 17
+                obs = [float(ep * 10 + step) / 100.0] * OBSERVATION_FIELD_COUNT
+                next_obs = [float(ep * 10 + step + 1) / 100.0] * OBSERVATION_FIELD_COUNT
                 action = [1, 0, 0, 0, 1 if step % 2 == 0 else 0, 0.0, 0.0]
                 reward = 1.0 if step == 9 else 0.01
                 done = (step == 9)
@@ -72,9 +73,9 @@ class SimulationIntegrationTests(unittest.TestCase):
             self.assertEqual(summary["terminal_transitions"], 3)
 
             obs_arr, act_arr, next_obs_arr, rew_arr, done_arr = dataset.arrays()
-            self.assertEqual(obs_arr.shape, (30, 17))
+            self.assertEqual(obs_arr.shape, (30, OBSERVATION_FIELD_COUNT))
             self.assertEqual(act_arr.shape, (30, 5))
-            self.assertEqual(next_obs_arr.shape, (30, 17))
+            self.assertEqual(next_obs_arr.shape, (30, OBSERVATION_FIELD_COUNT))
             self.assertEqual(rew_arr.shape, (30,))
             self.assertEqual(done_arr.shape, (30,))
 
@@ -82,8 +83,8 @@ class SimulationIntegrationTests(unittest.TestCase):
         recorder = DemonstrationRecorder({"test": "bc_lifecycle"})
         recorder.start()
         for i in range(50):
-            obs = [math.sin(i * 0.1 + j) for j in range(17)]
-            next_obs = [math.sin((i + 1) * 0.1 + j) for j in range(17)]
+            obs = [math.sin(i * 0.1 + j) for j in range(OBSERVATION_FIELD_COUNT)]
+            next_obs = [math.sin((i + 1) * 0.1 + j) for j in range(OBSERVATION_FIELD_COUNT)]
             action = [0, 1, 0, 0, 1 if i % 5 == 0 else 0, 0.0, 0.0]
             recorder.append(obs, action, next_obs, 0.5, i == 49, episode_id=0)
         recorder.stop()
@@ -108,7 +109,7 @@ class SimulationIntegrationTests(unittest.TestCase):
 
             # Load checkpoint
             loaded_model = load_bc_checkpoint(result["best_checkpoint"])
-            pred = loaded_model.predict(torch.randn(4, 17))
+            pred = loaded_model.predict(torch.randn(4, OBSERVATION_FIELD_COUNT))
             self.assertEqual(pred.shape, (4, 5))
 
             # Test transfer into SB3 PPO policy
@@ -117,7 +118,7 @@ class SimulationIntegrationTests(unittest.TestCase):
 
             class SimpleEnv(gym.Env):
                 def __init__(self):
-                    self.observation_space = gym.spaces.Box(-1.0, 1.0, shape=(17,))
+                    self.observation_space = gym.spaces.Box(-1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,))
                     self.action_space = gym.spaces.MultiDiscrete([3, 3, 3, 3, 2])
             
             ppo_model = PPO(

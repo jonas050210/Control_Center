@@ -8,8 +8,11 @@ from pathlib import Path
 import time
 from typing import Any
 
+from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
-ACTION_NVECS = (3, 3, 3, 3, 2)
+# Kept as a module-level name for backwards compatibility with existing
+# imports; the single source of truth is contract.ACTION_NVEC.
+ACTION_NVECS = ACTION_NVEC
 SCHEMA = "sandboxai.demonstrations"
 
 
@@ -129,7 +132,7 @@ class DemonstrationDataset:
         metadata = {
             "schema": SCHEMA,
             "schema_version": 1,
-            "observation_dim": len(self.transitions[0]["observation"]) if self.transitions else 17,
+            "observation_dim": len(self.transitions[0]["observation"]) if self.transitions else OBSERVATION_FIELD_COUNT,
             "action_encoding": "[move, strafe, yaw, pitch, shoot, look_delta_x, look_delta_y]",
             "created_unix": time.time(),
             **self.metadata,

@@ -169,10 +169,15 @@ sandboxai train \
   --env-count 8 --steps 1000000 \
   --rollout-length 2048 --batch-size 256 \
   --learning-rate 0.0003 --gamma 0.99 --gae-lambda 0.95 \
-  --entropy-coefficient 0.0 --clip-range 0.2 \
+  --entropy-coefficient 0.01 --clip-range 0.2 \
   --checkpoint-frequency 100000 --evaluation-frequency 50000 \
   --seed 1234 --device auto --curriculum-level 3
 ```
+
+The entropy coefficient is non-zero by default (0.01): with MultiDiscrete
+actions, a zero entropy coefficient lets PPO collapse to a degenerate action
+(for example never shooting) in the first few updates, after which useful
+behavior can no longer be discovered. Omit the flag to use the safe default.
 
 A JSON config can replace command-line editing:
 

@@ -88,10 +88,21 @@ class TrainingConfig:
             raise ValueError("learning_rate must be positive")
         if self.clip_range <= 0.0:
             raise ValueError("clip_range must be positive")
+        # Negative entropy would actively reward determinism; forbid it so
+        # the mistake surfaces at config load instead of as silent policy
+        # collapse during training.
+        if self.entropy_coefficient < 0.0:
+            raise ValueError("entropy_coefficient must be non-negative")
         if self.total_training_steps < 1:
             raise ValueError("total_training_steps must be positive")
         if self.checkpoint_frequency < 1 or self.evaluation_frequency < 1:
             raise ValueError("checkpoint/evaluation frequency must be positive")
+        if self.evaluation_episodes < 1:
+            raise ValueError("evaluation_episodes must be >= 1")
+        if len(self.net_arch) < 1 or any(size < 1 for size in self.net_arch):
+            raise ValueError("net_arch must contain at least one positive layer size")
+        if self.torch_threads < 0:
+            raise ValueError("torch_threads must be non-negative (0 = engine default)")
         if self.curriculum_level not in range(1, 6):
             raise ValueError("curriculum_level must be between 1 and 5")
         if self.early_stopping_patience < 0:

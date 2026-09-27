@@ -154,18 +154,22 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     """Runs a fast, self-contained smoke test verifying all Python ML components."""
     print("Running SandboxAI ML stack smoke test...")
     results: dict[str, Any] = {}
+    failures: list[str] = []
 
     # 1. Config test
     config = TrainingConfig(environment_count=2, rollout_length=64, batch_size=32, total_training_steps=128, device=device).validate()
     results["config_valid"] = True
 
-    # 2. Dataset creation and validation
+    # 2. Dataset creation and validation. Observations use the real
+    # 33-field contract dimension so the smoke test exercises (and produces
+    # checkpoints compatible with) the actual observation space.
+    from .contract import OBSERVATION_FIELD_COUNT
     from .dataset import DemonstrationDataset, DemonstrationRecorder
     recorder = DemonstrationRecorder({"source": "smoke_test"})
     recorder.start()
     for i in range(20):
-        obs = [0.1 * ((i + j) % 10) for j in range(17)]
-        next_obs = [0.1 * ((i + j + 1) % 10) for j in range(17)]
+        obs = [0.1 * ((i + j) % 10) for j in range(OBSERVATION_FIELD_COUNT)]
+        next_obs = [0.1 * ((i + j + 1) % 10) for j in range(OBSERVATION_FIELD_COUNT)]
         action = [0, 0, 1, 0, 1 if i % 4 == 0 else 0, 0.0, 0.0]
         done = (i == 19)
         recorder.append(obs, action, next_obs, 1.0 if done else 0.01, done, episode_id=0)
@@ -177,6 +181,9 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
         dataset = DemonstrationDataset.load(dataset_path)
         summary = dataset.summary()
         results["dataset_transitions"] = summary["transitions"]
+        results["observation_dim"] = summary["observation_dim"]
+        if summary["observation_dim"] != OBSERVATION_FIELD_COUNT:
+            failures.append(f"observation_dim {summary['observation_dim']} != contract {OBSERVATION_FIELD_COUNT}")
 
         # 3. BC training
         from .bc import train_behavior_cloning, load_bc_checkpoint, load_bc_into_sb3_policy
@@ -186,29 +193,40 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
 
         # 4. BC checkpoint load & predict
         model = load_bc_checkpoint(bc_result["best_checkpoint"], device=device)
-        sample_pred = model.predict([0.0] * 17)
+        sample_pred = model.predict([0.0] * OBSERVATION_FIELD_COUNT)
         results["bc_prediction_shape"] = list(sample_pred.shape)
+        if list(sample_pred.shape) != [5]:
+            failures.append(f"BC prediction shape {list(sample_pred.shape)} != [5]")
 
         # 5. SB3 warm start verification
         try:
             import gymnasium as gym
             from stable_baselines3 import PPO
-            # Create a MultiDiscrete mock policy to test weight transfer
             action_space = gym.spaces.MultiDiscrete([3, 3, 3, 3, 2])
-            obs_space = gym.spaces.Box(-1.0, 1.0, shape=(17,))
-            class MockVecEnv(gym.Env):
+            obs_space = gym.spaces.Box(-1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,))
+
+            class MockGymEnv(gym.Env):
                 def __init__(self):
                     self.observation_space = obs_space
                     self.action_space = action_space
-            mock_env = MockVecEnv()
-            ppo_model = PPO("MlpPolicy", mock_env, n_steps=16, batch_size=16, policy_kwargs={"net_arch": {"pi": [128, 128], "vf": [128, 128]}}, device=device)
+
+            ppo_model = PPO("MlpPolicy", MockGymEnv(), n_steps=16, batch_size=16, policy_kwargs={"net_arch": {"pi": [128, 128], "vf": [128, 128]}}, device=device)
             transfer_res = load_bc_into_sb3_policy(ppo_model.policy, bc_result["best_checkpoint"], device=device)
             results["sb3_weight_transfer"] = transfer_res["transferred"]
+            if not transfer_res["transferred"]:
+                failures.append("SB3 weight transfer reported transferred=False")
         except Exception as e:
             results["sb3_weight_transfer_error"] = str(e)
+            failures.append(f"SB3 weight transfer failed: {e}")
 
-    results["all_passed"] = True
-    print("Smoke test completed successfully!")
+    results["failures"] = failures
+    results["all_passed"] = not failures
+    if failures:
+        print("Smoke test FAILED:")
+        for failure in failures:
+            print(f"  - {failure}")
+    else:
+        print("Smoke test completed successfully!")
     return results
 
 
@@ -223,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smoke-test":
         res = run_smoke_test(args.device)
         print(json.dumps(res, indent=2, default=str))
-        return 0
+        return 0 if res.get("all_passed") else 1
     if args.command == "inspect-dataset":
         from .dataset import DemonstrationDataset
         print(json.dumps(DemonstrationDataset.load(args.dataset).summary(), indent=2, default=str))
@@ -277,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             godot_executable=args.godot_executable,
             project_path=args.project_path,
-        )
+        ).validate()
         model = PPO.load(args.checkpoint, device=config.resolved_device())
         result = evaluate_model(
             model,

@@ -4,9 +4,13 @@ These tests validate the Python-side contract module used as the target for
 a future external (e.g. Roblox) adapter. They intentionally do not require a
 running Godot process; keeping OBSERVATION_SPEC in sync with
 scripts/core/observation.gd is a manual responsibility documented in
-contract.py's module docstring.
+contract.py's module docstring. The GodotSourceDriftTests below narrow that
+gap statically: they parse the GDScript sources and fail loudly when the
+Godot-side constants/field layout no longer match the Python contract.
 """
+import re
 import unittest
+from pathlib import Path
 
 from sandboxai.contract import (
     ACTION_NVEC,
@@ -19,6 +23,8 @@ from sandboxai.contract import (
     GameAdapter,
     validate_observation_spec,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ObservationContractTests(unittest.TestCase):
@@ -78,6 +84,74 @@ class GameAdapterInterfaceTests(unittest.TestCase):
         adapter.close()
         self.assertEqual(len(DummyAdapter.observation_spec()), len(OBSERVATION_SPEC))
         self.assertEqual(len(DummyAdapter.action_spec()), len(ACTION_SPEC))
+
+
+class GodotSourceDriftTests(unittest.TestCase):
+    """Static cross-language drift guards for the observation/action contract.
+
+    The contract is implemented twice (GDScript + Python) and no build step
+    generates one from the other. These tests parse the Godot sources and
+    compare the declared constants and the to_array() field layout against
+    the Python contract, so an accidental change on either side fails here
+    instead of silently producing incompatible checkpoints.
+    """
+
+    def _godot_source(self, relative: str) -> str:
+        path = PROJECT_ROOT / relative
+        self.assertTrue(path.is_file(), f"missing Godot source: {path}")
+        return path.read_text(encoding="utf-8")
+
+    def test_godot_observation_field_count_matches_python_contract(self):
+        source = self._godot_source("scripts/core/observation.gd")
+        match = re.search(r"const FIELD_COUNT:\s*int\s*=\s*(\d+)", source)
+        self.assertIsNotNone(match, "Observation.FIELD_COUNT declaration not found")
+        self.assertEqual(
+            int(match.group(1)),
+            OBSERVATION_FIELD_COUNT,
+            "Observation.FIELD_COUNT in scripts/core/observation.gd no longer matches "
+            "OBSERVATION_FIELD_COUNT in python/sandboxai/contract.py",
+        )
+
+    def test_godot_to_array_assigns_every_contract_index_exactly_once(self):
+        source = self._godot_source("scripts/core/observation.gd")
+        start = source.find("func to_array()")
+        end = source.find("\nfunc ", start + 1)
+        self.assertGreater(start, -1, "to_array() not found in observation.gd")
+        body = source[start:end if end != -1 else len(source)]
+        indices = [int(value) for value in re.findall(r"arr\[(\d+)\]\s*=", body)]
+        self.assertEqual(
+            sorted(indices),
+            list(range(OBSERVATION_FIELD_COUNT)),
+            "to_array() must assign exactly indices 0..N-1 with no gaps or duplicates; "
+            "update the field table in docs/OBSERVATION_ACTION_CONTRACT.md and "
+            "python/sandboxai/contract.py together with scripts/core/observation.gd",
+        )
+        self.assertIn(
+            "arr.resize(FIELD_COUNT)",
+            body,
+            "to_array() must pre-allocate the packed array to FIELD_COUNT",
+        )
+
+    def test_godot_action_nvec_matches_python_contract(self):
+        source = self._godot_source("scripts/core/action.gd")
+        match = re.search(
+            r"const MULTI_DISCRETE_NVECS:\s*Array\s*=\s*\[([0-9,\s]+)\]", source
+        )
+        self.assertIsNotNone(match, "Action.MULTI_DISCRETE_NVECS declaration not found")
+        self.assertEqual(
+            tuple(int(value) for value in match.group(1).split(",")),
+            ACTION_NVEC,
+            "Action.MULTI_DISCRETE_NVECS in scripts/core/action.gd no longer matches "
+            "ACTION_NVEC in python/sandboxai/contract.py",
+        )
+
+    def test_godot_tracked_enemy_budget_matches_python_contract(self):
+        source = self._godot_source("scripts/core/sandbox_config.gd")
+        match = re.search(r"const OBSERVATION_MAX_TRACKED_ENEMIES:\s*int\s*=\s*(\d+)", source)
+        self.assertIsNotNone(
+            match, "SandboxConfig.OBSERVATION_MAX_TRACKED_ENEMIES declaration not found"
+        )
+        self.assertEqual(int(match.group(1)), OBSERVATION_MAX_TRACKED_ENEMIES)
 
 
 if __name__ == "__main__":

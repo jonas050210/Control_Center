@@ -218,9 +218,11 @@ func get_observations() -> Array:
 func _sync_proxies() -> void:
 	proxy_a.position = agent_a.position
 	proxy_a.health = agent_a.health
+	proxy_a.max_health = agent_a.max_health
 	proxy_a.alive = agent_a.alive
 	proxy_b.position = agent_b.position
 	proxy_b.health = agent_b.health
+	proxy_b.max_health = agent_b.max_health
 	proxy_b.alive = agent_b.alive
 
 

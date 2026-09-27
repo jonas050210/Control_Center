@@ -64,6 +64,14 @@ test). Level 1 keeps the exact original fixed layout (enemies lined up
 directly ahead with only ±0.5 m jitter) so the originally-validated combat
 path is unchanged at that level.
 
+One geometric caveat: the agent's spawn point is offset from the arena
+center, so a wide spawn angle can place the *sampled* point outside the
+walls. Those spawns are clamped back inside the arena, which shortens the
+effective distance below the sampled value (worst case, directly behind the
+agent, the arena is only ~3.5 m deep). The 4–13 m range is therefore an
+upper envelope for off-axis spawns, not a strict guarantee; every clamped
+spawn is still a valid, deterministic, in-arena position.
+
 ## Enemy movement patterns
 
 `EnemyState.update_ai(..., enable_strafe)` (default `false`, preserving the

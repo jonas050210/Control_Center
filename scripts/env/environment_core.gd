@@ -61,8 +61,21 @@ func set_curriculum_level(level: int) -> void:
 		_rebuild_enemies(enemy_count)
 
 	for enemy in enemies:
-		var state: EnemyState = enemy
-		state.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
+		_apply_enemy_difficulty(enemy)
+
+
+## Applies every curriculum-derived per-enemy parameter to one enemy. Used
+## both at reset() and by set_curriculum_level() so a mid-episode level
+## change takes effect consistently on the existing enemy list (previously
+## only the radius was updated immediately, leaving speed/cooldown/damage at
+## the previous level's values until the next reset).
+func _apply_enemy_difficulty(enemy: EnemyState) -> void:
+	enemy.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
+	enemy.move_speed = SandboxConfig.ENEMY_MOVE_SPEED * curriculum.enemy_speed_scale()
+	enemy.attack_damage = SandboxConfig.ENEMY_ATTACK_DAMAGE
+	enemy.attack_cooldown_time = (
+		SandboxConfig.ENEMY_ATTACK_COOLDOWN * curriculum.enemy_cooldown_scale()
+	)
 
 
 ## Deterministically (re)starts an episode. Passing the same seed produces
@@ -101,12 +114,7 @@ func reset(seed_value: int = -1) -> Observation:
 			var jitter_z: float = rng.randf_range(-0.5, 0.5)
 			spawn = SandboxConfig.ENEMY_SPAWN_POSITION + Vector3(lateral + jitter_x, 0.0, jitter_z)
 		enemy.reset(spawn)
-		enemy.radius = SandboxConfig.ENEMY_RADIUS * curriculum.target_radius_scale()
-		enemy.move_speed = SandboxConfig.ENEMY_MOVE_SPEED * curriculum.enemy_speed_scale()
-		enemy.attack_damage = SandboxConfig.ENEMY_ATTACK_DAMAGE
-		enemy.attack_cooldown_time = (
-			SandboxConfig.ENEMY_ATTACK_COOLDOWN * curriculum.enemy_cooldown_scale()
-		)
+		_apply_enemy_difficulty(enemy)
 		if strafing:
 			enemy.strafe_direction = 1.0 if rng.randf() > 0.5 else -1.0
 			enemy.strafe_phase = rng.randf_range(0.0, TAU)

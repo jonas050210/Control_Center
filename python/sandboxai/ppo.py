@@ -40,7 +40,23 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
     PPO, BaseCallback, CallbackList, CheckpointCallback = _require_sb3()
     device = config.resolved_device()
     checkpoint_path = Path(resume_checkpoint).expanduser().resolve() if resume_checkpoint else None
-    run_dir = checkpoint_path.parent.parent if checkpoint_path else config.run_directory()
+    if checkpoint_path is not None and not checkpoint_path.is_file():
+        raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint_path}")
+    if config.torch_threads > 0:
+        import torch  # type: ignore
+
+        torch.set_num_threads(config.torch_threads)
+    # Resume artifacts stay inside the original run directory. A checkpoint
+    # inside <run>/checkpoints/ maps to <run>; a checkpoint stored directly
+    # in the run root (e.g. final.zip) maps to the run root itself, never to
+    # the run's parent (which would scatter checkpoints/logs elsewhere).
+    if checkpoint_path is not None:
+        if checkpoint_path.parent.name == "checkpoints":
+            run_dir = checkpoint_path.parent.parent
+        else:
+            run_dir = checkpoint_path.parent
+    else:
+        run_dir = config.run_directory()
     checkpoints = run_dir / "checkpoints"
     logs = run_dir / "logs"
     evaluations = run_dir / "evaluations"
