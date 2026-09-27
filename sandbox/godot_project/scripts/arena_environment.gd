@@ -1,6 +1,8 @@
 extends Node3D
 class_name SandboxArenaEnvironment
 
+const MODEL_FACTORY: Script = preload("res://scripts/model_factory.gd")
+
 ## Original modular layouts. They use the same gameplay principles as public
 ## tactical test maps without reproducing their geometry or assets.
 @export_enum("facility", "research_complex", "compound") var map_id: String = "facility"
@@ -15,8 +17,33 @@ func _ready() -> void:
 	sun = get_node_or_null("DirectionalLight3D") as DirectionalLight3D
 	environment = get_node_or_null("WorldEnvironment") as WorldEnvironment
 	apply_time_of_day(time_of_day)
+	_decorate_authored_geometry()
 	_build_original_layout()
 	_build_navigation_surface()
+
+func _decorate_authored_geometry() -> void:
+	# Add trim and inset panels to the authored floor, perimeter, and cover
+	# bodies. Their collision shapes stay untouched; these are visual-only parts.
+	var floor_body: Node = get_node_or_null("Floor")
+	if floor_body != null:
+		var floor_surface: StandardMaterial3D = MODEL_FACTORY.material(Color(0.12, 0.17, 0.20), 0.12, 0.86)
+		MODEL_FACTORY.add_box(floor_body, "FloorInset", Vector3(38.0, 0.035, 38.0), Vector3(0, 0.52, 0), floor_surface)
+		for index: int in range(-3, 4):
+			var strip_material: StandardMaterial3D = MODEL_FACTORY.material(Color(0.16, 0.28, 0.30), 0.20, 0.58)
+			MODEL_FACTORY.add_box(floor_body, "FloorStrip" + str(index), Vector3(0.025, 0.012, 38.0), Vector3(index * 5.0, 0.545, 0), strip_material)
+	for wall_name: String in ["WallNorth", "WallSouth", "WallEast", "WallWest"]:
+		var wall: Node = get_node_or_null(wall_name)
+		if wall == null: continue
+		var trim: StandardMaterial3D = MODEL_FACTORY.material(Color(0.20, 0.48, 0.52), 0.32, 0.38, Color(0.01, 0.06, 0.07))
+		MODEL_FACTORY.add_box(wall, "WallCap", Vector3(40.2, 0.10, 1.10), Vector3(0, 3.06, 0), trim)
+		MODEL_FACTORY.add_box(wall, "WallBand", Vector3(36.0, 0.16, 0.035), Vector3(0, 1.15, -0.53), trim)
+	for cover_name: String in ["CoverCenter", "CoverWest", "CoverEast", "CoverSouth"]:
+		var cover: Node = get_node_or_null(cover_name)
+		if cover == null: continue
+		var cover_trim: StandardMaterial3D = MODEL_FACTORY.material(Color(0.36, 0.55, 0.55), 0.26, 0.48)
+		var cover_dark: StandardMaterial3D = MODEL_FACTORY.material(Color(0.08, 0.14, 0.16), 0.08, 0.88)
+		MODEL_FACTORY.add_box(cover, "CoverCap", Vector3(4.14, 0.08, 1.64), Vector3(0, 1.34, 0), cover_trim)
+		MODEL_FACTORY.add_box(cover, "CoverPanel", Vector3(2.8, 1.0, 0.035), Vector3(0, 0.15, -0.77), cover_dark)
 
 func _build_original_layout() -> void:
 	# Reset is driven by the bridge between commands, outside physics
@@ -35,22 +62,9 @@ func _build_original_layout() -> void:
 	if map_id == "compound":
 		_add_box(Vector3(0, 2.5, -12), Vector3(8, 5, 1), Color(0.30, 0.22, 0.16))
 	for position: Vector3 in layouts.get(map_id, layouts["facility"]):
-		var body: StaticBody3D = StaticBody3D.new()
-		body.position = position
-		body.add_to_group("generated_map_geometry")
-		add_child(body)
-		var cover: MeshInstance3D = MeshInstance3D.new()
-		var mesh: BoxMesh = BoxMesh.new()
 		var cover_size: Vector3 = Vector3(3.2, 2.4 if position.y < 2.0 else 4.5, 1.4)
-		mesh.size = cover_size
-		var collision: CollisionShape3D = CollisionShape3D.new()
-		var shape: BoxShape3D = BoxShape3D.new()
-		shape.size = cover_size
-		collision.shape = shape
-		body.add_child(collision)
-		var material: StandardMaterial3D = StandardMaterial3D.new()
-		material.albedo_color = Color(0.20, 0.28, 0.32) if map_id != "compound" else Color(0.34, 0.25, 0.18)
-		material.roughness = 0.82; mesh.material = material; cover.mesh = mesh; body.add_child(cover)
+		var cover_color: Color = Color(0.20, 0.28, 0.32) if map_id != "compound" else Color(0.34, 0.25, 0.18)
+		_add_box(position, cover_size, cover_color)
 
 func _build_navigation_surface() -> void:
 	var region: NavigationRegion3D = NavigationRegion3D.new()
@@ -62,10 +76,25 @@ func _build_navigation_surface() -> void:
 	add_child(region)
 
 func _add_box(position: Vector3, size: Vector3, color: Color) -> void:
-	var body: StaticBody3D = StaticBody3D.new(); body.position = position; body.add_to_group("generated_map_geometry"); add_child(body)
-	var mesh_instance: MeshInstance3D = MeshInstance3D.new(); var mesh: BoxMesh = BoxMesh.new(); mesh.size = size
-	var material: StandardMaterial3D = StandardMaterial3D.new(); material.albedo_color = color; material.roughness = 0.8; mesh.material = material; mesh_instance.mesh = mesh; body.add_child(mesh_instance)
-	var collider: CollisionShape3D = CollisionShape3D.new(); var shape: BoxShape3D = BoxShape3D.new(); shape.size = size; collider.shape = shape; body.add_child(collider)
+	var body: StaticBody3D = StaticBody3D.new()
+	body.position = position
+	body.add_to_group("generated_map_geometry")
+	add_child(body)
+	var surface: StandardMaterial3D = MODEL_FACTORY.material(color, 0.18, 0.78)
+	var trim: StandardMaterial3D = MODEL_FACTORY.material(color.lightened(0.18), 0.24, 0.52)
+	var shadow: StandardMaterial3D = MODEL_FACTORY.material(color.darkened(0.24), 0.10, 0.92)
+	MODEL_FACTORY.add_box(body, "MainVolume", size, Vector3.ZERO, surface)
+	var top_y: float = size.y * 0.5 + 0.035
+	MODEL_FACTORY.add_box(body, "TopTrim", Vector3(size.x + 0.10, 0.07, size.z + 0.10), Vector3(0, top_y, 0), trim)
+	MODEL_FACTORY.add_box(body, "FrontPanel", Vector3(size.x * 0.68, size.y * 0.42, 0.035), Vector3(0, 0, -size.z * 0.51), shadow)
+	if size.x > 1.0:
+		MODEL_FACTORY.add_box(body, "SupportLeft", Vector3(0.10, size.y * 0.82, 0.10), Vector3(-size.x * 0.42, 0, -size.z * 0.53), trim)
+		MODEL_FACTORY.add_box(body, "SupportRight", Vector3(0.10, size.y * 0.82, 0.10), Vector3(size.x * 0.42, 0, -size.z * 0.53), trim)
+	var collider: CollisionShape3D = CollisionShape3D.new()
+	var shape: BoxShape3D = BoxShape3D.new()
+	shape.size = size
+	collider.shape = shape
+	body.add_child(collider)
 
 func is_valid_spawn(position: Vector3, radius: float = 0.45) -> bool:
 	var query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()

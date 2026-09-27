@@ -117,6 +117,8 @@ The old `MockTacticalArenaEnv` name is retained as a compatibility alias only.
 
 `sandbox/godot_project` is the manually playable long-term visual environment. It has enclosing collision walls, tactical cover, player collision/camera, mouse look, WASD, sprint/crouch/jump, ADS FOV, ray weapon, ammo/reload/cadence/recoil, HUD, health, moving/damaging target enemies, deterministic controller reset, and an 84×84 observation viewport.
 
+Its 3D presentation is self-contained: `scripts/model_factory.gd` builds reusable low-poly meshes and materials at runtime. Player viewmodels use weapon-specific assemblies (receiver, stock, grip, magazine, barrel, sight, scope or pump), targets use armored body/limb/visor/backpack parts, and authored or generated arena cover receives trim, panels, supports, floor insets, and wall bands. No external art pack or network asset is required, so deterministic maps remain portable and easy to test.
+
 A custom localhost-only newline-delimited JSON/TCP bridge is built into the export and enabled only with `--rl-server`. `GodotSandboxEnv` launches an **exported binary**, handshakes protocol v1, sends full actions, receives PNG observations/reward/state, and terminates it cleanly. Manual play has no server. Explicit Godot requests fail rather than silently falling back to Python.
 
 Agent-mode timers/enemy simulation advance once per command at 20 Hz rather than by network wall time, making command trajectories deterministic. The export helper is `python -m sandbox.export`.
