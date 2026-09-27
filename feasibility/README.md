@@ -199,3 +199,22 @@ python feasibility/benchmark_env.py --env_path build/fps_linux.x86_64
 
 This runs the project through the editor binary without exporting (handy for
 fast iteration); exported binaries remain the canonical environments.
+
+## Godot shutdown messages seen on Windows runs (classification)
+
+Static analysis of Godot 4.3-stable sources + the pinned example project.
+**Not re-verified at runtime in the Linux CI sandbox** (no Godot binary
+available there — engine downloads are blocked), so treat the runtime part
+as ANALYSIS, not MEASURED.
+
+| Message | Origin | Action |
+|---|---|---|
+| `Attempt to disconnect a nonexistent connection` | Engine-internal `Area3D::_clear_monitoring()` / `_area_inout()` (`scene/3d/physics/area_3d.cpp`) reacting to overlap pairs torn down in the same frame. No SandboxAI or FPS-example GDScript calls `disconnect()` on these signals — the only explicit `disconnect()` in the repo (`sandbox/.../ai_controller.gd`) is guarded by `is_connected()`. | Upstream/engine behaviour; our overlay only reduces how often projectiles are freed mid-overlap. Not suppressed. |
+| `ObjectDB instances leaked at exit` | `ObjectDB::cleanup()` warning at process exit. `sync.gd` calls `get_tree().quit()` from inside its message loop while the tree is paused, so pending `await get_tree().create_timer(...)` objects (upstream `player.gd::_shoot`) and pending deletions are never collected. | Shutdown diagnostic of the pinned example's quit path, not a growing runtime leak (RSS stays flat during the benchmark). |
+| `Pages in use exist at exit in PagedAllocator` | `~PagedAllocator` (`core/templates/paged_allocator.h`) — same abrupt-quit path, servers torn down with live allocations. | Harmless Godot 4.x shutdown diagnostic. |
+
+Genuinely ours and fixed: `projectile.gd::_finish_destroy()` used to skip
+`queue_free()` when the projectile had already left the tree (shooter freed /
+respawned in the same frame), orphaning the Area3D until engine exit — one
+real contributor to the ObjectDB report. Covered by
+`tests/test_godot_lifecycle.py`.
