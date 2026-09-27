@@ -19,8 +19,11 @@ func _ready() -> void:
 	_build_navigation_surface()
 
 func _build_original_layout() -> void:
+	# Reset is driven by the bridge between commands, outside physics
+	# callbacks. Free generated geometry immediately so old cover/navigation
+	# nodes cannot overlap the newly configured map for one frame.
 	for old: Node in get_tree().get_nodes_in_group("generated_map_geometry"):
-		old.queue_free()
+		if is_instance_valid(old): old.free()
 	# Lightweight modular cover pieces create distinct sightline rhythms per map.
 	var layouts: Dictionary = {
 		"facility": [Vector3(-6, 1.2, -4), Vector3(6, 1.2, -4), Vector3(-2, 1.2, 5), Vector3(3, 2.8, 0)],

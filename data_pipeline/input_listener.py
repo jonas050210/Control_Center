@@ -32,8 +32,11 @@ class InputListener:
     """Thread-safe input listener recording keyboard and mouse events."""
 
     def __init__(self, max_buffer_size: int = 50000) -> None:
-        self.max_buffer_size = max_buffer_size
-        self._events: Deque[RawInputEvent] = collections.deque(maxlen=max_buffer_size)
+        if max_buffer_size < 1:
+            raise ValueError("max_buffer_size must be positive")
+        self.max_buffer_size = int(max_buffer_size)
+        self._events: Deque[RawInputEvent] = collections.deque(maxlen=self.max_buffer_size)
+        self._dropped_events = 0
         self._lock = threading.Lock()
         self._running = False
 
@@ -61,6 +64,7 @@ class InputListener:
                 return
             self._running = True
             self._events.clear()
+            self._dropped_events = 0
             self._currently_pressed_keys.clear()
             self._current_mouse_buttons = {"left": False, "right": False, "middle": False}
             self._last_mouse_pos = None
@@ -95,6 +99,12 @@ class InputListener:
                 pass
             self._mouse_listener = None
 
+    def _append_event(self, event: RawInputEvent) -> None:
+        """Append an event while making buffer overflow observable."""
+        if len(self._events) >= self.max_buffer_size:
+            self._dropped_events += 1
+        self._events.append(event)
+
     def _normalize_key(self, key: Any) -> str:
         """Normalizes pynput Key / KeyCode into lowercase canonical string."""
         if hasattr(key, "char") and key.char is not None:
@@ -110,7 +120,7 @@ class InputListener:
         k_str = self._normalize_key(key)
         with self._lock:
             self._currently_pressed_keys.add(k_str)
-            self._events.append(
+            self._append_event(
                 RawInputEvent(
                     t=t,
                     event_type="key_down",
@@ -123,7 +133,7 @@ class InputListener:
         k_str = self._normalize_key(key)
         with self._lock:
             self._currently_pressed_keys.discard(k_str)
-            self._events.append(
+            self._append_event(
                 RawInputEvent(
                     t=t,
                     event_type="key_up",
@@ -142,7 +152,7 @@ class InputListener:
                 dy = 0
             self._last_mouse_pos = (x, y)
 
-            self._events.append(
+            self._append_event(
                 RawInputEvent(
                     t=t,
                     event_type="mouse_move",
@@ -164,7 +174,7 @@ class InputListener:
 
         with self._lock:
             self._current_mouse_buttons[btn_str] = pressed
-            self._events.append(
+            self._append_event(
                 RawInputEvent(
                     t=t,
                     event_type="mouse_click",
@@ -175,7 +185,7 @@ class InputListener:
     def _on_mouse_scroll(self, x: int, y: int, dx: int, dy: int) -> None:
         t = time.perf_counter()
         with self._lock:
-            self._events.append(
+            self._append_event(
                 RawInputEvent(
                     t=t,
                     event_type="mouse_scroll",
@@ -186,7 +196,7 @@ class InputListener:
     def push_event(self, event: RawInputEvent) -> None:
         """Manually push an event (useful for mocking and testing)."""
         with self._lock:
-            self._events.append(event)
+            self._append_event(event)
             if event.event_type == "key_down":
                 self._currently_pressed_keys.add(event.data.get("key", ""))
             elif event.event_type == "key_up":
@@ -201,6 +211,11 @@ class InputListener:
             events = list(self._events)
             self._events.clear()
             return events
+
+    def get_dropped_event_count(self) -> int:
+        """Return the number of events discarded because the buffer was full."""
+        with self._lock:
+            return int(self._dropped_events)
 
     def get_instantaneous_state(self) -> Tuple[Set[str], Dict[str, bool]]:
         """Returns snapshot of current pressed keys and mouse button states."""

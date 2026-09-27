@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-09-27
 
-**Status:** end-to-end local workflow implemented and verified on the production headless sandbox; Godot project/bridge implemented but an exported binary must be built and runtime-tested on the target Windows/Godot installation.
+**Status:** end-to-end local workflow is implemented; the Python reference path is statically checked in this checkout, while the exported Godot binary still requires a Godot 4.3 runtime test on the target machine.
 
 This document records facts and boundaries. Labels mean:
 
@@ -125,7 +125,9 @@ No Godot executable/export templates were available in this Linux agent checkout
 
 ### 3.4 Shared action contract — VERIFIED
 
-`sandbox.actions` is the conversion authority. Canonical values:
+Action contract version **2.0.0** is declared in `data_pipeline.schema`, checked by
+Python, and returned during the Godot bridge handshake. `sandbox.actions` is
+the conversion authority. Canonical values:
 
 | Order | Name | Dataset domain | Gym category count |
 |---:|---|---|---:|
@@ -210,17 +212,16 @@ Synthetic data verifies plumbing, not policy quality and never substitutes for h
 
 ## 5. Verification performed in this checkout
 
-**VERIFIED / MEASURED 2026-09-27:**
+**Repository verification status 2026-09-27:**
 
-- `python -m compileall` passed for all production Python packages.
-- `git diff --check` passed.
-- `pytest -q`: **73 passed** in **18.81 s** on this agent's CPU environment (pinned SB3 2.4.0 / Gymnasium 1.0.0).
-- Full quick workflow passed: two recordings (16 frames total) → catalog → temporal GRU BC → offline evaluation → closed-loop BC → BC-weight transfer → 128-step PPO → deterministic four-policy benchmark → persisted summaries/manifests.
-- Quick workflow confirmed both `encoder_copied=true` and `action_heads_copied=true`.
-- A two-cycle `rl.iterate` smoke run completed resume/evaluation and wrote the final checkpoint/learning curve (128 requested per cycle; SB3's two-environment rollout minimum collected 256 actual transitions per cycle).
-- These short runs are functional smoke tests only; their tiny synthetic-policy scores have no scientific meaning.
+- `python -m compileall` passes for all production Python packages in the current checkout.
+- `git diff --check` passes.
+- The current checkout contains the full Python/Godot test suite, but its dependencies are not installed in this agent environment; run `python -m pip install -e ".[dev]"` before `pytest -q`.
+- GitHub Actions now runs Python 3.11/3.12 compilation, tests, whitespace checks, and Godot project smoke checks.
+- Godot export, scene parsing, local bridge, repeated reset, and target-machine runtime still require Godot 4.3 and must be verified on Windows or a Godot-enabled CI runner.
+- Synthetic recordings verify plumbing only; their policy scores have no scientific meaning.
 
-Automated coverage includes schema/actions, screen/input mocks, event synchronization including future-event retention, validation failure modes, stats/HTML catalog, temporal datasets/models/policy, train/resume, deterministic arena reset and mechanics, weapon reload, closed-loop BC, PPO smoke, benchmark, telemetry, experiment artifacts, CLI integration, and historical feasibility regressions.
+Automated coverage includes schema/actions, screen/input mocks, event synchronization including future-event retention, strict validation failure modes, stats/HTML catalog, temporal datasets/models/policy, train/resume, deterministic arena reset and mechanics, weapon reload, closed-loop BC, PPO smoke, benchmark, telemetry, experiment artifacts, replay conversion, CLI integration, and historical feasibility regressions.
 
 ## 6. Repository map
 

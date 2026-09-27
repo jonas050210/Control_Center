@@ -1,12 +1,12 @@
 # SandboxAI runtime (Python 3.11)
 # Windows/NVIDIA: install CUDA PyTorch first as setup_windows.ps1 does.
-numpy>=1.24,<3
-Pillow>=10.0
-mss>=9.0
+numpy>=1.26,<3
+Pillow>=10.0,<12
+mss>=9.0,<11
 pynput>=1.7.6; platform_system == "Windows"
-psutil>=5.9
+psutil>=5.9,<7
 
-torch>=2.2
+torch>=2.6,<2.7
 stable-baselines3==2.4.0
 gymnasium==1.0.0
 

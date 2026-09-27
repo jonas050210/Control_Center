@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import os
 import platform
 import threading
@@ -12,6 +13,21 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Union
 
 import psutil
+
+
+def _strict_json(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(key): _strict_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_strict_json(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return _strict_json(value.item())
+        except Exception:
+            pass
+    return value
 
 
 class SystemTelemetry:
@@ -109,7 +125,9 @@ class SystemTelemetry:
             self.state["hardware"] = self.get_hardware_info()
         self.state["last_updated"] = self._now()
         temporary = self.state_file.with_suffix(self.state_file.suffix + ".tmp")
-        temporary.write_text(json.dumps(self.state, indent=2), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(_strict_json(self.state), indent=2, allow_nan=False), encoding="utf-8"
+        )
         os.replace(temporary, self.state_file)
 
     @staticmethod

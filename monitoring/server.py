@@ -1,4 +1,4 @@
-"""Zero-dependency local monitoring dashboard and JSON API."""
+"""Dependency-light local monitoring dashboard and JSON API."""
 
 from __future__ import annotations
 
@@ -29,8 +29,9 @@ h1{margin:0;font-size:23px}.stage{color:var(--accent);font-weight:700}.grid{disp
 <section class="card wide"><h2>Recent experiments</h2><table><thead><tr><th>Run</th><th>Kind</th><th>Status</th><th>Started</th></tr></thead><tbody id="runs"></tbody></table></section></main>
 <script>
 function text(id,v){document.getElementById(id).textContent=v}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function chart(rows){const c=document.getElementById('chart'),x=c.getContext('2d');x.clearRect(0,0,c.width,c.height);if(!rows.length)return;const vals=rows.map(r=>r[1].mean_reward),lo=Math.min(0,...vals),hi=Math.max(1,...vals),span=hi-lo;rows.forEach((r,i)=>{const y=25+i*35,w=(r[1].mean_reward-lo)/span*700;x.fillStyle='#273449';x.fillRect(150,y,700,22);x.fillStyle='#59d8a1';x.fillRect(150,y,w,22);x.fillStyle='#ecf4ff';x.font='14px system-ui';x.fillText(r[0].toUpperCase(),8,y+16);x.fillText(r[1].mean_reward.toFixed(3),865,y+16)})}
-async function refresh(){try{const [s,r]=await Promise.all([fetch('/api/state').then(x=>x.json()),fetch('/api/experiments').then(x=>x.json())]);text('stage',s.pipeline_stage);text('steps',(s.datasets?.total_steps||0).toLocaleString()+' steps');text('dataset',`${s.datasets?.total_sessions||0} sessions · ${s.datasets?.total_mb||0} MB`);text('bc',s.bc?.best_val_loss==null?'not trained':Number(s.bc.best_val_loss).toFixed(4));text('bcsub',s.bc?.active_checkpoint||'No checkpoint');text('rl',(s.rl?.timesteps||0).toLocaleString()+' steps');text('rlsub',`${s.rl?.steps_per_sec||0} steps/s · ${s.rl?.active_checkpoint||'No checkpoint'}`);text('runtime',`${s.runtime?.steps_per_sec||0} steps/s`);text('action',JSON.stringify(s.runtime?.last_action||{}));const rows=Object.entries(s.evaluation?.latest_benchmark||{}).filter(x=>x[1]?.mean_reward!==undefined);document.getElementById('benchmark').innerHTML=rows.map(([n,m])=>`<tr><td>${n.toUpperCase()}</td><td>${m.mean_reward} ± ${m.std_reward}</td><td>${m.total_hits}</td><td>${m.total_kills||0}</td><td>${m.hit_rate_pct}%</td><td>${m.mean_final_health??'—'}</td></tr>`).join('');chart(rows);document.getElementById('runs').innerHTML=r.slice(0,10).map(v=>`<tr><td><code>${v.run_id}</code></td><td>${v.kind}</td><td class="ok">${v.status}</td><td>${v.started_at}</td></tr>`).join('')}catch(e){text('stage','OFFLINE')}}refresh();setInterval(refresh,2000)
+async function refresh(){try{const [s,r]=await Promise.all([fetch('/api/state').then(x=>x.json()),fetch('/api/experiments').then(x=>x.json())]);text('stage',s.pipeline_stage);text('steps',(s.datasets?.total_steps||0).toLocaleString()+' steps');text('dataset',`${s.datasets?.total_sessions||0} sessions · ${s.datasets?.total_mb||0} MB`);text('bc',s.bc?.best_val_loss==null?'not trained':Number(s.bc.best_val_loss).toFixed(4));text('bcsub',s.bc?.active_checkpoint||'No checkpoint');text('rl',(s.rl?.timesteps||0).toLocaleString()+' steps');text('rlsub',`${s.rl?.steps_per_sec||0} steps/s · ${s.rl?.active_checkpoint||'No checkpoint'}`);text('runtime',`${s.runtime?.steps_per_sec||0} steps/s`);text('action',JSON.stringify(s.runtime?.last_action||{}));const rows=Object.entries(s.evaluation?.latest_benchmark||{}).filter(x=>x[1]?.mean_reward!==undefined);document.getElementById('benchmark').innerHTML=rows.map(([n,m])=>`<tr><td>${esc(n.toUpperCase())}</td><td>${esc(m.mean_reward)} ± ${esc(m.std_reward)}</td><td>${esc(m.total_hits)}</td><td>${esc(m.total_kills||0)}</td><td>${esc(m.hit_rate_pct)}%</td><td>${esc(m.mean_final_health??'—')}</td></tr>`).join('');chart(rows);document.getElementById('runs').innerHTML=r.slice(0,10).map(v=>`<tr><td><code>${esc(v.run_id)}</code></td><td>${esc(v.kind)}</td><td class="ok">${esc(v.status)}</td><td>${esc(v.started_at)}</td></tr>`).join('')}catch(e){text('stage','OFFLINE')}}refresh();setInterval(refresh,2000)
 </script></body></html>"""
 
 
@@ -41,8 +42,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -53,9 +55,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             body = DASHBOARD_HTML.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            return
+        if parsed.path == "/health":
+            self._json({"ok": True})
             return
         if parsed.path == "/api/state":
             self._json(SystemTelemetry(self.state_file).state)
@@ -72,7 +79,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not path.is_file():
                 self._json([], 404)
                 return
-            events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+            events = []
+            try:
+                for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        self._json({"error": f"invalid metrics JSON at line {line_number}"}, 500)
+                        return
+            except OSError as exc:
+                self._json({"error": str(exc)}, 500)
+                return
             self._json(events)
             return
         self._json({"error": "not found"}, 404)

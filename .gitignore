@@ -10,6 +10,10 @@ checkpoints/
 *.tgz
 __pycache__/
 *.egg-info/
+*.tmp
+*.lock
+*.corrupt.json
 
 # exported RL environment binaries (feasibility/export_envs.py)
 build/
+examples_backup_*/

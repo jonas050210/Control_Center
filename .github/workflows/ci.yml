@@ -1,0 +1,38 @@
+name: SandboxAI CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Compile production modules
+        run: python -m compileall -q bc data_pipeline evaluation monitoring rl sandbox sandboxai
+      - name: Run tests
+        run: pytest -q
+      - name: Check patch whitespace
+        run: git diff --check
+
+  godot-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tracked Godot project files
+        run: |
+          test -f sandbox/godot_project/project.godot
+          test -f sandbox/godot_project/export_presets.cfg
+          grep -q '"protocol": 1' sandbox/godot_project/scripts/rl_bridge.gd
+          grep -q 'MAX_REQUEST_BYTES' sandbox/godot_project/scripts/rl_bridge.gd

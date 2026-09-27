@@ -69,6 +69,9 @@ if ($LASTEXITCODE -ne 0) {
 Step "SandboxAI runtime requirements (capture, BC, SB3, Gymnasium)"
 & $py -m pip install -r requirements.txt
 if ($LASTEXITCODE -ne 0) { Fail "requirements install failed" }
+Info "installing SandboxAI in editable mode"
+& $py -m pip install -e .
+if ($LASTEXITCODE -ne 0) { Fail "editable package install failed" }
 
 # ---------------------------------------- 4. optional historical feasibility stack
 if ($IncludeFeasibility) {

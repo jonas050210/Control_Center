@@ -13,7 +13,7 @@ from typing import Any, Dict, Mapping, Sequence, Tuple
 
 import numpy as np
 
-from data_pipeline.schema import ActionState
+from data_pipeline.schema import ACTION_CONTRACT_VERSION, ActionState
 
 
 ACTION_NAMES: Tuple[str, ...] = (

@@ -32,6 +32,8 @@ def run_bc_in_sandbox(
     state_file: Optional[Union[str, Path]] = None,
     base_seed: int = 1000,
 ) -> Dict[str, Any]:
+    if num_episodes < 1 or max_steps_per_episode < 1:
+        raise ValueError("num_episodes and max_steps_per_episode must be positive")
     policy = BCPolicy.load_from_checkpoint(checkpoint_path, device=device)
     env = make_sandbox_env(
         env_path=env_path,

@@ -33,10 +33,10 @@ func advance_simulation(delta: float) -> void:
 	if patrol_enabled:
 		is_moving = true
 		patrol_phase += delta * 0.65
-	else:
-		is_moving = false
 		global_position.x = spawn_origin.x + sin(patrol_phase) * patrol_radius
 		global_position.z = spawn_origin.z + cos(patrol_phase * 0.83) * patrol_radius
+	else:
+		is_moving = false
 	if not enemy_enabled or player == null or player.health <= 0.0:
 		return
 	fire_timer -= delta

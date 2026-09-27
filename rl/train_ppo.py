@@ -16,7 +16,7 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from bc.models import BCVisionNetwork
 from monitoring.experiments import ExperimentTracker
@@ -235,7 +235,15 @@ def train_ppo_sandbox(
 
         return factory
 
-    vector_env = DummyVecEnv([make_env(index) for index in range(n_envs)])
+    env_factories = [make_env(index) for index in range(n_envs)]
+    # DummyVecEnv is useful for one environment and deterministic debugging,
+    # but it executes multiple environments serially. Use subprocess workers
+    # for real throughput when the caller requests parallel environments.
+    vector_env = (
+        DummyVecEnv(env_factories)
+        if n_envs == 1
+        else SubprocVecEnv(env_factories, start_method="spawn")
+    )
     warm_start: Optional[Dict[str, Any]] = None
     started = time.perf_counter()
     try:

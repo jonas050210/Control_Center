@@ -42,6 +42,7 @@ Portable/manual setup:
 python -m venv .venv
 # Activate .venv, then install a platform-appropriate PyTorch build first.
 pip install -r requirements.txt
+pip install -e .
 python -m sandboxai doctor
 ```
 
@@ -162,13 +163,21 @@ Gym actions are `MultiDiscrete([3,3,2,2,2,2,2,2,21,21])` in this order:
 
 The recorder, BC model, Python environment, Godot bridge, PPO, and evaluators all use this contract. Dataset movement remains human-readable `-1/0/+1`; `sandbox.actions` is the single conversion layer.
 
-## Test
+## Test and development
+
+Install the package and development dependencies first:
 
 ```powershell
+python -m pip install -e ".[dev]"
 pytest -q
 ```
 
-The suite covers recording, synchronization, schema/validation, visual data inspection, temporal BC, inference, deterministic FPS mechanics, closed-loop execution, PPO, benchmarks, monitoring, experiment persistence, and integration behavior.
+The repository also includes GitHub Actions for Python 3.11/3.12, strict
+JSON/data validation, compilation, and Godot project smoke checks. The Godot
+export/bridge runtime test still requires Godot 4.3 and is intentionally kept
+as a target-machine integration step.
+
+The suite covers recording, synchronization, schema/validation, visual data inspection, temporal BC, inference, deterministic FPS mechanics, closed-loop execution, PPO, benchmarks, monitoring, experiment persistence, and integration behavior. Synthetic recordings validate plumbing only; they do not measure policy quality.
 
 ## Hardware profile
 

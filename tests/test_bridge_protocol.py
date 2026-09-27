@@ -10,3 +10,5 @@ def test_bridge_has_correlated_request_responses():
     assert 'response["request_id"]' in godot
     assert "self._request_id" in python
     assert "response mismatch" in python
+    assert "ACTION_CONTRACT_VERSION" in python
+    assert '"action_contract"' in godot

@@ -81,10 +81,17 @@ def clone_pinned() -> None:
 
 
 def reclone_with_backup() -> None:
+    """Reclone safely and restore the previous checkout if cloning fails."""
     backup = ROOT / f"examples_backup_{time.strftime('%Y%m%d_%H%M%S')}"
     print(f"moving existing {DEST} -> {backup}")
     DEST.rename(backup)
-    clone_pinned()
+    try:
+        clone_pinned()
+    except BaseException:
+        if not DEST.exists() and backup.exists():
+            print("clone failed; restoring the previous examples checkout")
+            backup.rename(DEST)
+        raise
 
 
 def verify() -> None:

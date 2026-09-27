@@ -58,6 +58,8 @@ def evaluate_policy_on_env(
     base_seed: int = 1000,
     backend: str = "auto",
 ) -> Dict[str, Any]:
+    if num_episodes < 1 or max_steps_per_episode < 1:
+        raise ValueError("num_episodes and max_steps_per_episode must be positive")
     env = make_sandbox_env(
         env_path=env_path,
         backend=backend,

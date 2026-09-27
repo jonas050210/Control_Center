@@ -85,6 +85,9 @@ class GameplayDataset(Dataset):
                 logger.warning("Skipping incomplete session directory: %s", session_dir)
                 continue
             metadata = DatasetMetadata.load(meta_path)
+            if metadata.summary_stats.get("status", "complete") != "complete":
+                logger.warning("Skipping non-complete session directory: %s", session_dir)
+                continue
             if metadata.schema_version.split(".")[0] != SCHEMA_VERSION.split(".")[0]:
                 raise ValueError(
                     f"Unsupported schema {metadata.schema_version} in {session_dir}; expected {SCHEMA_VERSION}"
@@ -222,8 +225,19 @@ class GameplayDataset(Dataset):
             val_ds = cls(val_dirs, augment=False, **common)
         else:
             session = shuffled[0]
+            # Use the same valid-sample filtering as _load_sessions. Counting
+            # raw JSONL lines here can move the train/validation boundary when
+            # a recording contains malformed or explicitly invalid samples.
+            count = 0
             with (session / "samples.jsonl").open("r", encoding="utf-8") as handle:
-                count = sum(1 for line in handle if line.strip())
+                for line_no, line in enumerate(handle, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        sample = DatasetSample.from_dict(json.loads(line))
+                    except Exception as exc:
+                        raise ValueError(f"Malformed sample {session / 'samples.jsonl'}:{line_no}: {exc}") from exc
+                    count += int(sample.is_valid)
             split = max(seq_len, min(count - seq_len, int(count * (1.0 - val_ratio))))
             if count < seq_len * 2:
                 # Tiny smoke datasets cannot support disjoint context windows.

@@ -9,15 +9,18 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import os
 import platform
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 SCHEMA_VERSION: str = "1.1.0"
+ACTION_CONTRACT_VERSION: str = "2.0.0"
 
 # Canonical Action Space specification
 ACTION_SPACE_SPEC: Dict[str, Any] = {
     "schema_version": SCHEMA_VERSION,
+    "contract_version": ACTION_CONTRACT_VERSION,
     "actions": {
         "move_x": {
             "type": "discrete",
@@ -186,6 +189,7 @@ class DatasetMetadata:
             "total_steps": 0,
             "effective_fps": 0.0,
             "dropped_frames": 0,
+            "dropped_input_events": 0,
             "total_bytes": 0,
         }
     )
@@ -221,8 +225,12 @@ class DatasetMetadata:
     def save(self, file_path: Union[str, Path]) -> None:
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, allow_nan=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
 
     @classmethod
     def load(cls, file_path: Union[str, Path]) -> DatasetMetadata:

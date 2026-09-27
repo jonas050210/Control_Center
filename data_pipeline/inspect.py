@@ -60,7 +60,9 @@ def generate_inspection_report(
 <pre>{html.escape(validation.summary())}</pre><h2>Timeline sample</h2><div class='grid'>{''.join(cards)}</div><h2>Statistics</h2><pre>{payload}</pre></body></html>"""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(document, encoding="utf-8")
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(document, encoding="utf-8")
+    temporary.replace(output)
     return output
 
 
