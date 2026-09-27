@@ -25,6 +25,7 @@ var tracked_target_id: int = 0
 var tracking_confidence: float = 0.0
 var tracking_memory_seconds: float = 0.0
 @onready var scenario_director: SandboxScenarioDirector = get_tree().current_scene.get_node_or_null("ScenarioDirector") as SandboxScenarioDirector
+@onready var episode_logger: SandboxEpisodeLogger = get_node("../EpisodeLogger") as SandboxEpisodeLogger
 
 func _ready() -> void:
 	if player: player.shot_fired.connect(_on_player_shot_fired)
@@ -34,6 +35,7 @@ func _exit_tree() -> void:
 
 func _on_player_shot_fired(hit: bool, killed: bool) -> void:
 	shots_fired += 1
+	if episode_logger: episode_logger.record("shot", {"hit": hit, "killed": killed, "weapon": player.current_weapon_id})
 	if hit: hits += 1; reward += 0.45
 	else: reward -= 0.025
 	if killed: kills += 1; reward += 2.0
@@ -76,11 +78,12 @@ func _visible_perception() -> Array[Dictionary]:
 	return result
 
 func get_state_info() -> Dictionary:
-	return {"episode_seed": episode_seed, "step": step_count, "targets_hit": hits, "kills": kills, "shots_fired": shots_fired, "accuracy": float(hits) / float(maxi(1, shots_fired)), "last_shot_hit": player.last_shot_hit, "health": player.health, "ammo": player.ammo, "reserve_ammo": player.reserve_ammo, "reloading": player.reload_timer > 0.0, "damage_taken": damage_taken, "player_pos": [player.global_position.x, player.global_position.z], "perception": _visible_perception(), "tracked_target_id": tracked_target_id, "tracking_confidence": tracking_confidence, "scenario": scenario_director.state() if scenario_director else {}}
+	return {"episode_seed": episode_seed, "step": step_count, "targets_hit": hits, "kills": kills, "shots_fired": shots_fired, "accuracy": float(hits) / float(maxi(1, shots_fired)), "last_shot_hit": player.last_shot_hit, "health": player.health, "ammo": player.ammo, "reserve_ammo": player.reserve_ammo, "reloading": player.reload_timer > 0.0, "damage_taken": damage_taken, "player_pos": [player.global_position.x, player.global_position.z], "perception": _visible_perception(), "tracked_target_id": tracked_target_id, "tracking_confidence": tracking_confidence, "scenario": scenario_director.state() if scenario_director else {}, "telemetry": {"fps": Engine.get_frames_per_second(), "frame_time_ms": 1000.0 / maxf(1.0, Engine.get_frames_per_second())}, "events": episode_logger.snapshot() if episode_logger else []}
 
 func set_action(action: Array) -> void:
 	if action.size() < 10: push_error("Sandbox action must contain 10 values"); return
 	step_count += 1
+	if episode_logger: episode_logger.tick()
 	player.advance_simulation_timers(0.05)
 	var health_before: float = player.health
 	for node: Node in get_tree().get_nodes_in_group("targets"):
@@ -101,6 +104,7 @@ func set_action(action: Array) -> void:
 func reset(seed_value: int = 42) -> void:
 	episode_seed = seed_value; rng.seed = seed_value; step_count = 0; done = false; terminated = false; truncated = false; reward = 0.0; shots_fired = 0; hits = 0; kills = 0; damage_taken = 0.0; tracked_target_id = 0; tracking_confidence = 0.0; tracking_memory_seconds = 0.0
 	if scenario_director: scenario_director.configure(seed_value)
+	if episode_logger: episode_logger.begin(seed_value, "randomized", scenario_director.active_scenario if scenario_director else "none")
 	player.reset_player([Vector3(-3, 0, 0), Vector3(3, 0, 0), Vector3(0, 0, 3), Vector3(0, 0, -1.5)][rng.randi_range(0, 3)])
 	var targets: Array[Node] = get_tree().get_nodes_in_group("targets")
 	for index: int in range(targets.size()):

@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
 [ext_resource type="Script" path="res://scripts/ai_controller.gd" id="2_ai"]
+[ext_resource type="Script" path="res://scripts/episode_logger.gd" id="3_logger"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_1"]
 radius = 0.4
@@ -54,6 +55,9 @@ render_target_update_mode = 4
 
 [node name="ObsCamera" type="Camera3D" parent="ObsViewport"]
 fov = 75.0
+
+[node name="EpisodeLogger" type="Node" parent="."]
+script = ExtResource("3_logger")
 
 [node name="AIController3D" type="Node3D" parent="."]
 script = ExtResource("2_ai")

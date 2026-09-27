@@ -51,6 +51,12 @@ func _add_box(position: Vector3, size: Vector3, color: Color) -> void:
 	var material: StandardMaterial3D = StandardMaterial3D.new(); material.albedo_color = color; material.roughness = 0.8; mesh.material = material; mesh_instance.mesh = mesh; body.add_child(mesh_instance)
 	var collider: CollisionShape3D = CollisionShape3D.new(); var shape: BoxShape3D = BoxShape3D.new(); shape.size = size; collider.shape = shape; body.add_child(collider)
 
+func is_valid_spawn(position: Vector3, radius: float = 0.45) -> bool:
+	var query: PhysicsShapeQueryParameters3D = PhysicsShapeQueryParameters3D.new()
+	var shape: CapsuleShape3D = CapsuleShape3D.new(); shape.radius = radius; shape.height = 1.8; query.shape = shape
+	query.transform = Transform3D(Basis.IDENTITY, position + Vector3.UP * 0.9)
+	return get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
+
 func configure(seed_value: int, requested_map: String = "") -> void:
 	episode_seed = seed_value; rng.seed = seed_value
 	if requested_map != "": map_id = requested_map
