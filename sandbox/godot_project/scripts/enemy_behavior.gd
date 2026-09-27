@@ -27,11 +27,26 @@ var target_lost_seconds: float = 0.0
 func _ready() -> void:
 	health = max_health; spawn_origin = global_position; add_to_group("targets")
 	player = get_tree().get_first_node_in_group("players") as SandboxPlayer
+	_build_enemy_visual()
 	navigation_agent = NavigationAgent3D.new()
 	navigation_agent.path_height_offset = 0.5
 	navigation_agent.path_desired_distance = 0.7
 	navigation_agent.target_desired_distance = 1.8
 	add_child(navigation_agent)
+
+func _build_enemy_visual() -> void:
+	var body_mesh: MeshInstance3D = MeshInstance3D.new()
+	var body: CapsuleMesh = CapsuleMesh.new(); body.radius = 0.32; body.height = 1.15
+	var armor: StandardMaterial3D = StandardMaterial3D.new(); armor.albedo_color = Color(0.12, 0.18, 0.22); armor.metallic = 0.35; armor.roughness = 0.55; body.material = armor
+	body_mesh.mesh = body; body_mesh.position = Vector3(0, 0.9, 0); add_child(body_mesh)
+	var head_mesh: MeshInstance3D = MeshInstance3D.new(); var head: SphereMesh = SphereMesh.new(); head.radius = 0.24; head.height = 0.48
+	var helmet: StandardMaterial3D = StandardMaterial3D.new(); helmet.albedo_color = Color(0.04, 0.07, 0.08); helmet.metallic = 0.2; head.material = helmet
+	head_mesh.mesh = head; head_mesh.position = Vector3(0, 1.65, 0); add_child(head_mesh)
+	var visor_mesh: MeshInstance3D = MeshInstance3D.new(); var visor: BoxMesh = BoxMesh.new(); visor.size = Vector3(0.28, 0.08, 0.08)
+	var visor_mat: StandardMaterial3D = StandardMaterial3D.new(); visor_mat.albedo_color = Color(0.05, 0.75, 0.85); visor_mat.emission_enabled = true; visor_mat.emission = Color(0.02, 0.22, 0.28); visor.material = visor_mat
+	visor_mesh.mesh = visor; visor_mesh.position = Vector3(0, 1.66, -0.21); add_child(visor_mesh)
+	var weapon_mesh: MeshInstance3D = MeshInstance3D.new(); var weapon: BoxMesh = BoxMesh.new(); weapon.size = Vector3(0.12, 0.12, 0.7)
+	weapon_mesh.mesh = weapon; weapon_mesh.position = Vector3(0.42, 1.0, -0.3); weapon_mesh.rotation_degrees = Vector3(0, 12, 0); add_child(weapon_mesh)
 
 func configure_seed(value: int) -> void:
 	rng.seed = value; patrol_phase = rng.randf_range(0.0, TAU); fire_timer = rng.randf_range(0.7, 1.5); reaction_timer = rng.randf_range(0.15, 0.65); aim_quality = rng.randf_range(0.55, 0.92)

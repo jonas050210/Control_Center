@@ -165,12 +165,29 @@ func equip_weapon(weapon_id: String) -> bool:
 	if not weapon_catalog.has(weapon_id): return false
 	current_weapon_id = weapon_id
 	current_weapon = weapon_catalog[weapon_id] as SandboxWeapon
+	_configure_weapon_model(weapon_id)
 	magazine_size = current_weapon.magazine_size
 	starting_reserve = current_weapon.reserve_ammo
 	reload_seconds = current_weapon.reload_seconds
 	fire_interval = current_weapon.fire_interval
 	ammo = magazine_size; reserve_ammo = starting_reserve
 	return true
+
+func _configure_weapon_model(weapon_id: String) -> void:
+	var view_model: MeshInstance3D = get_node_or_null("CameraPivot/Camera3D/ViewModel") as MeshInstance3D
+	if view_model == null: return
+	var mesh: BoxMesh = BoxMesh.new()
+	match weapon_id:
+		"pistol": mesh.size = Vector3(0.16, 0.18, 0.55)
+		"smg": mesh.size = Vector3(0.19, 0.22, 0.78)
+		"rifle": mesh.size = Vector3(0.16, 0.20, 1.05)
+		"shotgun": mesh.size = Vector3(0.22, 0.24, 1.15)
+		"marksman": mesh.size = Vector3(0.18, 0.20, 1.28)
+	var material: StandardMaterial3D = StandardMaterial3D.new()
+	material.albedo_color = {"pistol": Color(0.08, 0.08, 0.09), "smg": Color(0.12, 0.16, 0.18), "rifle": Color(0.08, 0.13, 0.10), "shotgun": Color(0.20, 0.10, 0.05), "marksman": Color(0.16, 0.14, 0.12)}.get(weapon_id, Color.DIM_GRAY)
+	material.metallic = 0.55; material.roughness = 0.3; mesh.material = material
+	view_model.mesh = mesh
+	view_model.position = Vector3(0.38, -0.32, -0.62 if weapon_id != "shotgun" else -0.58)
 
 func switch_weapon(weapon_id: String) -> bool:
 	if reload_timer > 0.0: return false
