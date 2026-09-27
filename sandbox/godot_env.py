@@ -164,7 +164,11 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
         if seed is not None:
             self._seed = int(seed)
             self.action_space.seed(seed)
-        response = self._request({"command": "reset", "seed": self._seed})
+        request: Dict[str, Any] = {"command": "reset", "seed": self._seed}
+        if options:
+            if "map" in options: request["map"] = str(options["map"])
+            if "scenario" in options: request["scenario"] = str(options["scenario"])
+        response = self._request(request)
         return self._decode_observation(response), dict(response.get("info", {}))
 
     def step(
@@ -181,6 +185,12 @@ class GodotSandboxEnv(gym.Env[np.ndarray, np.ndarray]):
             bool(response.get("truncated", False)),
             dict(response.get("info", {})),
         )
+
+    def replay(self) -> list[Dict[str, Any]]:
+        """Return bounded deterministic episode events from the Godot controller."""
+        response = self._request({"command": "replay"})
+        events = response.get("events", [])
+        return list(events) if isinstance(events, list) else []
 
     def render(self) -> np.ndarray:
         return np.transpose(self._last_observation, (1, 2, 0))

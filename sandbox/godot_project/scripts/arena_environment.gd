@@ -16,8 +16,11 @@ func _ready() -> void:
 	environment = get_node_or_null("WorldEnvironment") as WorldEnvironment
 	apply_time_of_day(time_of_day)
 	_build_original_layout()
+	_build_navigation_surface()
 
 func _build_original_layout() -> void:
+	for old: Node in get_tree().get_nodes_in_group("generated_map_geometry"):
+		old.queue_free()
 	# Lightweight modular cover pieces create distinct sightline rhythms per map.
 	var layouts: Dictionary = {
 		"facility": [Vector3(-6, 1.2, -4), Vector3(6, 1.2, -4), Vector3(-2, 1.2, 5), Vector3(3, 2.8, 0)],
@@ -31,6 +34,7 @@ func _build_original_layout() -> void:
 	for position: Vector3 in layouts.get(map_id, layouts["facility"]):
 		var body: StaticBody3D = StaticBody3D.new()
 		body.position = position
+		body.add_to_group("generated_map_geometry")
 		add_child(body)
 		var cover: MeshInstance3D = MeshInstance3D.new()
 		var mesh: BoxMesh = BoxMesh.new()
@@ -45,8 +49,17 @@ func _build_original_layout() -> void:
 		material.albedo_color = Color(0.20, 0.28, 0.32) if map_id != "compound" else Color(0.34, 0.25, 0.18)
 		material.roughness = 0.82; mesh.material = material; cover.mesh = mesh; body.add_child(cover)
 
+func _build_navigation_surface() -> void:
+	var region: NavigationRegion3D = NavigationRegion3D.new()
+	var nav: NavigationMesh = NavigationMesh.new()
+	nav.vertices = PackedVector3Array([Vector3(-18, 0.02, -18), Vector3(18, 0.02, -18), Vector3(18, 0.02, 18), Vector3(-18, 0.02, 18)])
+	nav.add_polygon(PackedInt32Array([0, 1, 2, 3]))
+	region.navigation_mesh = nav
+	region.add_to_group("generated_map_geometry")
+	add_child(region)
+
 func _add_box(position: Vector3, size: Vector3, color: Color) -> void:
-	var body: StaticBody3D = StaticBody3D.new(); body.position = position; add_child(body)
+	var body: StaticBody3D = StaticBody3D.new(); body.position = position; body.add_to_group("generated_map_geometry"); add_child(body)
 	var mesh_instance: MeshInstance3D = MeshInstance3D.new(); var mesh: BoxMesh = BoxMesh.new(); mesh.size = size
 	var material: StandardMaterial3D = StandardMaterial3D.new(); material.albedo_color = color; material.roughness = 0.8; mesh.material = material; mesh_instance.mesh = mesh; body.add_child(mesh_instance)
 	var collider: CollisionShape3D = CollisionShape3D.new(); var shape: BoxShape3D = BoxShape3D.new(); shape.size = size; collider.shape = shape; body.add_child(collider)
@@ -62,6 +75,8 @@ func configure(seed_value: int, requested_map: String = "") -> void:
 	if requested_map != "": map_id = requested_map
 	elif randomize_episode: map_id = ["facility", "research_complex", "compound"][rng.randi_range(0, 2)]
 	apply_time_of_day(["day", "evening", "night"][rng.randi_range(0, 2)] if randomize_episode else time_of_day)
+	_build_original_layout()
+	_build_navigation_surface()
 
 func apply_time_of_day(value: String) -> void:
 	time_of_day = value
