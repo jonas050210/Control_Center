@@ -62,6 +62,25 @@ func test_useless_shot_is_penalized() -> SandboxTest:
 	return t
 
 
+## Regression: genuine misses must stay much cheaper than impossible trigger
+## pulls, otherwise the expected value of shooting turns negative while aim is
+## being learned and PPO collapses to a never-shoot policy.
+func test_missed_shot_is_cheaper_than_useless_shot() -> SandboxTest:
+	var t := SandboxTest.new("reward_missed_shot_cheaper_than_useless_shot")
+	var miss_reward := RewardSystem.compute({"missed_shot": true, "alive": true})
+	t.assert_almost_eq(
+		miss_reward,
+		SandboxConfig.PENALTY_MISSED_SHOT + SandboxConfig.REWARD_SURVIVE_TICK,
+		0.0001
+	)
+	t.assert_gt(SandboxConfig.PENALTY_MISSED_SHOT, SandboxConfig.PENALTY_USELESS_SHOT,
+		"a genuine miss must be cheaper than an impossible pull")
+	# Sanity: an aimed hit (+1.0) must outweigh roughly fifty real misses.
+	t.assert_gt(SandboxConfig.REWARD_HIT, 50.0 * -SandboxConfig.PENALTY_MISSED_SHOT,
+		"hitting must dominate missing often enough for shooting to stay learnable")
+	return t
+
+
 func test_survive_tick_alone_is_small_and_positive() -> SandboxTest:
 	var t := SandboxTest.new("reward_survive_tick")
 	var reward := RewardSystem.compute({"alive": true})

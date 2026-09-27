@@ -31,6 +31,7 @@ var reward_positioning: float = 0.0
 var penalty_damage: float = 0.0
 var penalty_death: float = 0.0
 var penalty_useless_shot: float = 0.0
+var penalty_missed_shot: float = 0.0
 
 ## Lifetime counters, useful for the Godot debug overlay.
 var total_kills: int = 0
@@ -58,6 +59,7 @@ func start_new_episode() -> void:
 	penalty_damage = 0.0
 	penalty_death = 0.0
 	penalty_useless_shot = 0.0
+	penalty_missed_shot = 0.0
 
 
 func record_step(reward: float) -> void:
@@ -80,6 +82,8 @@ func record_reward_breakdown(events: Dictionary) -> void:
 		penalty_death += SandboxConfig.PENALTY_DEATH
 	if events.get("useless_shot", false):
 		penalty_useless_shot += SandboxConfig.PENALTY_USELESS_SHOT
+	if events.get("missed_shot", false):
+		penalty_missed_shot += SandboxConfig.PENALTY_MISSED_SHOT
 	var pos_delta: float = float(events.get("positioning_delta", 0.0))
 	if pos_delta != 0.0:
 		reward_positioning += clampf(
@@ -133,6 +137,7 @@ func get_reward_breakdown() -> Dictionary:
 		"penalty_damage": penalty_damage,
 		"penalty_death": penalty_death,
 		"penalty_useless_shot": penalty_useless_shot,
+		"penalty_missed_shot": penalty_missed_shot,
 		"total": cumulative_reward,
 	}
 

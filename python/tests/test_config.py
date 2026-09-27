@@ -17,6 +17,14 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingConfig(curriculum_level=6).validate()
 
+    def test_entropy_coefficient_defaults_to_nonzero(self):
+        # Regression: with MultiDiscrete actions, a 0 entropy coefficient lets
+        # PPO collapse into a degenerate action distribution (e.g. never
+        # shooting) in the first few updates. The default must keep gentle
+        # exploration pressure so combat actions stay discoverable.
+        config = TrainingConfig()
+        self.assertGreaterEqual(config.entropy_coefficient, 0.005)
+
     def test_bc_config_validation(self):
         config = BCConfig(epochs=10, batch_size=64, early_stopping_patience=3).validate()
         self.assertEqual(config.epochs, 10)
