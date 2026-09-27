@@ -2,6 +2,8 @@
 class_name TestRewardSystem
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_hit_gives_configured_reward() -> SandboxTest:
 	var t := SandboxTest.new("reward_hit")

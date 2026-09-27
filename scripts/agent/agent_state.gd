@@ -30,6 +30,25 @@ var radius: float = SandboxConfig.AGENT_RADIUS
 var weapon: WeaponState = WeaponState.new()
 
 
+func _init(
+	p_max_health: float = SandboxConfig.AGENT_MAX_HEALTH,
+	p_move_speed: float = SandboxConfig.AGENT_MOVE_SPEED,
+	p_turn_speed: float = SandboxConfig.AGENT_TURN_SPEED_DEG,
+	p_pitch_limit: float = SandboxConfig.AGENT_PITCH_LIMIT_DEG,
+	p_eye_height: float = SandboxConfig.AGENT_EYE_HEIGHT,
+	p_radius: float = SandboxConfig.AGENT_RADIUS
+) -> void:
+	max_health = maxf(1.0, p_max_health)
+	health = max_health
+	move_speed = maxf(0.0, p_move_speed)
+	turn_speed_deg = maxf(0.0, p_turn_speed)
+	pitch_limit_deg = maxf(0.0, p_pitch_limit)
+	eye_height = maxf(0.1, p_eye_height)
+	radius = maxf(0.01, p_radius)
+	alive = true
+	weapon = WeaponState.new()
+
+
 ## Resets the agent to a fresh episode-start state.
 func reset(
 	spawn_position: Vector3 = SandboxConfig.AGENT_SPAWN_POSITION,
@@ -47,10 +66,10 @@ func reset(
 func get_forward_vector() -> Vector3:
 	var yaw_rad: float = deg_to_rad(yaw_deg)
 	var pitch_rad: float = deg_to_rad(pitch_deg)
-	return (
-		Vector3(sin(yaw_rad) * cos(pitch_rad), sin(pitch_rad), -cos(yaw_rad) * cos(pitch_rad))
-		. normalized()
+	var forward := Vector3(
+		sin(yaw_rad) * cos(pitch_rad), sin(pitch_rad), -cos(yaw_rad) * cos(pitch_rad)
 	)
+	return forward.normalized() if not forward.is_zero_approx() else Vector3.FORWARD
 
 
 func get_forward_horizontal() -> Vector3:
@@ -109,3 +128,16 @@ func take_damage(amount: float) -> float:
 		health = 0.0
 		alive = false
 	return applied
+
+
+func to_dict() -> Dictionary:
+	return {
+		"position": position,
+		"velocity": velocity,
+		"yaw_deg": yaw_deg,
+		"pitch_deg": pitch_deg,
+		"health": health,
+		"max_health": max_health,
+		"alive": alive,
+		"weapon": weapon.to_dict(),
+	}

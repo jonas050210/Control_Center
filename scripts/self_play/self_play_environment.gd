@@ -45,7 +45,27 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 			"observations": get_observations(),
 			"rewards": [0.0, 0.0],
 			"done": true,
-			"infos": [{"already_done": true}, {"already_done": true}],
+			"infos":
+			[
+				{
+					"already_done": true,
+					"done_reason": done_reason,
+					"TimeLimit.truncated": done_reason == "timeout",
+					"metrics":
+					episode_a.to_metrics(
+						SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_a_win"
+					)
+				},
+				{
+					"already_done": true,
+					"done_reason": done_reason,
+					"TimeLimit.truncated": done_reason == "timeout",
+					"metrics":
+					episode_b.to_metrics(
+						SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_b_win"
+					)
+				}
+			],
 		}
 	var action_a: Action = (
 		actions[0] if actions.size() > 0 and actions[0] is Action else Action.idle()
@@ -63,6 +83,7 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var shot_b: bool = false
 	var damage_a: float = 0.0
 	var damage_b: float = 0.0
+
 	if action_a.shoot and agent_a.weapon.try_fire():
 		shot_a = true
 		if agent_a.weapon.ray_hits_sphere(
@@ -79,6 +100,7 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 			damage_b = agent_a.take_damage(agent_b.weapon.damage)
 			hit_b = damage_b > 0.0
 			kill_b = hit_b and not agent_a.alive
+
 	if shot_a:
 		episode_a.record_shot(hit_a)
 	if shot_b:
@@ -91,28 +113,35 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		episode_a.record_damage_taken(damage_b)
 	if damage_a > 0.0:
 		episode_b.record_damage_taken(damage_a)
+
 	var events_a := {
 		"hit": hit_a,
 		"kill": kill_a,
 		"damage_taken": damage_b,
-		"died": false,
+		"damage_dealt": damage_a,
+		"died": not agent_a.alive,
+		"shot_fired": shot_a,
+		"useless_shot": shot_a and not hit_a,
 		"alive": agent_a.alive,
 	}
 	var events_b := {
 		"hit": hit_b,
 		"kill": kill_b,
 		"damage_taken": damage_a,
-		"died": false,
+		"damage_dealt": damage_b,
+		"died": not agent_b.alive,
+		"shot_fired": shot_b,
+		"useless_shot": shot_b and not hit_b,
 		"alive": agent_b.alive,
 	}
-	if not agent_a.alive:
-		events_a["died"] = true
-	if not agent_b.alive:
-		events_b["died"] = true
+
 	var reward_a: float = RewardSystem.compute(events_a)
 	var reward_b: float = RewardSystem.compute(events_b)
 	episode_a.record_step(reward_a)
 	episode_b.record_step(reward_b)
+	episode_a.record_reward_breakdown(events_a)
+	episode_b.record_reward_breakdown(events_b)
+
 	if kill_a:
 		episode_a.record_kill()
 	if kill_b:
@@ -121,6 +150,7 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		episode_a.record_death()
 	if not agent_b.alive:
 		episode_b.record_death()
+
 	if not agent_a.alive or not agent_b.alive:
 		done = true
 		if not agent_b.alive and agent_a.alive:
@@ -132,10 +162,12 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	elif episode_a.is_timeout(max_steps):
 		done = true
 		done_reason = "timeout"
+
 	if done:
 		episode_a.mark_done(done_reason)
 		episode_b.mark_done(done_reason)
 	_sync_proxies()
+
 	return {
 		"observations": get_observations(),
 		"rewards": [reward_a, reward_b],
@@ -143,12 +175,22 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"infos":
 		[
 			{
+				"events": events_a,
+				"done_reason": done_reason,
+				"TimeLimit.truncated": done_reason == "timeout",
 				"metrics":
-				episode_a.to_metrics(SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_a_win")
+				episode_a.to_metrics(
+					SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_a_win"
+				)
 			},
 			{
+				"events": events_b,
+				"done_reason": done_reason,
+				"TimeLimit.truncated": done_reason == "timeout",
 				"metrics":
-				episode_b.to_metrics(SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_b_win")
+				episode_b.to_metrics(
+					SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_b_win"
+				)
 			},
 		],
 	}
@@ -168,3 +210,15 @@ func _sync_proxies() -> void:
 	proxy_b.position = agent_b.position
 	proxy_b.health = agent_b.health
 	proxy_b.alive = agent_b.alive
+
+
+func health_check() -> Dictionary:
+	var a_ok: bool = not is_nan(agent_a.position.x) and not is_nan(agent_a.health)
+	var b_ok: bool = not is_nan(agent_b.position.x) and not is_nan(agent_b.health)
+	return {
+		"healthy": a_ok and b_ok,
+		"agent_a_alive": agent_a.alive,
+		"agent_b_alive": agent_b.alive,
+		"done": done,
+		"done_reason": done_reason,
+	}

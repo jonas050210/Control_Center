@@ -5,6 +5,8 @@
 class_name TestProjectStartup
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_main_scene_loads_and_boots_simulation_manager() -> SandboxTest:
 	var t := SandboxTest.new("main_scene_loads_and_boots_simulation_manager")
@@ -22,6 +24,7 @@ func test_main_scene_loads_and_boots_simulation_manager() -> SandboxTest:
 	var loop: SceneTree = Engine.get_main_loop() as SceneTree
 	t.assert_not_null(loop, "a SceneTree main loop must be running")
 	if loop == null:
+		instance.free()
 		return t
 
 	loop.root.add_child(instance)  # triggers _ready() synchronously
@@ -39,5 +42,6 @@ func test_main_scene_loads_and_boots_simulation_manager() -> SandboxTest:
 			"a HumanController should be attached for env 0"
 		)
 
-	instance.queue_free()
+	loop.root.remove_child(instance)
+	instance.free()
 	return t

@@ -2,6 +2,8 @@
 class_name TestWeapon
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_first_shot_fires_and_starts_cooldown() -> SandboxTest:
 	var t := SandboxTest.new("weapon_first_shot_fires_and_starts_cooldown")

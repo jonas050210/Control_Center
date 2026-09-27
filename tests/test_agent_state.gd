@@ -2,6 +2,8 @@
 class_name TestAgentState
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_move_forward_advances_position_along_facing_direction() -> SandboxTest:
 	var t := SandboxTest.new("agent_move_forward_advances_position")

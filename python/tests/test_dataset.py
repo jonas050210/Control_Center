@@ -27,6 +27,34 @@ class DatasetTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 DemonstrationDataset.load(path)
 
+    def test_nan_observation_fails_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nan.jsonl"
+            bad_obs = [0.0] * 16 + [float("nan")]
+            record = {
+                "observation": bad_obs,
+                "action": [0, 0, 0, 0, 0, 0, 0],
+                "next_observation": [0.0] * 17,
+                "reward": 0.0,
+                "done": False,
+            }
+            path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                DemonstrationDataset.load(path)
+
+    def test_split_dataset(self):
+        recorder = DemonstrationRecorder({"source": "split_test"})
+        recorder.start()
+        for i in range(10):
+            recorder.append([0.1 * i] * 17, [0, 0, 0, 0, 0, 0, 0], [0.1 * (i + 1)] * 17, 0.5, i == 9)
+        recorder.stop()
+        with tempfile.TemporaryDirectory() as directory:
+            path = recorder.save(Path(directory) / "split_demo.jsonl")
+            dataset = DemonstrationDataset.load(path)
+            train, val = dataset.split(0.2, seed=42)
+            self.assertEqual(len(train.transitions) + len(val.transitions), 10)
+            self.assertEqual(len(val.transitions), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

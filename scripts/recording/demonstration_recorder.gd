@@ -69,9 +69,14 @@ func record_transition(
 
 
 func save_dataset(path: String) -> bool:
-	var file_path: String = ProjectSettings.globalize_path(path)
+	var file_path: String = (
+		ProjectSettings.globalize_path(path)
+		if path.begins_with("user://") or path.begins_with("res://")
+		else path
+	)
 	var parent: String = file_path.get_base_dir()
-	DirAccess.make_dir_recursive_absolute(parent)
+	if not parent.is_empty():
+		DirAccess.make_dir_recursive_absolute(parent)
 	var file := FileAccess.open(file_path, FileAccess.WRITE)
 	if file == null:
 		push_error("Could not open demonstration dataset for writing: %s" % file_path)
@@ -85,7 +90,12 @@ func save_dataset(path: String) -> bool:
 
 
 func load_dataset(path: String) -> Array:
-	var file := FileAccess.open(ProjectSettings.globalize_path(path), FileAccess.READ)
+	var file_path: String = (
+		ProjectSettings.globalize_path(path)
+		if path.begins_with("user://") or path.begins_with("res://")
+		else path
+	)
+	var file := FileAccess.open(file_path, FileAccess.READ)
 	if file == null:
 		push_error("Could not open demonstration dataset: %s" % path)
 		return []

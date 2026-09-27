@@ -5,7 +5,33 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import json
 import os
+import shutil
 from typing import Any
+
+
+def find_godot_executable(preferred: str = "godot") -> str:
+    """Find a usable Godot executable across PATH, environment variables and common platform locations."""
+    if preferred and (shutil.which(preferred) or Path(preferred).is_file()):
+        return preferred
+    env_path = os.environ.get("GODOT_PATH") or os.environ.get("GODOT_EXECUTABLE")
+    if env_path and (shutil.which(env_path) or Path(env_path).is_file()):
+        return env_path
+    candidates = [
+        "godot4",
+        "godot",
+        "godot.exe",
+        "Godot_v4.7.2-stable_linux.x86_64",
+        "Godot_v4.7.2-stable_win64.exe",
+        "Godot_v4.3-stable_linux.x86_64",
+        "Godot_v4.2-stable_linux.x86_64",
+        "/usr/local/bin/godot",
+        "/usr/bin/godot",
+        "C:\\Program Files\\Godot\\godot.exe",
+    ]
+    for candidate in candidates:
+        if shutil.which(candidate) or Path(candidate).is_file():
+            return candidate
+    return preferred or "godot"
 
 
 @dataclass
@@ -30,9 +56,13 @@ class TrainingConfig:
     project_path: str = ""
     output_root: str = "training"
     run_id: str = ""
+    experiment_id: str = ""
     bc_checkpoint: str = ""
     torch_threads: int = 0
     net_arch: tuple[int, int] = (128, 128)
+    early_stopping_patience: int = 0
+    min_eval_reward: float | None = None
+    reward_breakdown_logging: bool = True
 
     def validate(self) -> "TrainingConfig":
         if self.environment_count < 1:
@@ -42,7 +72,10 @@ class TrainingConfig:
         if self.rollout_length < 1:
             raise ValueError("rollout_length must be >= 1")
         if self.batch_size < 1 or self.batch_size > self.rollout_length * self.environment_count:
-            raise ValueError("batch_size must be in [1, rollout_length * environment_count]")
+            raise ValueError(
+                f"batch_size ({self.batch_size}) must be in [1, rollout_length * environment_count] "
+                f"([1, {self.rollout_length * self.environment_count}])"
+            )
         if not 0.0 < self.gamma <= 1.0:
             raise ValueError("gamma must be in (0, 1]")
         if not 0.0 <= self.gae_lambda <= 1.0:
@@ -57,6 +90,8 @@ class TrainingConfig:
             raise ValueError("checkpoint/evaluation frequency must be positive")
         if self.curriculum_level not in range(1, 6):
             raise ValueError("curriculum_level must be between 1 and 5")
+        if self.early_stopping_patience < 0:
+            raise ValueError("early_stopping_patience must be non-negative")
         return self
 
     @property
@@ -87,7 +122,8 @@ class TrainingConfig:
         import datetime as _datetime
 
         run_id = self.run_id or _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
-        return Path(self.output_root).expanduser() / "runs" / run_id
+        prefix = f"{self.experiment_id}_" if self.experiment_id else ""
+        return Path(self.output_root).expanduser() / "runs" / f"{prefix}{run_id}"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -126,6 +162,7 @@ class BCConfig:
     seed: int = 1234
     device: str = "auto"
     checkpoint_frequency: int = 5
+    early_stopping_patience: int = 5
     output_root: str = "training"
 
     def validate(self) -> "BCConfig":
@@ -135,6 +172,8 @@ class BCConfig:
             raise ValueError("validation_fraction must be between 0 and 1")
         if any(size < 1 for size in self.hidden_sizes):
             raise ValueError("BC hidden sizes must be positive")
+        if self.early_stopping_patience < 0:
+            raise ValueError("early_stopping_patience must be non-negative")
         return self
 
     def resolved_device(self) -> str:
@@ -164,6 +203,7 @@ class SelfPlayConfig:
     environment_count: int = 8
     seed: int = 1234
     opponent_checkpoint: str = ""
+    opponent_pool: list[str] = field(default_factory=list)
     learning_slot: int = 0
     frozen_slot: int = 1
 

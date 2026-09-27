@@ -2,6 +2,8 @@
 class_name TestAction
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_idle_default() -> SandboxTest:
 	var t := SandboxTest.new("action_idle_default")

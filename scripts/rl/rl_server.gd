@@ -1,7 +1,8 @@
 ## Headless JSON-lines bridge for the Python trainer.
 ##
 ## Protocol: one JSON object per input line and one JSON object per output
-## line. Commands are spaces, reset, step, metrics and close. This keeps the
+## line. Commands are spaces, reset, reset_indices, step, metrics,
+## reward_breakdown, set_curriculum, health_check, ping, and close. This keeps the
 ## simulation process independent from Python package versions and works on
 ## Windows and Linux without native extensions or a renderer.
 extends SceneTree
@@ -36,6 +37,8 @@ func _serve_stdio() -> void:
 	while not stdin.eof_reached():
 		var line: String = stdin.get_line()
 		if line.strip_edges().is_empty():
+			if stdin.eof_reached():
+				break
 			continue
 		var request = JSON.parse_string(line)
 		var response: Dictionary = _handle_request(request)
@@ -48,10 +51,12 @@ func _serve_stdio() -> void:
 
 func _handle_request(request) -> Dictionary:
 	var response: Dictionary = {"ok": false, "error": "request must be a JSON object"}
-	if not request is Dictionary:
+	if not (request is Dictionary):
 		return response
 	var command: String = str(request.get("cmd", ""))
 	match command:
+		"ping":
+			response = {"ok": true, "pong": true}
 		"spaces":
 			response = {
 				"ok": true,
@@ -61,13 +66,18 @@ func _handle_request(request) -> Dictionary:
 		"reset":
 			var seed: int = int(request.get("seed", -1))
 			var observations: Array = adapter.reset(seed)
-			var flat: Array = []
-			for observation in observations:
-				flat.append(RLAdapter._observation_to_array(observation))
 			response = {
 				"ok": true,
-				"observations": flat,
+				"observations": observations,
 				"infos": simulation_manager.get_metrics(),
+			}
+		"reset_indices":
+			var indices: Array = request.get("indices", [])
+			var seed_idx: int = int(request.get("seed", -1))
+			var results: Array = adapter.reset_indices(indices, seed_idx)
+			response = {
+				"ok": true,
+				"results": results,
 			}
 		"step":
 			var actions: Array = request.get("actions", [])
@@ -75,6 +85,14 @@ func _handle_request(request) -> Dictionary:
 			response["ok"] = true
 		"metrics":
 			response = {"ok": true, "metrics": simulation_manager.get_metrics()}
+		"reward_breakdown":
+			response = {"ok": true, "breakdowns": simulation_manager.get_reward_breakdowns()}
+		"set_curriculum":
+			var level: int = int(request.get("level", CurriculumConfig.Level.ENEMY_ATTACKS))
+			simulation_manager.set_curriculum_level(level)
+			response = {"ok": true, "curriculum_level": simulation_manager.curriculum_level}
+		"health_check":
+			response = {"ok": true, "health": simulation_manager.health_check_all()}
 		"close":
 			response = {"ok": true, "close": true}
 		_:

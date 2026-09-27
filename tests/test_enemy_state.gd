@@ -2,6 +2,8 @@
 class_name TestEnemyState
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_enemy_chases_agent_when_far_away() -> SandboxTest:
 	var t := SandboxTest.new("enemy_chases_agent_when_far")

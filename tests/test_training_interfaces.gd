@@ -3,6 +3,8 @@
 class_name TestTrainingInterfaces
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_action_multidiscrete_round_trip_has_fixed_dimension() -> SandboxTest:
 	var t := SandboxTest.new("action_multidiscrete_round_trip")

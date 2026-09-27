@@ -2,6 +2,8 @@
 class_name TestEpisodeState
 extends RefCounted
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func test_start_new_episode_resets_counters() -> SandboxTest:
 	var t := SandboxTest.new("episode_start_resets_counters")

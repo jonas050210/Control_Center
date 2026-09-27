@@ -9,6 +9,8 @@
 ## passed or 1 if anything failed (suitable for CI).
 extends SceneTree
 
+const SandboxTest = preload("res://tests/sandbox_test.gd")
+
 
 func _initialize() -> void:
 	var exit_code: int = _run_all_tests()
