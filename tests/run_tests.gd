@@ -33,6 +33,15 @@ func _run_all_tests() -> int:
 			print("ERROR %s (failed to load)" % script_path)
 			failure_lines.append("%s -> script failed to load" % script_path)
 			continue
+		# A script with a compilation/dependency failure can still load() as a
+		# non-null but invalid GDScript. Calling new() on it throws
+		# "Nonexistent function 'new' in base 'GDScript'", so guard first and
+		# report it as a proper failure instead of crashing the runner.
+		if not script_resource.can_instantiate():
+			failed += 1
+			print("ERROR %s (failed to compile)" % script_path)
+			failure_lines.append("%s -> script failed to compile" % script_path)
+			continue
 		var instance: Object = script_resource.new()
 		if instance == null:
 			failed += 1

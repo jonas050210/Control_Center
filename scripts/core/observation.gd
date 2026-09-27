@@ -17,6 +17,14 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 const FIELD_COUNT: int = 17
 
+## Absolute path to this very script. `build()` constructs a new instance via
+## `load(SELF_PATH).new()` rather than `Observation.new()`: referencing the
+## script's own `class_name` in a value context needs the editor global-class
+## cache, which is absent during standalone `godot --headless --script ...`
+## runs, and `preload(self)` would be a compile-time cyclic reference. `load()`
+## resolves at runtime against the already-compiled, cached script.
+const SELF_PATH: String = "res://scripts/core/observation.gd"
+
 var agent_position_norm: Vector3 = Vector3.ZERO
 var agent_velocity_norm: Vector3 = Vector3.ZERO
 var agent_forward: Vector3 = Vector3.FORWARD
@@ -34,7 +42,7 @@ var in_combat: bool = false
 ## (nearest alive enemy, or the first enemy if none are alive) plus arena
 ## configuration used for normalization.
 static func build(agent: AgentState, enemies: Array, arena_half_extent: float) -> Observation:
-	var obs: Observation = Observation.new()
+	var obs: Observation = (load(SELF_PATH) as GDScript).new()
 
 	obs.agent_position_norm = Vector3(
 		agent.position.x / arena_half_extent,

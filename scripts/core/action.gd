@@ -26,6 +26,19 @@ const DISCRETE_COUNT: int = 10
 const MULTI_DISCRETE_NVECS: Array = [3, 3, 3, 3, 2]
 const MULTI_DISCRETE_SIZE: int = 5
 
+## Absolute path to this very script. The static factory methods below build
+## new instances through `load(SELF_PATH).new(...)` instead of `Action.new(...)`.
+##
+## Referencing the script's own `class_name` in a *value* context requires the
+## global class to be registered in the editor class cache
+## (.godot/global_script_class_cache.cfg). That cache does not exist during a
+## standalone `godot --headless --script ...` run on a freshly checked-out
+## project, so `Action.new()` fails with "Identifier not found: Action".
+## `preload(self)` cannot be used either — it forms a compile-time cyclic
+## reference. `load()` is resolved at runtime (when this script is already
+## compiled and cached), so it is both safe and cheap.
+const SELF_PATH: String = "res://scripts/core/action.gd"
+
 ## -1 backward, 0 none, +1 forward.
 var move_axis: int = 0
 ## -1 left, 0 none, +1 right.
@@ -57,36 +70,53 @@ func _init(
 	look_delta = p_look_delta
 
 
+static func _make(
+	p_move_axis: int = 0,
+	p_strafe_axis: int = 0,
+	p_look_yaw_axis: int = 0,
+	p_look_pitch_axis: int = 0,
+	p_shoot: bool = false,
+	p_look_delta: Vector2 = Vector2.ZERO
+) -> Action:
+	var action_script := load(SELF_PATH) as GDScript
+	return (
+		action_script.new(
+			p_move_axis, p_strafe_axis, p_look_yaw_axis, p_look_pitch_axis, p_shoot, p_look_delta
+		)
+		as Action
+	)
+
+
 static func from_discrete(discrete_action: int) -> Action:
 	match discrete_action:
 		Discrete.MOVE_FORWARD:
-			return Action.new(1, 0, 0, 0, false)
+			return _make(1, 0, 0, 0, false)
 		Discrete.MOVE_BACKWARD:
-			return Action.new(-1, 0, 0, 0, false)
+			return _make(-1, 0, 0, 0, false)
 		Discrete.STRAFE_LEFT:
-			return Action.new(0, -1, 0, 0, false)
+			return _make(0, -1, 0, 0, false)
 		Discrete.STRAFE_RIGHT:
-			return Action.new(0, 1, 0, 0, false)
+			return _make(0, 1, 0, 0, false)
 		Discrete.LOOK_LEFT:
-			return Action.new(0, 0, -1, 0, false)
+			return _make(0, 0, -1, 0, false)
 		Discrete.LOOK_RIGHT:
-			return Action.new(0, 0, 1, 0, false)
+			return _make(0, 0, 1, 0, false)
 		Discrete.LOOK_UP:
-			return Action.new(0, 0, 0, 1, false)
+			return _make(0, 0, 0, 1, false)
 		Discrete.LOOK_DOWN:
-			return Action.new(0, 0, 0, -1, false)
+			return _make(0, 0, 0, -1, false)
 		Discrete.SHOOT:
-			return Action.new(0, 0, 0, 0, true)
+			return _make(0, 0, 0, 0, true)
 		_:
-			return Action.idle()
+			return idle()
 
 
 ## Converts an external MultiDiscrete action [0..2, 0..2, 0..2, 0..2, 0..1]
 ## to the canonical -1..1/boolean representation.
 static func from_multidiscrete(values: Array) -> Action:
 	if values.size() < MULTI_DISCRETE_SIZE:
-		return Action.idle()
-	return Action.new(
+		return idle()
+	return _make(
 		clampi(int(values[0]), 0, 2) - 1,
 		clampi(int(values[1]), 0, 2) - 1,
 		clampi(int(values[2]), 0, 2) - 1,
@@ -107,7 +137,7 @@ func to_multidiscrete() -> Array:
 
 
 static func idle() -> Action:
-	return Action.new()
+	return _make()
 
 
 ## Flat logging representation. The two final values are continuous look
