@@ -1,0 +1,24 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; but since it's all text you can also edit it here.
+
+config_version=5
+
+[application]
+
+config/name="SandboxAI Tactical Arena"
+config/description="Minimal custom tactical-FPS-style greybox arena for SandboxAI imitation and reinforcement learning."
+config/version="1.0.0"
+run/main_scene="res://scenes/Arena.tscn"
+config/features=PackedStringArray("4.3", "Forward Plus")
+
+[physics]
+
+common/physics_ticks_per_second=60
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+textures/vram_compression/import_etc2_astc=true
+viewport/size/viewport_width=1280
+viewport/size/viewport_height=720

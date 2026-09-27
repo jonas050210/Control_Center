@@ -5,27 +5,29 @@
 > keep results labeled VERIFIED / MEASURED / ESTIMATED / UNKNOWN and never
 > invent measurements.
 
-Last updated: 2026-09-27 (M1 completion: versioned dataset schema, external screen capture,
-OS-level input logging, microsecond timestamp synchronization, mouse discretization binning,
-synthetic mock recording, dataset validation/inspection tools, and 37 automated tests; see section 6).
+Last updated: 2026-09-27 (Full Rough End-to-End Architecture Complete: M1 Data Pipeline,
+Phase 2 Behavioral Cloning, Phase 3 Godot Tactical Sandbox, Phase 4 Closed-Loop BC Inference,
+Phase 5 PPO Reinforcement Learning, Phase 6 Evaluation Benchmark, Phase 7 System Telemetry,
+and 54 automated tests; see sections 5–8).
 
 ## 1. What this project is
 
 SandboxAI is a vision-based AI learning project. The pipeline:
 
 ```
-human plays (Roblox "TTK Testing [HARDPOINT]")
-      │  screen recording + input logging (manual data capture only — M1 Pipeline)
+human plays (Roblox "TTK Testing [HARDPOINT]" / Godot Sandbox)
+      │  screen recording + input logging (manual data capture only — M1 Data Pipeline)
       ▼
-imitation learning / behavioral cloning (PyTorch)
-      │  BC policy weights
+imitation learning / behavioral cloning (PyTorch IMPALA CNN + GRU — Phase 2)
+      │  BC policy weights (bc_best.pt)
       ▼
-AI plays inside OUR OWN controlled sandbox (Godot 4 + godot_rl_agents)
-      │  PPO / later APPO fine-tuning
+AI plays inside OUR OWN controlled sandbox (Godot 4 Tactical Arena — Phases 3 & 4)
+      │  PPO reinforcement learning fine-tuning (Stable-Baselines3 — Phase 5)
       ▼
-reinforcement learning improves the policy
+evaluation & benchmark harness (Random vs BC vs PPO — Phase 6)
+      │
       ▼
-later: GUI / control center for running, watching and managing the AI
+technical monitoring & control center telemetry (Phase 7)
 ```
 
 The sandbox is a small, controlled, tactical-FPS-like environment *inspired by*
@@ -58,62 +60,72 @@ reset/state/time-acceleration interfaces — unusable for high-throughput RL.
 
 ## 4. Technology choices (decided, with reasons)
 
-Chosen after a comparative study (Godot vs Unity ML-Agents vs Unreal vs custom
-Python vs ViZDoom vs GPU-batch simulators):
-
 | Piece | Choice | Why |
 |---|---|---|
 | Engine / sandbox | **Godot 4.3-stable** (`official.77dcf97d8`) | MIT, free, light on 8 GB GPU, low-poly visuals close to Roblox style (helps BC transfer), sandbox doubles as later GUI/game |
-| RL bridge | **godot_rl_agents** (pip `godot-rl` **0.8.2**, latest release) | Gymnasium interface, Python 3.11, SB3/SampleFactory/CleanRL wrappers, ONNX export path |
-| RL algo | **Stable-Baselines3 PPO 2.4.0** first; Sample Factory/APPO to evaluate later if throughput demands | simplicity first |
-| ML framework | **PyTorch** (2.6.0+cu124 on Windows) | project preference |
-| BC model | Custom PyTorch (suggested start: ResNet-18 or IMPALA-style CNN + ConvGRU) trained on Roblox recordings | research finding |
+| RL bridge | **godot_rl_agents** (pip `godot-rl` **0.8.2**, latest release) | Gymnasium interface, Python 3.11, SB3 wrappers, ONNX export path |
+| RL algo | **Stable-Baselines3 PPO 2.4.0** | simplicity first, robust on visual observations |
+| ML framework | **PyTorch** (2.6.0+cu124 on Windows / 2.14 on Linux) | project preference |
+| BC model | Custom PyTorch IMPALA-style residual CNN + optional GRU | lightweight, fast inference, multi-head action distribution |
 | Data capture | **MSS + Pynput + PIL** (pure Python, cross-platform, non-invasive) | zero-overhead, no C++ compilation, native Windows hook support |
-| Deployment | ONNX later, for in-engine inference / GUI phase | optional |
+| Monitoring | Structured JSON telemetry (`SystemTelemetry`) | decoupled, CLI status tool, consumable by future GUI |
 
 ---
 
-## 5. M1 Architecture: Human Data Capture Pipeline
+## 5. End-to-End Architecture Overview
 
-### Pipeline Overview ("KI guckt erst zu und lernt bei mir dazu")
-
-The M1 data pipeline records human gameplay from the outside (desktop screen grabber + OS-level input hooks) without interfering with the game process or anti-cheat.
-
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. DATA PIPELINE (M1)                                                       │
+│    - ScreenCapture (MSS): 160x120 RGB @ ~15 Hz                              │
+│    - InputListener (Pynput): Async WASD, Space, Shift, C, R, LMB, RMB, dx/dy│
+│    - ActionSynchronizer: Microsecond timestamp integration & tap preservation│
+│    - Versioned Dataset Schema v1.0.0 (metadata.json + samples.jsonl + frames)│
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. BEHAVIORAL CLONING (Phase 2)                                             │
+│    - GameplayDataset: Session-level train/val split, temporal sequence window│
+│    - BCVisionNetwork: IMPALA residual CNN + multi-head action prediction    │
+│    - BCTrainer: AdamW, AMP (CUDA/CPU), CrossEntropy + Mouse Bin Accuracies   │
+│    - Checkpointing: bc_best.pt / bc_latest.pt                                │
+└──────────────────┬──────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. GODOT TACTICAL SANDBOX & CLOSED-LOOP INFERENCE (Phases 3 & 4)            │
+│    - Godot 4.3 Arena: Greybox arena, walls, cover pillars, target dummies   │
+│    - BCPolicy: Observation -> Model -> Predicted ActionState                │
+│    - SandboxGymEnv: Visual Gymnasium bridge (84x84 / 160x120 RGB)           │
+│    - Closed-Loop Runner: bc.sandbox_runner evaluates policy in sandbox      │
+└──────────────────┬──────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. REINFORCEMENT LEARNING (Phase 5)                                         │
+│    - Stable-Baselines3 PPO with CnnPolicy on visual sandbox observation     │
+│    - Fine-tunes tactical movement, target acquisition, and shooting accuracy│
+│    - Checkpoint: ppo_sandbox.zip                                            │
+└──────────────────┬──────────────────────────────────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. EVALUATION & TELEMETRY (Phases 6 & 7)                                    │
+│    - evaluation.benchmark: Standardized comparison (Random vs BC vs PPO)    │
+│    - Tracks mean reward, hit rate %, fire rate %, survival steps            │
+│    - monitoring.status: Real-time CLI telemetry and system state dashboard  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
-┌─────────────────────────────────┐       ┌─────────────────────────────────┐
-│     Screen Capture (MSS)        │       │   OS Input Listener (Pynput)    │
-│  - Captures viewport or ROI     │       │  - Asynchronous event queue     │
-│  - Downsamples to 160x120 RGB   │       │  - Microsecond perf_counter     │
-│  - Precise monotonic timestamp  │       │  - WASD, Space, Shift, C, R     │
-│  - Throttled to ~15 Hz          │       │  - Mouse dx/dy, LMB, RMB, Wheel │
-└────────────────┬────────────────┘       └────────────────┬────────────────┘
-                 │                                         │
-                 └───────────────────┬─────────────────────┘
-                                     │
-                                     ▼
-                   ┌───────────────────────────────────┐
-                   │    Timestamp Synchronization      │
-                   │  - Windowed mouse dx/dy sum       │
-                   │  - Key press/release state track  │
-                   │  - Single-frame tap preservation  │
-                   │  - Symmetric log mouse binning    │
-                   └─────────────────┬─────────────────┘
-                                     │
-                                     ▼
-                   ┌───────────────────────────────────┐
-                   │   Session Dataset Writer (v1.0)   │
-                   │  - metadata.json                  │
-                   │  - samples.jsonl (sync stream)    │
-                   │  - frames/frame_XXXXXXXX.jpg      │
-                   └───────────────────────────────────┘
-```
 
-### Initial Restricted Action Space (VERIFIED)
+---
+
+## 6. Action Space & Mouse Discretization Specification
 
 | Action Key | Type | Domain / Values | Description |
 |---|---|---|---|
-| `move_x` | Discrete | `{-1, 0, +1}` | Lateral strafe: -1 = A (Left), 0 = None, +1 = D (Right). Cancellation applies (A+D = 0). |
-| `move_y` | Discrete | `{-1, 0, +1}` | Longitudinal movement: -1 = S (Backward), 0 = None, +1 = W (Forward). Cancellation applies (W+S = 0). |
+| `move_x` | Discrete | `{-1, 0, +1}` | Lateral strafe: -1 = A (Left), 0 = None, +1 = D (Right). Cancellation applies. |
+| `move_y` | Discrete | `{-1, 0, +1}` | Longitudinal movement: -1 = S (Backward), 0 = None, +1 = W (Forward). Cancellation applies. |
 | `jump` | Binary | `{0, 1}` | Space key. Active if held or tapped during frame window. |
 | `crouch` | Binary | `{0, 1}` | Ctrl / C key. |
 | `sprint` | Binary | `{0, 1}` | Shift key. |
@@ -125,119 +137,27 @@ The M1 data pipeline records human gameplay from the outside (desktop screen gra
 | `mouse_dx_bin` | Discrete | `[0, num_bins_x - 1]` | Discretized horizontal look/aim bin index (default 21 bins). |
 | `mouse_dy_bin` | Discrete | `[0, num_bins_y - 1]` | Discretized vertical look/aim bin index (default 21 bins). |
 | `wheel_dy` | Integer | `int` | Mouse scroll wheel delta. |
-| `active_keys` | List[str] | e.g. `["w", "shift"]` | Normalized raw active keys list for debugging/inspection. |
 
-### Mouse Discretization & Binning Strategy
-
-Human FPS mouse movements are heavy-tailed: high density of sub-pixel and micro-adjustments around zero, with occasional large flick turns.
-- **Symmetric Log (`symmetric_log`, default 21 bins)**:
-  - Center bin (`bin 10`): deadzone / zero `[-0.2, +0.2]` pixels.
-  - Intermediate bins: exponentially spaced thresholds (`[-0.87, -0.42]`, `[-1.82, -0.87]`, `[-3.79, -1.82]`, ..., `[+0.42, +0.87]`, `[+0.87, +1.82]`, ...).
-  - Outer bins (`bin 0` and `bin 20`): clamp extreme flicks `[-inf, -150.0]` and `[+150.0, +inf]`.
-- **Quantile Binning (`quantile`)**: `MouseBinner.fit_quantile_edges(dataset_deltas, num_bins=21)` fits empirical quantiles directly from recorded human demonstrations.
-- **Dequantization**: `binner.dequantize(bin_idx)` maps discrete predictions back to representative continuous deltas for BC policy execution.
-
-### Dataset Storage Layout (Schema v1.0.0)
-
-A dataset session directory has the following structure:
-
-```
-datasets/<session_id>/
-  ├── metadata.json       <- Session config, schema version, action space, stats summary
-  ├── samples.jsonl       <- Line-by-line synchronized steps (JSONL)
-  └── frames/             <- Compressed observation images
-        ├── frame_00000000.jpg
-        ├── frame_00000001.jpg
-        └── ...
-```
-
-#### `metadata.json` Schema:
-```json
-{
-  "session_id": "session_20260927_073021_12599a",
-  "schema_version": "1.0.0",
-  "created_at": "2026-09-27T07:30:21.054713+00:00",
-  "source": "ttk_testing",
-  "platform": {
-    "system": "Windows",
-    "release": "11",
-    "machine": "AMD64",
-    "python_version": "3.11.2"
-  },
-  "capture_config": {
-    "target_fps": 15.0,
-    "frame_width": 160,
-    "frame_height": 120,
-    "color_mode": "RGB",
-    "image_format": "jpg",
-    "jpeg_quality": 90,
-    "window_title": "Roblox",
-    "roi": null
-  },
-  "mouse_config": {
-    "sensitivity_scale": 1.0,
-    "binning_strategy": "symmetric_log",
-    "num_bins_x": 21,
-    "num_bins_y": 21,
-    "bin_edges_x": [-Infinity, -150.0, ..., 150.0, Infinity],
-    "bin_edges_y": [-Infinity, -150.0, ..., 150.0, Infinity]
-  },
-  "action_space": { ... },
-  "summary_stats": {
-    "duration_seconds": 60.0,
-    "total_steps": 900,
-    "effective_fps": 15.0,
-    "dropped_frames": 0,
-    "total_bytes": 2100000
-  }
-}
-```
-
-#### `samples.jsonl` Line Schema:
-```json
-{
-  "step_idx": 42,
-  "timestamp": 124.51234,
-  "iso_timestamp": "2026-09-27T07:31:02.123456+00:00",
-  "dt": 0.0667,
-  "frame_file": "frames/frame_00000042.jpg",
-  "actions": {
-    "move_x": 1,
-    "move_y": 1,
-    "jump": 0,
-    "crouch": 0,
-    "sprint": 1,
-    "reload": 0,
-    "fire": 1,
-    "ads": 0,
-    "mouse_dx": 4.5,
-    "mouse_dy": -1.2,
-    "mouse_dx_bin": 14,
-    "mouse_dy_bin": 8,
-    "wheel_dy": 0,
-    "active_keys": ["d", "w", "shift"],
-    "mouse_buttons": {"left": true, "right": false, "middle": false}
-  },
-  "is_valid": true,
-  "metadata": {}
-}
-```
+### Mouse Discretization Model (`symmetric_log`)
+- Center bin (`bin 10`): deadzone / zero `[-0.2, +0.2]` pixels.
+- Intermediate bins: exponentially spaced thresholds for fine sub-pixel aiming adjustments.
+- Outer bins (`bin 0` and `bin 20`): clamp extreme outer flick turns `[-inf, -150.0]` and `[+150.0, +inf]`.
+- Dequantization: `binner.dequantize(bin_idx)` maps discrete predictions back to continuous pixel rotations for policy replay.
 
 ---
 
-## 6. Repository Structure
+## 7. Repository Structure
 
 ```
-PROJECT.md                    <- this file (single source of truth)
-README.md                     <- short overview + quickstart
-setup_windows.ps1             <- ONE-COMMAND Windows bootstrap (fresh clone -> exported envs)
-requirements.txt              <- root requirements (Python 3.11)
+PROJECT.md                    <- single source of truth
+README.md                     <- quickstart & runbook
+setup_windows.ps1             <- ONE-COMMAND Windows bootstrap
+requirements.txt              <- pinned root requirements (Python 3.11)
 pytest.ini                    <- pytest configuration
-.gitignore                    <- excludes .venv/, tools/, /examples/, logs/, build/, datasets/
-data_pipeline/                <- M1: Human Data Capture Pipeline
-  __init__.py                 <- package exports
+data_pipeline/                <- M1 Data Capture & Dataset Tooling
+  __init__.py
   schema.py                   <- versioned schema, dataclasses, serialization
-  actions.py                  <- canonical action space, MouseBinner (symmetric log/quantile)
+  actions.py                  <- canonical action space, MouseBinner
   capture.py                  <- ScreenCapture (MSS, downsampling, ROI cropping)
   input_listener.py           <- InputListener (Pynput async event queue)
   sync.py                     <- ActionSynchronizer (timestamp alignment, tap preservation)
@@ -248,79 +168,152 @@ data_pipeline/                <- M1: Human Data Capture Pipeline
   inspect.py                  <- CLI alias for dataset inspection
   record.py                   <- CLI entry point for live & mock recording
   ttk_adapter.py              <- Roblox/TTK & Godot window isolation layer
-tests/                        <- Automated test suite (37 tests)
+bc/                           <- Phase 2 & 4: Behavioral Cloning
+  __init__.py
+  dataset.py                  <- GameplayDataset (session-level split, sequence windows)
+  models.py                   <- BCVisionNetwork (IMPALA CNN + GRU + multi-head actions)
+  train.py                    <- BCTrainer (AdamW, AMP, multi-task cross-entropy loss)
+  policy.py                   <- BCPolicy inference wrapper (predict ActionState)
+  infer.py                    <- CLI tool for single-frame inference
+  sandbox_runner.py           <- Phase 4: Closed-loop BC runner in tactical sandbox
+sandbox/                      <- Phase 3: Godot Tactical Sandbox & Gym Bridge
+  __init__.py
+  env.py                      <- MockTacticalArenaEnv & GodotSandboxEnv Gymnasium wrappers
+  godot_project/              <- Godot 4.3 project
+    project.godot
+    export_presets.cfg        <- Windows (.exe) and Linux export presets
+    scenes/Arena.tscn         <- Greybox 3D tactical arena
+    scenes/Player.tscn        <- CharacterBody3D, Camera3D, SubViewport (84x84)
+    scenes/TargetDummy.tscn   <- TargetDummy entity with hit detection
+    scripts/player.gd         <- WASD, mouse look, raycast weapon shooting
+    scripts/ai_controller.gd  <- godot_rl_agents AIController3D interface
+    scripts/target_dummy.gd   <- Health, hit callback, randomized respawn
+rl/                           <- Phase 5: Reinforcement Learning
+  __init__.py
+  train_ppo.py                <- Stable-Baselines3 PPO training in Sandbox
+  train.py                    <- CLI alias for PPO training
+evaluation/                   <- Phase 6: Evaluation & Benchmarking
+  __init__.py
+  benchmark.py                <- PolicyBenchmark (Random vs BC vs PPO comparison)
+monitoring/                   <- Phase 7: System Telemetry & Control Layer
+  __init__.py
+  state.py                    <- SystemTelemetry persistent JSON tracker
+  status.py                   <- CLI status & telemetry dashboard
+tests/                        <- Automated Test Suite (54 tests)
   test_schema.py
   test_actions.py
   test_sync.py
   test_validator.py
   test_stats.py
   test_recorder_mock.py
+  test_smoke_pipeline.py
   test_ttk_adapter.py
-feasibility/                  <- M0: Godot-RL feasibility & benchmarks
-  README.md                   <- RUNBOOK: setup + Tests A/B/C + results table
-  requirements.txt            <- pinned Python deps (Python 3.11)
-  gdrl_common.py              <- shared helpers (port pre-check, process cleanup, path resolution)
-  setup_examples.py           <- clone pinned examples + apply overlay
-  export_envs.py              <- headless import + export env executables
-  benchmark_env.py            <- env steps/sec + RAM/VRAM benchmark
-  train_ppo.py                <- short SB3 PPO training run
-  godot_overlays/examples/    <- overlays for godot_rl_agents_examples
+  test_bc_dataset.py
+  test_bc_model.py
+  test_bc_policy.py
+  test_sandbox_env.py
+  test_rl_ppo.py
+  test_evaluation_benchmark.py
+  test_monitoring.py
+feasibility/                  <- M0 Godot-RL feasibility & benchmarks
+  README.md
+  requirements.txt
+  benchmark_env.py
+  train_ppo.py
+  setup_examples.py
+  export_envs.py
+  gdrl_common.py
 ```
 
 ---
 
-## 7. Exact Commands (Windows 11, from Repo Root)
+## 8. Exact Commands (Windows 11, from Repo Root)
 
 Activate environment:
 ```powershell
 .venv\Scripts\activate
 ```
 
-### M1: Test the Pipeline with Synthetic Mock Data (No Roblox Required)
-```powershell
-python -m data_pipeline.record --mock --duration 5 --output datasets/mock_test
-python -m data_pipeline.validate datasets/mock_test/<session_id>
-python -m data_pipeline.inspect datasets/mock_test/<session_id>
-```
-
-### M1: Record Real Manual Gameplay from TTK Testing
-1. Launch Roblox and enter **TTK Testing [HARDPOINT]**.
-2. Run the recorder:
-```powershell
-python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --width 160 --height 120 --output datasets/ttk_sessions
-```
-3. Play normally. Press `Ctrl+C` in the terminal when done.
-4. Validation and summary statistics are printed automatically upon exit.
-
-### M1: Run Automated Tests
+### 1. Run Automated Tests (54 tests)
 ```powershell
 pytest -v
 ```
 
-### M0: Feasibility Benchmarks (from previous phase)
+### 2. Record Gameplay Data
 ```powershell
-python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --seconds 30
-python feasibility\train_ppo.py --env_path build\fps_windows.exe --timesteps 50000 --n_parallel 2
-python feasibility\benchmark_env.py --env_path build\virtualcamera_windows.exe --viz --speedup 30 --seconds 30
+# Synthetic mock recording (5 seconds, test without Roblox)
+python -m data_pipeline.record --mock --duration 5 --output datasets/mock_session
+
+# Real manual gameplay from TTK Testing on Roblox
+python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --output datasets/ttk_pilot
+```
+
+### 3. Validate and Inspect Dataset
+```powershell
+python -m data_pipeline.validate datasets/mock_session/<session_id>
+python -m data_pipeline.inspect datasets/mock_session/<session_id>
+```
+
+### 4. Train Behavioral Cloning (BC) Policy
+```powershell
+python -m bc.train --data_dir datasets/ --epochs 10 --batch_size 32 --checkpoint_dir checkpoints/
+```
+
+### 5. Run BC Inference on a Single Frame
+```powershell
+python -m bc.infer --checkpoint checkpoints/bc_best.pt
+```
+
+### 6. Run BC Policy Closed-Loop inside Tactical Sandbox
+```powershell
+python -m bc.sandbox_runner --checkpoint checkpoints/bc_best.pt --episodes 5
+```
+
+### 7. Train Reinforcement Learning (PPO) in Tactical Sandbox
+```powershell
+python -m rl.train --timesteps 10000 --checkpoint_dir checkpoints/
+```
+
+### 8. Benchmark & Compare Policies (Random vs BC vs PPO)
+```powershell
+python -m evaluation.benchmark --bc_checkpoint checkpoints/bc_best.pt --ppo_checkpoint checkpoints/ppo_sandbox.zip --episodes 5
+```
+
+### 9. View System Telemetry Dashboard
+```powershell
+python -m monitoring.status
 ```
 
 ---
 
-## 8. Roadmap
+## 9. Roadmap
 
-- **M0 Feasibility** — Godot 4.3 + godot-rl 0.8.2 + export pipeline verified. Windows baseline benchmarks (Tests A–C).
-- **M1 Human Data Pipeline** — [COMPLETED & VERIFIED] Real-time screen capture (~15 Hz, 160x120), OS-level input logging, microsecond timestamp synchronization, symmetric log/quantile mouse binning, synthetic mock generator, validation tool, inspection tool, 37 automated tests.
-- **M2 Minimal Sandbox & Dataset Collection** —
-  - 1. Record 30–60 minutes of real manual TTK gameplay sessions using M1 recorder.
-  - 2. Build small greybox tactical-FPS sandbox map in Godot (TTK-inspired layout, low-poly textures).
-- **M3 Behavioral Cloning** — Train visual BC policy (ResNet-18 / IMPALA + ConvGRU) on captured dataset; offline evaluation.
-- **M4 Closed-loop Evaluation** — BC policy plays inside the Godot sandbox.
-- **M5 DAgger / RL** — PPO fine-tuning in sandbox.
-- **M6 GUI / Control Center** — Visualization and management.
+- **M0 Feasibility** — [COMPLETED & HARDENED] Godot 4.3 + godot-rl 0.8.2 + export flow verified.
+- **M1 Human Data Pipeline** — [COMPLETED & VERIFIED] External screen capture (~15 Hz, 160x120), OS-level input listener, microsecond timestamp synchronization, symmetric log mouse binning, validation and inspection tools.
+- **M2 Behavioral Cloning & Sandbox End-to-End** — [COMPLETED & VERIFIED]
+  - PyTorch IMPALA residual CNN + GRU model
+  - Session-level train/validation split
+  - Closed-loop BC inference in tactical sandbox
+  - Stable-Baselines3 PPO training in tactical sandbox
+  - 3-way evaluation benchmark harness (Random vs BC vs PPO)
+  - System telemetry & state tracking dashboard
+  - 54 automated unit and integration tests
+- **M3 Real Demonstration Collection & Scaling** —
+  - Jonas records 1–2 hours of manual TTK Testing gameplay across several sessions
+  - Scale BC model training on real human demonstration data
+  - Quantile bin fitting from human mouse distributions
+- **M4 Sandbox Visual Tuning & DAgger** —
+  - Align Godot sandbox lighting / textures closer to TTK style to minimize visual domain gap
+  - DAgger / interactive imitation fine-tuning in sandbox
+- **M5 PPO Self-Play & Advanced RL** —
+  - Multi-agent target / opponent bots in Godot sandbox
+  - High-throughput PPO fine-tuning initialized from BC weights
+- **M6 GUI / Control Center Application** —
+  - Godot-based or web-based live control center consuming `monitoring.state` telemetry
 
 ---
 
-## 9. Decisions future agents must NOT undo without explicit justification
+## 10. Decisions future agents must NOT undo without explicit justification
 
 1. No automation/injection/memory-reading of the public Roblox game. Ever.
 2. TTK Testing is ONLY a manual gameplay data source.
@@ -333,16 +326,25 @@ python feasibility\benchmark_env.py --env_path build\virtualcamera_windows.exe -
 
 ---
 
-## 10. Known Limitations
+## 11. Known Limitations
 
-1. **OS Window Occlusion**: If another window completely covers the game viewport during recording, screen capture will record the occluding window unless Roblox is focused.
-2. **Dynamic In-Game Sensitivity**: If the player changes in-game sensitivity mid-match, continuous mouse `dx/dy` magnitude changes relative to in-game angular rotation. Sensitivity should remain constant during capture sessions.
-3. **Headless Linux Capture**: Real screen capture with `mss` requires an active X11/Wayland display server; in headless CI environments, use `--mock` for full synthetic end-to-end testing.
+1. **Visual Domain Gap**: Roblox TTK and the minimal Godot greybox arena have visual differences; zero-shot transfer without sandbox domain adaptation or color augmentation is limited.
+2. **OS Window Occlusion**: Screen capture records whatever is displayed in the game client rect; if another application window is overlaid on top of Roblox while playing, it will be captured in the frames.
+3. **In-game Sensitivity Shifts**: In-game sensitivity must be kept constant across manual recording sessions so mouse pixel deltas map consistently to angular rotation.
 
 ---
 
-## 11. Recommendations for M2
+## 12. Recommended Immediate Next Step
 
-1. **Jonas records initial 15–30 min manual dataset**: Play 3–5 rounds of TTK Testing [HARDPOINT] with `python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --output datasets/ttk_pilot`.
-2. **Fit Quantile Mouse Bins**: Use empirical mouse delta distributions from the pilot recording to fine-tune `MouseBinner` quantiles if desired.
-3. **Build Minimal Godot Sandbox Map**: Create the greybox tactical FPS map with matching visual style (low poly, 160x120 camera view, player character controller with matching WASD speed, ADS FOV transition, weapon recoil, and hitboxes).
+Jonas records an initial 15–30 minute manual gameplay demonstration dataset in **TTK Testing [HARDPOINT]** on Roblox using:
+```powershell
+python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --width 160 --height 120 --output datasets/ttk_pilot
+```
+Then trains the first real BC model on his own demonstrations:
+```powershell
+python -m bc.train --data_dir datasets/ttk_pilot --epochs 15 --batch_size 32
+```
+And benchmarks it inside the sandbox:
+```powershell
+python -m evaluation.benchmark --bc_checkpoint checkpoints/bc_best.pt --episodes 10
+```

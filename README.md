@@ -12,9 +12,31 @@ ever. The RL environment is our own Godot project, not Roblox.
 
 - **Read [`PROJECT.md`](PROJECT.md) first** — it is the single source of truth
   (context, decisions, measured results, boundaries).
-- Current status:
-  - **M0 Feasibility**: Godot 4.3 + godot-rl 0.8.2 + SB3 PPO export/benchmark pipeline.
-  - **M1 Data Pipeline**: Real-time screen capture + OS-level input listener + timestamp synchronization + versioned dataset schema + validation and inspection tools (*"KI guckt erst zu und lernt bei mir dazu"*).
+- Core pipeline:
+  ```text
+  Manual human gameplay (TTK on Roblox / Godot)
+        │
+        ▼ (M1: data_pipeline)
+  Screen capture (160x120) + OS input logging + microsecond timestamp sync
+        │
+        ▼ (M1: schema v1.0.0)
+  Versioned dataset (metadata.json + samples.jsonl + frames/)
+        │
+        ▼ (Phase 2: bc)
+  Behavioral Cloning training (PyTorch ResNet/IMPALA CNN + multi-head actions)
+        │
+        ▼ (Phase 4: bc.sandbox_runner)
+  BC policy closed-loop execution inside Godot tactical sandbox
+        │
+        ▼ (Phase 5: rl.train)
+  PPO reinforcement learning fine-tuning inside Godot tactical sandbox
+        │
+        ▼ (Phase 6: evaluation.benchmark)
+  Evaluation & benchmarking (Random vs BC vs PPO)
+        │
+        ▼ (Phase 7: monitoring)
+  System telemetry & state tracking dashboard
+  ```
 
 ---
 
@@ -26,53 +48,83 @@ powershell -ExecutionPolicy Bypass -File setup_windows.ps1
 
 This creates `.venv`, installs PyTorch (CUDA 12.4), data pipeline dependencies, and pinned RL tools (godot-rl 0.8.2, SB3 2.4.0, Gymnasium 1.0.0), clones the examples with the SandboxAI overlay, installs Godot export templates, and exports the benchmark binaries.
 
----
-
-## M1 Data Pipeline Usage
-
 Activate the virtual environment:
-
 ```powershell
 .venv\Scripts\activate
 ```
 
-### 1. Run a Synthetic Mock Recording (Test without Roblox)
+---
 
-Verify the entire capture, synchronization, serialization, and validation pipeline in seconds:
+## Complete End-to-End Workflow & Commands
 
+### 1. Data Pipeline (Recording & Verification)
+
+#### Synthetic Mock Recording (Test without Roblox):
 ```powershell
 python -m data_pipeline.record --mock --duration 5 --output datasets/mock_session
 ```
 
-### 2. Record Real Manual Gameplay (TTK Testing on Roblox)
-
+#### Real Manual Recording (TTK Testing on Roblox):
 Launch Roblox TTK Testing, then run:
-
 ```powershell
-python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --output datasets/ttk_run
+python -m data_pipeline.record --source ttk_testing --window Roblox --fps 15 --output datasets/ttk_pilot
 ```
+*(Press `Ctrl+C` in the terminal when you finish playing)*
 
-- Target FPS: ~15 Hz (configurable via `--fps 15`)
-- Target Resolution: 160x120 RGB (configurable via `--width 160 --height 120`)
-- Stop recording at any time: press `Ctrl+C`.
-
-### 3. Validate a Dataset Session
-
-Check schema conformance, frame integrity, monotonic timestamps, and action bounds:
-
+#### Validate & Inspect Dataset:
 ```powershell
 python -m data_pipeline.validate datasets/mock_session/<session_id>
-```
-
-### 4. Inspect Dataset Metrics & Action Histograms
-
-View detailed step statistics, keyboard frequencies, and mouse rotation histograms:
-
-```powershell
 python -m data_pipeline.inspect datasets/mock_session/<session_id>
 ```
 
-### 5. Run the Automated Test Suite
+---
+
+### 2. Behavioral Cloning (BC Training & Inference)
+
+#### Train BC Policy from Recorded Datasets:
+```powershell
+python -m bc.train --data_dir datasets/ --epochs 10 --batch_size 32 --checkpoint_dir checkpoints/
+```
+
+#### Test BC Action Inference on a Frame:
+```powershell
+python -m bc.infer --checkpoint checkpoints/bc_best.pt
+```
+
+#### Run BC Policy Closed-Loop inside Tactical Sandbox:
+```powershell
+python -m bc.sandbox_runner --checkpoint checkpoints/bc_best.pt --episodes 5
+```
+
+---
+
+### 3. Reinforcement Learning (PPO in Sandbox)
+
+#### Train PPO Agent in the Tactical Arena:
+```powershell
+python -m rl.train --timesteps 10000 --checkpoint_dir checkpoints/
+```
+
+---
+
+### 4. Benchmark & Policy Comparison
+
+Compare Random Policy vs BC Policy vs PPO Policy on identical evaluation seeds:
+```powershell
+python -m evaluation.benchmark --bc_checkpoint checkpoints/bc_best.pt --ppo_checkpoint checkpoints/ppo_sandbox.zip --episodes 5
+```
+
+---
+
+### 5. Telemetry & Monitoring Dashboard
+
+```powershell
+python -m monitoring.status
+```
+
+---
+
+### 6. Run Automated Test Suite (54 Tests)
 
 ```powershell
 pytest -v
@@ -80,7 +132,7 @@ pytest -v
 
 ---
 
-## M0 Feasibility Benchmarks
+## M0 Feasibility Benchmarks (Reference)
 
 ```powershell
 python feasibility\benchmark_env.py --env_path build\fps_windows.exe --speedup 30 --seconds 30

@@ -4,6 +4,7 @@ tools/
 /examples/
 logs/
 datasets/
+checkpoints/
 .pytest_cache/
 *.zip
 *.tgz
