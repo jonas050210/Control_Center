@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 import time
-from typing import Any, Iterable
+from typing import Any
 
 
 ACTION_NVECS = (3, 3, 3, 3, 2)

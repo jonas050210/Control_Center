@@ -11,10 +11,22 @@ extends SceneTree
 
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
+var _tests_started: bool = false
 
-func _initialize() -> void:
+
+## Tests must NOT run inside `_initialize()`: SceneTree::initialize() calls the
+## script's `_initialize()` BEFORE `root` enters the tree
+## (`root->_set_tree(this)` only runs after `MainLoop::initialize()` returns),
+## so any node a test adds under `root` at that point never enters the tree and
+## never receives `_ready()`. Running the suite on the first process frame gives
+## tests a genuinely live SceneTree, matching normal runtime semantics.
+func _process(_delta: float) -> bool:
+	if _tests_started:
+		return true
+	_tests_started = true
 	var exit_code: int = _run_all_tests()
 	quit(exit_code)
+	return true
 
 
 func _run_all_tests() -> int:

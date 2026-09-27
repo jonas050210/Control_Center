@@ -17,8 +17,10 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##   kill: bool                -- that hit (or a prior one) killed an enemy this tick
 ##   damage_taken: float       -- HP lost by the agent this tick (>= 0)
 ##   died: bool                -- the agent died this tick
-##   useless_shot: bool        -- trigger pulled but could not possibly land
-##                                 (on cooldown or no line-of-sight/target)
+##   useless_shot: bool        -- trigger pulled without landing a hit: a
+##                                 miss, a shot while on cooldown, or no
+##                                 alive target (both environment cores
+##                                 penalize every non-connecting shot)
 ##   positioning_delta: float  -- meters the agent closed toward the enemy
 ##                                 this tick while not already at an
 ##                                 effective engagement range (can be

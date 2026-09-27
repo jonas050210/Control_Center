@@ -66,12 +66,14 @@ func set_curriculum_level(level: int) -> void:
 
 
 ## Deterministically (re)starts an episode. Passing the same seed produces
-## the same spawn positions and first observation.
+## the same spawn positions and first observation. Passing a negative seed
+## keeps the current RNG stream: a fresh RandomNumberGenerator is already
+## randomized at construction, so unseeded use stays random, while a
+## previously seeded environment continues its deterministic sequence
+## (essential for reproducible training across auto-resets).
 func reset(seed_value: int = -1) -> Observation:
 	if seed_value >= 0:
 		rng.seed = seed_value
-	else:
-		rng.randomize()
 
 	var target_count: int = curriculum.effective_enemy_count()
 	if enemies.size() != target_count:

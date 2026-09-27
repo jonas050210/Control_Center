@@ -10,6 +10,10 @@ config/description="SandboxAI: a Godot-based reinforcement-learning training sim
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
+; The JSON-lines RL bridge (scripts/rl/rl_server.gd) replies over stdout via
+; print(); without this, release/export builds buffer stdout and the Python
+; trainer deadlocks waiting for a response line.
+run/flush_stdout_on_print=true
 
 [display]
 

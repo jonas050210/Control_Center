@@ -74,6 +74,26 @@ func test_deterministic_reset_same_seed_gives_identical_observation() -> Sandbox
 	return t
 
 
+func test_negative_seed_reset_continues_seeded_stream() -> SandboxTest:
+	var t := SandboxTest.new("negative_seed_reset_continues_seeded_stream")
+	var env_a := EnvironmentCore.new(0, 1)
+	var env_b := EnvironmentCore.new(1, 1)
+	env_a.reset(4242)
+	env_b.reset(4242)
+	# A negative seed (used by vector auto-reset between episodes) must keep
+	# the seeded RNG stream, so two identically seeded environments stay in
+	# lockstep across episode boundaries instead of being re-randomized.
+	env_a.reset(-1)
+	env_b.reset(-1)
+	t.assert_vec_almost_eq(
+		env_a.enemies[0].position,
+		env_b.enemies[0].position,
+		0.000001,
+		"auto-reset (seed -1) should continue the deterministic seeded stream"
+	)
+	return t
+
+
 func test_different_seeds_generally_differ() -> SandboxTest:
 	var t := SandboxTest.new("different_seeds_generally_differ")
 	var env_a := EnvironmentCore.new(0, 1)

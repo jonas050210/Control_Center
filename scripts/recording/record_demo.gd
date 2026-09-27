@@ -28,6 +28,10 @@ func _initialize() -> void:
 	main_scene.set("enemy_count_per_environment", int(options.get("enemy-count", 1)))
 	main_scene.set("human_controls_environment_zero", true)
 	root.add_child(main_scene)
+	# A SceneTree script never receives NOTIFICATION_WM_CLOSE_REQUEST (that is
+	# a Node notification propagated through the tree), so hook the main
+	# window's close signal directly to save before the engine quits.
+	root.close_requested.connect(_finish)
 	call_deferred("_attach_recorder")
 
 
@@ -48,36 +52,41 @@ func _attach_recorder() -> void:
 	configured = true
 	print(
 		(
-			"Recording demonstrations to %s. Press Escape to release mouse; "
-			+ "close the window to save." % output_path
+			"Recording demonstrations to %s. Press Escape to release mouse; close the window to save."
+			% output_path
 		)
 	)
 
 
-func _process(delta: float) -> void:
+func _process(delta: float) -> bool:
 	if not configured:
-		return
+		return false
 	elapsed += delta
 	if duration_seconds > 0.0 and elapsed >= duration_seconds:
 		_finish()
+	return false
 
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		_finish()
+## Engine shutdown hook (runs on every exit path, including window close and
+## quit()); guarantees the dataset is persisted even if _finish() never ran.
+func _finalize() -> void:
+	_save_dataset_once()
 
 
 func _finish() -> void:
+	_save_dataset_once()
+	quit(0)
+
+
+func _save_dataset_once() -> void:
 	if finished:
 		return
 	finished = true
 	if recorder == null:
-		quit(0)
 		return
 	recorder.stop_recording()
 	recorder.save_dataset(output_path)
 	print("Saved %d demonstration transitions." % recorder.get_transition_count())
-	quit(0)
 
 
 func _parse_args(args: PackedStringArray) -> Dictionary:

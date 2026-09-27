@@ -216,6 +216,12 @@ func set_curriculum_level(level: int) -> void:
 	)
 	for env in environments:
 		(env as EnvironmentCore).set_curriculum_level(curriculum_level)
+	# A level change can rebuild each environment's enemy list; refresh any
+	# attached views so they mirror the live EnemyState objects.
+	for i in range(views.size()):
+		var view: EnvironmentView = views[i]
+		if view != null and is_instance_valid(view):
+			view.rebind_enemy_views()
 
 
 func set_controller(env_index: int, controller: ControllerBase) -> void:
