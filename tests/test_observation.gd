@@ -2,6 +2,13 @@
 class_name TestObservation
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const AgentState = preload("res://scripts/agent/agent_state.gd")
+const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

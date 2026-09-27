@@ -27,11 +27,18 @@ func _run_all_tests() -> int:
 	print("==========================================================")
 
 	for script_path in test_scripts:
-		var script: GDScript = load(script_path) as GDScript
-		if script == null:
-			print("SKIP  %s (failed to load)" % script_path)
+		var script_resource: Script = load(script_path) as Script
+		if script_resource == null:
+			failed += 1
+			print("ERROR %s (failed to load)" % script_path)
+			failure_lines.append("%s -> script failed to load" % script_path)
 			continue
-		var instance: Object = script.new()
+		var instance: Object = script_resource.new()
+		if instance == null:
+			failed += 1
+			print("ERROR %s (failed to instantiate)" % script_path)
+			failure_lines.append("%s -> script failed to instantiate" % script_path)
+			continue
 		for method_info in instance.get_method_list():
 			var method_name: String = method_info.name
 			if not method_name.begins_with("test_"):

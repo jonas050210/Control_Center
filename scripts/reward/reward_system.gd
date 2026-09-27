@@ -7,6 +7,10 @@
 class_name RewardSystem
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 
 ## `events` expected keys (all optional, default to "nothing happened"):
 ##   hit: bool                 -- weapon shot connected with an enemy this tick

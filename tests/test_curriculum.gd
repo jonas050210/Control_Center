@@ -2,6 +2,10 @@
 class_name TestCurriculum
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

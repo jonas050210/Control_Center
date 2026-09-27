@@ -6,6 +6,10 @@
 class_name EnemyState
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 enum AIState { IDLE = 0, CHASE = 1, ATTACK = 2, DEAD = 3 }
 
 var position: Vector3 = SandboxConfig.ENEMY_SPAWN_POSITION

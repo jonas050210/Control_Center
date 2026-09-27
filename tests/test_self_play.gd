@@ -3,6 +3,12 @@
 class_name TestSelfPlay
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+const SelfPlayEnvironmentCore = preload("res://scripts/self_play/self_play_environment.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

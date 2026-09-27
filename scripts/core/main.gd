@@ -7,6 +7,16 @@
 ## external trainer yet), the active camera, and the debug overlay.
 extends Node3D
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const AIStubController = preload("res://scripts/input/ai_stub_controller.gd")
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+const DebugOverlay = preload("res://scripts/debug/debug_overlay.gd")
+const EnvironmentView = preload("res://scripts/env/environment_view.gd")
+const HumanController = preload("res://scripts/input/human_controller.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 @export var environment_count: int = SandboxConfig.DEFAULT_ENVIRONMENT_COUNT
 @export var enemy_count_per_environment: int = SandboxConfig.ENEMY_COUNT_DEFAULT
 @export_range(1, 5) var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS

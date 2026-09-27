@@ -3,6 +3,13 @@
 class_name TestDemonstrationRecorder
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const DemonstrationRecorder = preload("res://scripts/recording/demonstration_recorder.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

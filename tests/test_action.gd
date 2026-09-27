@@ -2,6 +2,10 @@
 class_name TestAction
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

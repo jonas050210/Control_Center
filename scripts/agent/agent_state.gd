@@ -12,6 +12,12 @@
 class_name AgentState
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
+
+
 var position: Vector3 = SandboxConfig.AGENT_SPAWN_POSITION
 var velocity: Vector3 = Vector3.ZERO
 var yaw_deg: float = SandboxConfig.AGENT_SPAWN_YAW_DEG

@@ -2,6 +2,13 @@
 class_name TestJsonBridge
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const Action = preload("res://scripts/core/action.gd")
+const Observation = preload("res://scripts/core/observation.gd")
+const RLAdapter = preload("res://scripts/rl/rl_adapter.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

@@ -5,6 +5,10 @@
 class_name WeaponState
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 var damage: float = SandboxConfig.WEAPON_DAMAGE
 var range_m: float = SandboxConfig.WEAPON_RANGE
 var cooldown_time: float = SandboxConfig.WEAPON_FIRE_COOLDOWN

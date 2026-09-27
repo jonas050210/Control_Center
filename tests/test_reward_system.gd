@@ -2,6 +2,11 @@
 class_name TestRewardSystem
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const RewardSystem = preload("res://scripts/reward/reward_system.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

@@ -9,6 +9,12 @@
 class_name Observation
 extends RefCounted
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const AgentState = preload("res://scripts/agent/agent_state.gd")
+const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+
+
 const FIELD_COUNT: int = 17
 
 var agent_position_norm: Vector3 = Vector3.ZERO

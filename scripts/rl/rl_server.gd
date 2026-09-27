@@ -7,6 +7,13 @@
 ## Windows and Linux without native extensions or a renderer.
 extends SceneTree
 
+## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+const RLAdapter = preload("res://scripts/rl/rl_adapter.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
 var simulation_manager: SimulationManager
 var adapter: RLAdapter
 var stdin: FileAccess
