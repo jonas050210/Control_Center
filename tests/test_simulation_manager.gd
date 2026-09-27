@@ -141,6 +141,30 @@ func test_run_headless_steps_advances_without_a_provided_action() -> SandboxTest
 	return t
 
 
+## Regression/feature: SimulationManager must remember the last resolved
+## Action per environment (debug overlay / telemetry consumers only).
+func test_get_last_actions_mirrors_last_step_all_input() -> SandboxTest:
+	var t := SandboxTest.new("get_last_actions_mirrors_last_step_all_input")
+	var sim := SimulationManager.new()
+	sim.create_visuals = false
+	sim.build(2, 1)
+
+	var idle_actions: Array = sim.get_last_actions()
+	t.assert_eq(idle_actions.size(), 2)
+	t.assert_eq((idle_actions[0] as Action).shoot, false)
+
+	sim.step_all(
+		[Action.from_discrete(Action.Discrete.SHOOT), Action.from_discrete(Action.Discrete.MOVE_FORWARD)]
+	)
+	var last_actions: Array = sim.get_last_actions()
+	t.assert_true((last_actions[0] as Action).shoot, "env0's last action should have been SHOOT")
+	t.assert_eq(
+		(last_actions[1] as Action).move_axis, 1, "env1's last action should have been MOVE_FORWARD"
+	)
+	sim.free()
+	return t
+
+
 func test_deterministic_base_seed_gives_reproducible_environment_set() -> SandboxTest:
 	var t := SandboxTest.new("deterministic_base_seed_reproducible")
 	var sim_a := SimulationManager.new()

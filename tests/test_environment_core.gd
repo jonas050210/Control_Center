@@ -207,6 +207,88 @@ func test_step_after_done_is_a_safe_noop() -> SandboxTest:
 	return t
 
 
+## Level 2+ enables spawn-position variety: distance and horizontal angle
+## around the agent should vary across episodes (deterministically per seed)
+## instead of always landing directly ahead.
+func test_spawn_variety_places_enemies_at_varied_distance_and_angle() -> SandboxTest:
+	var t := SandboxTest.new("spawn_variety_places_enemies_at_varied_distance_and_angle")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(2)
+	var distances: Array = []
+	var directly_ahead_count: int = 0
+	for seed in range(1, 13):
+		env.reset(seed)
+		var to_enemy: Vector3 = env.enemies[0].position - env.agent.position
+		to_enemy.y = 0.0
+		distances.append(to_enemy.length())
+		if absf(to_enemy.x) < 0.05:
+			directly_ahead_count += 1
+	var min_d: float = distances[0]
+	var max_d: float = distances[0]
+	for d in distances:
+		min_d = minf(min_d, d)
+		max_d = maxf(max_d, d)
+	t.assert_gt(max_d - min_d, 0.5, "spawn distance should vary noticeably across seeds")
+	t.assert_lt(
+		float(directly_ahead_count),
+		float(distances.size()),
+		"spawn variety must not always place the enemy directly ahead"
+	)
+	return t
+
+
+## Level 1 must keep the original fixed legacy layout (directly ahead, only
+## small jitter) so the previously-validated combat pipeline stays intact.
+func test_level_one_keeps_legacy_fixed_spawn_layout() -> SandboxTest:
+	var t := SandboxTest.new("level_one_keeps_legacy_fixed_spawn_layout")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(1)
+	env.reset(21)
+	t.assert_almost_eq(
+		env.enemies[0].position.x, 0.0, 0.6, "level 1 enemy should stay near the centerline"
+	)
+	t.assert_lt(env.enemies[0].position.z, 0.0, "level 1 enemy should spawn ahead of the agent")
+	return t
+
+
+## Deterministic seeded spawning: the same seed must reproduce identical
+## spawn distance/angle/strafe assignment even with spawn variety enabled.
+func test_spawn_variety_is_deterministic_given_same_seed() -> SandboxTest:
+	var t := SandboxTest.new("spawn_variety_is_deterministic_given_same_seed")
+	var env_a := EnvironmentCore.new(0, 3)
+	var env_b := EnvironmentCore.new(1, 3)
+	env_a.set_curriculum_level(4)
+	env_b.set_curriculum_level(4)
+	env_a.reset(555)
+	env_b.reset(555)
+	for i in range(env_a.enemies.size()):
+		t.assert_vec_almost_eq(
+			env_a.enemies[i].position,
+			env_b.enemies[i].position,
+			0.0001,
+			"same seed must produce identical multi-enemy spawn positions"
+		)
+		t.assert_almost_eq(
+			env_a.enemies[i].strafe_direction,
+			env_b.enemies[i].strafe_direction,
+			0.0001,
+			"same seed must produce identical strafe assignment"
+		)
+	return t
+
+
+## Curriculum level 4 (MULTIPLE_ENEMIES) should place at least 3 enemies with
+## varied movement so the agent must track more than one simultaneous threat.
+func test_multiple_enemies_curriculum_spawns_three_or_more_with_strafing() -> SandboxTest:
+	var t := SandboxTest.new("multiple_enemies_curriculum_spawns_three_or_more_with_strafing")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(4)
+	env.reset(9)
+	t.assert_gte(float(env.enemies.size()), 3.0)
+	t.assert_true(env.curriculum.strafing_enabled())
+	return t
+
+
 func test_get_observations_rewards_done_accessors() -> SandboxTest:
 	var t := SandboxTest.new("accessors_return_current_state")
 	var env := EnvironmentCore.new(0, 1)

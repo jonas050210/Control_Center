@@ -159,7 +159,10 @@ sandboxai bc-train --dataset training/datasets/human_demo.jsonl \
 
 The trainer starts one Godot headless process containing the requested number
 of independent environments and uses a `MultiDiscrete([3,3,3,3,2])` action
-space. The structured observation is a 17-float `Box`.
+space. The structured observation is a 33-float `Box` (see
+[`docs/OBSERVATION_ACTION_CONTRACT.md`](docs/OBSERVATION_ACTION_CONTRACT.md)
+for the full field-by-field table, including the multi-enemy tracking
+fields added for curriculum levels with more than one enemy).
 
 ```bash
 sandboxai train \
@@ -215,13 +218,18 @@ survival time, accuracy, shots fired/hit, win rate and loss rate.
 ### Benchmark simulation throughput
 
 ```bash
-sandboxai benchmark --env-counts 1,4,8,16 \
-  --steps 10000 --output-dir training/benchmarks/4060ti
+sandboxai benchmark --env-counts 1,2,4,8,16,24,32,48,64 \
+  --steps 2000 --output-dir training/benchmarks/4060ti
 ```
 
 Benchmark output includes environments, total steps, steps/sec,
-episodes/sec and best-effort CPU/process/GPU memory snapshots. It is the
-practical way to choose an environment count before PPO training.
+episodes/sec and best-effort CPU/process/GPU memory snapshots. Each
+environment count is time-boxed (`--max-seconds-per-config`, default 20s) so
+sweeping the full recommended list does not take an unbounded amount of
+time. It is the practical way to choose an environment count before PPO
+training — see
+[`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)
+for how to interpret the results and where the bottleneck usually is.
 
 ## Checkpoint and output layout
 
@@ -277,8 +285,10 @@ location and best-effort resource utilization.
 - `scripts/rl/rl_server.gd` is the local JSON-lines bridge. The Python side
   does not call `localhost`, use a browser, or depend on a visual scene.
 - Curriculum levels 1–4 progressively enable stationary targets, moving
-  targets, attacks and multiple configured enemies. Level 5 exposes the
-  self-play slot/match foundation.
+  targets with varied spawn positions, strafing/attacking enemies and
+  multiple (3+) simultaneously-tracked enemies. Level 5 exposes the
+  self-play slot/match foundation. See
+  [`docs/CURRICULUM_AND_COMBAT.md`](docs/CURRICULUM_AND_COMBAT.md).
 - `SelfPlayEnvironmentCore` provides two controllable `AgentState` slots with
   per-agent rewards/metrics. `SelfPlayCoordinator` supports a learning slot
   against a frozen SB3 checkpoint; population algorithms are intentionally
@@ -286,6 +296,14 @@ location and best-effort resource utilization.
 - `Observation` remains structured-only today. `ObservationMode.RGB` and the
   Python configuration leave room for future RGB observations and temporal
   frame stacking without changing the structured vector contract.
+- `scripts/debug/debug_overlay.gd` is an optional, presentation-only debug
+  GUI (FPS/telemetry + pause/reset/enemy-count/curriculum controls). It is
+  never created by the headless RL bridge. See
+  [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md).
+- `python/sandboxai/contract.py` documents the Observation/Action contract
+  as data and defines the abstract `GameAdapter` boundary a future external
+  Roblox Player adapter would implement. No Roblox integration exists yet —
+  see [`docs/ROBLOX_ADAPTER.md`](docs/ROBLOX_ADAPTER.md).
 
 Simulation code never imports PyTorch. Python code never depends on Godot
 render nodes. The only current external process boundary is the lightweight

@@ -40,6 +40,9 @@ var _steps_since_report: int = 0
 var _report_timer: float = 0.0
 var _last_step_rewards: Array = []
 var _last_step_dones: Array = []
+## Mirrors the last resolved Action passed to each environment. Debug/GUI
+## and telemetry consumers only; never read by the simulation itself.
+var _last_actions: Array = []
 
 
 func _ready() -> void:
@@ -68,6 +71,7 @@ func build(count: int, enemies_per_env: int = SandboxConfig.ENEMY_COUNT_DEFAULT)
 		controllers.append(null)
 		_last_step_rewards.append(0.0)
 		_last_step_dones.append(false)
+		_last_actions.append(Action.idle())
 
 		var view: EnvironmentView = null
 		if create_visuals:
@@ -91,6 +95,7 @@ func _clear() -> void:
 	recorders.clear()
 	_last_step_rewards.clear()
 	_last_step_dones.clear()
+	_last_actions.clear()
 
 
 func _cell_offset(index: int) -> Vector3:
@@ -144,6 +149,7 @@ func step_all(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Array:
 		var result: Dictionary = env.step(action, dt)
 		_last_step_rewards[i] = float(result.get("reward", 0.0))
 		_last_step_dones[i] = bool(result.get("done", false))
+		_last_actions[i] = action
 		if recorders.has(i) and recorders[i] != null:
 			var recorder = recorders[i]
 			if recorder.has_method("record_transition"):
@@ -183,6 +189,12 @@ func get_observations() -> Array:
 
 func get_rewards() -> Array:
 	return _last_step_rewards.duplicate()
+
+
+## Last resolved Action applied to each environment (debug/GUI/telemetry
+## only). Returns Action.idle() for an environment that has not stepped yet.
+func get_last_actions() -> Array:
+	return _last_actions.duplicate()
 
 
 func is_done_all() -> Array:

@@ -58,6 +58,36 @@ const ENEMY_SPAWN_POSITION: Vector3 = Vector3(0.0, 0.0, -6.0)
 const ENEMY_COUNT_DEFAULT: int = 1
 
 # ---------------------------------------------------------------------------
+# Multi-enemy spawn variety / movement patterns (curriculum-driven).
+#
+# These constants exist so a curriculum level can place enemies at varied
+# distances and horizontal angles around the agent (instead of always
+# directly ahead) and can make enemies strafe while approaching/engaging
+# instead of walking straight at the agent. All of it stays inside the
+# existing flat, analytic arena: no physics, no verticality, no navmesh.
+# ---------------------------------------------------------------------------
+## Minimum/maximum spawn distance from the agent's spawn point once a
+## curriculum level enables spawn-position variety (see
+## CurriculumConfig.spawn_variety_enabled()).
+const ENEMY_SPAWN_MIN_DISTANCE: float = 4.0
+## Kept comfortably inside the arena walls even for spawn angles pointing
+## sideways/behind the agent's spawn point (which is offset from the arena
+## center), so spawn variety never needs post-hoc wall clamping to be usable.
+const ENEMY_SPAWN_MAX_DISTANCE: float = 13.0
+## Enemy lateral (strafe) speed as a fraction of its forward move speed.
+const ENEMY_STRAFE_SPEED_SCALE: float = 0.6
+## Angular frequency (radians/second) driving the deterministic sinusoidal
+## strafe oscillation. Higher = faster left/right direction changes.
+const ENEMY_STRAFE_ANGULAR_SPEED: float = 1.6
+## Number of enemy "slots" the structured observation reports individually
+## (nearest-alive-first). Extra enemies beyond this count still exist and
+## affect the simulation/reward, they are simply not each individually
+## observed — a policy trained on this contract must generalize from the
+## nearest few threats, matching what a human/Roblox player could plausibly
+## track. Kept small deliberately to keep the observation cheap.
+const OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
+
+# ---------------------------------------------------------------------------
 # Weapon
 # ---------------------------------------------------------------------------
 const WEAPON_DAMAGE: float = 25.0
