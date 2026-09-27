@@ -1,4 +1,4 @@
-extends Node3D
+extends Area3D
 class_name Projectile
 
 @export var speed = 40
@@ -59,5 +59,10 @@ func _destroy() -> void:
 	call_deferred("_finish_destroy")
 
 func _finish_destroy() -> void:
-	if is_inside_tree():
+	# queue_free() is valid for a node that already left the tree (e.g. its
+	# shooter was freed/respawned in the same frame).  Skipping the free for
+	# such a projectile silently leaked it: nothing else owns it, so it
+	# survived until engine shutdown and was reported as
+	# "ObjectDB instances leaked at exit".
+	if not is_queued_for_deletion():
 		queue_free()
