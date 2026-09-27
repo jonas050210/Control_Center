@@ -22,6 +22,9 @@ var hits: int = 0
 var kills: int = 0
 var damage_taken: float = 0.0
 var tracked_target_id: int = 0
+var tracking_confidence: float = 0.0
+var tracking_memory_seconds: float = 0.0
+@onready var scenario_director: SandboxScenarioDirector = get_tree().current_scene.get_node_or_null("ScenarioDirector") as SandboxScenarioDirector
 
 func _ready() -> void:
 	if player: player.shot_fired.connect(_on_player_shot_fired)
@@ -38,7 +41,7 @@ func _on_player_shot_fired(hit: bool, killed: bool) -> void:
 func set_agent_mode(enabled: bool) -> void:
 	player.set_agent_controlled(enabled)
 	for node: Node in get_tree().get_nodes_in_group("targets"):
-		var target: TargetDummy = node as TargetDummy
+		var target: SandboxEnemy = node as SandboxEnemy
 		if target: target.agent_controlled = enabled
 
 func get_observation_image() -> Image:
@@ -51,7 +54,7 @@ func _visible_perception() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var viewport_size: Vector2 = Vector2(obs_viewport.size)
 	for node: Node in get_tree().get_nodes_in_group("targets"):
-		var target: TargetDummy = node as TargetDummy
+		var target: SandboxEnemy = node as SandboxEnemy
 		if target == null or target.health <= 0.0: continue
 		var world_pos: Vector3 = target.global_position + Vector3.UP * 0.8
 		var screen: Vector2 = player.camera.unproject_position(world_pos)
@@ -65,12 +68,15 @@ func _visible_perception() -> Array[Dictionary]:
 		var projected: Vector2 = Vector2(clampf(screen.x / 1280.0, 0.0, 1.0), clampf(screen.y / 720.0, 0.0, 1.0))
 		var confidence: float = 0.0 if not visible else clampf(1.0 - distance / 35.0, 0.25, 0.99)
 		var target_id: int = target.get_instance_id()
-		if visible: tracked_target_id = target_id
+		if visible:
+			tracked_target_id = target_id; tracking_confidence = confidence; tracking_memory_seconds = 0.75
+		elif tracking_memory_seconds > 0.0 and target_id == tracked_target_id:
+			tracking_memory_seconds = maxf(0.0, tracking_memory_seconds - 0.05); confidence = tracking_confidence * (tracking_memory_seconds / 0.75)
 		result.append({"id": target_id, "detected": visible, "confidence": confidence, "screen_position": [projected.x, projected.y], "screen_rect": [clampf(projected.x - 0.035, 0.0, 1.0), clampf(projected.y - 0.12, 0.0, 1.0), 0.07, 0.24], "distance": distance, "relative_position": [target.global_position.x - player.global_position.x, target.global_position.y - player.global_position.y, target.global_position.z - player.global_position.z], "moving": target.is_moving, "tracked": target_id == tracked_target_id and visible})
 	return result
 
 func get_state_info() -> Dictionary:
-	return {"episode_seed": episode_seed, "step": step_count, "targets_hit": hits, "kills": kills, "shots_fired": shots_fired, "accuracy": float(hits) / float(maxi(1, shots_fired)), "last_shot_hit": player.last_shot_hit, "health": player.health, "ammo": player.ammo, "reserve_ammo": player.reserve_ammo, "reloading": player.reload_timer > 0.0, "damage_taken": damage_taken, "player_pos": [player.global_position.x, player.global_position.z], "perception": _visible_perception(), "tracked_target_id": tracked_target_id}
+	return {"episode_seed": episode_seed, "step": step_count, "targets_hit": hits, "kills": kills, "shots_fired": shots_fired, "accuracy": float(hits) / float(maxi(1, shots_fired)), "last_shot_hit": player.last_shot_hit, "health": player.health, "ammo": player.ammo, "reserve_ammo": player.reserve_ammo, "reloading": player.reload_timer > 0.0, "damage_taken": damage_taken, "player_pos": [player.global_position.x, player.global_position.z], "perception": _visible_perception(), "tracked_target_id": tracked_target_id, "tracking_confidence": tracking_confidence, "scenario": scenario_director.state() if scenario_director else {}}
 
 func set_action(action: Array) -> void:
 	if action.size() < 10: push_error("Sandbox action must contain 10 values"); return
@@ -78,7 +84,7 @@ func set_action(action: Array) -> void:
 	player.advance_simulation_timers(0.05)
 	var health_before: float = player.health
 	for node: Node in get_tree().get_nodes_in_group("targets"):
-		var target: TargetDummy = node as TargetDummy
+		var target: SandboxEnemy = node as SandboxEnemy
 		if target: target.advance_simulation(0.05)
 	var lost_health: float = maxf(0.0, health_before - player.health)
 	if lost_health > 0.0: damage_taken += lost_health; reward -= lost_health * 0.018
@@ -93,9 +99,10 @@ func set_action(action: Array) -> void:
 	terminated = player.health <= 0.0; truncated = step_count >= max_steps and not terminated; done = terminated or truncated
 
 func reset(seed_value: int = 42) -> void:
-	episode_seed = seed_value; rng.seed = seed_value; step_count = 0; done = false; terminated = false; truncated = false; reward = 0.0; shots_fired = 0; hits = 0; kills = 0; damage_taken = 0.0; tracked_target_id = 0
+	episode_seed = seed_value; rng.seed = seed_value; step_count = 0; done = false; terminated = false; truncated = false; reward = 0.0; shots_fired = 0; hits = 0; kills = 0; damage_taken = 0.0; tracked_target_id = 0; tracking_confidence = 0.0; tracking_memory_seconds = 0.0
+	if scenario_director: scenario_director.configure(seed_value)
 	player.reset_player([Vector3(-3, 0, 0), Vector3(3, 0, 0), Vector3(0, 0, 3), Vector3(0, 0, -1.5)][rng.randi_range(0, 3)])
 	var targets: Array[Node] = get_tree().get_nodes_in_group("targets")
 	for index: int in range(targets.size()):
-		var target: TargetDummy = targets[index] as TargetDummy
+		var target: SandboxEnemy = targets[index] as SandboxEnemy
 		if target: target.configure_seed(seed_value + index * 1009); target.respawn()
