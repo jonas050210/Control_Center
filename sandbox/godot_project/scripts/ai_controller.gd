@@ -52,7 +52,9 @@ func get_observation_image() -> Image:
 	player.obs_camera.global_transform = player.camera.global_transform
 	player.obs_camera.fov = player.camera.fov
 	RenderingServer.force_draw(false)
-	return obs_viewport.get_texture().get_image()
+	var image: Image = obs_viewport.get_texture().get_image()
+	if episode_logger: episode_logger.record_observation(image)
+	return image
 
 func _visible_perception() -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
