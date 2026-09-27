@@ -2,6 +2,7 @@ extends CharacterBody3D
 class_name SandboxPlayer
 
 const WEAPON_CONFIG: Script = preload("res://scripts/weapon_config.gd")
+const MODEL_FACTORY: Script = preload("res://scripts/model_factory.gd")
 
 signal shot_fired(hit_target: bool, killed_target: bool)
 signal ammo_changed(magazine: int, reserve: int)
@@ -176,18 +177,59 @@ func equip_weapon(weapon_id: String) -> bool:
 func _configure_weapon_model(weapon_id: String) -> void:
 	var view_model: MeshInstance3D = get_node_or_null("CameraPivot/Camera3D/ViewModel") as MeshInstance3D
 	if view_model == null: return
-	var mesh: BoxMesh = BoxMesh.new()
-	match weapon_id:
-		"pistol": mesh.size = Vector3(0.16, 0.18, 0.55)
-		"smg": mesh.size = Vector3(0.19, 0.22, 0.78)
-		"rifle": mesh.size = Vector3(0.16, 0.20, 1.05)
-		"shotgun": mesh.size = Vector3(0.22, 0.24, 1.15)
-		"marksman": mesh.size = Vector3(0.18, 0.20, 1.28)
-	var material: StandardMaterial3D = StandardMaterial3D.new()
-	material.albedo_color = {"pistol": Color(0.08, 0.08, 0.09), "smg": Color(0.12, 0.16, 0.18), "rifle": Color(0.08, 0.13, 0.10), "shotgun": Color(0.20, 0.10, 0.05), "marksman": Color(0.16, 0.14, 0.12)}.get(weapon_id, Color.DIM_GRAY)
-	material.metallic = 0.55; material.roughness = 0.3; mesh.material = material
-	view_model.mesh = mesh
+	# The root remains a MeshInstance3D for compatibility with existing scenes;
+	# the children add a readable low-poly receiver, controls, magazine, barrel,
+	# sight, and stock instead of a single placeholder BoxMesh.
+	for child: Node in view_model.get_children():
+		child.free()
+	var body_color: Color = {
+		"pistol": Color(0.08, 0.08, 0.09),
+		"smg": Color(0.12, 0.16, 0.18),
+		"rifle": Color(0.08, 0.13, 0.10),
+		"shotgun": Color(0.20, 0.10, 0.05),
+		"marksman": Color(0.16, 0.14, 0.12),
+	}.get(weapon_id, Color.DIM_GRAY)
+	var body: StandardMaterial3D = MODEL_FACTORY.material(body_color, 0.58, 0.30)
+	var dark: StandardMaterial3D = MODEL_FACTORY.material(Color(0.025, 0.03, 0.035), 0.72, 0.22)
+	var grip: StandardMaterial3D = MODEL_FACTORY.material(Color(0.035, 0.045, 0.05), 0.08, 0.82)
+	var accent: StandardMaterial3D = MODEL_FACTORY.material(Color(0.12, 0.55, 0.62), 0.25, 0.28, Color(0.02, 0.18, 0.22))
+	var brass: StandardMaterial3D = MODEL_FACTORY.material(Color(0.52, 0.34, 0.12), 0.62, 0.30)
+
 	view_model.position = Vector3(0.38, -0.32, -0.62 if weapon_id != "shotgun" else -0.58)
+	view_model.rotation = Vector3(deg_to_rad(-4.0), deg_to_rad(-2.0), 0.0)
+	view_model.mesh = MODEL_FACTORY.box_mesh(Vector3(0.18, 0.20, 0.72), body)
+	if weapon_id == "pistol":
+		MODEL_FACTORY.add_box(view_model, "Grip", Vector3(0.14, 0.30, 0.18), Vector3(0.0, -0.22, 0.16), grip, Vector3(deg_to_rad(-9.0), 0.0, 0.0))
+		MODEL_FACTORY.add_cylinder(view_model, "Barrel", 0.045, 0.34, Vector3(0.0, 0.01, -0.50), dark, Vector3(PI / 2.0, 0.0, 0.0), 10)
+		MODEL_FACTORY.add_box(view_model, "FrontSight", Vector3(0.035, 0.07, 0.05), Vector3(0.0, 0.13, -0.53), brass)
+		MODEL_FACTORY.add_box(view_model, "SlideAccent", Vector3(0.10, 0.025, 0.22), Vector3(0.0, 0.12, -0.13), accent)
+	elif weapon_id == "smg":
+		MODEL_FACTORY.add_box(view_model, "Stock", Vector3(0.20, 0.15, 0.35), Vector3(0.0, 0.01, 0.48), dark)
+		MODEL_FACTORY.add_box(view_model, "Grip", Vector3(0.13, 0.30, 0.18), Vector3(0.0, -0.22, 0.12), grip, Vector3(deg_to_rad(-10.0), 0.0, 0.0))
+		MODEL_FACTORY.add_box(view_model, "Magazine", Vector3(0.13, 0.28, 0.18), Vector3(0.0, -0.19, -0.08), dark, Vector3(deg_to_rad(-8.0), 0.0, 0.0))
+		MODEL_FACTORY.add_cylinder(view_model, "Barrel", 0.042, 0.48, Vector3(0.0, 0.02, -0.61), dark, Vector3(PI / 2.0, 0.0, 0.0), 10)
+		MODEL_FACTORY.add_box(view_model, "TopRail", Vector3(0.10, 0.035, 0.34), Vector3(0.0, 0.13, -0.17), dark)
+		MODEL_FACTORY.add_box(view_model, "Sight", Vector3(0.07, 0.10, 0.10), Vector3(0.0, 0.20, -0.22), accent)
+	elif weapon_id == "shotgun":
+		MODEL_FACTORY.add_box(view_model, "Stock", Vector3(0.22, 0.18, 0.40), Vector3(0.0, 0.02, 0.48), dark)
+		MODEL_FACTORY.add_box(view_model, "Grip", Vector3(0.16, 0.30, 0.20), Vector3(0.0, -0.20, 0.17), grip, Vector3(deg_to_rad(-12.0), 0.0, 0.0))
+		MODEL_FACTORY.add_cylinder(view_model, "Barrel", 0.07, 0.72, Vector3(0.0, 0.04, -0.72), dark, Vector3(PI / 2.0, 0.0, 0.0), 12)
+		MODEL_FACTORY.add_cylinder(view_model, "Tube", 0.045, 0.58, Vector3(0.0, -0.08, -0.62), brass, Vector3(PI / 2.0, 0.0, 0.0), 10)
+		MODEL_FACTORY.add_box(view_model, "Pump", Vector3(0.20, 0.14, 0.22), Vector3(0.0, -0.10, -0.42), grip)
+		MODEL_FACTORY.add_box(view_model, "FrontSight", Vector3(0.04, 0.10, 0.06), Vector3(0.0, 0.14, -1.08), accent)
+	else:
+		var long_barrel: float = 0.86 if weapon_id == "marksman" else 0.62
+		MODEL_FACTORY.add_box(view_model, "Stock", Vector3(0.22, 0.16, 0.44), Vector3(0.0, 0.01, 0.48), dark)
+		MODEL_FACTORY.add_box(view_model, "Grip", Vector3(0.14, 0.30, 0.18), Vector3(0.0, -0.22, 0.14), grip, Vector3(deg_to_rad(-10.0), 0.0, 0.0))
+		MODEL_FACTORY.add_box(view_model, "Magazine", Vector3(0.14, 0.32, 0.20), Vector3(0.0, -0.19, -0.06), dark, Vector3(deg_to_rad(-7.0), 0.0, 0.0))
+		MODEL_FACTORY.add_cylinder(view_model, "Barrel", 0.045, long_barrel, Vector3(0.0, 0.02, -0.72), dark, Vector3(PI / 2.0, 0.0, 0.0), 10)
+		MODEL_FACTORY.add_box(view_model, "TopRail", Vector3(0.10, 0.035, 0.48), Vector3(0.0, 0.13, -0.20), dark)
+		if weapon_id == "marksman":
+			MODEL_FACTORY.add_cylinder(view_model, "Scope", 0.065, 0.32, Vector3(0.0, 0.23, -0.25), accent, Vector3(PI / 2.0, 0.0, 0.0), 12)
+			MODEL_FACTORY.add_box(view_model, "ScopeMount", Vector3(0.16, 0.08, 0.08), Vector3(0.0, 0.15, -0.25), dark)
+		else:
+			MODEL_FACTORY.add_box(view_model, "Sight", Vector3(0.07, 0.11, 0.10), Vector3(0.0, 0.20, -0.23), accent)
+		MODEL_FACTORY.add_box(view_model, "MuzzleBrake", Vector3(0.10, 0.10, 0.08), Vector3(0.0, 0.02, -1.18), brass)
 
 func switch_weapon(weapon_id: String) -> bool:
 	if reload_timer > 0.0: return false

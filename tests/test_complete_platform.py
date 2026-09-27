@@ -140,3 +140,16 @@ def test_telemetry_instances_merge_component_updates(tmp_path: Path) -> None:
     merged = SystemTelemetry(state_file).state
     assert merged["rl"]["timesteps"] == 512
     assert merged["pipeline_stage"] == "IDLE"
+
+
+def test_tactical_arena_state_snapshot_restores_rng_and_entities():
+    env = TacticalArenaEnv(seed=17, max_steps=20)
+    env.reset(seed=17)
+    for _ in range(3):
+        env.step(SandboxAction(move_y=1, fire=1).to_array())
+    snapshot = env.state_snapshot()
+    first = env.step(SandboxAction(move_x=1, mouse_dx_bin=12).to_array())
+    env.restore_state(snapshot)
+    second = env.step(SandboxAction(move_x=1, mouse_dx_bin=12).to_array())
+    assert np.array_equal(first[0], second[0])
+    assert first[1:] == second[1:]

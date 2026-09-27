@@ -92,6 +92,7 @@ class SessionRecorder:
         self._stop_requested = False
         self._total_steps = 0
         self._dropped_frames = 0
+        self._dropped_input_events = 0
         self._start_time_monotonic = 0.0
         self._end_time_monotonic = 0.0
 
@@ -150,7 +151,7 @@ class SessionRecorder:
         self._prepare_directory()
         self.synchronizer.reset()
         self._stop_requested = False
-        self._total_steps = self._dropped_frames = 0
+        self._total_steps = self._dropped_frames = self._dropped_input_events = 0
         metadata = DatasetMetadata(
             session_id=self.session_id,
             schema_version=SCHEMA_VERSION,
@@ -251,9 +252,15 @@ class SessionRecorder:
             except (ValueError, AttributeError):
                 pass
             if listener_started and self.input_listener is not None:
+                get_dropped = getattr(self.input_listener, "get_dropped_event_count", None)
+                if callable(get_dropped):
+                    self._dropped_input_events = int(get_dropped())
                 self.input_listener.stop()
             if capture_started and self.capture_source is not None:
                 self.capture_source.close()
+            # Remove the crash marker before calculating the reported footprint;
+            # it is an operational lock, not part of the recorded dataset.
+            self.marker_file.unlink(missing_ok=True)
             duration = max(0.0, self._end_time_monotonic - self._start_time_monotonic)
             total_bytes = sum(
                 path.stat().st_size for path in self.session_dir.rglob("*") if path.is_file()
@@ -264,6 +271,7 @@ class SessionRecorder:
                 "total_steps": self._total_steps,
                 "effective_fps": round(self._total_steps / max(1e-9, duration), 3),
                 "dropped_frames": self._dropped_frames,
+                "dropped_input_events": self._dropped_input_events,
                 "total_bytes": total_bytes,
             }
             metadata.save(self.metadata_file)

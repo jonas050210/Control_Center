@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-09-27
 
-**Status:** end-to-end local workflow implemented and verified on the production headless sandbox; Godot project/bridge implemented but an exported binary must be built and runtime-tested on the target Windows/Godot installation.
+**Status:** end-to-end local workflow is implemented; the Python reference path is statically checked in this checkout, while the exported Godot binary still requires a Godot 4.3 runtime test on the target machine.
 
 This document records facts and boundaries. Labels mean:
 
@@ -117,6 +117,8 @@ The old `MockTacticalArenaEnv` name is retained as a compatibility alias only.
 
 `sandbox/godot_project` is the manually playable long-term visual environment. It has enclosing collision walls, tactical cover, player collision/camera, mouse look, WASD, sprint/crouch/jump, ADS FOV, ray weapon, ammo/reload/cadence/recoil, HUD, health, moving/damaging target enemies, deterministic controller reset, and an 84×84 observation viewport.
 
+Its 3D presentation is self-contained: `scripts/model_factory.gd` builds reusable low-poly meshes and materials at runtime. Player viewmodels use weapon-specific assemblies (receiver, stock, grip, magazine, barrel, sight, scope or pump), targets use armored body/limb/visor/backpack parts, and authored or generated arena cover receives trim, panels, supports, floor insets, and wall bands. No external art pack or network asset is required, so deterministic maps remain portable and easy to test.
+
 A custom localhost-only newline-delimited JSON/TCP bridge is built into the export and enabled only with `--rl-server`. `GodotSandboxEnv` launches an **exported binary**, handshakes protocol v1, sends full actions, receives PNG observations/reward/state, and terminates it cleanly. Manual play has no server. Explicit Godot requests fail rather than silently falling back to Python.
 
 Agent-mode timers/enemy simulation advance once per command at 20 Hz rather than by network wall time, making command trajectories deterministic. The export helper is `python -m sandbox.export`.
@@ -125,7 +127,9 @@ No Godot executable/export templates were available in this Linux agent checkout
 
 ### 3.4 Shared action contract — VERIFIED
 
-`sandbox.actions` is the conversion authority. Canonical values:
+Action contract version **2.0.0** is declared in `data_pipeline.schema`, checked by
+Python, and returned during the Godot bridge handshake. `sandbox.actions` is
+the conversion authority. Canonical values:
 
 | Order | Name | Dataset domain | Gym category count |
 |---:|---|---|---:|
@@ -210,17 +214,16 @@ Synthetic data verifies plumbing, not policy quality and never substitutes for h
 
 ## 5. Verification performed in this checkout
 
-**VERIFIED / MEASURED 2026-09-27:**
+**Repository verification status 2026-09-27:**
 
-- `python -m compileall` passed for all production Python packages.
-- `git diff --check` passed.
-- `pytest -q`: **73 passed** in **18.81 s** on this agent's CPU environment (pinned SB3 2.4.0 / Gymnasium 1.0.0).
-- Full quick workflow passed: two recordings (16 frames total) → catalog → temporal GRU BC → offline evaluation → closed-loop BC → BC-weight transfer → 128-step PPO → deterministic four-policy benchmark → persisted summaries/manifests.
-- Quick workflow confirmed both `encoder_copied=true` and `action_heads_copied=true`.
-- A two-cycle `rl.iterate` smoke run completed resume/evaluation and wrote the final checkpoint/learning curve (128 requested per cycle; SB3's two-environment rollout minimum collected 256 actual transitions per cycle).
-- These short runs are functional smoke tests only; their tiny synthetic-policy scores have no scientific meaning.
+- `python -m compileall` passes for all production Python packages in the current checkout.
+- `git diff --check` passes.
+- The current checkout contains the full Python/Godot test suite, but its dependencies are not installed in this agent environment; run `python -m pip install -e ".[dev]"` before `pytest -q`.
+- GitHub Actions now runs Python 3.11/3.12 compilation, tests, whitespace checks, and Godot project smoke checks.
+- Godot export, scene parsing, local bridge, repeated reset, and target-machine runtime still require Godot 4.3 and must be verified on Windows or a Godot-enabled CI runner.
+- Synthetic recordings verify plumbing only; their policy scores have no scientific meaning.
 
-Automated coverage includes schema/actions, screen/input mocks, event synchronization including future-event retention, validation failure modes, stats/HTML catalog, temporal datasets/models/policy, train/resume, deterministic arena reset and mechanics, weapon reload, closed-loop BC, PPO smoke, benchmark, telemetry, experiment artifacts, CLI integration, and historical feasibility regressions.
+Automated coverage includes schema/actions, screen/input mocks, event synchronization including future-event retention, strict validation failure modes, stats/HTML catalog, temporal datasets/models/policy, train/resume, deterministic arena reset and mechanics, weapon reload, closed-loop BC, PPO smoke, benchmark, telemetry, experiment artifacts, replay conversion, CLI integration, and historical feasibility regressions.
 
 ## 6. Repository map
 

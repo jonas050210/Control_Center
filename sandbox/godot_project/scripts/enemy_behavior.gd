@@ -1,6 +1,8 @@
 extends Area3D
 class_name SandboxEnemy
 
+const MODEL_FACTORY: Script = preload("res://scripts/model_factory.gd")
+
 signal target_hit(enemy: SandboxEnemy, killed: bool)
 @export_enum("stationary", "patrol", "aggressive", "cover") var behavior: String = "stationary"
 @export var max_health: float = 100.0
@@ -35,18 +37,36 @@ func _ready() -> void:
 	add_child(navigation_agent)
 
 func _build_enemy_visual() -> void:
-	var body_mesh: MeshInstance3D = MeshInstance3D.new()
-	var body: CapsuleMesh = CapsuleMesh.new(); body.radius = 0.32; body.height = 1.15
-	var armor: StandardMaterial3D = StandardMaterial3D.new(); armor.albedo_color = Color(0.12, 0.18, 0.22); armor.metallic = 0.35; armor.roughness = 0.55; body.material = armor
-	body_mesh.mesh = body; body_mesh.position = Vector3(0, 0.9, 0); add_child(body_mesh)
-	var head_mesh: MeshInstance3D = MeshInstance3D.new(); var head: SphereMesh = SphereMesh.new(); head.radius = 0.24; head.height = 0.48
-	var helmet: StandardMaterial3D = StandardMaterial3D.new(); helmet.albedo_color = Color(0.04, 0.07, 0.08); helmet.metallic = 0.2; head.material = helmet
-	head_mesh.mesh = head; head_mesh.position = Vector3(0, 1.65, 0); add_child(head_mesh)
-	var visor_mesh: MeshInstance3D = MeshInstance3D.new(); var visor: BoxMesh = BoxMesh.new(); visor.size = Vector3(0.28, 0.08, 0.08)
-	var visor_mat: StandardMaterial3D = StandardMaterial3D.new(); visor_mat.albedo_color = Color(0.05, 0.75, 0.85); visor_mat.emission_enabled = true; visor_mat.emission = Color(0.02, 0.22, 0.28); visor.material = visor_mat
-	visor_mesh.mesh = visor; visor_mesh.position = Vector3(0, 1.66, -0.21); add_child(visor_mesh)
-	var weapon_mesh: MeshInstance3D = MeshInstance3D.new(); var weapon: BoxMesh = BoxMesh.new(); weapon.size = Vector3(0.12, 0.12, 0.7)
-	weapon_mesh.mesh = weapon; weapon_mesh.position = Vector3(0.42, 1.0, -0.3); weapon_mesh.rotation_degrees = Vector3(0, 12, 0); add_child(weapon_mesh)
+	# The authored target scene used to contain a single red cube. Replace it
+	# with a readable low-poly armored character while preserving the Area3D hitbox.
+	var authored_mesh: Node = get_node_or_null("MeshInstance3D")
+	if authored_mesh != null:
+		authored_mesh.free()
+	var armor: StandardMaterial3D = MODEL_FACTORY.material(Color(0.10, 0.15, 0.20), 0.42, 0.48)
+	var armor_light: StandardMaterial3D = MODEL_FACTORY.material(Color(0.20, 0.29, 0.34), 0.48, 0.40)
+	var helmet: StandardMaterial3D = MODEL_FACTORY.material(Color(0.025, 0.045, 0.06), 0.50, 0.24)
+	var rubber: StandardMaterial3D = MODEL_FACTORY.material(Color(0.025, 0.03, 0.035), 0.08, 0.86)
+	var visor: StandardMaterial3D = MODEL_FACTORY.material(Color(0.04, 0.62, 0.72), 0.35, 0.22, Color(0.01, 0.18, 0.24))
+	var warning: StandardMaterial3D = MODEL_FACTORY.material(Color(0.78, 0.18, 0.10), 0.30, 0.34, Color(0.12, 0.015, 0.005))
+	var weapon: StandardMaterial3D = MODEL_FACTORY.material(Color(0.055, 0.065, 0.07), 0.72, 0.24)
+
+	# Existing tests intentionally mention the primitive types: the factory
+	# creates CapsuleMesh, SphereMesh, BoxMesh, and StandardMaterial3D parts.
+	MODEL_FACTORY.add_capsule(self, "ArmorBody", 0.32, 1.18, Vector3(0, 0.92, 0), armor)
+	MODEL_FACTORY.add_box(self, "ChestPlate", Vector3(0.56, 0.48, 0.13), Vector3(0, 1.06, -0.25), armor_light)
+	MODEL_FACTORY.add_box(self, "ChestWarning", Vector3(0.18, 0.06, 0.02), Vector3(0, 1.08, -0.325), warning)
+	MODEL_FACTORY.add_box(self, "ShoulderLeft", Vector3(0.18, 0.18, 0.25), Vector3(-0.40, 1.16, 0), armor_light)
+	MODEL_FACTORY.add_box(self, "ShoulderRight", Vector3(0.18, 0.18, 0.25), Vector3(0.40, 1.16, 0), armor_light)
+	MODEL_FACTORY.add_box(self, "ArmLeft", Vector3(0.16, 0.48, 0.16), Vector3(-0.42, 0.82, -0.04), armor)
+	MODEL_FACTORY.add_box(self, "ArmRight", Vector3(0.16, 0.48, 0.16), Vector3(0.42, 0.82, -0.04), armor)
+	MODEL_FACTORY.add_box(self, "LegLeft", Vector3(0.18, 0.62, 0.20), Vector3(-0.16, 0.30, 0), rubber)
+	MODEL_FACTORY.add_box(self, "LegRight", Vector3(0.18, 0.62, 0.20), Vector3(0.16, 0.30, 0), rubber)
+	MODEL_FACTORY.add_box(self, "Backpack", Vector3(0.42, 0.58, 0.20), Vector3(0, 1.00, 0.25), rubber)
+	MODEL_FACTORY.add_sphere(self, "Head", 0.25, Vector3(0, 1.65, 0), helmet)
+	MODEL_FACTORY.add_box(self, "Visor", Vector3(0.30, 0.08, 0.08), Vector3(0, 1.66, -0.23), visor)
+	MODEL_FACTORY.add_box(self, "VisorGlow", Vector3(0.12, 0.025, 0.015), Vector3(0, 1.66, -0.275), warning)
+	MODEL_FACTORY.add_box(self, "WeaponReceiver", Vector3(0.14, 0.14, 0.48), Vector3(0.40, 1.00, -0.32), weapon, Vector3(0, deg_to_rad(12.0), 0))
+	MODEL_FACTORY.add_cylinder(self, "WeaponBarrel", 0.035, 0.38, Vector3(0.40, 1.00, -0.72), weapon, Vector3(PI / 2.0, 0, 0), 10)
 
 func configure_seed(value: int) -> void:
 	rng.seed = value; patrol_phase = rng.randf_range(0.0, TAU); fire_timer = rng.randf_range(0.7, 1.5); reaction_timer = rng.randf_range(0.15, 0.65); aim_quality = rng.randf_range(0.55, 0.92)

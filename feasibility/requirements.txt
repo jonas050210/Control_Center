@@ -12,9 +12,9 @@
 # M1 Data Pipeline
 mss>=9.0.0
 pynput>=1.7.6
-numpy>=1.24.0
-Pillow>=10.0.0
-pytest>=7.0.0
+numpy>=1.26,<3
+Pillow>=10.0,<12
+pytest>=7.0,<9
 
 # M0 Feasibility & RL
 godot-rl==0.8.2

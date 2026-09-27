@@ -5,6 +5,7 @@ and statistics inspection for Behavioral Cloning (BC).
 """
 
 from data_pipeline.schema import (
+    ACTION_CONTRACT_VERSION,
     ACTION_SPACE_SPEC,
     ActionState,
     CaptureConfig,
@@ -23,6 +24,7 @@ __version__ = SCHEMA_VERSION
 
 __all__ = [
     "SCHEMA_VERSION",
+    "ACTION_CONTRACT_VERSION",
     "ACTION_SPACE_SPEC",
     "ActionState",
     "CaptureConfig",

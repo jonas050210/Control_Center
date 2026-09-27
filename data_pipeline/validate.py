@@ -22,12 +22,33 @@ from PIL import Image
 
 from data_pipeline.actions import MouseBinner
 from data_pipeline.schema import (
+    ACTION_CONTRACT_VERSION,
     DatasetMetadata,
     DatasetSample,
     SCHEMA_VERSION,
 )
 
 logger = logging.getLogger("SandboxAI.Validator")
+
+REQUIRED_METADATA_FIELDS = {
+    "session_id",
+    "schema_version",
+    "created_at",
+    "source",
+    "platform",
+    "capture_config",
+    "mouse_config",
+    "action_space",
+    "summary_stats",
+}
+
+
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def _reject_nonfinite(value: str) -> None:
+    raise ValueError(f"Non-finite JSON number is not allowed: {value}")
 
 
 @dataclasses.dataclass
@@ -102,8 +123,12 @@ def validate_dataset(
             errors=["Missing metadata.json file"],
         )
 
+    raw_metadata: Dict[str, Any] = {}
     try:
-        metadata = DatasetMetadata.load(meta_path)
+        raw_metadata = json.loads(meta_path.read_text(encoding="utf-8"), parse_constant=_reject_nonfinite)
+        if not isinstance(raw_metadata, dict):
+            raise ValueError("metadata root must be a JSON object")
+        metadata = DatasetMetadata.from_dict(raw_metadata)
     except Exception as e:
         return ValidationReport(
             is_valid=False,
@@ -113,17 +138,40 @@ def validate_dataset(
             errors=[f"Failed to parse metadata.json: {e}"],
         )
 
+    missing_metadata = sorted(REQUIRED_METADATA_FIELDS - raw_metadata.keys())
+    if missing_metadata:
+        errors.append("metadata.json is missing required field(s): " + ", ".join(missing_metadata))
+    for field in ("capture_config", "mouse_config", "action_space", "summary_stats", "platform"):
+        if field in raw_metadata and not isinstance(raw_metadata[field], dict):
+            errors.append(f"metadata.json field '{field}' must be an object")
+    action_space = raw_metadata.get("action_space")
+    if isinstance(action_space, dict):
+        contract_version = action_space.get("contract_version")
+        if contract_version is None:
+            warnings.append(
+                "metadata.json has no action contract version; assuming the legacy 2.0.0 field order"
+            )
+        elif contract_version != ACTION_CONTRACT_VERSION:
+            errors.append(
+                "Unsupported action contract "
+                f"{contract_version!r}; validator supports {ACTION_CONTRACT_VERSION}"
+            )
+
     schema_version = metadata.schema_version
-    if not schema_version:
-        errors.append("metadata.json missing 'schema_version'")
+    if not isinstance(schema_version, str) or not schema_version:
+        errors.append("metadata.json 'schema_version' must be a non-empty string")
     elif schema_version.split(".")[0] != SCHEMA_VERSION.split(".")[0]:
         errors.append(
             f"Unsupported schema major version {schema_version}; validator supports {SCHEMA_VERSION}"
         )
 
-    recording_status = metadata.summary_stats.get("status", "complete")
+    recording_status = metadata.summary_stats.get("status", "complete") if isinstance(metadata.summary_stats, dict) else "invalid"
     if recording_status != "complete":
         errors.append(f"Recording is not complete (status={recording_status})")
+    if isinstance(metadata.summary_stats, dict):
+        dropped_input = metadata.summary_stats.get("dropped_input_events", 0)
+        if isinstance(dropped_input, int) and dropped_input > 0:
+            warnings.append(f"Recording dropped {dropped_input} input event(s) because the listener buffer filled")
     if (path / ".recording").exists():
         errors.append("Recording lock marker is present; session may still be active or was interrupted")
 
@@ -135,6 +183,22 @@ def validate_dataset(
     target_fps = metadata.capture_config.target_fps
     num_bins_x = metadata.mouse_config.num_bins_x
     num_bins_y = metadata.mouse_config.num_bins_y
+
+    if not isinstance(target_w, int) or isinstance(target_w, bool):
+        errors.append(f"frame_width must be an integer, got {target_w!r}")
+        target_w = 0
+    if not isinstance(target_h, int) or isinstance(target_h, bool):
+        errors.append(f"frame_height must be an integer, got {target_h!r}")
+        target_h = 0
+    if not _finite_number(target_fps):
+        errors.append(f"target_fps must be a finite number, got {target_fps!r}")
+        target_fps = 0.0
+    if not isinstance(num_bins_x, int) or isinstance(num_bins_x, bool):
+        errors.append(f"num_bins_x must be an integer, got {num_bins_x!r}")
+        num_bins_x = 0
+    if not isinstance(num_bins_y, int) or isinstance(num_bins_y, bool):
+        errors.append(f"num_bins_y must be an integer, got {num_bins_y!r}")
+        num_bins_y = 0
 
     for axis, num_bins, edges in (
         ("x", num_bins_x, metadata.mouse_config.bin_edges_x),
@@ -148,8 +212,8 @@ def validate_dataset(
             )
         except (TypeError, ValueError) as exc:
             errors.append(f"Invalid mouse bin metadata for axis {axis}: {exc}")
-    if not math.isfinite(metadata.mouse_config.sensitivity_scale):
-        errors.append("Mouse sensitivity_scale must be finite")
+    if not _finite_number(metadata.mouse_config.sensitivity_scale):
+        errors.append("Mouse sensitivity_scale must be a finite number")
 
     if target_w <= 0 or target_h <= 0:
         errors.append(f"Invalid frame dimensions in metadata: {target_w}x{target_h}")
@@ -201,7 +265,7 @@ def validate_dataset(
 
             if not sample.is_valid:
                 warnings.append(f"Line {line_num}: Sample is explicitly marked invalid")
-            if not math.isfinite(sample.timestamp) or not math.isfinite(sample.dt):
+            if not _finite_number(sample.timestamp) or not _finite_number(sample.dt):
                 errors.append(f"Line {line_num}: timestamp/dt must be finite")
 
             # Timestamp monotonicity check
@@ -227,9 +291,17 @@ def validate_dataset(
 
             # Action bounds check
             act = sample.actions
-            if act.move_x not in (-1, 0, 1):
+            if (
+                not isinstance(act.move_x, int)
+                or isinstance(act.move_x, bool)
+                or act.move_x not in (-1, 0, 1)
+            ):
                 errors.append(f"Line {line_num}: Invalid move_x value {act.move_x}")
-            if act.move_y not in (-1, 0, 1):
+            if (
+                not isinstance(act.move_y, int)
+                or isinstance(act.move_y, bool)
+                or act.move_y not in (-1, 0, 1)
+            ):
                 errors.append(f"Line {line_num}: Invalid move_y value {act.move_y}")
             for flag_name, flag_val in [
                 ("jump", act.jump),
@@ -239,17 +311,29 @@ def validate_dataset(
                 ("fire", act.fire),
                 ("ads", act.ads),
             ]:
-                if flag_val not in (0, 1):
+                if (
+                    not isinstance(flag_val, int)
+                    or isinstance(flag_val, bool)
+                    or flag_val not in (0, 1)
+                ):
                     errors.append(f"Line {line_num}: Invalid binary flag {flag_name}={flag_val}")
 
             # Mouse bin and finite continuous delta checks
-            if not math.isfinite(act.mouse_dx) or not math.isfinite(act.mouse_dy):
+            if not _finite_number(act.mouse_dx) or not _finite_number(act.mouse_dy):
                 errors.append(f"Line {line_num}: Mouse deltas must be finite")
-            if not (0 <= act.mouse_dx_bin < num_bins_x):
+            if (
+                not isinstance(act.mouse_dx_bin, int)
+                or isinstance(act.mouse_dx_bin, bool)
+                or not (0 <= act.mouse_dx_bin < num_bins_x)
+            ):
                 errors.append(
                     f"Line {line_num}: mouse_dx_bin {act.mouse_dx_bin} out of range [0, {num_bins_x - 1}]"
                 )
-            if not (0 <= act.mouse_dy_bin < num_bins_y):
+            if (
+                not isinstance(act.mouse_dy_bin, int)
+                or isinstance(act.mouse_dy_bin, bool)
+                or not (0 <= act.mouse_dy_bin < num_bins_y)
+            ):
                 errors.append(
                     f"Line {line_num}: mouse_dy_bin {act.mouse_dy_bin} out of range [0, {num_bins_y - 1}]"
                 )
@@ -284,11 +368,14 @@ def validate_dataset(
 
     if total_steps == 0:
         errors.append("Dataset contains 0 valid steps in samples.jsonl")
-    stored_steps = metadata.summary_stats.get("total_steps")
-    if stored_steps not in (None, 0) and int(stored_steps) != total_steps:
-        errors.append(
-            f"metadata total_steps={stored_steps} does not match samples.jsonl count={total_steps}"
-        )
+    stored_steps = metadata.summary_stats.get("total_steps") if isinstance(metadata.summary_stats, dict) else None
+    if stored_steps is not None:
+        if not isinstance(stored_steps, int) or isinstance(stored_steps, bool) or stored_steps < 0:
+            errors.append(f"metadata total_steps must be a non-negative integer, got {stored_steps!r}")
+        elif stored_steps not in (0, total_steps):
+            errors.append(
+                f"metadata total_steps={stored_steps} does not match samples.jsonl count={total_steps}"
+            )
     frames_dir = path / "frames"
     if frames_dir.is_dir():
         disk_frames = {

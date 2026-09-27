@@ -11,6 +11,8 @@ var peer: StreamPeerTCP
 var receive_buffer: String = ""
 var current_request_id: int = 0
 var controller: SandboxAIController
+const MAX_REQUEST_BYTES: int = 8 * 1024 * 1024
+const ACTION_CONTRACT_VERSION: String = "2.0.0"
 
 func _ready() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
@@ -41,6 +43,11 @@ func _process(_delta: float) -> void:
 		return
 	var available: int = peer.get_available_bytes()
 	if available > 0: receive_buffer += peer.get_utf8_string(available)
+	if receive_buffer.to_utf8_buffer().size() > MAX_REQUEST_BYTES:
+		_send({"ok": false, "error": "request buffer exceeds maximum size"})
+		peer.disconnect_from_host()
+		receive_buffer = ""
+		return
 	while receive_buffer.contains("\n"):
 		var line: String = receive_buffer.get_slice("\n", 0)
 		receive_buffer = receive_buffer.substr(line.length() + 1)
@@ -63,7 +70,7 @@ func _handle_line(line: String) -> void:
 	current_request_id = int(request.get("request_id", 0))
 	var command: String = str(request.get("command", ""))
 	if command == "hello":
-		_send({"ok": true, "protocol": 1, "action_dims": [3,3,2,2,2,2,2,2,21,21]})
+		_send({"ok": true, "protocol": 1, "action_contract": ACTION_CONTRACT_VERSION, "action_dims": [3,3,2,2,2,2,2,2,21,21]})
 		return
 	if controller == null:
 		_send({"ok": false, "error": "arena controller is not ready"})
@@ -83,6 +90,10 @@ func _handle_line(line: String) -> void:
 		if not action is Array or action.size() < 10:
 			_send({"ok": false, "error": "action must contain 10 integers"})
 			return
+		for value: Variant in action:
+			if typeof(value) != TYPE_INT:
+				_send({"ok": false, "error": "action values must be integers"})
+				return
 		controller.set_action(action)
 		_send_state(controller.consume_reward())
 	elif command == "close":

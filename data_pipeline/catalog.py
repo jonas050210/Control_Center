@@ -53,7 +53,9 @@ def build_catalog(
     if output_path:
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        temporary = output.with_suffix(output.suffix + ".tmp")
+        temporary.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
+        temporary.replace(output)
     return report
 
 

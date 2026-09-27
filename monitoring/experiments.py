@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import platform
 import subprocess
@@ -23,15 +24,18 @@ def utc_now() -> str:
 
 
 def _json_safe(value: Any) -> Any:
+    """Convert common scientific Python values into strict JSON values."""
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
     if isinstance(value, dict):
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     if hasattr(value, "item"):
         try:
-            return value.item()
+            return _json_safe(value.item())
         except Exception:
             pass
     return value
@@ -40,7 +44,9 @@ def _json_safe(value: Any) -> Any:
 def _atomic_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(_json_safe(payload), indent=2), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(_json_safe(payload), indent=2, allow_nan=False), encoding="utf-8"
+    )
     os.replace(temporary, path)
 
 
@@ -108,7 +114,9 @@ class ExperimentTracker:
             "metrics": _json_safe(metrics),
         }
         with self.metrics_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, separators=(",", ":")) + "\n")
+            handle.write(
+                json.dumps(_json_safe(event), separators=(",", ":"), allow_nan=False) + "\n"
+            )
             handle.flush()
 
     def add_artifact(self, path: Union[str, Path], role: str) -> Dict[str, Any]:

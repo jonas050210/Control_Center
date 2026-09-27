@@ -492,7 +492,7 @@ class TacticalArenaEnv(gym.Env[np.ndarray, np.ndarray]):
         }
 
     def state_snapshot(self) -> Dict[str, Any]:
-        """Serializable deterministic state, useful for reset regression tests."""
+        """Return a restorable deterministic state for debugging and replay tests."""
         return {
             "player": [
                 self.player_x,
@@ -503,9 +503,72 @@ class TacticalArenaEnv(gym.Env[np.ndarray, np.ndarray]):
                 self.ammo,
                 self.reserve_ammo,
             ],
-            "enemies": [[e.x, e.z, e.health, e.phase, e.fire_cooldown] for e in self.enemies],
+            "enemies": [
+                [e.x, e.z, e.spawn_x, e.spawn_z, e.health, e.radius, e.phase, e.fire_cooldown]
+                for e in self.enemies
+            ],
             "step": self.step_count,
+            "episode_seed": self._episode_seed,
+            "timers": [self.reload_timer, self.shot_cooldown, self.air_timer, self.recoil],
+            "counters": [
+                self.targets_hit_count,
+                self.kill_count,
+                self.shots_fired,
+                self.damage_taken,
+                self.distance_travelled,
+            ],
+            "last_action": self.last_action.to_array().tolist(),
+            "last_shot_hit": self.last_shot_hit,
+            "last_action_fired": self.last_action_fired,
+            "previous_aim_error": self._previous_aim_error,
+            "visited_cells": [list(cell) for cell in sorted(self._visited_cells)],
+            "rng_state": self._rng.bit_generator.state,
         }
+
+    def restore_state(self, snapshot: Dict[str, Any]) -> None:
+        """Restore a state previously returned by :meth:`state_snapshot`."""
+        if not isinstance(snapshot, dict) or "player" not in snapshot or "enemies" not in snapshot:
+            raise ValueError("invalid TacticalArenaEnv state snapshot")
+        player = snapshot["player"]
+        if not isinstance(player, list) or len(player) != 7:
+            raise ValueError("snapshot player state must contain seven values")
+        (
+            self.player_x,
+            self.player_z,
+            self.player_yaw,
+            self.player_pitch,
+            self.player_health,
+            self.ammo,
+            self.reserve_ammo,
+        ) = player
+        restored: List[Enemy] = []
+        for values in snapshot["enemies"]:
+            if not isinstance(values, list) or len(values) != 8:
+                raise ValueError("snapshot enemy state is malformed")
+            restored.append(Enemy(*values))
+        self.enemies = restored
+        self.step_count = int(snapshot.get("step", 0))
+        self._episode_seed = int(snapshot.get("episode_seed", self._episode_seed))
+        timers = snapshot.get("timers", [0, 0, 0, 0.0])
+        if isinstance(timers, list) and len(timers) == 4:
+            self.reload_timer, self.shot_cooldown, self.air_timer, self.recoil = timers
+        counters = snapshot.get("counters", [0, 0, 0, 0.0, 0.0])
+        if isinstance(counters, list) and len(counters) == 5:
+            (
+                self.targets_hit_count,
+                self.kill_count,
+                self.shots_fired,
+                self.damage_taken,
+                self.distance_travelled,
+            ) = counters
+        self.last_action = SandboxAction.from_array(snapshot.get("last_action", SandboxAction().to_array()))
+        self.last_shot_hit = bool(snapshot.get("last_shot_hit", False))
+        self.last_action_fired = bool(snapshot.get("last_action_fired", False))
+        self._previous_aim_error = float(snapshot.get("previous_aim_error", math.pi))
+        self._visited_cells = {tuple(cell) for cell in snapshot.get("visited_cells", [])}
+        if "rng_state" in snapshot:
+            self._rng.bit_generator.state = snapshot["rng_state"]
+        self._sync_targets_compat()
 
     # ----------------------------------------------------------------- render
     def _project(self, x: float, z: float) -> Optional[Tuple[int, float, float]]:

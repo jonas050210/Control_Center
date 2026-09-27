@@ -79,3 +79,13 @@ def test_mock_session_recorder_end_to_end_png(tmp_path: Path) -> None:
     assert metadata.capture_config.frame_width == 84
     assert metadata.capture_config.image_format == "png"
     assert metadata.mouse_config.num_bins_x == 11
+
+
+def test_input_listener_reports_buffer_overflow():
+    from data_pipeline.input_listener import InputListener, RawInputEvent
+
+    listener = InputListener(max_buffer_size=1)
+    listener.push_event(RawInputEvent(0.0, "key_down", {"key": "w"}))
+    listener.push_event(RawInputEvent(0.1, "key_up", {"key": "w"}))
+    assert listener.get_dropped_event_count() == 1
+    assert len(listener.drain_events()) == 1

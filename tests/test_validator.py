@@ -212,3 +212,15 @@ def test_validator_warns_on_large_frame_delay(tmp_path: Path) -> None:
     assert report.is_valid is True  # Warning, not hard failure
     assert any("Large frame delay" in w for w in report.warnings)
 
+
+
+def test_validator_rejects_partial_metadata(tmp_path: Path) -> None:
+    ds_dir = tmp_path / "partial_meta"
+    create_dummy_dataset(ds_dir, num_samples=1)
+    metadata = json.loads((ds_dir / "metadata.json").read_text())
+    metadata.pop("capture_config")
+    (ds_dir / "metadata.json").write_text(json.dumps(metadata))
+
+    report = validate_dataset(ds_dir)
+    assert report.is_valid is False
+    assert any("capture_config" in error for error in report.errors)

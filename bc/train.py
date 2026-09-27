@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -34,6 +35,13 @@ DISCRETE_HEADS = (
     "mouse_dx_bin",
     "mouse_dy_bin",
 )
+
+
+def _atomic_torch_save(payload: Dict[str, Any], destination: Path) -> None:
+    """Write checkpoints atomically so interruption cannot destroy the last model."""
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    torch.save(payload, temporary)
+    os.replace(temporary, destination)
 
 
 def compute_top_k_accuracy(logits: torch.Tensor, targets: torch.Tensor, k: int = 1) -> float:
@@ -250,6 +258,23 @@ def train_bc(
                 )
             resume_checkpoint = torch.load(resume_file, map_location=device, weights_only=False)
             resume_config = resume_checkpoint.get("config", {})
+            expected_resume = {
+                "target_h": target_h,
+                "target_w": target_w,
+                "seq_len": seq_len,
+                "num_bins_x": int(train_ds.num_bins_x),
+                "num_bins_y": int(train_ds.num_bins_y),
+            }
+            mismatches = {
+                key: (expected_resume[key], resume_config[key])
+                for key in expected_resume
+                if key in resume_config and expected_resume[key] != resume_config[key]
+            }
+            if mismatches:
+                raise ValueError(
+                    "Resume checkpoint is incompatible with the requested dataset/model settings: "
+                    + ", ".join(f"{key}={current!r} (checkpoint={saved!r})" for key, (current, saved) in mismatches.items())
+                )
             latent_dim = int(resume_config.get("latent_dim", latent_dim))
             channel_scales = tuple(resume_config.get("channel_scales", channel_scales))
             use_gru = bool(resume_config.get("use_gru", use_gru))
@@ -295,6 +320,16 @@ def train_bc(
             "seed": seed,
         }
         history: List[Dict[str, Any]] = []
+        history_file = checkpoint_path / "bc_history.json"
+        if resume_checkpoint is not None and history_file.is_file():
+            try:
+                loaded_history = json.loads(history_file.read_text(encoding="utf-8"))
+                if isinstance(loaded_history, list):
+                    history = [item for item in loaded_history if isinstance(item, dict)]
+            except (OSError, json.JSONDecodeError):
+                # A checkpoint remains usable even if its optional history
+                # artifact was interrupted during a previous write.
+                history = []
         for epoch in range(start_epoch, start_epoch + epochs):
             started = time.perf_counter()
             train_metrics = train_bc_epoch(
@@ -324,12 +359,12 @@ def train_bc(
                 "best_val_loss": best_val_loss,
                 "config": config,
             }
-            torch.save(payload, checkpoint_path / "bc_latest.pt")
+            _atomic_torch_save(payload, checkpoint_path / "bc_latest.pt")
             if is_best:
-                torch.save(payload, checkpoint_path / "bc_best.pt")
-            (checkpoint_path / "bc_history.json").write_text(
-                json.dumps(history, indent=2), encoding="utf-8"
-            )
+                _atomic_torch_save(payload, checkpoint_path / "bc_best.pt")
+            history_tmp = checkpoint_path / "bc_history.json.tmp"
+            history_tmp.write_text(json.dumps(history, indent=2, allow_nan=False), encoding="utf-8")
+            os.replace(history_tmp, checkpoint_path / "bc_history.json")
             if tracker:
                 tracker.log_metrics(epoch, summary, phase="train_val")
             if telemetry:
