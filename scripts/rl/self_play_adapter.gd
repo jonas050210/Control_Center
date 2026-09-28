@@ -87,6 +87,42 @@ func health_check() -> Array:
 	return reports
 
 
+func set_map(map_id: String) -> bool:
+	var all_ok: bool = true
+	for env in environments:
+		if not (env as SelfPlayEnvironmentCore).set_map(map_id):
+			all_ok = false
+	return all_ok
+
+
+func set_layout(layout_id: String) -> bool:
+	var all_ok: bool = true
+	for env in environments:
+		if not (env as SelfPlayEnvironmentCore).set_layout(layout_id):
+			all_ok = false
+	return all_ok
+
+
+func set_lighting_mode(mode_id: String) -> bool:
+	var all_ok: bool = true
+	for env in environments:
+		if not (env as SelfPlayEnvironmentCore).set_lighting_mode(mode_id):
+			all_ok = false
+	return all_ok
+
+
+func set_curriculum_level(level: int) -> void:
+	for env in environments:
+		(env as SelfPlayEnvironmentCore).set_curriculum_level(level)
+
+
+func get_episode_conditions() -> Array:
+	var conditions: Array = []
+	for env in environments:
+		conditions.append((env as SelfPlayEnvironmentCore).get_episode_condition())
+	return conditions
+
+
 static func _serialize_pair(observations: Array) -> Array:
 	return [
 		RLAdapter._observation_to_array(observations[0]),

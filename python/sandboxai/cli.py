@@ -276,6 +276,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adapter.add_argument("--check-mock", action="store_true", help="run the mock adapter contract check")
 
+    validate_rt = sub.add_parser(
+        "validate-runtime",
+        help="run automated live headless validation against a real Godot executable",
+    )
+    validate_rt.add_argument("--godot-executable", default="godot")
+    validate_rt.add_argument("--project-path", default="")
+    validate_rt.add_argument("--timeout", type=float, default=15.0)
+    validate_rt.add_argument("--env-count", type=int, default=2)
+    validate_rt.add_argument("--json", action="store_true")
+
+    compare_exp = sub.add_parser(
+        "compare-experiments",
+        help="compare candidate experiment summary against a baseline and detect regressions",
+    )
+    compare_exp.add_argument("--baseline", required=True, help="path to baseline summary.json")
+    compare_exp.add_argument("--candidate", required=True, help="path to candidate summary.json")
+    compare_exp.add_argument("--threshold", type=float, default=0.05, help="regression threshold (default 0.05)")
+    compare_exp.add_argument("--json", action="store_true")
+
+    summarize_exp = sub.add_parser(
+        "summarize-experiment",
+        help="summarize multi-seed experiment runs in a directory",
+    )
+    summarize_exp.add_argument("--path", required=True, help="directory containing seed run summaries")
+    summarize_exp.add_argument("--json", action="store_true")
+
     smoke = sub.add_parser("smoke-test", help="run end-to-end sanity verification of the Python & ML stack")
     smoke.add_argument("--device", default="cpu", choices=["cpu", "cuda", "auto"])
 
@@ -525,6 +551,40 @@ def main(argv: list[str] | None = None) -> int:
             problems = AdapterContractChecker(MockExternalEnvironment()).run()
             print(json.dumps({"mock_adapter_problems": problems}, indent=2))
             return 1 if problems else 0
+        return 0
+    if args.command == "validate-runtime":
+        from .runtime_validation import RuntimeValidator, format_validation_report
+        validator = RuntimeValidator(
+            project_path=args.project_path,
+            godot_executable=args.godot_executable,
+            timeout=args.timeout,
+        )
+        report = validator.validate(env_count=args.env_count)
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2, default=str))
+        else:
+            print(format_validation_report(report))
+        return 0 if report.status in {"passed", "unavailable"} else 1
+    if args.command == "compare-experiments":
+        from .experiment import compare_experiments, format_experiment_report
+        base_data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        cand_data = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
+        res = compare_experiments(base_data, cand_data, threshold=args.threshold)
+        if args.json:
+            print(json.dumps(res, indent=2, default=str))
+        else:
+            print(format_experiment_report(cand_data, comparison=res))
+        return 0 if res["status"] != "regression_warning" else 1
+    if args.command == "summarize-experiment":
+        from .experiment import aggregate_seed_runs, format_experiment_report
+        target_dir = Path(args.path)
+        summary_files = list(target_dir.glob("**/run_summary.json")) or list(target_dir.glob("*.json"))
+        run_dicts = [json.loads(p.read_text(encoding="utf-8")) for p in summary_files]
+        agg = aggregate_seed_runs(run_dicts)
+        if args.json:
+            print(json.dumps(agg, indent=2, default=str))
+        else:
+            print(format_experiment_report(agg))
         return 0
     raise RuntimeError(f"unhandled command {args.command}")
 
