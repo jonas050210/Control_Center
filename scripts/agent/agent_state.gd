@@ -101,6 +101,17 @@ func get_forward_horizontal() -> Vector3:
 	return Vector3(sin(yaw_rad), 0.0, -cos(yaw_rad))
 
 
+## Inverse of `get_forward_horizontal()`: aims the agent along `direction`
+## on the horizontal plane. Aiming is stored as yaw/pitch, so there is no
+## writable `forward` property; this is the supported way to point the
+## agent at something from a test or a scripted setup.
+func set_forward_horizontal(direction: Vector3) -> void:
+	var flat := Vector3(direction.x, 0.0, direction.z)
+	if flat.is_zero_approx():
+		return
+	yaw_deg = rad_to_deg(atan2(flat.x, -flat.z))
+
+
 func get_right_horizontal() -> Vector3:
 	var yaw_rad: float = deg_to_rad(yaw_deg)
 	return Vector3(cos(yaw_rad), 0.0, sin(yaw_rad))

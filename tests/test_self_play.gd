@@ -61,7 +61,8 @@ func test_self_play_with_world_blocks_weapon_ray_occlusion() -> SandboxTest:
 
 	# Agent A aims towards B and shoots
 	var aim_dir: Vector3 = (env.agent_b.position - env.agent_a.position).normalized()
-	env.agent_a.forward = aim_dir
+	# AgentState stores aim as yaw/pitch; it has no writable `forward`.
+	env.agent_a.set_forward_horizontal(aim_dir)
 
 	var shoot_action := Action.new(0, 0, 0, 0, true, Vector2.ZERO, false)
 	var res: Dictionary = env.step([shoot_action, Action.idle()])
@@ -92,7 +93,7 @@ func test_self_play_perception_gating_detects_visible_and_hidden() -> SandboxTes
 
 	# Move into direct line of sight
 	env.agent_b.reset(Vector3(-4.0, 0.0, 4.0), 180.0)
-	env.agent_a.forward = Vector3(0.0, 0.0, 1.0)
+	env.agent_a.set_forward_horizontal(Vector3(0.0, 0.0, 1.0))
 	env._sync_proxies()
 	env.step([Action.idle(), Action.idle()])
 
@@ -225,8 +226,11 @@ func test_self_play_zero_information_leakage_when_occluded() -> SandboxTest:
 	t.assert_false(obs_b.primary_enemy_los_clear)
 
 	# Enemy health / speed / distance must not leak ground truth
-	t.assert_eq(obs_a.primary_enemy_health_norm, 0.0)
-	t.assert_eq(obs_b.primary_enemy_health_norm, 0.0)
+	# The primary target's health field is `enemy_health_norm` on the
+	# Observation object; `primary_enemy_health_norm` is only its name in
+	# Observation.FIELD_SPEC (the flat-vector layout).
+	t.assert_eq(obs_a.enemy_health_norm, 0.0)
+	t.assert_eq(obs_b.enemy_health_norm, 0.0)
 	return t
 
 

@@ -94,15 +94,17 @@ func refresh(snapshot: Dictionary) -> void:
 		% [int(snapshot["selected_agent_slot"]), int(snapshot["selected_environment"])]
 	)
 
-	_set("mode", "%s (%s)" % [str(status["mode_name"]), str(status["policy_source_name"])])
+	_set_row("mode", "%s (%s)" % [str(status["mode_name"]), str(status["policy_source_name"])])
 	var health_ratio: float = float(agent["health"]) / maxf(1.0, float(agent["max_health"]))
-	_set("health", "%.0f / %.0f" % [float(agent["health"]), float(agent["max_health"])])
+	_set_row("health", "%.0f / %.0f" % [float(agent["health"]), float(agent["max_health"])])
 	(_rows["health"] as Label).add_theme_color_override(
 		"font_color", ControlCenterTheme.ratio_color(health_ratio)
 	)
-	_set("enemies", "%d alive / %d" % [int(episode["alive_enemies"]), int(episode["total_enemies"])])
+	_set_row(
+		"enemies", "%d alive / %d" % [int(episode["alive_enemies"]), int(episode["total_enemies"])]
+	)
 	if bool(target.get("has_target", false)):
-		_set(
+		_set_row(
 			"target",
 			(
 				"#%d  %.1f m  %s"
@@ -114,8 +116,8 @@ func refresh(snapshot: Dictionary) -> void:
 			)
 		)
 	else:
-		_set("target", "none")
-	_set(
+		_set_row("target", "none")
+	_set_row(
 		"weapon",
 		(
 			"ready"
@@ -123,19 +125,19 @@ func refresh(snapshot: Dictionary) -> void:
 			else "cooldown %.2fs" % float(agent["weapon_cooldown"])
 		)
 	)
-	_set("episode", "#%d  step %d/%d" % [
+	_set_row("episode", "#%d  step %d/%d" % [
 		int(episode["episode"]), int(episode["step"]), int(episode["max_steps"])
 	])
-	_set("time", "%.2f s" % float(episode["time_seconds"]))
-	_set("reward", "%.2f  (last %+.3f)" % [
+	_set_row("time", "%.2f s" % float(episode["time_seconds"]))
+	_set_row("reward", "%.2f  (last %+.3f)" % [
 		float(episode["reward"]), float(episode["last_reward"])
 	])
-	_set("kills", str(int(episode["kills"])))
-	_set("deaths", str(int(episode["deaths"])))
-	_set("damage", "dealt %.0f / taken %.0f" % [
+	_set_row("kills", str(int(episode["kills"])))
+	_set_row("deaths", str(int(episode["deaths"])))
+	_set_row("damage", "dealt %.0f / taken %.0f" % [
 		float(episode["damage_dealt"]), float(episode["damage_received"])
 	])
-	_set("accuracy", "%.0f%%  (%d/%d)" % [
+	_set_row("accuracy", "%.0f%%  (%d/%d)" % [
 		float(episode["accuracy"]) * 100.0,
 		int(episode["shots_hit"]),
 		int(episode["shots_fired"]),
@@ -181,7 +183,11 @@ func refresh(snapshot: Dictionary) -> void:
 		_enemy_list.text = "\n".join(lines)
 
 
-func _set(key: String, value: String) -> void:
+## Renamed from `_set`: that name is the engine's `Object::_set(StringName,
+## Variant) -> bool` virtual. Godot 4.7 validates virtual-method signatures at
+## compile time, so a private helper sharing the name failed to compile the
+## whole panel (and with it the Control Center scene).
+func _set_row(key: String, value: String) -> void:
 	var label: Label = _rows.get(key)
 	if label != null:
 		label.text = value

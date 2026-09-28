@@ -6,12 +6,18 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
+const AgentState = preload("res://scripts/agent/agent_state.gd")
 const AIStubController = preload("res://scripts/input/ai_stub_controller.gd")
+const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
+const ControlCenterResults = preload("res://scripts/control_center/control_center_results.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
+const PerceptionModel = preload("res://scripts/control_center/perception_model.gd")
+const ReplayPlayer = preload("res://scripts/replay/replay_player.gd")
+const ReplayRecorder = preload("res://scripts/replay/replay_recorder.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
@@ -231,3 +237,123 @@ func test_missed_point_blank_shot_does_not_also_melee() -> SandboxTest:
 		"melee damage must stay available when ranged is disabled"
 	)
 	return t
+
+
+## Bug (Godot 4.7 compile cascade): `const X: PackedStringArray =
+## PackedStringArray([...])` is not a constant expression, so
+## control_center_config.gd, control_center_results.gd and
+## perception_model.gd all failed to compile and every test that preloaded
+## them failed with them. Reading the constants proves they still exist,
+## still hold the same entries and are still usable as lookup tables.
+func test_string_list_constants_are_constant_expressions() -> SandboxTest:
+	var t := SandboxTest.new("string_list_constants_are_constant_expressions")
+	t.assert_true(ControlCenterConfig.REBUILD_SETTINGS.has("environment_count"))
+	t.assert_true(ControlCenterConfig.REBUILD_SETTINGS.has("enemy_count"))
+	t.assert_true(ControlCenterConfig.REBUILD_SETTINGS.has("seed"))
+	t.assert_false(ControlCenterConfig.REBUILD_SETTINGS.has("curriculum_level"))
+	t.assert_true(ControlCenterResults.AVERAGED_KEYS.has("reward"))
+	t.assert_eq(PerceptionModel.SLOT_LABELS.size(), 3)
+	t.assert_eq(str(PerceptionModel.SLOT_LABELS[0]), "primary")
+	return t
+
+
+## Bug: `AgentState` stores aim as yaw/pitch and has no writable `forward`
+## property; tests that assigned one raised "Invalid assignment of property
+## 'forward'". `set_forward_horizontal()` is the supported inverse of
+## `get_forward_horizontal()` and must round-trip.
+func test_set_forward_horizontal_round_trips() -> SandboxTest:
+	var t := SandboxTest.new("set_forward_horizontal_round_trips")
+	var agent := AgentState.new()
+	for direction in [
+		Vector3(0.0, 0.0, 1.0), Vector3(0.0, 0.0, -1.0), Vector3(1.0, 0.0, 0.0), Vector3(1.0, 0.0, 1.0)
+	]:
+		agent.set_forward_horizontal(direction)
+		t.assert_vec_almost_eq((direction as Vector3).normalized(), agent.get_forward_horizontal())
+	# A degenerate direction must not move the aim.
+	var yaw_before: float = agent.yaw_deg
+	agent.set_forward_horizontal(Vector3(0.0, 1.0, 0.0))
+	t.assert_almost_eq(agent.yaw_deg, yaw_before, 0.0001)
+	return t
+
+
+## Bug: `seek_time()` floored `seconds / (1.0 / 60.0)`, and 0.5 / (1/60)
+## evaluates to 29.999999999999996 in binary floating point, so seeking to
+## half a second landed on tick 29 instead of 30.
+func test_replay_seek_time_is_not_off_by_one() -> SandboxTest:
+	var t := SandboxTest.new("replay_seek_time_is_not_off_by_one")
+	var recorder := ReplayRecorder.new({"map_id": "compound", "simulation_dt": 1.0 / 60.0})
+	recorder.start(5)
+	for index in range(120):
+		recorder.record_step(Action.idle(), 0.0, null, index == 119)
+	var player := ReplayPlayer.new(recorder.finish({"done_reason": "done"}))
+	t.assert_eq(player.seek_time(0.0), 0)
+	t.assert_eq(player.seek_time(0.5), 30)
+	t.assert_eq(player.seek_time(1.0), 60)
+	t.assert_eq(player.seek_time(1.5), 90)
+	t.assert_eq(player.seek_time(-1.0), 0)
+	# Mid-tick times must still floor to the tick that contains them.
+	t.assert_eq(player.seek_time(0.5 + (1.0 / 120.0)), 30)
+	return t
+
+
+## Bug: `_try_attack()` read `events["damage"]` directly, so a caller that
+## passed a fresh dictionary (the documented "events out" contract) crashed
+## with "Invalid access to key 'damage'", and it typed the injected RNG as
+## `RandomNumberGenerator`, which rejected deterministic test stubs.
+func test_try_attack_accepts_empty_events_and_stub_rng() -> SandboxTest:
+	var t := SandboxTest.new("try_attack_accepts_empty_events_and_stub_rng")
+	var enemy: EnemyState = EnemyState.new()
+	enemy.reset(Vector3(0.0, 0.0, -1.5))
+	enemy.state_time = 10.0
+	var context: Dictionary = {
+		"allow_attack": true,
+		"agent_alive": true,
+		"agent_position": Vector3.ZERO,
+		"allow_ranged": false,
+		"world": null,
+		"rng": MissRng.new(),
+	}
+	var events: Dictionary = {}
+	EnemyBrain._try_attack(enemy, context, events)
+	t.assert_true(bool(events.get("hit", false)))
+	t.assert_almost_eq(
+		float(events.get("damage", 0.0)), SandboxConfig.ENEMY_ATTACK_DAMAGE, 0.0001
+	)
+	return t
+
+
+## Bug: `agent_panel.gd` declared a private helper called `_set`, which is
+## the engine's `Object::_set(StringName, Variant) -> bool` virtual. Godot
+## 4.7 validates virtual signatures at compile time and rejected the whole
+## script. No script may re-declare an engine virtual with a different
+## signature.
+func test_no_script_redeclares_engine_virtuals() -> SandboxTest:
+	var t := SandboxTest.new("no_script_redeclares_engine_virtuals")
+	var offenders: Array = []
+	for path in _all_script_paths("res://scripts"):
+		var source: String = FileAccess.get_file_as_string(path)
+		for line in source.split("\n"):
+			var text: String = str(line)
+			if text.begins_with("func _set(") or text.begins_with("func _get("):
+				offenders.append(path)
+	t.assert_eq(offenders.size(), 0, "engine virtual re-declared in: %s" % str(offenders))
+	return t
+
+
+func _all_script_paths(root: String) -> Array:
+	var found: Array = []
+	var directory := DirAccess.open(root)
+	if directory == null:
+		return found
+	directory.list_dir_begin()
+	var entry: String = directory.get_next()
+	while entry != "":
+		var path: String = "%s/%s" % [root, entry]
+		if directory.current_is_dir():
+			found.append_array(_all_script_paths(path))
+		elif entry.ends_with(".gd"):
+			found.append(path)
+		entry = directory.get_next()
+	directory.list_dir_end()
+	found.sort()
+	return found

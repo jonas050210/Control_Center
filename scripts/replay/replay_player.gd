@@ -111,8 +111,13 @@ func seek(tick_index: int) -> int:
 	return cursor
 
 
+## The epsilon is not cosmetic: `simulation_dt` is 1/60, which is not
+## representable in binary, so 0.5 / (1.0 / 60.0) evaluates to
+## 29.999999999999996 and a plain floor() seeks one tick too early. The
+## tolerance is far smaller than a tick, so it only absorbs that error.
 func seek_time(seconds: float) -> int:
-	return seek(int(floor(maxf(0.0, seconds) / simulation_dt())))
+	var ticks: float = maxf(0.0, seconds) / simulation_dt()
+	return seek(int(floor(ticks + 1e-6)))
 
 
 ## Jumps to the next event at or after the cursor. Returns the event, or

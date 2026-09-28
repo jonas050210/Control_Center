@@ -62,9 +62,11 @@ const MAX_ENEMY_COUNT: int = 12
 ## Settings that cannot be applied to running environments and therefore
 ## need an explicit rebuild/reset. The UI marks them and only applies them
 ## when "Apply & reset" is pressed.
-const REBUILD_SETTINGS: PackedStringArray = PackedStringArray(
-	["environment_count", "enemy_count", "seed"]
-)
+## NOTE: declared as a plain Array literal, not `PackedStringArray(...)`.
+## A built-in constructor call taking an Array argument is not a constant
+## expression in Godot 4.7 ("Not a constant expression"), which made this
+## whole script fail to compile and cascaded into every Control Center test.
+const REBUILD_SETTINGS: Array = ["environment_count", "enemy_count", "seed"]
 
 ## Scenario presets. Each one is only a bundle of settings the simulation
 ## already supports (curriculum level + enemy count) — no scenario-specific

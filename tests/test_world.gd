@@ -21,7 +21,7 @@ func test_obstacle_bounds_and_containment() -> SandboxTest:
 	t.assert_almost_eq(box.bottom_y(), 0.0)
 	t.assert_true(box.contains_xz(Vector3(2.0, 0.0, 0.0)))
 	t.assert_false(box.contains_xz(Vector3(9.0, 0.0, 0.0)))
-	t.assert_eq(box.kind_name(), "crate")
+	t.assert_eq(Obstacle.kind_name(box.kind), "crate")
 	return t
 
 

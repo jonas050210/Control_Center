@@ -115,7 +115,9 @@ const OPTIONAL_FEATURES: Array = [
 	},
 ]
 
-const SLOT_LABELS: PackedStringArray = PackedStringArray(["primary", "secondary", "tertiary"])
+## Plain Array literal: `PackedStringArray([...])` is not a constant
+## expression in Godot 4.7 and fails to compile.
+const SLOT_LABELS: Array = ["primary", "secondary", "tertiary"]
 
 
 ## Which optional perception hooks the current EnvironmentCore provides.

@@ -346,7 +346,11 @@ static func _choose_search(enemy: EnemyState, context: Dictionary, track: Dictio
 		enemy.tactical_destination = last_known
 		enemy.has_tactical_destination = true
 		return
-	var rng: RandomNumberGenerator = context.get("rng")
+	# Typed as Variant on purpose: callers may inject a deterministic RNG
+	# stub (see tests/test_bug_regressions.gd). A `RandomNumberGenerator`
+	# static type makes that assignment fail at runtime with
+	# "Trying to assign value of type 'RefCounted'".
+	var rng: Variant = context.get("rng")
 	var angle: float = 0.0
 	var distance: float = SandboxConfig.ENEMY_SEARCH_RADIUS
 	if rng != null:
@@ -490,7 +494,7 @@ static func _wants_jump(enemy: EnemyState, destination: Vector3, context: Dictio
 	var arena: ArenaWorld = world
 	if arena.is_position_free(probe, enemy.radius, enemy.height):
 		return false
-	var rng: RandomNumberGenerator = context.get("rng")
+	var rng: Variant = context.get("rng")
 	if rng == null:
 		return true
 	return rng.randf() < SandboxConfig.ENEMY_JUMP_PROBABILITY
@@ -526,11 +530,11 @@ static func _try_attack(enemy: EnemyState, context: Dictionary, events: Dictiona
 		var hit_chance: float = clampf(
 			enemy.weapon.hit_radius / maxf(enemy.weapon.hit_radius + spread_m, 0.0001), 0.05, 1.0
 		)
-		var rng: RandomNumberGenerator = context.get("rng")
-		var roll: float = rng.randf() if rng != null else 0.0
+		var rng: Variant = context.get("rng")
+		var roll: float = float(rng.randf()) if rng != null else 0.0
 		if roll <= hit_chance:
 			events["hit"] = true
-			events["damage"] = float(events["damage"]) + SandboxConfig.ENEMY_FIRE_DAMAGE
+			events["damage"] = float(events.get("damage", 0.0)) + SandboxConfig.ENEMY_FIRE_DAMAGE
 		# The ranged attack was made this tick (the weapon cooldown was
 		# consumed whether the roll hit or missed), so the enemy is done:
 		# falling through to the melee check made a MISSED point-blank shot
@@ -543,4 +547,4 @@ static func _try_attack(enemy: EnemyState, context: Dictionary, events: Dictiona
 	if distance <= enemy.attack_range and enemy.attack_cooldown_remaining <= 0.0:
 		enemy.attack_cooldown_remaining = enemy.attack_cooldown_time
 		events["hit"] = true
-		events["damage"] = float(events["damage"]) + enemy.attack_damage
+		events["damage"] = float(events.get("damage", 0.0)) + enemy.attack_damage
