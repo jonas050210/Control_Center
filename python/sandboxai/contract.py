@@ -117,6 +117,86 @@ OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
 OBSERVATION_LEGACY_FIELD_COUNT: int = 33
 
 
+# Semantic channels of the observation vector. An external adapter has to
+# be able to produce each channel independently and honestly; when a target
+# game cannot supply one, the adapter must emit that channel's neutral
+# "no information" encoding (zeros, with the corresponding `*_visible` /
+# `*_confidence` flags at 0) rather than substituting privileged data.
+#
+# Keys are channel names; values are the OBSERVATION_SPEC field names in
+# that channel. Every field belongs to exactly one channel (asserted by
+# validate_observation_spec()).
+OBSERVATION_GROUPS: dict[str, tuple[str, ...]] = {
+    "self_state": (
+        "agent_position_norm",
+        "agent_forward",
+        "agent_health_norm",
+    ),
+    "movement": (
+        "agent_velocity_norm",
+        "agent_on_ground",
+        "agent_vertical_velocity_norm",
+    ),
+    "combat": (
+        "weapon_ready",
+        "in_combat",
+    ),
+    "targets": (
+        "primary_enemy_relative_position_norm",
+        "primary_enemy_distance_norm",
+        "primary_enemy_health_norm",
+        "primary_enemy_bearing_norm",
+        "alive_enemy_count_norm",
+        "secondary_enemy_relative_position_norm",
+        "secondary_enemy_distance_norm",
+        "secondary_enemy_bearing_norm",
+        "secondary_enemy_health_norm",
+        "secondary_enemy_alive",
+        "tertiary_enemy_relative_position_norm",
+        "tertiary_enemy_distance_norm",
+        "tertiary_enemy_bearing_norm",
+        "tertiary_enemy_health_norm",
+        "tertiary_enemy_alive",
+    ),
+    "perception": (
+        "primary_enemy_visible",
+        "primary_enemy_in_fov",
+        "primary_enemy_los_clear",
+        "primary_enemy_elevation_norm",
+        "secondary_enemy_visible",
+        "secondary_enemy_elevation_norm",
+        "tertiary_enemy_visible",
+        "tertiary_enemy_elevation_norm",
+        "visible_enemy_count_norm",
+        "agent_in_cover",
+        "agent_forward_clearance_norm",
+    ),
+    "memory": (
+        "primary_enemy_info_age_norm",
+        "primary_enemy_confidence",
+        "primary_enemy_source_visual",
+        "primary_enemy_source_sound",
+        "secondary_enemy_info_age_norm",
+        "tertiary_enemy_info_age_norm",
+        "remembered_enemy_count_norm",
+    ),
+    "sound": (
+        "last_sound_direction",
+        "last_sound_distance_norm",
+        "last_sound_bearing_norm",
+        "last_sound_age_norm",
+        "last_sound_loudness",
+        "last_sound_category_norm",
+        "audible_event_count_norm",
+    ),
+    "world": (
+        "nearest_obstacle_distance_norm",
+        "nearest_obstacle_bearing_norm",
+        "corpse_count_norm",
+    ),
+}
+
+
 @dataclass(frozen=True)
 class ActionField:
     index: int
@@ -151,6 +231,17 @@ def validate_observation_spec() -> None:
         assert field.width > 0
         expected_index += field.width
     assert expected_index == OBSERVATION_FIELD_COUNT
+
+    # Every field belongs to exactly one adapter channel. This is what makes
+    # OBSERVATION_GROUPS a usable implementation checklist rather than
+    # decorative documentation.
+    grouped: list[str] = [name for names in OBSERVATION_GROUPS.values() for name in names]
+    assert len(grouped) == len(set(grouped)), "a field appears in more than one observation group"
+    declared = {field.name for field in OBSERVATION_SPEC}
+    missing = declared - set(grouped)
+    unknown = set(grouped) - declared
+    assert not missing, f"observation fields not assigned to a group: {sorted(missing)}"
+    assert not unknown, f"OBSERVATION_GROUPS references unknown fields: {sorted(unknown)}"
 
 
 class GameAdapter(ABC):

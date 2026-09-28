@@ -19,6 +19,12 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 var core: EnvironmentCore
 var agent_view: AgentView
 var enemy_views: Array = []  # Array[EnemyView]
+## Mesh instances mirroring `core.world`'s obstacles. Rebuilt whenever the
+## layout changes; empty on the obstacle-free curriculum levels.
+var obstacle_meshes: Array = []  # Array[MeshInstance3D]
+## Layout the current obstacle meshes were built for, so a reset that keeps
+## the same layout does not pointlessly rebuild the geometry.
+var _obstacle_layout_key: String = ""
 
 
 func setup(p_core: EnvironmentCore) -> void:
@@ -35,6 +41,7 @@ func setup(p_core: EnvironmentCore) -> void:
 		enemy_view.setup(enemy_state)
 		enemy_views.append(enemy_view)
 
+	rebuild_obstacles()
 	sync_from_state()
 
 
@@ -94,6 +101,51 @@ func _build_arena() -> void:
 		add_child(wall_mesh)
 
 
+## Rebuilds the interior geometry meshes from `core.world`.
+##
+## Called on setup and after every reset, but it early-outs unless the
+## layout id or seed actually changed — regenerating dozens of BoxMeshes on
+## every episode boundary would make the GUI stutter for no reason.
+## Colour-codes by obstacle kind so cover reads at a glance: low cover is
+## the one you can shoot over, high cover is not.
+func rebuild_obstacles() -> void:
+	var key: String = "none"
+	if core != null and core.world != null:
+		key = "%s:%d" % [core.world.layout_id, core.world.layout_seed]
+	if key == _obstacle_layout_key:
+		return
+	_obstacle_layout_key = key
+
+	for mesh_value in obstacle_meshes:
+		if is_instance_valid(mesh_value):
+			(mesh_value as Node).queue_free()
+	obstacle_meshes.clear()
+	if core == null or core.world == null:
+		return
+
+	for obstacle_value in core.world.obstacles:
+		var obstacle = obstacle_value
+		var mesh_instance := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = obstacle.half_extents * 2.0
+		mesh_instance.mesh = box
+		mesh_instance.position = obstacle.center
+		var material := StandardMaterial3D.new()
+		material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		material.albedo_color = _obstacle_color(obstacle)
+		mesh_instance.material_override = material
+		add_child(mesh_instance)
+		obstacle_meshes.append(mesh_instance)
+
+
+static func _obstacle_color(obstacle) -> Color:
+	if not obstacle.blocks_sight:
+		return Color(0.40, 0.46, 0.34)  # low cover: shoot over it
+	if obstacle.standable:
+		return Color(0.34, 0.40, 0.52)  # platform: stand on it
+	return Color(0.30, 0.30, 0.36)  # wall / high cover
+
+
 ## Recreates the per-enemy views from the core's CURRENT enemy list. Needed
 ## after a curriculum-level change rebuilds `core.enemies`, which would
 ## otherwise leave these views mirroring orphaned EnemyState objects.
@@ -111,7 +163,11 @@ func rebind_enemy_views() -> void:
 		enemy_views.append(enemy_view)
 
 
+## Mirrors the simulation onto the scene. Also refreshes the interior
+## geometry, because a reset can regenerate the arena layout and the view
+## would otherwise keep displaying the previous episode's cover.
 func sync_from_state() -> void:
+	rebuild_obstacles()
 	if agent_view != null:
 		agent_view.sync()
 	for enemy_view in enemy_views:

@@ -234,3 +234,31 @@ class GodotSourceDriftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ObservationGroupTests(unittest.TestCase):
+    """The adapter-channel split (Phase 14 boundary prep)."""
+
+    def test_groups_partition_every_field_exactly_once(self):
+        from sandboxai.contract import OBSERVATION_GROUPS
+
+        grouped = [name for names in OBSERVATION_GROUPS.values() for name in names]
+        self.assertEqual(len(grouped), len(set(grouped)))
+        self.assertEqual(set(grouped), {field.name for field in OBSERVATION_SPEC})
+
+    def test_every_adapter_channel_is_present(self):
+        from sandboxai.contract import OBSERVATION_GROUPS
+
+        self.assertEqual(
+            set(OBSERVATION_GROUPS),
+            {
+                "self_state",
+                "movement",
+                "combat",
+                "targets",
+                "perception",
+                "memory",
+                "sound",
+                "world",
+            },
+        )

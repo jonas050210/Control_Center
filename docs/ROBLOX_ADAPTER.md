@@ -22,11 +22,18 @@ similar-looking one.
 `python/sandboxai/contract.py` defines:
 
 - `OBSERVATION_SPEC` / `OBSERVATION_FIELD_COUNT` / `OBSERVATION_LOW` /
-  `OBSERVATION_HIGH` — the exact 33-float, `[-1, 1]`-normalized observation
+  `OBSERVATION_HIGH` — the exact 65-float, `[-1, 1]`-normalized observation
   shape and per-field semantics (mirrors
   `docs/OBSERVATION_ACTION_CONTRACT.md`).
-- `ACTION_SPEC` / `ACTION_NVEC` — the `MultiDiscrete([3,3,3,3,2])` action
+- `ACTION_SPEC` / `ACTION_NVEC` — the `MultiDiscrete([3,3,3,3,2,2])` action
   shape and per-field semantics.
+- `OBSERVATION_GROUPS` — the observation split into the six semantic
+  channels an adapter has to be able to produce independently:
+  `self_state`, `movement`, `combat`, `perception`, `memory`, `sound` and
+  `world`. This is the practical checklist: if a target game cannot supply
+  one of these channels honestly, the adapter must report the neutral
+  "no information" encoding for it rather than substituting privileged
+  data.
 - `GameAdapter` — an `abc.ABC` with `reset(seed) -> observation`,
   `step(action) -> (observation, reward, done, info)`, and `close()`. This is
   the seam a future adapter implements. `GodotBatchClient` /
@@ -46,15 +53,31 @@ similar-looking one.
    to Roblox's own terms, rate limits, and possibly cost depending on usage)
    — evaluating exactly which mechanism is viable is unresearched and
    unimplemented here.
-2. **Compute the same 33 fields from Roblox's game state**, using only
-   information a Roblox player character could access (own
-   `Humanoid`/`CFrame`/health, other characters' relative position/health/
-   aliveness within some plausible detection radius) — no server-only
-   internals.
-3. **Translate the 5-field `MultiDiscrete` action into Roblox input** (e.g.
-   `Humanoid:Move()`, camera rotation, a fire `RemoteEvent`), respecting the
-   same weapon-cooldown-style semantics so the policy's learned timing still
-   applies.
+2. **Compute the same 65 fields from Roblox's game state**, using only
+   information a Roblox player character could access — no server-only
+   internals. Concretely, per channel:
+   - *self state / movement*: own `CFrame`, `Humanoid` velocity, health,
+     `FloorMaterial`/grounded state, jump state.
+   - *combat*: weapon cooldown readiness, whether a target is within
+     effective range.
+   - *perception*: the adapter MUST do its own FOV + raycast occlusion test
+     (`workspace:Raycast` from the camera to each candidate character) and
+     only report characters that pass it. Reporting every character the
+     server knows about would hand the policy information a player does not
+     have and invalidate everything it learned about corner fights.
+   - *memory*: the adapter keeps its own last-known-position/confidence
+     store, decayed the same way `EnemyMemory` does, for characters that
+     have left view.
+   - *sound*: derived from the game's own audio events where available; if
+     the target place emits nothing usable, report silence (all-zero sound
+     fields) rather than leaking positions through a fake "sound".
+   - *world*: nearest-cover distance/bearing from a short raycast fan; the
+     corpse count from whatever death representation the place uses.
+3. **Translate the 6-field `MultiDiscrete` action into Roblox input** (e.g.
+   `Humanoid:Move()` for the two movement axes, camera rotation for the two
+   look axes, a fire `RemoteEvent` for `shoot`, `Humanoid.Jump` for
+   `jump`), respecting the same weapon-cooldown-style semantics so the
+   policy's learned timing still applies.
 4. **Match units/normalization.** Roblox's default unit (studs) and
    coordinate conventions are not the same as Godot's meters; a real adapter
    must convert distances/velocities into the same normalized ranges this

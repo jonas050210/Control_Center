@@ -139,3 +139,49 @@ reports), not to maximize environment count for its own sake. Run
 `sandboxai benchmark` on the target machine (i7-12700F / RTX 4060 Ti 8GB /
 32GB RAM) before committing to a larger environment count for a long
 training run.
+
+## Cost of the world/perception layer
+
+The world, perception, sound and memory systems are all **opt-in per
+curriculum level**, and the headless hot path is written so the cheap
+levels stay exactly as cheap as they were:
+
+| Level range | Per-step work added vs. the original implementation |
+| --- | --- |
+| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 65 floats instead of 33 (the extra 32 are written from already-computed values). |
+| 5 | Collision + ground queries per character (O(obstacles) axis-separated box tests), `EnemyBrain` instead of `update_ai()`. |
+| 6 | Adds per-enemy FOV + line-of-sight: 2 ray samples per enemy per tick, each O(obstacles). |
+| 7 | Adds sound: bounded at `SOUND_MAX_ACTIVE = 24` events, each sampled with one occluder count per listener. |
+| 8 | Adds memory decay: O(tracked contacts), capped at `MEMORY_MAX_TRACKS = 8`. |
+| 9–10 | Adds jump/ground resolution for enemies; same order of cost as level 5. |
+
+Deliberate design choices that keep this bounded:
+
+- Layouts are flat arrays of axis-aligned boxes (8–24 of them), tested with
+  the slab method. There is no BVH because at this obstacle count a linear
+  scan is faster than traversing one.
+- `EnemyBrain` receives a **reused** context dictionary owned by
+  `EnvironmentCore`, so the tactical path allocates nothing per tick.
+- Sound events and memory tracks both have hard caps, so a long episode
+  cannot grow the per-step cost.
+- `debug_perception` is off by default and is only ever set by the Control
+  Center, for the selected environment, outside TRAINING mode.
+
+### Measuring it on the target machine
+
+No throughput numbers are published here, because no Godot executable was
+available in the environment these changes were written in and **fabricated
+benchmark numbers are worse than none**. To get real ones:
+
+```bash
+sandboxai benchmark --env-counts 1,4,8,16,32,64 --steps 2000
+```
+
+Run it once per curriculum level you intend to train at (levels 1–4 and
+levels 5–10 have materially different per-step costs, so a single sweep
+does not characterise both), and pick the environment count where
+steps/second stops scaling linearly. On an i7-12700F / RTX 4060 Ti 8 GB /
+32 GB / Win11 box the binding constraint is expected to be CPU-side
+simulation and the JSON bridge rather than GPU memory — the policy network
+is a small MLP — but that expectation must be confirmed with the sweep
+above before it is used to size a training run.
