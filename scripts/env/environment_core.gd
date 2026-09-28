@@ -411,6 +411,7 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var prev_distance: float = (
 		agent.position.distance_to(prev_enemy.position) if prev_enemy != null else 0.0
 	)
+	var prev_alignment: float = _target_alignment(prev_enemy)
 
 	var sound_on: bool = curriculum.sound_enabled()
 	var motion: Dictionary = agent.apply_action(action, dt, arena_half_extent, world)
@@ -428,6 +429,8 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		positioning_delta = prev_distance - agent.position.distance_to(prev_enemy.position)
 
 	var shot: Dictionary = _resolve_agent_shot(action, sound_on)
+	var aiming_delta: float = _target_alignment(prev_enemy) - prev_alignment
+	var meaningful_action: bool = bool(shot["shot_fired"]) or aiming_delta > 0.0 or positioning_delta > 0.0
 
 	var damage_taken: float = _update_enemies(dt, sound_on)
 	if damage_taken > 0.0:
@@ -458,6 +461,9 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"missed_shot": bool(shot["missed_shot"]),
 		"shot_fired": bool(shot["shot_fired"]),
 		"positioning_delta": positioning_delta,
+		"aiming_delta": aiming_delta,
+		"valid_target": prev_enemy != null and prev_enemy.is_targetable(),
+		"meaningful_action": meaningful_action,
 		"alive": agent.alive,
 	}
 	# Exploration only pays in the dedicated Map Analyzer mode. With
@@ -470,7 +476,8 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		)
 		if bool(events["exploration_complete"]):
 			_exploration_paid = true
-	var reward: float = RewardSystem.compute(events)
+	var reward_components: Dictionary = RewardSystem.compute_components(events)
+	var reward: float = RewardSystem.components_total(reward_components)
 	episode.record_step(reward)
 	episode.record_reward_breakdown(events)
 
@@ -500,6 +507,7 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		reward,
 		{
 			"events": events,
+			"reward_components": reward_components,
 			"done_reason": episode.done_reason,
 			"TimeLimit.truncated": episode.done_reason == "timeout",
 			"metrics": get_metrics()
@@ -510,6 +518,13 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 # ---------------------------------------------------------------------------
 # Step sub-steps
 # ---------------------------------------------------------------------------
+
+
+func _target_alignment(target: EnemyState) -> float:
+	if target == null or not target.is_targetable():
+		return 0.0
+	var direction: Vector3 = (target.get_chest_position() - agent.get_eye_position()).normalized()
+	return agent.get_forward_vector().dot(direction)
 
 
 ## Resolves the agent's trigger pull.
