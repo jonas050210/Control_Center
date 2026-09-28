@@ -39,6 +39,8 @@ const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
+const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
+const MapLibrary = preload("res://scripts/world/map_library.gd")
 const NavigationGraph = preload("res://scripts/world/navigation_graph.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
@@ -63,6 +65,9 @@ const LEVEL_SCENARIOS: Dictionary = {
 
 var env_id: int = 0
 var arena_half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
+## The arena size this environment was configured with. A map may override
+## `arena_half_extent` for its episode; clearing the map restores this.
+var configured_half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
 var max_steps: int = SandboxConfig.MAX_EPISODE_STEPS
 var enemy_count: int = SandboxConfig.ENEMY_COUNT_DEFAULT
 var curriculum: CurriculumConfig = CurriculumConfig.new()
@@ -83,6 +88,19 @@ var navigation: NavigationGraph = null
 var sound_bus: SoundBus = SoundBus.create()
 ## The agent's perception state (contact timers, memory, heard events).
 var perception: AgentPerception = AgentPerception.create()
+
+## Explicit map override. Empty means "let the scenario generate its own
+## geometry" (the pre-map behavior). When set, `MapLibrary` owns the
+## geometry, the arena size and the lighting, and the scenario only places
+## the characters into it.
+var map_id: String = ""
+## Resolved map descriptor for the current episode ({} when none).
+var map_instance: Dictionary = {}
+## Explicit lighting override (a LightingProfile mode id). Empty means "use
+## the map's lighting", which for a map-less episode is NORMAL.
+var lighting_mode_id: String = ""
+## Environmental visibility for this episode. Never null.
+var lighting: LightingProfile = LightingProfile.create()
 
 ## Explicit scenario override. Empty means "use the curriculum's layout".
 var scenario_id: String = ""
@@ -113,6 +131,7 @@ var _target_reason: String = "no target"
 
 func _init(p_env_id: int = 0, p_enemy_count: int = SandboxConfig.ENEMY_COUNT_DEFAULT) -> void:
 	env_id = p_env_id
+	configured_half_extent = arena_half_extent
 	enemy_count = maxi(1, p_enemy_count)
 	curriculum = CurriculumConfig.new(CurriculumConfig.Level.ENEMY_ATTACKS, enemy_count)
 	_rebuild_enemies(enemy_count)
@@ -157,6 +176,33 @@ func set_scenario(p_scenario_id: String) -> bool:
 	return true
 
 
+## Forces a specific authored map for subsequent resets. Pass "" to go back
+## to scenario-generated geometry. Unknown ids are rejected so a typo fails
+## here instead of silently training on the wrong environment.
+##
+## The map id is deliberately NOT part of the observation: it selects an
+## environment, it is not a label the policy may condition on.
+func set_map(p_map_id: String) -> bool:
+	if p_map_id.is_empty():
+		map_id = ""
+		return true
+	if not MapLibrary.has_map(p_map_id):
+		return false
+	map_id = p_map_id
+	return true
+
+
+## Forces a lighting mode for subsequent resets ("" = use the map default).
+func set_lighting_mode(mode_id: String) -> bool:
+	if mode_id.is_empty():
+		lighting_mode_id = ""
+		return true
+	if not LightingProfile.MODE_IDS.has(mode_id):
+		return false
+	lighting_mode_id = mode_id
+	return true
+
+
 ## Applies every curriculum-derived per-enemy parameter to one enemy. Used
 ## both at reset() and by set_curriculum_level() so a mid-episode level
 ## change takes effect consistently on the existing enemy list (previously
@@ -194,6 +240,8 @@ func reset(seed_value: int = -1) -> Observation:
 
 	sound_bus.clear()
 	navigation = null
+	map_instance = {}
+	lighting = LightingProfile.create()
 	perception.reset()
 	perception.configure(
 		curriculum.perception_enabled(), curriculum.sound_enabled(), curriculum.memory_enabled()
@@ -207,7 +255,12 @@ func reset(seed_value: int = -1) -> Observation:
 	else:
 		world = null
 		scenario = {}
+		# NOTE: no rng.randi() here. The obstacle-free levels must consume
+		# exactly the same number of random draws they always did, or
+		# previously trained policies stop reproducing.
+		_apply_lighting(maxi(0, episode_seed))
 		_reset_legacy()
+	perception.set_lighting(lighting)
 
 	episode.start_new_episode()
 	_has_reset = true
@@ -250,9 +303,21 @@ func _reset_with_world() -> void:
 	# `seed_value` directly, so consecutive auto-resets of a seeded env
 	# produce a varied but fully reproducible sequence of arenas.
 	var layout_seed: int = rng.randi()
-	scenario = ScenarioLibrary.resolve(
-		resolved_id, layout_seed, enemies.size(), arena_half_extent
-	)
+	if map_id.is_empty():
+		arena_half_extent = configured_half_extent
+		scenario = ScenarioLibrary.resolve(
+			resolved_id, layout_seed, enemies.size(), arena_half_extent
+		)
+		map_instance = {}
+	else:
+		# A map owns the geometry, the arena size and the lighting; the
+		# scenario only decides where the characters start inside it.
+		map_instance = MapLibrary.resolve(map_id, layout_seed)
+		arena_half_extent = float(map_instance["half_extent"])
+		scenario = ScenarioLibrary.resolve_on_world(
+			resolved_id, layout_seed, map_instance["world"], enemies.size()
+		)
+	_apply_lighting(layout_seed)
 	world = scenario["world"]
 
 	agent.reset(scenario["agent_spawn"], float(scenario["agent_yaw_deg"]))
@@ -287,6 +352,18 @@ func _reset_enemy(enemy: EnemyState, index: int, spawn: Vector3, strafing: bool)
 	)
 
 
+## Resolves the episode's lighting profile: an explicit override wins, then
+## the map's declared lighting, then NORMAL. The profile seed is derived
+## from the layout seed so light/dark patches are reproducible.
+func _apply_lighting(layout_seed: int) -> void:
+	var mode_id: String = lighting_mode_id
+	if mode_id.is_empty() and not map_instance.is_empty():
+		mode_id = str(map_instance.get("lighting_id", SandboxConfig.LIGHTING_DEFAULT_MODE_ID))
+	if mode_id.is_empty():
+		mode_id = SandboxConfig.LIGHTING_DEFAULT_MODE_ID
+	lighting = LightingProfile.from_id(mode_id, layout_seed)
+
+
 ## Which scenario the current curriculum level plays. Level 10 draws a new
 ## one from the seeded RNG every episode (Phase 9/10 "mixed randomized").
 func _scenario_for_level() -> String:
@@ -297,7 +374,11 @@ func _scenario_for_level() -> String:
 
 
 func _world_enabled() -> bool:
-	return curriculum.obstacles_enabled() or not scenario_id.is_empty()
+	return (
+		curriculum.obstacles_enabled()
+		or not scenario_id.is_empty()
+		or not map_id.is_empty()
+	)
 
 
 func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary:
@@ -504,6 +585,7 @@ func _update_enemies(dt: float, sound_on: bool) -> float:
 	if tactical:
 		context["world"] = world
 		context["navigation"] = _ensure_navigation()
+		context["lighting"] = lighting
 		context["sound_bus"] = sound_bus if sound_on else null
 		context["rng"] = rng
 		context["dt"] = dt
@@ -714,6 +796,22 @@ func get_navigation_graph_info() -> Dictionary:
 	var info: Dictionary = graph.to_dict()
 	info["available"] = true
 	return info
+
+
+## Environmental conditions for the Control Center. Includes the map's
+## human-facing metadata, which the POLICY never receives.
+func get_environment_conditions() -> Dictionary:
+	var conditions: Dictionary = {
+		"lighting": lighting.to_dict(),
+		"local_illumination": perception.local_illumination,
+		"map_id": map_id,
+		"arena_half_extent": arena_half_extent,
+	}
+	if map_instance.is_empty():
+		conditions["map"] = {"id": "", "label": "(scenario-generated)", "known": false}
+	else:
+		conditions["map"] = map_instance["metadata"]
+	return conditions
 
 
 ## Static geometry description for the overlay: one Dictionary per box.

@@ -160,6 +160,26 @@ const AGENT_VISUAL_DETECTION_DELAY: float = 0.12
 const VISUAL_LOSS_GRACE: float = 0.10
 
 # ---------------------------------------------------------------------------
+# Lighting / visibility conditions (LightingProfile)
+#
+# Visibility conditions are expressed as multipliers on the EXISTING
+# perception pipeline rather than as a new observation flag. A policy is
+# meant to notice "I am acquiring targets late and losing them early" and
+# fall back on sound and memory, not to read a night bit.
+# ---------------------------------------------------------------------------
+## Fraction of the nominal vision range that survives total darkness. Never
+## zero: a target close enough is still visible with no light at all.
+const LIGHTING_MIN_RANGE_SCALE: float = 0.3
+## How much the visual detection delay grows in total darkness, as a
+## multiple of the nominal delay (1.0 = up to twice as slow).
+const LIGHTING_DELAY_GAIN: float = 1.4
+## Transmittance below which a sight line counts as lost in fog. Sets the
+## fog horizon together with the profile's density.
+const LIGHTING_MIN_TRANSMITTANCE: float = 0.25
+## Default lighting mode id for maps that do not declare one.
+const LIGHTING_DEFAULT_MODE_ID: String = "normal"
+
+# ---------------------------------------------------------------------------
 # Sound
 #
 # Sound is modelled as discrete, decaying events with a base audible radius

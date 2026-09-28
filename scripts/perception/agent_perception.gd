@@ -24,6 +24,7 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
@@ -41,6 +42,15 @@ var memory_enabled: bool = false
 var fov_deg: float = SandboxConfig.AGENT_FOV_DEG
 var vision_range: float = SandboxConfig.VISION_RANGE
 var detection_delay: float = SandboxConfig.AGENT_VISUAL_DETECTION_DELAY
+
+## Environmental visibility conditions. Never observed as a mode; it acts
+## by shortening the acquisition range, slowing detection and shortening
+## the loss grace, so the policy experiences consequences rather than a
+## label. Defaults to NORMAL, i.e. exactly the pre-lighting behavior.
+var lighting: LightingProfile = LightingProfile.create()
+## Perceived brightness where the agent is standing, in [0, 1]. This IS
+## exposed to the policy: a human standing in a dark room knows it is dark.
+var local_illumination: float = 1.0
 
 var memory: EnemyMemory = EnemyMemory.create()
 ## enemy id -> continuous seconds of unbroken geometric visibility.
@@ -71,8 +81,13 @@ func configure(
 		detection_delay = p_detection_delay
 
 
+func set_lighting(profile) -> void:
+	lighting = profile if profile != null else LightingProfile.create()
+
+
 func reset() -> void:
 	memory.clear()
+	local_illumination = 1.0
 	contact_timers.clear()
 	loss_timers.clear()
 	heard.clear()
@@ -106,6 +121,7 @@ func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
 	var eye: Vector3 = agent.get_eye_position()
 	var forward: Vector3 = agent.get_forward_horizontal()
 	forward_clearance = PerceptionSystem.forward_clearance(world, eye, forward, vision_range)
+	local_illumination = lighting.illumination_at(agent.position)
 	threat_count = 0
 
 	var beliefs: Array = []
@@ -171,6 +187,10 @@ static func selection_reason(belief: Dictionary, damage_source: int) -> String:
 func _evaluate_enemy(
 	agent, enemy: EnemyState, world, eye: Vector3, forward: Vector3, dt: float
 ) -> Dictionary:
+	# Lighting acts HERE, on the acquisition range, rather than being
+	# reported to the policy: a target standing in shadow simply has to be
+	# closer before it resolves at all.
+	var effective_range: float = lighting.detection_range(vision_range, enemy.position)
 	var evaluation: Dictionary = PerceptionSystem.evaluate_target(
 		world,
 		eye,
@@ -179,7 +199,7 @@ func _evaluate_enemy(
 		enemy.position,
 		enemy.height,
 		fov_deg,
-		vision_range
+		effective_range
 	)
 	# Threat accounting uses pure geometry (does the enemy see me?), not the
 	# agent's own FOV, and never leaks into the observation as a position.
@@ -216,10 +236,14 @@ func _evaluate_enemy(
 		loss_timers[enemy_id] = float(loss_timers.get(enemy_id, 0.0)) + dt
 	contact_timers[enemy_id] = contact
 
-	var confirmed: bool = geometric and contact >= detection_delay
+	# Poor light also costs reaction time and shortens how long a lost
+	# silhouette keeps being reported.
+	var required_contact: float = detection_delay * lighting.detection_delay_scale(enemy.position)
+	var grace: float = SandboxConfig.VISUAL_LOSS_GRACE * lighting.loss_grace_scale(enemy.position)
+	var confirmed: bool = geometric and contact >= required_contact
 	var within_grace: bool = (
 		not geometric
-		and float(loss_timers.get(enemy_id, 0.0)) <= SandboxConfig.VISUAL_LOSS_GRACE
+		and float(loss_timers.get(enemy_id, 0.0)) <= grace
 		and memory.has(enemy_id)
 	)
 	var visible: bool = confirmed or within_grace

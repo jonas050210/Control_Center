@@ -32,6 +32,7 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const NavigationAgent = preload("res://scripts/world/navigation_agent.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
@@ -44,7 +45,7 @@ const AGENT_TRACK_ID: int = -1
 ## Advances one enemy by one tick.
 ##
 ## `context` carries the shared per-environment objects and flags:
-##   world, navigation, sound_bus, rng, arena_half_extent, agent_position,
+##   world, navigation, lighting, sound_bus, rng, arena_half_extent, agent_position,
 ##   agent_eye, agent_height, agent_alive, dt, time_seconds,
 ##   allow_ranged, allow_movement, allow_jump
 ##
@@ -94,6 +95,16 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 	var agent_alive: bool = bool(context.get("agent_alive", true))
 	var agent_height: float = float(context.get("agent_height", SandboxConfig.AGENT_HEIGHT))
 
+	# The opponents obey exactly the same visibility rules as the policy,
+	# including lighting: an enemy in the dark also loses you.
+	var lighting = context.get("lighting")
+	var range_limit: float = SandboxConfig.VISION_RANGE
+	var delay_scale: float = 1.0
+	if lighting != null:
+		var profile: LightingProfile = lighting
+		range_limit = profile.detection_range(SandboxConfig.VISION_RANGE, agent_position)
+		delay_scale = profile.detection_delay_scale(agent_position)
+
 	var visible: bool = false
 	if agent_alive:
 		var evaluation: Dictionary = PerceptionSystem.evaluate_target(
@@ -104,14 +115,14 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 			agent_position,
 			agent_height,
 			SandboxConfig.ENEMY_FOV_DEG,
-			SandboxConfig.VISION_RANGE
+			range_limit
 		)
 		visible = bool(evaluation["visible"])
 
 	if visible:
 		enemy.visual_contact_time += dt
 		enemy.time_since_visual = 0.0
-		if enemy.visual_contact_time >= enemy.reaction.visual_detection_delay:
+		if enemy.visual_contact_time >= enemy.reaction.visual_detection_delay * delay_scale:
 			var direction: Vector3 = (agent_position - enemy.position)
 			direction.y = 0.0
 			enemy.memory.observe_visual(
@@ -130,7 +141,9 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 	if track.is_empty():
 		enemy.target_confirmed = false
 		return
-	var required: float = enemy.reaction.visual_detection_delay + enemy.reaction.target_confirm_delay
+	var required: float = (
+		enemy.reaction.visual_detection_delay * delay_scale + enemy.reaction.target_confirm_delay
+	)
 	if visible and enemy.visual_contact_time >= required:
 		enemy.target_confirmed = true
 	elif not visible and enemy.time_since_visual > SandboxConfig.VISUAL_LOSS_GRACE:
