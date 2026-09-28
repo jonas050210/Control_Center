@@ -7,6 +7,25 @@
 ## method whose name starts with "test_" (each must return a SandboxTest),
 ## prints a PASS/FAIL line per test, then exits with code 0 if everything
 ## passed or 1 if anything failed (suitable for CI).
+##
+## Shutdown diagnostics
+## --------------------
+## Tests own their objects: anything that is NOT RefCounted (every Node —
+## SimulationManager, ControlCenterSession, controllers, panels, scene
+## instances) must be freed by the test that created it, because this
+## runner calls `quit()` on the first process frame and never gives the
+## SceneTree another frame to flush `queue_free()`.
+##
+## A "N ObjectDB instances were leaked at exit" / "resources still in use
+## at exit" line therefore points at one of two things, in this order:
+##   1. a test that created a Node and returned without freeing it (a
+##      test-cleanup bug — fix the test, not the engine), or
+##   2. objects the engine itself keeps alive past `SceneTree::finalize()`
+##      in a headless process (script/scene resources still referenced by
+##      the resource cache while it is torn down). Those are engine
+##      shutdown artifacts: they are reported after the suite has already
+##      printed its verdict, they do not affect the exit code, and they
+##      must NOT be "fixed" by force-freeing engine-owned objects here.
 extends SceneTree
 
 const SandboxTest = preload("res://tests/sandbox_test.gd")

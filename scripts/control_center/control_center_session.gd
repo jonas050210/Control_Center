@@ -682,14 +682,18 @@ func _record_episode(env_index: int, result: Dictionary) -> void:
 		return
 	var is_selected: bool = env_index == config.selected_environment
 	# SimulationManager.step_all() auto-resets a finished environment
-	# BEFORE the result reaches this method, so episode_count already
-	# refers to the NEXT episode. The episode that just finished — the one
-	# this record is about — is one less.
-	var episode_number: int = int(
-		simulation_manager.environments[env_index].episode.episode_count
-	)
-	if bool(result.get("auto_reset", false)):
-		episode_number -= 1
+	# BEFORE the result reaches this method, so the live
+	# `episode.episode_count` already refers to the NEXT episode. The
+	# metrics were built inside EnvironmentCore.step() — before any reset —
+	# and carry the number of the episode that actually finished, so the
+	# record keeps that episode's identity instead of inferring it from
+	# post-reset state. The fallback covers a metrics dictionary produced
+	# by an older/foreign environment implementation.
+	var episode_number: int = int(metrics.get("episode", -1))
+	if episode_number < 0:
+		episode_number = int(simulation_manager.environments[env_index].episode.episode_count)
+		if bool(result.get("auto_reset", false)):
+			episode_number -= 1
 	var record: Dictionary = {
 		"source": _action_source_for(env_index),
 		"mode": ControlCenterConfig.mode_name(config.mode),
