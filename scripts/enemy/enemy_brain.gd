@@ -32,6 +32,7 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const NavigationAgent = preload("res://scripts/world/navigation_agent.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
@@ -43,7 +44,7 @@ const AGENT_TRACK_ID: int = -1
 ## Advances one enemy by one tick.
 ##
 ## `context` carries the shared per-environment objects and flags:
-##   world, sound_bus, rng, arena_half_extent, agent_position,
+##   world, navigation, sound_bus, rng, arena_half_extent, agent_position,
 ##   agent_eye, agent_height, agent_alive, dt, time_seconds,
 ##   allow_ranged, allow_movement, allow_jump
 ##
@@ -284,6 +285,10 @@ static func _set_state(enemy: EnemyState, state: int, reason: String) -> void:
 	if enemy.ai_state != state:
 		enemy.ai_state = state
 		enemy.state_time = 0.0
+		# A route planned for the previous behavior's destination is stale
+		# the moment the behavior changes; keeping it would walk an
+		# engaging enemy back toward an abandoned cover spot.
+		enemy.navigation.abandon()
 	enemy.tactical_reason = reason
 
 
@@ -323,6 +328,22 @@ static func _act(
 
 	if not allow_movement:
 		speed_scale = 0.0
+
+	# Navigation is consulted only when the enemy is demonstrably blocked
+	# (see NavigationAgent): in the open field this is two float compares.
+	var steering: Vector3 = enemy.navigation.update(
+		context.get("navigation"),
+		world,
+		enemy.position,
+		destination,
+		speed_scale > 0.0,
+		dt
+	)
+	if enemy.navigation.status != NavigationAgent.STATUS_DIRECT:
+		enemy.tactical_reason = "%s (nav: %s)" % [
+			enemy.tactical_reason, enemy.navigation.status
+		]
+	destination = steering
 
 	var jump_requested: bool = _wants_jump(enemy, destination, context)
 	var motion: Dictionary = enemy.move_towards(

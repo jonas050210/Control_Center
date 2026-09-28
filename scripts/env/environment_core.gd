@@ -39,6 +39,7 @@ const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
+const NavigationGraph = preload("res://scripts/world/navigation_graph.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const ReactionProfile = preload("res://scripts/perception/reaction_profile.gd")
@@ -74,6 +75,10 @@ var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 ## Static geometry for this episode. `null` on the obstacle-free levels,
 ## which is the signal every downstream system uses to take the cheap path.
 var world: ArenaWorld = null
+## Walkable navigation graph for the current geometry. Built LAZILY on the
+## first tick an enemy is actually blocked, so obstacle-free levels and
+## episodes where nobody ever gets stuck never pay the bake cost.
+var navigation: NavigationGraph = null
 ## Transient audible events. Only ticked when the curriculum enables sound.
 var sound_bus: SoundBus = SoundBus.create()
 ## The agent's perception state (contact timers, memory, heard events).
@@ -188,6 +193,7 @@ func reset(seed_value: int = -1) -> Observation:
 		_rebuild_enemies(enemy_count)
 
 	sound_bus.clear()
+	navigation = null
 	perception.reset()
 	perception.configure(
 		curriculum.perception_enabled(), curriculum.sound_enabled(), curriculum.memory_enabled()
@@ -497,6 +503,7 @@ func _update_enemies(dt: float, sound_on: bool) -> float:
 	var context: Dictionary = _brain_context
 	if tactical:
 		context["world"] = world
+		context["navigation"] = _ensure_navigation()
 		context["sound_bus"] = sound_bus if sound_on else null
 		context["rng"] = rng
 		context["dt"] = dt
@@ -679,6 +686,36 @@ func get_target_memory() -> Dictionary:
 	}
 
 
+## Builds (once per episode) and returns the navigation graph for the
+## current geometry, or null when there is no geometry at all.
+##
+## Baked for the ENEMY footprint: the enemies are the only navigation
+## consumers, they are wider than the agent, and a graph baked for the
+## wider body is conservatively valid for a narrower one. Sharing one graph
+## per environment instead of one per enemy is what keeps the cost O(1) in
+## the enemy count.
+func _ensure_navigation() -> NavigationGraph:
+	if world == null:
+		return null
+	if navigation == null:
+		navigation = NavigationGraph.build(
+			world, SandboxConfig.ENEMY_RADIUS, SandboxConfig.AGENT_HEIGHT
+		)
+	return navigation
+
+
+## Navigation graph summary for the Control Center. Read-only: calling it
+## does force the lazy bake, which costs time but cannot change simulation
+## state, and the graph itself is a pure function of the geometry.
+func get_navigation_graph_info() -> Dictionary:
+	var graph: NavigationGraph = _ensure_navigation()
+	if graph == null:
+		return {"available": false, "node_count": 0}
+	var info: Dictionary = graph.to_dict()
+	info["available"] = true
+	return info
+
+
 ## Static geometry description for the overlay: one Dictionary per box.
 func get_obstacles() -> Array:
 	if world == null:
@@ -708,11 +745,13 @@ func get_navigation_state() -> Dictionary:
 				"target_confirmed": enemy.target_confirmed,
 				"time_since_visual": enemy.time_since_visual,
 				"reaction": enemy.reaction.to_dict(),
+				"navigation": enemy.navigation.to_dict(),
 			}
 		)
 	return {
 		"layout_id": world.layout_id if world != null else "none",
 		"layout_seed": world.layout_seed if world != null else -1,
+		"graph": get_navigation_graph_info(),
 		"scenario": scenario.get("id", ""),
 		"scenario_label": scenario.get("label", ""),
 		"spawn_rule": scenario.get("spawn_rule", ""),

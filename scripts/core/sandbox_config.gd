@@ -114,6 +114,34 @@ const LANDING_EPSILON: float = 0.01
 const MAX_VERTICAL_EXTENT: float = 6.0
 
 # ---------------------------------------------------------------------------
+# Navigation
+#
+# A uniform walkable grid baked from the arena geometry (NavigationGraph).
+# It is only consulted when direct steering is blocked, so the open-field
+# case still costs nothing. The cell size is the single most important
+# knob: smaller means finer paths through narrow doorways but a quadratic
+# increase in bake cost, so it is tuned to just under the widest character
+# diameter (enemy radius 0.45 -> 0.9 m) plus clearance.
+# ---------------------------------------------------------------------------
+const NAV_CELL_SIZE: float = 1.1
+## Horizontal speed below which a character that IS asking to move counts as
+## blocked (meters/second).
+const NAV_STUCK_SPEED: float = 0.35
+## How long a character must be blocked before navigation takes over.
+const NAV_STUCK_TIME: float = 0.3
+## Minimum interval between path re-plans for one character (seconds).
+const NAV_REPATH_INTERVAL: float = 0.45
+## Distance at which a waypoint counts as reached (meters).
+const NAV_WAYPOINT_TOLERANCE: float = 0.55
+## How long a recovery nudge is committed to once triggered (seconds).
+## Committing prevents the character oscillating between "stuck" and
+## "free" on alternating ticks.
+const NAV_RECOVERY_TIME: float = 0.5
+## Hard cap on cached waypoints per character; a longer route is re-planned
+## when the tail is consumed.
+const NAV_MAX_WAYPOINTS: int = 32
+
+# ---------------------------------------------------------------------------
 # Perception: field of view, line of sight, detection latency
 # ---------------------------------------------------------------------------
 ## Horizontal field of view (total cone angle, degrees) used to decide

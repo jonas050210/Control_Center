@@ -34,6 +34,7 @@ enum AIState {
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const CharacterMotor = preload("res://scripts/world/character_motor.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
+const NavigationAgent = preload("res://scripts/world/navigation_agent.gd")
 const ReactionProfile = preload("res://scripts/perception/reaction_profile.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
@@ -106,6 +107,9 @@ var tactical_destination: Vector3 = Vector3.ZERO
 var has_tactical_destination: bool = false
 ## Human-readable reason the brain chose its current state. Debug/UI only.
 var tactical_reason: String = "idle"
+## Path-following / stuck-recovery state. Only consulted once direct
+## steering demonstrably fails, so open layouts pay nothing for it.
+var navigation: NavigationAgent = NavigationAgent.create()
 
 
 func _init(
@@ -148,6 +152,7 @@ func reset(spawn_position: Vector3 = SandboxConfig.ENEMY_SPAWN_POSITION) -> void
 	has_tactical_destination = false
 	tactical_destination = Vector3.ZERO
 	tactical_reason = "idle"
+	navigation.reset(spawn_position)
 	weapon.reset()
 	memory.clear()
 
@@ -379,6 +384,7 @@ func to_dict() -> Dictionary:
 		"tactical_reason": tactical_reason,
 		"target_confirmed": target_confirmed,
 		"time_since_visual": time_since_visual,
+		"navigation": navigation.to_dict(),
 	}
 
 
