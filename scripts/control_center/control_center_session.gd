@@ -31,8 +31,11 @@ const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const HumanController = preload("res://scripts/input/human_controller.gd")
 const PerceptionModel = preload("res://scripts/control_center/perception_model.gd")
+const ControlCenterSystemMonitor = preload("res://scripts/control_center/system_monitor.gd")
+const EpisodeProbe = preload("res://scripts/control_center/episode_probe.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+const TrainingAgentManager = preload("res://scripts/control_center/training_agent_manager.gd")
 const TrainingRunController = preload(
 	"res://scripts/control_center/training_run_controller.gd"
 )
@@ -42,6 +45,9 @@ var simulation_manager: SimulationManager
 var event_log: ControlCenterEventLog
 var results: ControlCenterResults
 var training_run: TrainingRunController
+## Multi-agent registry (Agent 1 wraps `training_run`) and PC telemetry.
+var agent_manager: TrainingAgentManager
+var system_monitor: ControlCenterSystemMonitor
 
 ## Whether the human input pipeline is currently allowed to drive the
 ## agent. The UI sets this from the mouse-capture state so clicking a
@@ -62,6 +68,8 @@ var presentation_enabled: bool = true:
 		if presentation_enabled == value:
 			return
 		presentation_enabled = value
+		if system_monitor != null:
+			system_monitor.set_active(value)
 		if simulation_manager != null:
 			_apply_mode_to_runtime()
 
@@ -78,8 +86,7 @@ var _pending_setting_keys: PackedStringArray = PackedStringArray()
 ## Per-environment derived measurements for the CURRENT episode. Only the
 ## selected environment is instrumented (Phase 15: no per-environment
 ## bookkeeping for data nobody looks at).
-var _episode_probe: Dictionary = {}
-var _last_target_index: int = -1
+var _probe: EpisodeProbe
 var _single_step_requests: int = 0
 
 
@@ -87,8 +94,13 @@ func _init() -> void:
 	config = ControlCenterConfig.new()
 	event_log = ControlCenterEventLog.new()
 	results = ControlCenterResults.new()
+	_probe = EpisodeProbe.new(event_log)
 	training_run = TrainingRunController.new()
 	training_run.name = "TrainingRunController"
+	agent_manager = TrainingAgentManager.new()
+	agent_manager.name = "TrainingAgentManager"
+	system_monitor = ControlCenterSystemMonitor.new()
+	system_monitor.name = "SystemMonitor"
 
 
 ## Creates (or adopts) the SimulationManager and wires controllers.
@@ -103,6 +115,12 @@ func setup(p_config: ControlCenterConfig = null, p_manager: SimulationManager = 
 		training_run.state_changed.connect(_on_training_state_changed)
 	if not training_run.training_event.is_connected(_on_training_event):
 		training_run.training_event.connect(_on_training_event)
+	if agent_manager.get_parent() == null:
+		add_child(agent_manager)
+	agent_manager.register_primary(training_run)
+	if system_monitor.get_parent() == null:
+		add_child(system_monitor)
+	system_monitor.set_active(presentation_enabled)
 
 	simulation_manager = p_manager if p_manager != null else SimulationManager.new()
 	simulation_manager.name = "SimulationManager"
@@ -124,7 +142,7 @@ func setup(p_config: ControlCenterConfig = null, p_manager: SimulationManager = 
 
 	_create_controllers()
 	_apply_mode_to_runtime()
-	_reset_episode_probe()
+	_probe.reset()
 	log_system(
 		(
 			"Control Center session ready: %d environments, level %d, seed %d"
@@ -159,7 +177,20 @@ func start_training() -> bool:
 	var started: bool = training_run.start(config)
 	if not started:
 		log_warning(training_run.last_error)
+	else:
+		agent_manager.note_primary_started(config)
 	return started
+
+
+## Launches an ADDITIONAL managed agent without disturbing running ones.
+## Returns the agent id, or -1 when validation rejected the launch.
+func launch_agent() -> int:
+	config.sanitize()
+	var problem: String = agent_manager.launch_validation_error(config)
+	if not problem.is_empty():
+		log_warning(problem)
+		return -1
+	return agent_manager.launch(config)
 
 
 func _on_training_state_changed(state: int) -> void:
@@ -272,7 +303,7 @@ func select_environment(index: int) -> void:
 		_apply_view_visibility()
 	_bind_controllers()
 	_apply_debug_perception()
-	_reset_episode_probe()
+	_probe.reset()
 	log_system("selected environment %d" % resolved)
 	selection_changed.emit(resolved, config.selected_agent_slot)
 
@@ -447,7 +478,7 @@ func reset_selected_environment_with_random_seed() -> int:
 	var index: int = config.selected_environment
 	simulation_manager.base_seed = value
 	simulation_manager.reset_indices([index], value)
-	_reset_episode_probe()
+	_probe.reset()
 	log_system("reset environment %d (random seed %d)" % [index, value + index])
 	return value
 
@@ -491,7 +522,7 @@ func apply_pending_settings() -> PackedStringArray:
 	)
 	_create_controllers()
 	_apply_mode_to_runtime()
-	_reset_episode_probe()
+	_probe.reset()
 	log_system(
 		(
 			"applied settings [%s]: %d environments, %d enemies, seed %d"
@@ -521,7 +552,7 @@ func reset_selected_environment(deterministic: bool = true) -> void:
 		return
 	var index: int = config.selected_environment
 	simulation_manager.reset_indices([index], config.seed if deterministic else -1)
-	_reset_episode_probe()
+	_probe.reset()
 	log_system(
 		(
 			"reset environment %d (%s)"
@@ -534,7 +565,7 @@ func reset_all_environments(deterministic: bool = true) -> void:
 	if simulation_manager == null:
 		return
 	simulation_manager.reset_all(config.seed if deterministic else -1)
-	_reset_episode_probe()
+	_probe.reset()
 	log_system("reset all environments")
 
 
@@ -639,80 +670,11 @@ func _observe_step(step_results: Array) -> void:
 		var info: Dictionary = result.get("info", {})
 		var events: Dictionary = info.get("events", {})
 		if index == selected:
-			_track_selected_events(events)
+			_probe.track_selected_events(events)
 		if bool(result.get("done", false)):
 			_record_episode(index, result)
 	if selected < simulation_manager.environments.size():
-		_track_target_change(simulation_manager.environments[selected])
-
-
-func _track_selected_events(events: Dictionary) -> void:
-	var probe: Dictionary = _episode_probe
-	if bool(events.get("shot_fired", false)):
-		probe["shots"] = int(probe.get("shots", 0)) + 1
-		if int(probe.get("first_shot_step", -1)) < 0:
-			probe["first_shot_step"] = int(probe.get("steps", 0))
-	if bool(events.get("hit", false)):
-		event_log.log_event(
-			ControlCenterEventLog.Category.COMBAT,
-			"hit enemy for %.0f damage" % float(events.get("damage_dealt", 0.0)),
-			{},
-			"hit"
-		)
-	if bool(events.get("kill", false)):
-		event_log.log_event(ControlCenterEventLog.Category.COMBAT, "enemy eliminated")
-	if float(events.get("damage_taken", 0.0)) > 0.0:
-		event_log.log_event(
-			ControlCenterEventLog.Category.COMBAT,
-			"took %.0f damage" % float(events.get("damage_taken", 0.0)),
-			{},
-			"damage_taken"
-		)
-	if bool(events.get("useless_shot", false)):
-		probe["useless_shots"] = int(probe.get("useless_shots", 0)) + 1
-		event_log.log_event(
-			ControlCenterEventLog.Category.REWARD,
-			"useless trigger pull (weapon on cooldown or no live target)",
-			{},
-			"useless_shot"
-		)
-	if bool(events.get("missed_shot", false)):
-		probe["missed_shots"] = int(probe.get("missed_shots", 0)) + 1
-		event_log.log_event(
-			ControlCenterEventLog.Category.REWARD, "shot missed a live target", {}, "missed_shot"
-		)
-	if bool(events.get("died", false)):
-		event_log.log_event(ControlCenterEventLog.Category.COMBAT, "agent died")
-	probe["steps"] = int(probe.get("steps", 0)) + 1
-
-
-## Target changes are a perception event: the observation's primary slot
-## now refers to a different enemy.
-func _track_target_change(env) -> void:
-	var target_index: int = PerceptionModel.current_target_index(env)
-	if target_index == _last_target_index:
-		return
-	if _last_target_index >= 0 and target_index >= 0:
-		_episode_probe["target_switches"] = int(_episode_probe.get("target_switches", 0)) + 1
-	event_log.log_event(
-		ControlCenterEventLog.Category.PERCEPTION,
-		(
-			"target -> enemy #%d" % target_index
-			if target_index >= 0
-			else "target lost (no alive enemy in observation)"
-		),
-		{"previous": _last_target_index, "current": target_index}
-	)
-	_last_target_index = target_index
-
-	# First moment an enemy is inside weapon range starts the reaction clock.
-	if (
-		int(_episode_probe.get("engagement_step", -1)) < 0
-		and target_index >= 0
-		and env.agent.position.distance_to(env.enemies[target_index].position)
-		<= SandboxConfig.WEAPON_RANGE
-	):
-		_episode_probe["engagement_step"] = int(_episode_probe.get("steps", 0))
+		_probe.track_target_change(simulation_manager.environments[selected])
 
 
 func _record_episode(env_index: int, result: Dictionary) -> void:
@@ -759,10 +721,10 @@ func _record_episode(env_index: int, result: Dictionary) -> void:
 		"wall_time": float(Time.get_ticks_msec()) / 1000.0,
 	}
 	if is_selected:
-		record["reaction_time"] = _measured_reaction_time()
-		record["useless_shots"] = int(_episode_probe.get("useless_shots", 0))
-		record["missed_shots"] = int(_episode_probe.get("missed_shots", 0))
-		record["target_switches"] = int(_episode_probe.get("target_switches", 0))
+		record["reaction_time"] = _probe.measured_reaction_time()
+		record["useless_shots"] = _probe.count("useless_shots")
+		record["missed_shots"] = _probe.count("missed_shots")
+		record["target_switches"] = _probe.count("target_switches")
 	else:
 		record["reaction_time"] = -1.0
 
@@ -781,32 +743,8 @@ func _record_episode(env_index: int, result: Dictionary) -> void:
 		)
 	)
 	if is_selected:
-		_reset_episode_probe()
+		_probe.reset()
 	episode_recorded.emit(stored)
-
-
-## Seconds between the first tick with an enemy inside weapon range and the
-## first shot fired after that. Returns -1.0 when either never happened,
-## so "not measured" is never reported as a real number.
-func _measured_reaction_time() -> float:
-	var engagement: int = int(_episode_probe.get("engagement_step", -1))
-	var first_shot: int = int(_episode_probe.get("first_shot_step", -1))
-	if engagement < 0 or first_shot < engagement:
-		return -1.0
-	return float(first_shot - engagement) * SandboxConfig.SIMULATION_DT
-
-
-func _reset_episode_probe() -> void:
-	_episode_probe = {
-		"steps": 0,
-		"shots": 0,
-		"useless_shots": 0,
-		"missed_shots": 0,
-		"target_switches": 0,
-		"engagement_step": -1,
-		"first_shot_step": -1,
-	}
-	_last_target_index = -1
 
 
 func _action_source_for(env_index: int) -> String:
@@ -954,6 +892,8 @@ func get_status() -> Dictionary:
 		"training_type_name": ControlCenterConfig.training_type_name(config.training_type),
 		"training_mode": config.training_mode,
 		"training_mode_name": ControlCenterConfig.training_mode_name(config.training_mode),
+		"agent_count": agent_manager.agent_count() if agent_manager != null else 0,
+		"active_agents": agent_manager.active_count() if agent_manager != null else 0,
 	}
 
 
@@ -984,12 +924,4 @@ func log_warning(message: String) -> void:
 ## TRAINING panel because real PPO updates happen in the Python trainer,
 ## not in this window.
 func training_command_line() -> String:
-	if training_run == null:
-		return ""
-	var built: PackedStringArray = training_run.build_command(config)
-	if built.size() < 4:
-		return ""
-	var parts := PackedStringArray()
-	for value in built:
-		parts.append('"%s"' % value if value.contains(" ") else value)
-	return " ".join(parts)
+	return training_run.command_line(config) if training_run != null else ""

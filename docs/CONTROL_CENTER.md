@@ -28,6 +28,49 @@ Python backend. Anything the backend cannot actually do is shown as
 
 ---
 
+## Dashboard pages
+
+The window is organised as a headless-training dashboard with a persistent
+navigation bar. The active page is saved in the preferences
+(`active_page`) and restored on the next start.
+
+| Page | Purpose |
+| --- | --- |
+| **HOME** | PC status strip (GPU / CPU / RAM, see below) + one compact card per launched agent (state, steps, episodes, reward, kills/deaths, accuracy, throughput, Pause/Stop/Details) including recently finished or failed agents. |
+| **AGENTS** | Agent management: every agent with lifecycle controls (Pause/Resume/Stop, clear finished), plus "new agent" launch that reuses the current training configuration. |
+| **HEADLESS** | The main monitoring page: one panel per managed agent with the full live status published by the Python trainer (steps, episodes, reward, kills, deaths, shots, hits, accuracy, damage, survival, wins/losses, steps/s, ETA when the backend reports one, checkpoint) and a live, bounded log fed from the trainer's `events.jsonl` (timestamps, severity, auto-follow, terminal events preserved). |
+| **TRAINING** | The existing PPO / Behavior-Cloning configuration editor, unchanged, hosted as a launch screen. START TRAINING starts the run and jumps to HEADLESS. |
+| **SIMULATION** | The classic visual layout described below (3D view, HUD, inspector docks). Unchanged behaviour. |
+| **ANALYTICS** | Lightweight reward trends per agent, sampled only when the backend publishes a new progress marker. Real metrics only. |
+| **HISTORY** | Previous managed runs read from the persisted `status.json` files: run id, algorithm, final state, duration, steps, episodes, reward, checkpoint, error. |
+| **SETTINGS** | The existing settings panel (simulation parameters, scenarios, layout). |
+
+### PC status (HOME)
+
+`ControlCenterSystemMonitor` samples local hardware on a slow timer in a
+worker thread, completely outside the simulation/training loop:
+
+* **GPU** — name, utilisation %, VRAM used/total, temperature via
+  `nvidia-smi` when present (any NVIDIA model; nothing is hard-coded).
+* **CPU** — utilisation from `/proc/stat` (Linux) or WMIC (Windows).
+* **RAM** — used/total/percent from `OS.get_memory_info()`.
+
+Every metric that cannot be measured on the current machine is shown as
+`N/A` — values are never estimated or invented. There is deliberately no
+network or disk monitoring.
+
+### Multi-agent training
+
+`TrainingAgentManager` keeps a registry of `TrainingRunController`s —
+Agent 1 wraps the classic single-run controller, additional agents get
+their own managed run directory (`user://control_center_runs/<run_id>/`)
+and process. Pause/Resume/Stop go through the same cooperative
+`command.json` protocol as before; nothing is force-killed beyond the
+controller's existing final fallback. All displayed training metrics come
+from the backend's `status.json`/`events.jsonl`; the UI only renders them.
+
+---
+
 ## Launching
 
 ```bash
@@ -124,7 +167,12 @@ how much presentation work is permitted.
 
 ---
 
-## Layout
+## Layout (SIMULATION page)
+
+The inspector dock on the right has six tabs: **Run**, **Perception**,
+**Observation**, **Results**, **Metrics**, **Replay**. The settings and
+training-configuration editors live on their own pages (SETTINGS /
+TRAINING).
 
 ```
 +----------------------------------------------------------------------+
@@ -309,6 +357,18 @@ godot --headless --path . --script res://tests/run_tests.gd
 * `tests/test_control_center_scene.gd` — headless scene builds simulation
   only; forced GUI builds every panel and refreshing never steps the
   simulation.
+* `tests/test_system_monitor.gd` — PC telemetry: payload shape, `N/A` for
+  unavailable metrics, `nvidia-smi` / CPU-load / `/proc/stat` / RAM
+  parsing, no fabricated values.
+* `tests/test_training_agent_manager.gd` — multi-agent registry: identity,
+  lifecycle states, pause/resume/stop command propagation, bounded event
+  ingestion, terminal agents staying visible.
+* `tests/test_training_run_history.gd` — persisted run history parsing
+  (only published fields, non-final durations for live runs).
+* `tests/test_control_center_dashboard.gd` — dashboard shell: page
+  navigation with persistence, agent cards, headless monitors with a
+  bounded live log, PC-status rendering (`N/A`), history rows, launch
+  navigation.
 
 Python (no Godot required):
 

@@ -30,6 +30,10 @@ var state: int = State.IDLE
 var process_id: int = -1
 var status: Dictionary = {}
 var recent_events: Array = []
+## Lifetime count of ingested events. `recent_events` is a bounded ring, so
+## consumers that render incrementally (live log panels) diff against this
+## counter instead of re-reading the whole ring every frame.
+var total_events_ingested: int = 0
 var last_error: String = ""
 var run_directory: String = ""
 var command_file: String = ""
@@ -166,6 +170,17 @@ func build_command(config: ControlCenterConfig, paths: Dictionary = {}) -> Packe
 	return command
 
 
+## Human-readable form of `build_command` for display/copy in the UI.
+func command_line(config: ControlCenterConfig) -> String:
+	var built: PackedStringArray = build_command(config)
+	if built.size() < 4:
+		return ""
+	var parts := PackedStringArray()
+	for value in built:
+		parts.append('"%s"' % value if value.contains(" ") else value)
+	return " ".join(parts)
+
+
 func start(config: ControlCenterConfig) -> bool:
 	var problem: String = validation_error(config)
 	if not problem.is_empty():
@@ -178,6 +193,7 @@ func start(config: ControlCenterConfig) -> bool:
 	# metric, event or error may leak into the new dashboard.
 	status = {}
 	recent_events.clear()
+	total_events_ingested = 0
 	last_error = ""
 	process_id = -1
 	_prepare_run_paths(config.training_type)
@@ -262,6 +278,7 @@ func reset() -> bool:
 	process_id = -1
 	status = {}
 	recent_events.clear()
+	total_events_ingested = 0
 	last_error = ""
 	run_directory = ""
 	command_file = ""
@@ -299,6 +316,7 @@ func snapshot() -> Dictionary:
 	copy["last_error"] = last_error
 	copy["run_directory"] = run_directory
 	copy["recent_events"] = recent_events.duplicate(true)
+	copy["total_events"] = total_events_ingested
 	return copy
 
 
@@ -353,6 +371,7 @@ func _poll_events() -> void:
 		var parsed = JSON.parse_string(line)
 		if parsed is Dictionary:
 			recent_events.append(parsed)
+			total_events_ingested += 1
 			while recent_events.size() > MAX_RECENT_EVENTS:
 				recent_events.pop_front()
 			training_event.emit((parsed as Dictionary).duplicate(true))

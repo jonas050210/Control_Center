@@ -136,6 +136,9 @@ class TrainingPathIsolationTests(unittest.TestCase):
             "control_center_telemetry.gd",
             "observation_inspector.gd",
             "perception_model.gd",
+            "system_monitor.gd",
+            "training_agent_manager.gd",
+            "training_run_history.gd",
         )
         for name in data_layer:
             source = (CONTROL_CENTER_DIR / name).read_text(encoding="utf-8")
@@ -166,6 +169,15 @@ class ControlCenterSurfaceTests(unittest.TestCase):
             "ui/control_center_ui.gd",
             "ui/perception_map.gd",
             "ui/ui_theme.gd",
+            "ui/home_panel.gd",
+            "ui/agents_panel.gd",
+            "ui/headless_panel.gd",
+            "ui/headless_monitor_panel.gd",
+            "ui/agent_card.gd",
+            "ui/system_status_panel.gd",
+            "ui/analytics_panel.gd",
+            "ui/history_panel.gd",
+            "ui/training_launch_panel.gd",
             "spectator_camera.gd",
             "perception_overlay_3d.gd",
         )
@@ -181,6 +193,41 @@ class ControlCenterSurfaceTests(unittest.TestCase):
         self.assertIn("has_method", perception)
         config = read("scripts/control_center/control_center_config.gd")
         self.assertIn("policy_source_available", config)
+
+    def test_system_monitor_is_honest_and_hardware_agnostic(self):
+        """PC telemetry may only relay measured values, for any GPU model."""
+        source = read("scripts/control_center/system_monitor.gd")
+        # Unavailable metrics must surface as N/A through one shared helper.
+        self.assertIn('return "N/A"', source)
+        self.assertIn("empty_snapshot", source)
+        # GPU metrics come exclusively from real NVIDIA telemetry.
+        self.assertIn("nvidia-smi", source)
+        # No GPU model may be hard-coded (the RTX 4060 Ti must work because
+        # nvidia-smi reports it, not because the code special-cases it).
+        for needle in ("4060", "RTX", "GeForce"):
+            self.assertNotIn(
+                needle,
+                source,
+                f"system_monitor.gd must not hard-code the GPU model ({needle})",
+            )
+        # Polling stays slow and off the training path.
+        match = re.search(r"const POLL_INTERVAL_SECONDS:\s*float\s*=\s*([\d.]+)", source)
+        self.assertIsNotNone(match)
+        self.assertGreaterEqual(float(match.group(1)), 1.0, "system polling must stay cheap")
+
+    def test_history_and_agent_registry_relay_backend_data_only(self):
+        history = read("scripts/control_center/training_run_history.gd")
+        self.assertIn("status.json", history)
+        manager = read("scripts/control_center/training_agent_manager.gd")
+        # The registry must not compute training metrics of its own; it
+        # relays controller snapshots.
+        self.assertIn("controller.snapshot()", manager)
+        for needle in ("mean_episode_reward", "accuracy", "kills"):
+            self.assertNotIn(
+                needle,
+                manager,
+                "the agent registry must not synthesize backend metrics",
+            )
 
 
 if __name__ == "__main__":
