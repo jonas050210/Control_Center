@@ -9,8 +9,11 @@ from sandboxai.dataset import DemonstrationDataset, DemonstrationRecorder, actio
 
 class DatasetTests(unittest.TestCase):
     def test_action_encoding_and_round_trip(self):
-        self.assertEqual(action_to_multidiscrete([0, 0, 0, 0, 0, 0.2, -0.1]), [1, 1, 1, 1, 0])
-        self.assertEqual(action_to_multidiscrete(9), [1, 1, 1, 1, 1])
+        self.assertEqual(action_to_multidiscrete([0, 0, 0, 0, 0, 0.2, -0.1]), [1, 1, 1, 1, 0, 0])
+        # contract v2 log array: jump lives at index 5, look deltas shift right.
+        self.assertEqual(action_to_multidiscrete([0, 0, 0, 0, 0, 1, 0.2, -0.1]), [1, 1, 1, 1, 0, 1])
+        self.assertEqual(action_to_multidiscrete(9), [1, 1, 1, 1, 1, 0])
+        self.assertEqual(action_to_multidiscrete(10), [1, 1, 1, 1, 0, 1])
         recorder = DemonstrationRecorder({"source": "test"})
         recorder.start()
         recorder.append([0.0] * OBSERVATION_FIELD_COUNT, [0, 0, 0, 0, 0, 0, 0], [0.1] * OBSERVATION_FIELD_COUNT, 1.0, True, episode_id=2)

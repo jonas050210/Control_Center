@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 import numpy as np
 
-from sandboxai.contract import OBSERVATION_FIELD_COUNT
+from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.dataset import (
     ACTION_NVECS,
     DemonstrationDataset,
@@ -32,19 +32,19 @@ class SimulationIntegrationTests(unittest.TestCase):
     def test_multidiscrete_action_encodings_cover_full_space(self):
         for discrete_idx in range(10):
             encoded = discrete_to_multidiscrete(discrete_idx)
-            self.assertEqual(len(encoded), 5)
+            self.assertEqual(len(encoded), len(ACTION_NVEC))
             self.assertTrue(all(0 <= val < nvec for val, nvec in zip(encoded, ACTION_NVECS)))
 
     def test_canonical_action_to_multidiscrete(self):
         # 7-field canonical array [move, strafe, yaw, pitch, shoot, dx, dy]
         idle_canonical = [0, 0, 0, 0, 0, 0.0, 0.0]
-        self.assertEqual(action_to_multidiscrete(idle_canonical), [1, 1, 1, 1, 0])
+        self.assertEqual(action_to_multidiscrete(idle_canonical), [1, 1, 1, 1, 0, 0])
 
         forward_shoot = [1, 0, 0, 0, 1, 0.0, 0.0]
-        self.assertEqual(action_to_multidiscrete(forward_shoot), [2, 1, 1, 1, 1])
+        self.assertEqual(action_to_multidiscrete(forward_shoot), [2, 1, 1, 1, 1, 0])
 
         backward_left = [-1, -1, -1, -1, 0, 0.0, 0.0]
-        self.assertEqual(action_to_multidiscrete(backward_left), [0, 0, 0, 0, 0])
+        self.assertEqual(action_to_multidiscrete(backward_left), [0, 0, 0, 0, 0, 0])
 
     def test_demonstration_dataset_roundtrip_and_arrays(self):
         recorder = DemonstrationRecorder({"env": "test", "curriculum": 3})
@@ -74,7 +74,7 @@ class SimulationIntegrationTests(unittest.TestCase):
 
             obs_arr, act_arr, next_obs_arr, rew_arr, done_arr = dataset.arrays()
             self.assertEqual(obs_arr.shape, (30, OBSERVATION_FIELD_COUNT))
-            self.assertEqual(act_arr.shape, (30, 5))
+            self.assertEqual(act_arr.shape, (30, len(ACTION_NVEC)))
             self.assertEqual(next_obs_arr.shape, (30, OBSERVATION_FIELD_COUNT))
             self.assertEqual(rew_arr.shape, (30,))
             self.assertEqual(done_arr.shape, (30,))
@@ -110,7 +110,7 @@ class SimulationIntegrationTests(unittest.TestCase):
             # Load checkpoint
             loaded_model = load_bc_checkpoint(result["best_checkpoint"])
             pred = loaded_model.predict(torch.randn(4, OBSERVATION_FIELD_COUNT))
-            self.assertEqual(pred.shape, (4, 5))
+            self.assertEqual(pred.shape, (4, len(ACTION_NVEC)))
 
             # Test transfer into SB3 PPO policy
             import gymnasium as gym
@@ -119,7 +119,7 @@ class SimulationIntegrationTests(unittest.TestCase):
             class SimpleEnv(gym.Env):
                 def __init__(self):
                     self.observation_space = gym.spaces.Box(-1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,))
-                    self.action_space = gym.spaces.MultiDiscrete([3, 3, 3, 3, 2])
+                    self.action_space = gym.spaces.MultiDiscrete(list(ACTION_NVEC))
             
             ppo_model = PPO(
                 "MlpPolicy",

@@ -33,7 +33,7 @@ class ObservationContractTests(unittest.TestCase):
 
     def test_observation_field_count_matches_godot_contract(self):
         # Mirrors Observation.FIELD_COUNT in scripts/core/observation.gd.
-        self.assertEqual(OBSERVATION_FIELD_COUNT, 33)
+        self.assertEqual(OBSERVATION_FIELD_COUNT, 65)
 
     def test_observation_bounds_are_symmetric_and_normalized(self):
         self.assertEqual(OBSERVATION_LOW, -1.0)
@@ -50,7 +50,7 @@ class ObservationContractTests(unittest.TestCase):
 
 class ActionContractTests(unittest.TestCase):
     def test_action_nvec_matches_multidiscrete_shape(self):
-        self.assertEqual(ACTION_NVEC, (3, 3, 3, 3, 2))
+        self.assertEqual(ACTION_NVEC, (3, 3, 3, 3, 2, 2))
 
     def test_action_field_indices_are_sequential(self):
         for expected_index, field in enumerate(ACTION_SPEC):
