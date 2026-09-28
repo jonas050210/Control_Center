@@ -7,3 +7,5 @@ gymnasium>=0.29
 stable-baselines3>=2.2
 tensorboard>=2.14
 psutil>=5.9
+# GDScript static analysis / linting (python/sandboxai/gdscript_analysis.py).
+gdtoolkit>=4.3,<5

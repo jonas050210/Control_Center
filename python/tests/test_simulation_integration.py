@@ -4,9 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import torch
+try:  # Optional training extra; the suite must skip, never fail, without it.
+    import torch
+except ImportError:  # pragma: no cover - environment dependent
+    torch = None
 import numpy as np
 
+from optional_deps import HAS_TORCH, TORCH_REASON
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.dataset import (
     ACTION_NVECS,
@@ -26,6 +30,7 @@ from sandboxai.config import BCConfig, TrainingConfig
 from sandboxai.self_play import PolicySlot, SelfPlayCoordinator
 
 
+@unittest.skipUnless(HAS_TORCH, TORCH_REASON)
 class SimulationIntegrationTests(unittest.TestCase):
     """End-to-end integration and simulation physics / RL contract tests."""
 

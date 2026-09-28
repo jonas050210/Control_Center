@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from optional_deps import GYMNASIUM_REASON, HAS_GYMNASIUM, HAS_SB3, SB3_REASON
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.godot_env import GodotProcessTransport, GodotGymEnv, GodotVecEnv
 
@@ -123,6 +124,7 @@ class FakeBridgeTestCase(unittest.TestCase):
         finally:
             del os.environ["FAKE_BRIDGE_SILENT"]
 
+    @unittest.skipUnless(HAS_GYMNASIUM, GYMNASIUM_REASON)
     def test_gym_env_returns_terminal_observation(self):
         env = GodotGymEnv(project_path=PROJECT_ROOT, godot_executable=self.executable)
         try:
@@ -141,6 +143,7 @@ class FakeBridgeTestCase(unittest.TestCase):
         finally:
             env.close()
 
+    @unittest.skipUnless(HAS_SB3, SB3_REASON)
     def test_vec_env_consumes_sb3_seeds_on_reset(self):
         env = GodotVecEnv(project_path=PROJECT_ROOT, godot_executable=self.executable,
                           environment_count=1)
