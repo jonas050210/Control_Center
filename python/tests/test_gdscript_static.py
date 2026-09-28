@@ -24,6 +24,7 @@ from optional_deps import GDTOOLKIT_REASON, HAS_GDTOOLKIT
 from sandboxai.gdscript_analysis import (
     ProjectIndex,
     analyze,
+    check_local_method_calls,
     check_static_calls,
     lint_all,
 )
@@ -165,6 +166,106 @@ class StaticCallThroughScriptClassTests(unittest.TestCase):
             "self-play scripts must not call instance members through a "
             "script class (this is a Godot compile error that makes the "
             "self-play reset return [] over the bridge)",
+        )
+
+
+class UndefinedLocalCallTests(unittest.TestCase):
+    """Regression tests for the broken-``system_monitor.gd`` failure class.
+
+    ``scripts/control_center/system_monitor.gd`` called
+    ``_needs_cpu_command()`` and ``_parse_optional_number()`` without
+    declaring either. Godot rejects undeclared bare calls at COMPILE time
+    ("Function ... not found in base self"), which invalidates the whole
+    script — yet the invalid script still loads as a resource, so every
+    ``preload`` chain survived and the damage only appeared at runtime:
+    ``ControlCenterSystemMonitor.new()`` aborted with "Nonexistent function
+    'new' in base 'GDScript'", ``ControlCenterSession._init`` died mid-way
+    (leaving ``system_monitor`` and ``simulation_manager`` null), and ~37
+    Control Center tests failed across session/scene/dashboard files.
+
+    These tests pin the static check that catches this class of defect
+    without needing the engine.
+    """
+
+    def _fixture_project(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "scripts").mkdir(parents=True)
+        (root / "scripts" / "monitor.gd").write_text(
+            "class_name Monitor\n"
+            "extends Node\n"
+            "\n"
+            "func poll() -> void:\n"
+            "\tvar jobs := {\"cpu_command\": _needs_cpu_command()}\n"
+            "\t_ready()\n"
+            "\tsuper._init()\n",
+            encoding="utf-8",
+        )
+        return root
+
+    def test_undefined_local_call_is_flagged(self):
+        findings = check_local_method_calls(ProjectIndex(self._fixture_project()))
+        self.assertEqual(len(findings), 1)
+        finding = findings[0]
+        self.assertEqual(finding.kind, "unknown-local-call")
+        self.assertEqual(finding.path, "res://scripts/monitor.gd")
+        self.assertEqual(finding.line, 5)
+        self.assertIn("_needs_cpu_command()", finding.message)
+
+    def test_virtuals_and_super_calls_are_not_flagged(self):
+        root = self._fixture_project()
+        # Remove the only genuine offender; _ready() is an engine virtual
+        # and super._init() targets the base class, so neither may be
+        # reported even though neither is declared here.
+        (root / "scripts" / "monitor.gd").write_text(
+            "class_name Monitor\n"
+            "extends Node\n"
+            "\n"
+            "func poll() -> void:\n"
+            "\t_ready()\n"
+            "\tsuper._init()\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(check_local_method_calls(ProjectIndex(root)), [])
+
+    def test_declared_and_inherited_local_calls_are_not_flagged(self):
+        root = self._fixture_project()
+        (root / "scripts" / "base.gd").write_text(
+            "class_name Base\n"
+            "extends RefCounted\n"
+            "\n"
+            "func _inherited_helper() -> bool:\n"
+            "\treturn true\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "monitor.gd").write_text(
+            "class_name Monitor\n"
+            "extends Base\n"
+            "\n"
+            "func _own_helper() -> bool:\n"
+            "\treturn true\n"
+            "\n"
+            "func poll() -> void:\n"
+            "\tif _own_helper() and _inherited_helper():\n"
+            "\t\t_ready()\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(check_local_method_calls(ProjectIndex(root)), [])
+
+    def test_system_monitor_local_calls_are_clean(self):
+        # Direct, named regression guard for the file that broke the real
+        # runtime: it must not call any helper it does not declare.
+        index = ProjectIndex(REPO_ROOT)
+        findings = [
+            f for f in check_local_method_calls(index) if "system_monitor" in f.path
+        ]
+        self.assertEqual(
+            findings,
+            [],
+            "system_monitor.gd must not reference helpers it does not define "
+            "(this is the Godot compile error that invalidated the script and "
+            "cascaded through the Control Center suite)",
         )
 
 

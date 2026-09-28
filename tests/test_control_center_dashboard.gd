@@ -6,6 +6,9 @@ class_name TestControlCenterDashboard
 extends RefCounted
 
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
+const ControlCenterHeadlessMonitorPanel = preload(
+	"res://scripts/control_center/ui/headless_monitor_panel.gd"
+)
 const ControlCenterSystemMonitor = preload("res://scripts/control_center/system_monitor.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 const TrainingRunController = preload("res://scripts/control_center/training_run_controller.gd")
@@ -275,4 +278,62 @@ func test_active_page_round_trips_through_config() -> SandboxTest:
 	restored.active_page = "not-a-page"
 	restored.sanitize()
 	t.assert_eq(restored.active_page, "home", "unknown pages sanitize to home")
+	return t
+
+
+## Regression: the trainer's event ring was bounded at 200 while the monitor
+## log's bound was 300, so the visible log could never actually fill to its
+## documented capacity. The capacity is one shared constant now; this pins
+## all three declarations together so the drift cannot come back silently.
+func test_live_log_capacity_is_one_shared_constant() -> SandboxTest:
+	var t := SandboxTest.new("dashboard_live_log_capacity_shared")
+	t.assert_eq(
+		ControlCenterConfig.LIVE_LOG_LINES,
+		300,
+		"the documented live-log capacity is 300 most-recent events"
+	)
+	t.assert_eq(
+		TrainingRunController.MAX_RECENT_EVENTS,
+		ControlCenterConfig.LIVE_LOG_LINES,
+		"the event ring must retain exactly the log's capacity"
+	)
+	t.assert_eq(
+		ControlCenterHeadlessMonitorPanel.MAX_LOG_LINES,
+		ControlCenterConfig.LIVE_LOG_LINES,
+		"the rendered log bound must match the shared capacity"
+	)
+	return t
+
+
+## The other half of the focus contract: focus follows a launch even while
+## the backend still reports Idle, but it must fall back to the grid once
+## the focused agent is actually removed from the registry.
+func test_headless_focus_drops_when_the_agent_is_removed() -> SandboxTest:
+	var t := SandboxTest.new("dashboard_headless_focus_drop_on_remove")
+	var instance: Node = _instantiate()
+	if instance == null or not _mount(instance):
+		if instance != null:
+			instance.free()
+		return t
+	var ui = instance.ui
+	var manager = instance.session.agent_manager
+	var controller := TrainingRunController.new()
+	manager.adopt_agent(controller)
+	var agent_id: int = manager.agent_ids()[manager.agent_ids().size() - 1]
+	controller.apply_status({"state": "Finished", "timesteps": 500})
+	ui.set_page("headless", false)
+	ui.headless_panel.focus_agent(agent_id)
+	t.assert_eq(
+		ui.headless_panel.focused_agent_id,
+		agent_id,
+		"a launched agent keeps focus while it exists"
+	)
+	t.assert_true(manager.remove(agent_id), "a finished agent can be cleared")
+	ui.headless_panel.refresh()
+	t.assert_eq(
+		ui.headless_panel.focused_agent_id,
+		-1,
+		"focus returns to the grid once the focused agent is removed"
+	)
+	_teardown(instance)
 	return t
