@@ -67,7 +67,20 @@ var results: ControlCenterResults
 var human_input_enabled: bool = false
 ## Presentation work (view sync, telemetry, logging). Forced off in
 ## TRAINING mode and in headless runs.
-var presentation_enabled: bool = true
+##
+## Everything derived from this flag (event log, view visibility, debug
+## perception) is re-applied on assignment. It used to be a plain variable,
+## so turning presentation on AFTER `setup()` — exactly what the Control
+## Center scene does once it knows a display exists — left the event log
+## disabled and the views hidden: telemetry_enabled() reported true while
+## nothing was actually logged or synced.
+var presentation_enabled: bool = true:
+	set(value):
+		if presentation_enabled == value:
+			return
+		presentation_enabled = value
+		if simulation_manager != null:
+			_apply_mode_to_runtime()
 
 var running: bool = true
 var total_steps: int = 0

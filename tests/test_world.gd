@@ -127,6 +127,36 @@ func test_arena_bounds_are_always_enforced() -> SandboxTest:
 	t.assert_lte(resolved.x, 9.6)
 	t.assert_lte(resolved.z, 9.6)
 	t.assert_gte(resolved.x, -9.6)
+	# A clamped position must also be reported as a legal standing position;
+	# float rounding used to push it a hair past the limit, so the arena
+	# clamp and the free-position test disagreed about the same point.
+	t.assert_true(
+		world.is_position_free(resolved, 0.4, 1.8), "the clamped position must be inside"
+	)
+	var negative: Vector3 = world.resolve_move(
+		Vector3(-9.0, 0.0, -9.0), Vector3(-50.0, 0.0, -50.0), 0.4, 1.8
+	)
+	t.assert_gte(negative.x, -9.6)
+	t.assert_gte(negative.z, -9.6)
+	t.assert_true(world.is_position_free(negative, 0.4, 1.8))
+	return t
+
+
+## Regression: `resolve_move()` only tested the END position of a move, so
+## a displacement wider than a box passed straight through it. A swept move
+## must stop on the near side no matter how large the step is.
+func test_fast_movement_cannot_tunnel_through_geometry() -> SandboxTest:
+	var t := SandboxTest.new("fast_movement_cannot_tunnel_through_geometry")
+	var world: ArenaWorld = ArenaWorld.create(20.0)
+	world.add_box(Vector3(0.0, 1.5, 0.0), Vector3(0.35, 1.5, 6.0), Obstacle.Kind.WALL)
+	for distance in [1.0, 2.0, 5.0, 12.0, 30.0]:
+		var from := Vector3(-float(distance), 0.0, 0.0)
+		var to := Vector3(float(distance), 0.0, 0.0)
+		var resolved: Vector3 = world.resolve_move(from, to, 0.4, 1.8)
+		t.assert_lt(
+			resolved.x, -0.7, "a %d m step must not cross the wall" % int(distance)
+		)
+		t.assert_false(world.is_blocked(resolved, 0.4, 1.8))
 	return t
 
 

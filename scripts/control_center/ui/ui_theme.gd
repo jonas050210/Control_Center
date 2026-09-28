@@ -149,3 +149,20 @@ static func ratio_color(ratio: float) -> Color:
 	if ratio >= 0.33:
 		return COLOR_WARN
 	return COLOR_BAD
+
+
+## Compact number for a label: "0.25", "1", "16" — trailing zeros removed.
+##
+## GDScript's `%` formatter does NOT implement C's `%g` (it knows %d, %f,
+## %s, %x, %o, %c and %%). Using "%g" raised
+## "String formatting error: unsupported format character." on every
+## Control Center build and produced an unusable label, which is why speed
+## labels go through this helper instead.
+static func format_number(value: float, decimals: int = 2) -> String:
+	var text: String = String.num(value, maxi(0, decimals))
+	if text.contains("."):
+		text = text.rstrip("0")
+		text = text.rstrip(".")
+	if text.is_empty() or text == "-0":
+		return "0"
+	return text

@@ -310,7 +310,7 @@ func update_ai(
 		if enable_strafe:
 			move_dir = _blend_strafe_direction(dir, distance)
 		position += move_dir * move_speed * dt
-	var limit: float = arena_half_extent - radius
+	var limit: float = maxf(0.0, arena_half_extent - radius - SandboxConfig.ARENA_BOUNDS_EPSILON)
 	position.x = clampf(position.x, -limit, limit)
 	position.z = clampf(position.z, -limit, limit)
 	position.y = 0.0

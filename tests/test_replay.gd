@@ -278,6 +278,33 @@ func test_player_seeking_and_event_jumps() -> SandboxTest:
 	return t
 
 
+## Regression: an event was anchored to the NEXT tick, because record_step()
+## had already advanced the cursor by the time the caller translated that
+## step's events. "Jump to next event" then landed one tick after the shot
+## and `events_at(n)` found nothing.
+func test_events_are_anchored_to_the_tick_they_describe() -> SandboxTest:
+	var t := SandboxTest.new("replay_events_anchored_to_their_tick")
+	var recorder := ReplayRecorder.new({"map_id": "compound"})
+	recorder.start(11)
+	for index in range(5):
+		recorder.record_step(Action.idle(), 0.0, null, index == 4)
+		if index == 2:
+			recorder.record_step_events({"shot_fired": true, "hit": true})
+	var episode: Dictionary = recorder.finish({"done_reason": "done"})
+	var by_kind: Dictionary = {}
+	for event_value in episode["events"]:
+		var event: Dictionary = event_value
+		by_kind[str(event["kind"])] = int(event["tick"])
+	t.assert_eq(int(by_kind["episode_start"]), 0, "episode_start belongs to tick 0")
+	t.assert_eq(int(by_kind["combat"]), 2, "the shot fired during tick 2 belongs to tick 2")
+	t.assert_eq(int(by_kind["episode_end"]), 4, "the episode ends on its last tick")
+
+	var player := ReplayPlayer.new(episode)
+	player.seek(2)
+	t.assert_eq(player.events_at(2).size(), 1, "the event must be found at its own tick")
+	return t
+
+
 func test_player_status_is_presentation_only() -> SandboxTest:
 	var t := SandboxTest.new("replay_player_status")
 	var player := ReplayPlayer.new(_sample_episode(10))

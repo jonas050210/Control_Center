@@ -115,6 +115,24 @@ class ReplayRecordingTests(unittest.TestCase):
         self.assertIn("combat", kinds)
         self.assertIn("episode_end", kinds)
 
+    def test_events_are_anchored_to_the_tick_they_describe(self):
+        """Regression: events were filed one tick after the step they belong to.
+
+        ``record_step`` advances the cursor, so a recorder that anchored
+        events to the *current* tick put the shot fired during tick 3 at
+        tick 4 — the Control Center's "jump to event" then landed after the
+        shot and ``events_at(3)`` found nothing.
+        """
+        episode = _record().episode()
+        by_kind = {event.kind: event for event in episode.events}
+        self.assertEqual(by_kind["episode_start"].tick, 0)
+        self.assertEqual(by_kind["target_change"].tick, 2)
+        self.assertEqual(by_kind["combat"].tick, 3)
+        self.assertEqual(by_kind["episode_end"].tick, len(episode.ticks) - 1)
+        player = ReplayPlayer(episode)
+        player.seek(3)
+        self.assertEqual([event.kind for event in player.events_at()], ["combat"])
+
     def test_detailed_recording_stores_observations(self):
         recorder = _record(DetailLevel.DETAILED)
         episode = recorder.episode()

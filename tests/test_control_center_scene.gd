@@ -12,6 +12,7 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
+const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 
@@ -163,3 +164,54 @@ func test_gui_mode_switch_keeps_panels_alive() -> SandboxTest:
 	)
 	_teardown(instance)
 	return t
+
+
+## Regression: the transport panel used C's "%g" conversion, which GDScript's
+## String formatter does not implement. Every Control Center build printed
+## "String formatting error: unsupported format character." and the speed
+## buttons/tooltips ended up with an error string instead of "0.25x".
+func test_speed_labels_format_without_unsupported_conversions() -> SandboxTest:
+	var t := SandboxTest.new("control_center_speed_labels_format")
+	t.assert_eq(ControlCenterTheme.format_number(0.25), "0.25")
+	t.assert_eq(ControlCenterTheme.format_number(1.0), "1")
+	t.assert_eq(ControlCenterTheme.format_number(16.0), "16")
+	t.assert_eq(ControlCenterTheme.format_number(0.05), "0.05")
+	for preset_value in ControlCenterConfig.SPEED_PRESETS:
+		var label: String = "%sx" % ControlCenterTheme.format_number(float(preset_value))
+		t.assert_false(label.contains("error"), "speed label must render: %s" % label)
+		t.assert_true(label.ends_with("x"))
+
+	# No Control Center UI script may reintroduce an unsupported conversion.
+	# Comment lines are skipped so this file's own explanation of the bug
+	# does not trip the check.
+	var unsupported: Array = ["%g", "%e", "%i", "%u"]
+	for path in _ui_script_paths():
+		var script: Script = load(path) as Script
+		if script == null:
+			continue
+		for raw_line in script.source_code.split("\n"):
+			var line: String = str(raw_line).strip_edges()
+			if line.begins_with("#"):
+				continue
+			for token in unsupported:
+				t.assert_false(
+					line.contains(token),
+					"%s uses the unsupported format conversion %s" % [path, token]
+				)
+	return t
+
+
+static func _ui_script_paths() -> Array:
+	var paths: Array = []
+	var dir: DirAccess = DirAccess.open("res://scripts/control_center/ui")
+	if dir == null:
+		return paths
+	dir.list_dir_begin()
+	var file_name: String = dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir() and file_name.ends_with(".gd"):
+			paths.append("res://scripts/control_center/ui/%s" % file_name)
+		file_name = dir.get_next()
+	dir.list_dir_end()
+	paths.sort()
+	return paths

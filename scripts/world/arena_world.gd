@@ -29,6 +29,28 @@ const SELF_PATH: String = "res://scripts/world/arena_world.gd"
 ## stand on / step up onto" (meters).
 const STEP_UP_TOLERANCE: float = 0.35
 
+## Safety margin subtracted from the arena bound clamp (meters).
+##
+## `half_extent - radius` is evaluated in 32-bit floats inside a Vector3, so
+## the clamped coordinate can round to a value a few 1e-7 ABOVE the nominal
+## limit and put the character fractionally outside the arena. The margin is
+## three orders of magnitude smaller than the character radius, so it changes
+## no gameplay, but it makes "the clamp never leaves the arena" exactly true
+## instead of true-up-to-rounding.
+const BOUNDS_EPSILON: float = SandboxConfig.ARENA_BOUNDS_EPSILON
+
+## Maximum horizontal distance resolved in one collision substep (meters).
+##
+## `resolve_move()` used to test only the END position of a move, so any
+## displacement larger than a box could tunnel straight through it (a single
+## `resolve_move(-3, +3)` across a 2 m crate reported "no collision"). The
+## move is now swept in substeps no longer than this, which is well under the
+## smallest half-extent a generator emits. A normal 60 Hz tick moves ~0.08 m
+## and therefore still costs exactly one substep.
+const MAX_MOVE_SUBSTEP: float = 0.2
+## Upper bound on substeps so a teleport-sized request stays O(1)-ish.
+const MAX_MOVE_SUBSTEPS: int = 64
+
 var half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
 var wall_height: float = SandboxConfig.ARENA_WALL_HEIGHT
 var obstacles: Array = []  # Array[Obstacle]
@@ -139,6 +161,12 @@ func is_blocked(feet_position: Vector3, radius: float, height: float) -> bool:
 ## Highest standable surface at or below `from_y + STEP_UP_TOLERANCE` under
 ## the character's footprint. Returns 0.0 (the arena floor) when nothing
 ## else supports it.
+##
+## The footprint is inflated by the FULL character radius, exactly like the
+## collision test in `is_blocked()`. With a smaller support footprint there
+## was a ring around every standable box that was solid for movement but not
+## standable, so a character descending onto the edge of a platform fell
+## into the box's collision volume and got stuck against its side.
 func ground_height(feet_position: Vector3, radius: float, from_y: float) -> float:
 	var best: float = 0.0
 	var ceiling: float = from_y + STEP_UP_TOLERANCE
@@ -146,7 +174,7 @@ func ground_height(feet_position: Vector3, radius: float, from_y: float) -> floa
 		var obstacle: Obstacle = obstacle_value
 		if not obstacle.standable:
 			continue
-		if not obstacle.contains_xz(feet_position, radius * 0.5):
+		if not obstacle.contains_xz(feet_position, radius):
 			continue
 		var top: float = obstacle.top_y()
 		if top <= ceiling and top > best:
@@ -154,23 +182,51 @@ func ground_height(feet_position: Vector3, radius: float, from_y: float) -> floa
 	return best
 
 
-## Axis-separated horizontal move with wall sliding, then an arena-bounds
-## clamp. Returns the resolved feet position.
+## Largest coordinate a character of `radius` may occupy on X/Z.
+func movement_limit(radius: float) -> float:
+	return maxf(0.0, half_extent - radius - BOUNDS_EPSILON)
+
+
+## Axis-separated SWEPT horizontal move with wall sliding, then an
+## arena-bounds clamp. Returns the resolved feet position.
 ##
-## Axis separation (try X, then Z) is what produces natural "slide along the
-## wall" behavior for a strafing agent instead of sticking on contact, and
-## it costs two overlap tests instead of a full sweep.
+## Axis separation (advance X, then Z) is what produces natural "slide along
+## the wall" behavior for a strafing agent instead of sticking on contact.
+## The sweep is what keeps a fast or teleport-sized move from passing
+## through geometry: each axis advances in substeps of at most
+## MAX_MOVE_SUBSTEP and stops at the last free one.
 func resolve_move(
 	from_position: Vector3, desired: Vector3, radius: float, height: float
 ) -> Vector3:
 	var resolved: Vector3 = from_position
-
-	var step_x := Vector3(desired.x, resolved.y, resolved.z)
-	if not is_blocked(step_x, radius, height):
-		resolved = step_x
-	var step_z := Vector3(resolved.x, resolved.y, desired.z)
-	if not is_blocked(step_z, radius, height):
-		resolved = step_z
+	var delta_x: float = desired.x - from_position.x
+	var delta_z: float = desired.z - from_position.z
+	var distance: float = sqrt(delta_x * delta_x + delta_z * delta_z)
+	var substeps: int = clampi(
+		int(ceil(distance / MAX_MOVE_SUBSTEP)), 1, MAX_MOVE_SUBSTEPS
+	)
+	var blocked_x: bool = false
+	var blocked_z: bool = false
+	for index in range(1, substeps + 1):
+		var fraction: float = float(index) / float(substeps)
+		if not blocked_x:
+			var step_x := Vector3(
+				from_position.x + delta_x * fraction, resolved.y, resolved.z
+			)
+			if is_blocked(step_x, radius, height):
+				blocked_x = true
+			else:
+				resolved = step_x
+		if not blocked_z:
+			var step_z := Vector3(
+				resolved.x, resolved.y, from_position.z + delta_z * fraction
+			)
+			if is_blocked(step_z, radius, height):
+				blocked_z = true
+			else:
+				resolved = step_z
+		if blocked_x and blocked_z:
+			break
 
 	# Vertical motion is resolved by the caller (gravity/jump); here we only
 	# carry the requested height through and refuse to end up inside a box.
@@ -178,16 +234,17 @@ func resolve_move(
 	if not is_blocked(step_y, radius, height):
 		resolved = step_y
 
-	var limit: float = half_extent - radius
+	var limit: float = movement_limit(radius)
 	resolved.x = clampf(resolved.x, -limit, limit)
 	resolved.z = clampf(resolved.z, -limit, limit)
 	return resolved
 
 
 ## True when an upright character fits at `feet_position` and stays inside
-## the arena bounds.
+## the arena bounds. Uses the same limit `resolve_move()` clamps to, so a
+## clamped position is never reported as out of bounds.
 func is_position_free(feet_position: Vector3, radius: float, height: float) -> bool:
-	var limit: float = half_extent - radius
+	var limit: float = movement_limit(radius)
 	if absf(feet_position.x) > limit or absf(feet_position.z) > limit:
 		return false
 	return not is_blocked(feet_position, radius, height)

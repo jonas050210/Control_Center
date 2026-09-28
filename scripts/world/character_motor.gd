@@ -66,21 +66,33 @@ static func step(
 	var desired: Vector3 = position + Vector3(horizontal.x, vertical, horizontal.z) * dt
 
 	var resolved: Vector3
+	var floor_y: float = 0.0
 	if world == null:
 		resolved = desired
-		var limit: float = arena_half_extent - radius
+		var limit: float = maxf(0.0, arena_half_extent - radius - ArenaWorld.BOUNDS_EPSILON)
 		resolved.x = clampf(resolved.x, -limit, limit)
 		resolved.z = clampf(resolved.z, -limit, limit)
 	else:
-		resolved = (world as ArenaWorld).resolve_move(position, desired, radius, height)
-		# resolve_move() refuses a vertical step that would end inside a box;
-		# detect that and cancel the vertical velocity (head bump / ledge).
-		if absf(resolved.y - desired.y) > 0.000001 and vertical > 0.0:
+		var arena: ArenaWorld = world as ArenaWorld
+		# Horizontal first, at the CURRENT height: resolve_move() is a
+		# horizontal collision solver, and asking it to also place the feet
+		# vertically made a descending character hover forever above a
+		# standable box (the downward step ends "inside" the box, so it was
+		# refused, and the landing test below then never fired).
+		resolved = arena.resolve_move(
+			position, Vector3(desired.x, position.y, desired.z), radius, height
+		)
+		floor_y = arena.ground_height(resolved, radius, position.y)
+		# Vertical is resolved here: upward motion is stopped by a ceiling
+		# (head bump), downward motion is caught by the landing test below.
+		var target_y: float = desired.y
+		if (
+			vertical > 0.0
+			and arena.is_blocked(Vector3(resolved.x, target_y, resolved.z), radius, height)
+		):
+			target_y = position.y
 			vertical = 0.0
-
-	var floor_y: float = 0.0
-	if world != null:
-		floor_y = (world as ArenaWorld).ground_height(resolved, radius, position.y)
+		resolved.y = target_y
 
 	var landed: bool = false
 	if resolved.y <= floor_y + SandboxConfig.LANDING_EPSILON and vertical <= 0.0:

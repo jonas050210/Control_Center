@@ -197,7 +197,10 @@ static func random_spawn_position(
 	var base_direction := Vector3(0.0, 0.0, -1.0)  # matches AGENT_SPAWN_YAW_DEG == 0 forward
 	var rotated: Vector3 = base_direction.rotated(Vector3.UP, deg_to_rad(angle_deg))
 	var spawn: Vector3 = SandboxConfig.AGENT_SPAWN_POSITION + rotated * distance
-	var limit: float = env.arena_half_extent - SandboxConfig.ENEMY_RADIUS
+	var limit: float = maxf(
+		0.0,
+		env.arena_half_extent - SandboxConfig.ENEMY_RADIUS - SandboxConfig.ARENA_BOUNDS_EPSILON
+	)
 	spawn.x = clampf(spawn.x, -limit, limit)
 	spawn.z = clampf(spawn.z, -limit, limit)
 	spawn.y = 0.0
