@@ -4,6 +4,14 @@
 class_name SimulationManager
 extends Node
 
+signal environment_reset(env_index: int)
+signal environment_done(env_index: int, reason: String)
+## Emitted after build() finishes recreating the environment array, so
+## observers (views, the Control Center, the debug overlay) can re-bind
+## instead of silently holding references to freed environments.
+signal environments_rebuilt(environment_count: int, enemies_per_environment: int)
+
+
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
@@ -12,9 +20,6 @@ const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const EnvironmentView = preload("res://scripts/env/environment_view.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
-signal environment_reset(env_index: int)
-signal environment_done(env_index: int, reason: String)
 
 @export var environment_count: int = SandboxConfig.DEFAULT_ENVIRONMENT_COUNT
 @export var enemy_count_per_environment: int = SandboxConfig.ENEMY_COUNT_DEFAULT
@@ -57,7 +62,17 @@ func _ready() -> void:
 	build(environment_count, enemy_count_per_environment)
 
 
+## (Re)creates the environment array.
+##
+## Controllers are PRESERVED across a rebuild. Previously `build()` called
+## `_clear()`, which emptied `controllers`, and nothing re-attached them —
+## so changing the enemy count from the debug overlay silently detached the
+## HumanController installed by main.gd and the player lost all input until
+## the scene was reloaded. Controllers are keyed by environment index, so
+## they are captured here and re-attached to the environments that still
+## exist afterwards.
 func build(count: int, enemies_per_env: int = SandboxConfig.ENEMY_COUNT_DEFAULT) -> void:
+	var preserved_controllers: Array = controllers.duplicate()
 	_clear()
 	environment_count = maxi(1, count)
 	enemy_count_per_environment = maxi(1, enemies_per_env)
@@ -89,6 +104,12 @@ func build(count: int, enemies_per_env: int = SandboxConfig.ENEMY_COUNT_DEFAULT)
 		views.append(null)
 		if create_visuals and _should_create_view(i):
 			_create_view(i)
+
+	for i in range(mini(preserved_controllers.size(), controllers.size())):
+		var controller = preserved_controllers[i]
+		if controller != null:
+			controllers[i] = controller
+	environments_rebuilt.emit(environment_count, enemy_count_per_environment)
 
 
 ## Whether environment `index` gets a view up front. An empty

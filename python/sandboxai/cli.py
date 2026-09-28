@@ -377,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "project_path": config.project,
                 "godot_executable": config.godot_executable,
-                "environment_count": 1,
+                "environment_count": max(1, int(args.environment_count or 1)),
                 "enemy_count": config.enemy_count,
                 "seed": config.seed,
                 "curriculum_level": config.curriculum_level,

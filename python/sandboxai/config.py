@@ -8,6 +8,11 @@ import os
 import shutil
 from typing import Any
 
+## Highest curriculum level accepted by the Godot side. Mirrors
+## CurriculumConfig.Level (1-10 combat, 11 = agent-vs-agent self-play) in
+## scripts/core/curriculum_config.gd.
+CURRICULUM_LEVEL_COUNT: int = 11
+
 
 def find_godot_executable(preferred: str = "godot") -> str:
     """Find a usable Godot executable across PATH, environment variables and common platform locations."""
@@ -53,6 +58,9 @@ class TrainingConfig:
     checkpoint_frequency: int = 100_000
     evaluation_frequency: int = 50_000
     evaluation_episodes: int = 20
+    ## Environments used by the periodic in-training evaluation. Kept at 1
+    ## by default so evaluation stays cheap and exactly reproducible.
+    evaluation_environment_count: int = 1
     seed: int = 1234
     device: str = "auto"
     curriculum_level: int = 3
@@ -103,8 +111,12 @@ class TrainingConfig:
             raise ValueError("net_arch must contain at least one positive layer size")
         if self.torch_threads < 0:
             raise ValueError("torch_threads must be non-negative (0 = engine default)")
-        if self.curriculum_level not in range(1, 6):
-            raise ValueError("curriculum_level must be between 1 and 5")
+        # 1-10 are the combat levels, 11 is the self-play hook. Mirrors
+        # CurriculumConfig.Level in scripts/core/curriculum_config.gd.
+        if self.curriculum_level not in range(1, CURRICULUM_LEVEL_COUNT + 1):
+            raise ValueError(f"curriculum_level must be between 1 and {CURRICULUM_LEVEL_COUNT}")
+        if self.evaluation_environment_count < 1:
+            raise ValueError("evaluation_environment_count must be >= 1")
         if self.early_stopping_patience < 0:
             raise ValueError("early_stopping_patience must be non-negative")
         return self

@@ -46,7 +46,7 @@ func test_observation_values_stay_within_documented_bounds() -> SandboxTest:
 				var result: Dictionary = env.step(action)
 				var values: PackedFloat32Array = (result.observation as Observation).to_array()
 				t.assert_eq(
-					values.size(), Observation.FIELD_COUNT, "observation width is fixed at 33"
+					values.size(), Observation.FIELD_COUNT, "observation width is fixed at Observation.FIELD_COUNT"
 				)
 				for i in range(values.size()):
 					if values[i] < -1.0 - BOUNDS_EPSILON or values[i] > 1.0 + BOUNDS_EPSILON:

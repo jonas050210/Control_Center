@@ -265,7 +265,17 @@ static func build(
 		agent.position.y / SandboxConfig.ARENA_WALL_HEIGHT,
 		agent.position.z / arena_half_extent
 	)
-	obs.agent_velocity_norm = agent.velocity / maxf(agent.move_speed, 0.0001)
+	# Clamped per component: with gravity enabled the vertical velocity can
+	# exceed the horizontal move speed (jump velocity is 6.0 m/s against a
+	# 4.5 m/s run), which would push this field outside the declared
+	# [-1, 1] observation bounds. The horizontal components are unaffected
+	# because they are already capped by move_speed.
+	var raw_velocity: Vector3 = agent.velocity / maxf(agent.move_speed, 0.0001)
+	obs.agent_velocity_norm = Vector3(
+		clampf(raw_velocity.x, -1.0, 1.0),
+		clampf(raw_velocity.y, -1.0, 1.0),
+		clampf(raw_velocity.z, -1.0, 1.0)
+	)
 	obs.agent_forward = agent.get_forward_vector()
 	obs.agent_health_norm = agent.health / maxf(agent.max_health, 0.0001)
 	obs.weapon_ready = agent.weapon.is_ready()
@@ -408,15 +418,15 @@ static func _apply_world_context(
 		obs.nearest_obstacle_distance_norm = 1.0
 		obs.nearest_obstacle_bearing_norm = 0.0
 		return
-	var info: Dictionary = world.nearest_obstacle_info(agent.position)
-	if info.is_empty():
-		obs.nearest_obstacle_distance_norm = 1.0
-		obs.nearest_obstacle_bearing_norm = 0.0
-		return
+	var info: Dictionary = world.nearest_obstacle_info(
+		agent.position, agent.get_forward_horizontal(), SandboxConfig.ARENA_MAX_DISTANCE
+	)
 	obs.nearest_obstacle_distance_norm = clampf(
 		float(info["distance"]) / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), 0.0, 1.0
 	)
-	obs.nearest_obstacle_bearing_norm = _horizontal_bearing_norm(agent, info["position"])
+	obs.nearest_obstacle_bearing_norm = clampf(
+		float(info["bearing_deg"]) / 180.0, -1.0, 1.0
+	)
 
 
 static func _apply_sound_context(obs: Observation, context: Dictionary) -> void:

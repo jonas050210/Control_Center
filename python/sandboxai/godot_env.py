@@ -237,6 +237,10 @@ class GodotBatchClient:
     def set_curriculum(self, level: int):
         return self.transport.request({"cmd": "set_curriculum", "level": int(level)})
 
+    def metrics(self):
+        """Per-environment episode metrics (rl_server.gd `metrics` command)."""
+        return self.transport.request({"cmd": "metrics"}).get("metrics", [])
+
     def ping(self):
         return self.transport.request({"cmd": "ping"})
 
@@ -350,23 +354,83 @@ if VecEnv is not None:
         def close(self):
             self.client.close()
 
+        # Attributes SB3 and user code may read through the VecEnv API.
+        # Everything here is a property of the *bridge*, not of a Python
+        # sub-environment, so they are computed on demand.
+        _READABLE_ATTRS = (
+            "environment_count",
+            "num_envs",
+            "observation_dim",
+            "observation_space",
+            "action_space",
+            "render_mode",
+            "spec",
+        )
+
+        def _attr_value(self, attr_name: str):
+            if attr_name == "environment_count" or attr_name == "num_envs":
+                return self.environment_count
+            if attr_name == "observation_dim":
+                return self.client.observation_dim
+            if attr_name == "observation_space":
+                return self.observation_space
+            if attr_name == "action_space":
+                return self.action_space
+            if attr_name == "render_mode":
+                return getattr(self, "render_mode", None)
+            if attr_name == "spec":
+                return getattr(self, "spec", None)
+            raise AttributeError(
+                f"Godot bridge exposes no attribute {attr_name!r}; "
+                f"readable attributes are {sorted(self._READABLE_ATTRS)}"
+            )
+
         def get_attr(self, attr_name: str, indices=None):
+            """Reads a bridge attribute for the selected sub-environments.
+
+            This used to be ``values.get(attr_name)``, which returned
+            ``None`` for anything it did not know about. SB3 and callbacks
+            probe VecEnvs with ``get_attr`` all the time, so an unsupported
+            name produced a silent ``None`` that surfaced much later as an
+            unrelated ``TypeError``. Unknown names now raise immediately.
+            """
             indices = self._get_indices(indices)
-            values = {"environment_count": self.environment_count, "observation_dim": self.client.observation_dim}
-            return [values.get(attr_name) for _ in indices]
+            value = self._attr_value(attr_name)
+            return [value for _ in indices]
 
         def set_attr(self, attr_name: str, value, indices=None):
-            if attr_name not in {"environment_count", "observation_dim"}:
-                raise AttributeError(f"Godot environment attribute is not mutable: {attr_name}")
+            """Rejects every write.
+
+            No attribute of the Godot bridge is remotely mutable: the
+            environment count is fixed by the engine process and the spaces
+            are derived from the contract. The previous implementation only
+            raised for *unknown* names and silently no-opped for the known
+            ones, so ``set_attr("environment_count", 8)`` appeared to
+            succeed and changed nothing.
+            """
+            raise AttributeError(
+                f"Godot environment attributes are read-only over the bridge: {attr_name}"
+            )
 
         def env_method(self, method_name: str, *method_args, indices=None, **method_kwargs):
+            """Forwards a supported command to the Godot process.
+
+            The result is replicated per selected index so the return value
+            matches the VecEnv contract (one entry per sub-environment)
+            instead of a single bare value.
+            """
+            indices = self._get_indices(indices)
             if method_name == "health_check":
-                return self.client.health_check()
-            if method_name == "reward_breakdown":
-                return self.client.reward_breakdown()
-            if method_name == "set_curriculum":
-                return self.client.set_curriculum(*method_args)
-            raise AttributeError(f"Godot bridge has no remote env method {method_name}")
+                result = self.client.health_check()
+            elif method_name == "reward_breakdown":
+                result = self.client.reward_breakdown()
+            elif method_name == "set_curriculum":
+                result = self.client.set_curriculum(*method_args)
+            elif method_name == "metrics":
+                result = self.client.metrics()
+            else:
+                raise AttributeError(f"Godot bridge has no remote env method {method_name}")
+            return [result for _ in indices]
 
         def env_is_wrapped(self, wrapper_class, indices=None):
             return [False for _ in self._get_indices(indices)]

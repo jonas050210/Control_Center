@@ -1,3 +1,10 @@
+# gdlint:ignore=max-public-methods
+# The public surface is intentionally wide: it is the RL interface
+# (reset/step/get_*), plus the seven read-only introspection hooks
+# PerceptionModel probes by name for the Control Center. Splitting the
+# hooks into a helper object would mean the Control Center could no longer
+# discover them with has_method() on the environment, which is the whole
+# mechanism that keeps the debug GUI optional.
 ## EnvironmentCore
 ##
 ## The render-independent RL environment. All gameplay state is local to this
@@ -667,10 +674,17 @@ func get_target_memory() -> Dictionary:
 	}
 
 
-## Static geometry description for the overlay.
+## Static geometry description for the overlay: one Dictionary per box.
 func get_obstacles() -> Array:
 	if world == null:
 		return []
+	return world.to_dict()["obstacles"]
+
+
+## Full arena description (layout id, seed, bounds and boxes).
+func get_world_description() -> Dictionary:
+	if world == null:
+		return {"layout_id": "none", "obstacle_count": 0, "obstacles": []}
 	return world.to_dict()
 
 

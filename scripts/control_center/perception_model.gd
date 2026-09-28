@@ -33,56 +33,63 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ## Optional perception features and the EnvironmentCore method that would
 ## provide each one. Probed with `has_method()` so the Control Center
 ## consumes a perception system when it lands instead of re-implementing it.
+##
+## EnvironmentCore now implements all seven. The notes below are still used
+## verbatim for any OTHER environment type that does not (for example the
+## self-play environment), which is exactly why the probe is dynamic
+## instead of a compile-time assumption.
 const OPTIONAL_FEATURES: Array = [
 	{
 		"id": "field_of_view",
 		"label": "Field of view gating",
 		"method": "get_agent_field_of_view",
 		"unavailable_note":
-		"The contract gives the policy bearing/distance to the nearest "
-		+ "tracked enemies regardless of facing; there is no FOV limit yet.",
+		"This environment exposes no FOV hook, so the policy sees tracked "
+		+ "enemies regardless of facing.",
 	},
 	{
 		"id": "line_of_sight",
 		"label": "Line of sight / occlusion",
 		"method": "has_line_of_sight",
 		"unavailable_note":
-		"The arena is an empty box: no walls, cover or occluders exist "
-		+ "between agent and enemies, so nothing can be hidden by geometry.",
+		"This environment exposes no line-of-sight hook, so nothing can be "
+		+ "hidden by geometry.",
 	},
 	{
 		"id": "sound_events",
 		"label": "Sound events / hearing",
 		"method": "get_sound_events",
-		"unavailable_note": "The simulation emits no audio events.",
+		"unavailable_note": "This environment exposes no sound-event hook.",
 	},
 	{
 		"id": "target_memory",
 		"label": "Target memory / last-known position",
 		"method": "get_target_memory",
 		"unavailable_note":
-		"The observation is memoryless: it reports current positions only, "
-		+ "with no decay, confidence or last-known-position tracking.",
+		"This environment exposes no memory hook, so the observation is "
+		+ "memoryless: current positions only, no decay or confidence.",
 	},
 	{
 		"id": "obstacles_cover",
 		"label": "Obstacles / cover",
 		"method": "get_obstacles",
-		"unavailable_note": "The arena has perimeter walls only, no interior geometry.",
+		"unavailable_note": "This environment exposes no obstacle hook.",
 	},
 	{
 		"id": "navigation",
 		"label": "Navigation / pathfinding",
 		"method": "get_navigation_state",
-		"unavailable_note": "Movement is analytic; there is no navmesh or path planner.",
+		"unavailable_note":
+		"This environment exposes no navigation hook. Movement is analytic; "
+		+ "there is no navmesh or path planner in any case.",
 	},
 	{
 		"id": "dead_bodies",
 		"label": "Corpses / dead bodies",
 		"method": "get_dead_bodies",
 		"unavailable_note":
-		"Dead enemies are simply flagged not-alive and disappear from the "
-		+ "observation; no corpse entity is kept.",
+		"This environment exposes no corpse hook, so dead enemies are only "
+		+ "flagged not-alive and keep no body.",
 	},
 ]
 

@@ -361,11 +361,40 @@ func has_pending_settings() -> bool:
 	return not _pending_setting_keys.is_empty()
 
 
+## Queues a new random seed as a PENDING setting (it is applied when the
+## user hits Apply, like every other edited field).
 func randomize_seed() -> int:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var value: int = rng.randi_range(0, 1_000_000)
 	request_setting("seed", value)
+	return value
+
+
+## Draws a fresh seed and immediately restarts the selected environment
+## with it.
+##
+## The "Reset (random)" button used to call `randomize_seed()` followed by
+## `reset_selected_environment(false)`. The first call only QUEUED the new
+## seed and the second passed -1 ("continue the current RNG stream"), so
+## the freshly drawn seed was never applied to anything and the button was
+## indistinguishable from a plain non-deterministic reset. This applies the
+## seed for real and returns it so the UI can report it.
+func reset_selected_environment_with_random_seed() -> int:
+	if simulation_manager == null or simulation_manager.environments.is_empty():
+		return -1
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var value: int = rng.randi_range(0, 1_000_000)
+	config.seed = value
+	var pending_index: int = _pending_setting_keys.find("seed")
+	if pending_index >= 0:
+		_pending_setting_keys.remove_at(pending_index)
+	var index: int = config.selected_environment
+	simulation_manager.base_seed = value
+	simulation_manager.reset_indices([index], value)
+	_reset_episode_probe()
+	log_system("reset environment %d (random seed %d)" % [index, value + index])
 	return value
 
 

@@ -142,8 +142,18 @@ func get_reward_breakdown() -> Dictionary:
 	}
 
 
+## Episode summary.
+##
+## `loss` counts only episodes that were actually LOST. It used to be
+## `done and not won`, which classified every timeout as a defeat: a run
+## that survived the full 1200 steps without clearing the arena was
+## reported identically to one where the agent was killed, so `win_rate +
+## loss_rate` was always 1.0 and the timeout rate was invisible. A
+## truncated episode is neither a win nor a loss, which is also what
+## Gymnasium's `TimeLimit.truncated` convention means.
 func to_metrics(simulation_dt: float, enemy_count: int, won: bool = false) -> Dictionary:
 	var accuracy: float = float(shots_hit) / float(shots_fired) if shots_fired > 0 else 0.0
+	var truncated: bool = done_reason == "timeout"
 	return {
 		"episode_reward": cumulative_reward,
 		"episode_length": step_count,
@@ -156,7 +166,8 @@ func to_metrics(simulation_dt: float, enemy_count: int, won: bool = false) -> Di
 		"shots_fired": shots_fired,
 		"shots_hit": shots_hit,
 		"win": won,
-		"loss": done and not won,
+		"loss": done and not won and not truncated,
+		"truncated": truncated,
 		"done_reason": done_reason,
 		"enemy_count": enemy_count,
 		"reward_breakdown": get_reward_breakdown(),

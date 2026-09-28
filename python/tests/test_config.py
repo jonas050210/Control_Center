@@ -1,6 +1,6 @@
 import unittest
 
-from sandboxai.config import BCConfig, TrainingConfig, find_godot_executable
+from sandboxai.config import CURRICULUM_LEVEL_COUNT, BCConfig, TrainingConfig, find_godot_executable
 
 
 class ConfigTests(unittest.TestCase):
@@ -14,8 +14,15 @@ class ConfigTests(unittest.TestCase):
             TrainingConfig(environment_count=2, rollout_length=4, batch_size=9).validate()
 
     def test_invalid_curriculum_level_rejected(self):
+        # 1-10 are combat levels, 11 is the self-play hook; 0 and 12 are not.
         with self.assertRaises(ValueError):
-            TrainingConfig(curriculum_level=6).validate()
+            TrainingConfig(curriculum_level=CURRICULUM_LEVEL_COUNT + 1).validate()
+        with self.assertRaises(ValueError):
+            TrainingConfig(curriculum_level=0).validate()
+
+    def test_all_declared_curriculum_levels_are_accepted(self):
+        for level in range(1, CURRICULUM_LEVEL_COUNT + 1):
+            TrainingConfig(curriculum_level=level).validate()
 
     def test_negative_entropy_coefficient_rejected(self):
         # Negative entropy actively rewards determinism; it must fail at
