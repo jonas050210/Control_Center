@@ -323,12 +323,18 @@ static func parse_nvidia_smi(text: String) -> Dictionary:
 	if parts.size() < 5:
 		return unavailable_gpu()
 	# The four trailing fields are numeric; everything before them is the
-	# device name (which may itself contain commas).
+	# device name (which may itself contain commas). nvidia-smi separates
+	# CSV fields with ", ", so every fragment after a comma keeps its
+	# leading space — strip each fragment before re-joining, or a name
+	# containing ", " would come back with doubled spaces.
 	var name_parts: PackedStringArray = parts.slice(0, parts.size() - 4)
+	var name_fragments := PackedStringArray()
+	for fragment in name_parts:
+		name_fragments.append(str(fragment).strip_edges())
 	var gpu: Dictionary = unavailable_gpu()
 	gpu["available"] = true
 	gpu["source"] = "nvidia-smi"
-	gpu["name"] = ", ".join(name_parts).strip_edges()
+	gpu["name"] = ", ".join(name_fragments)
 	gpu["utilization_percent"] = _parse_optional_number(parts[parts.size() - 4])
 	gpu["vram_used_mb"] = _parse_optional_number(parts[parts.size() - 3])
 	gpu["vram_total_mb"] = _parse_optional_number(parts[parts.size() - 2])

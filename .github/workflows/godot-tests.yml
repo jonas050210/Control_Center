@@ -99,15 +99,20 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          # CPU-only torch keeps the install small; the CUDA wheel adds
-          # gigabytes the test suite never needs.
-          pip install --index-url https://download.pytorch.org/whl/cpu torch
-          pip install -r requirements.txt pytest gdlint
-          pip install --force-reinstall --index-url https://download.pytorch.org/whl/cpu torch
+          set -o pipefail
+          {
+            python -m pip install --upgrade pip
+            # CPU-only torch keeps the install small; the CUDA wheel adds
+            # gigabytes the test suite never needs. gdlint ships inside
+            # gdtoolkit, which requirements.txt already pins.
+            pip install --index-url https://download.pytorch.org/whl/cpu torch
+            pip install -r requirements.txt pytest
+          } 2>&1 | tee install_output.txt
 
       - name: Run pytest
-        run: pytest python/tests -q 2>&1 | tee pytest_output.txt
+        run: |
+          set -o pipefail
+          pytest python/tests -q 2>&1 | tee pytest_output.txt
 
       - name: Run gdlint
         run: gdlint scripts tests
@@ -117,11 +122,16 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os
-          raw = open("pytest_output.txt", encoding="utf-8", errors="replace").read() if os.path.exists("pytest_output.txt") else "(pytest never ran)"
-          if len(raw) > 55000:
-              raw = raw[-55000:]
-          body = "### Python suite output (tail)\n```\n" + raw + "\n```"
-          open("payload.json", "w").write(json.dumps({"body": body}))
+          sections = []
+          for name, path in (("pytest", "pytest_output.txt"), ("install", "install_output.txt")):
+              if os.path.exists(path):
+                  raw = open(path, encoding="utf-8", errors="replace").read()
+                  if len(raw) > 25000:
+                      raw = raw[-25000:]
+                  sections.append("#### %s output (tail)\n```\n%s\n```" % (name, raw))
+          if not sections:
+              sections.append("(neither step produced output)")
+          open("payload.json", "w").write(json.dumps({"body": "### Python suite output\n" + "\n".join(sections)}))
           EOF
           curl -s -X POST \
             -H "Authorization: token ${{ github.token }}" \
