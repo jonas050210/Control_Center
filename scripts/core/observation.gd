@@ -42,7 +42,7 @@ const COUNT_NORMALIZER: int = 8
 ## Mirrors SoundBus.Category cardinality. Duplicated as a plain int rather
 ## than preloading SoundBus here, because Observation must stay loadable
 ## without the perception layer (the Roblox adapter boundary depends on it).
-const SOUND_CATEGORY_COUNT: int = 6
+const SOUND_CATEGORY_COUNT: int = 7
 
 ## Machine-readable layout of `to_array()` and the single Godot-side source
 ## of truth for observation field names/indices/groups.

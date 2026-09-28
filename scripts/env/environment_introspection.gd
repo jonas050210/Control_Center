@@ -57,6 +57,17 @@ static func sound_events(env) -> Array:
 	)
 
 
+## Aggregate hearing state: how many distinct directions noise came from,
+## how much was masked by louder events, and how much the bearings can be
+## trusted. Mirrors exactly what the policy receives, plus the ambient
+## emitter count, which is map metadata and human-only.
+static func sound_summary(env) -> Dictionary:
+	var summary: Dictionary = (env.perception.sound_summary as Dictionary).duplicate()
+	summary["ambient_emitters"] = (env.sound_bus.ambient_sources as Array).size()
+	summary["enabled"] = env.curriculum.sound_enabled()
+	return summary
+
+
 ## Memory tracks plus the live belief list and the target-selection reason.
 static func target_memory(env) -> Dictionary:
 	return {

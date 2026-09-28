@@ -39,6 +39,7 @@ const WorldGenerator = preload("res://scripts/world/world_generator.gd")
 ##   lighting_pool optional alternative lighting ids sampled by seed
 ##   half_extent   arena half extent in meters
 ##   tags          human/curriculum tags; never observed
+##   ambience      number of environmental noise emitters placed in the map
 ##   description   prose for the Control Center map panel
 const MAPS: Array = [
 	{
@@ -49,6 +50,7 @@ const MAPS: Array = [
 		"lighting_pool": [],
 		"half_extent": 10.0,
 		"tags": ["open", "aim", "no_cover"],
+		"ambience": 0,
 		"description": "Empty arena. Pure aiming and movement; nothing to hide behind.",
 	},
 	{
@@ -59,6 +61,7 @@ const MAPS: Array = [
 		"lighting_pool": [],
 		"half_extent": 10.0,
 		"tags": ["open", "cover", "introductory"],
+		"ambience": 0,
 		"description": "A few crates in an otherwise open yard. First contact with occlusion.",
 	},
 	{
@@ -69,6 +72,7 @@ const MAPS: Array = [
 		"lighting_pool": ["normal", "low_light"],
 		"half_extent": 10.0,
 		"tags": ["corner", "occlusion", "peek"],
+		"ambience": 0,
 		"description": "An L-shaped junction. Sight lines break and reform as you move.",
 	},
 	{
@@ -79,6 +83,7 @@ const MAPS: Array = [
 		"lighting_pool": [],
 		"half_extent": 11.0,
 		"tags": ["cover", "positioning"],
+		"ambience": 0,
 		"description": "Staggered low and high cover. Rewards choosing which line to hold.",
 	},
 	{
@@ -89,6 +94,7 @@ const MAPS: Array = [
 		"lighting_pool": ["low_light", "normal"],
 		"half_extent": 10.0,
 		"tags": ["corridor", "one_lane", "low_light"],
+		"ambience": 2,
 		"description": "A single dim lane with one side opening. Nowhere to go but forward.",
 	},
 	{
@@ -99,6 +105,7 @@ const MAPS: Array = [
 		"lighting_pool": [],
 		"half_extent": 10.0,
 		"tags": ["rooms", "doorway", "memory"],
+		"ambience": 2,
 		"description": "Two rooms joined by a doorway plus an alcove to wait in.",
 	},
 	{
@@ -109,6 +116,7 @@ const MAPS: Array = [
 		"lighting_pool": ["high_contrast", "normal"],
 		"half_extent": 11.0,
 		"tags": ["pillars", "narrow_sightlines", "contrast"],
+		"ambience": 1,
 		"description": "A grid of pillars under harsh light. Many sight lines, all thin.",
 	},
 	{
@@ -119,6 +127,7 @@ const MAPS: Array = [
 		"lighting_pool": [],
 		"half_extent": 10.0,
 		"tags": ["vertical", "platforms", "elevation"],
+		"ambience": 2,
 		"description": "Standable platforms at two heights. Elevation changes who sees whom.",
 	},
 	{
@@ -129,6 +138,7 @@ const MAPS: Array = [
 		"lighting_pool": ["mixed", "normal"],
 		"half_extent": 12.0,
 		"tags": ["multi_room", "navigation", "mixed_light"],
+		"ambience": 3,
 		"description": "Four rooms behind doorways with uneven lighting. Navigation matters.",
 	},
 	{
@@ -139,6 +149,7 @@ const MAPS: Array = [
 		"lighting_pool": ["low_light", "night"],
 		"half_extent": 11.0,
 		"tags": ["ambush", "alcoves", "corner_check"],
+		"ambience": 2,
 		"description": "A lane flanked by blind alcoves. Whoever walks it first is exposed.",
 	},
 	{
@@ -149,6 +160,7 @@ const MAPS: Array = [
 		"lighting_pool": ["night"],
 		"half_extent": 11.0,
 		"tags": ["sound", "night", "occlusion"],
+		"ambience": 4,
 		"description": "Staggered stubs at night. Almost nothing is visible; sound carries.",
 	},
 	{
@@ -159,6 +171,7 @@ const MAPS: Array = [
 		"lighting_pool": ["night", "low_light"],
 		"half_extent": 10.0,
 		"tags": ["night", "cover", "sound"],
+		"ambience": 2,
 		"description": "A familiar yard, after dark. The same geometry, far less information.",
 	},
 	{
@@ -169,6 +182,7 @@ const MAPS: Array = [
 		"lighting_pool": ["fog"],
 		"half_extent": 12.0,
 		"tags": ["fog", "distance_limited"],
+		"ambience": 1,
 		"description": "Open ground under heavy haze. Range, not geometry, is the limit.",
 	},
 	{
@@ -179,6 +193,7 @@ const MAPS: Array = [
 		"lighting_pool": ["normal", "low_light", "night", "fog", "high_contrast", "mixed"],
 		"half_extent": 11.0,
 		"tags": ["randomized", "generalization"],
+		"ambience": 2,
 		"description": "A new layout and new lighting every episode. The generalization set.",
 	},
 ]
@@ -220,6 +235,7 @@ static func metadata(map_id: String) -> Dictionary:
 		"default_lighting": entry["lighting"],
 		"lighting_pool": (entry["lighting_pool"] as Array).duplicate(),
 		"half_extent": entry["half_extent"],
+		"ambience": int(entry.get("ambience", 0)),
 	}
 
 
@@ -282,6 +298,14 @@ static func resolve(map_id: String, seed_value: int = 0) -> Dictionary:
 	)
 	var lighting: LightingProfile = LightingProfile.from_id(lighting_id, rng.randi())
 
+	# Environmental noise emitters. Fixed for the episode and placed from
+	# the same seeded stream as the geometry, so ambience replays exactly.
+	var ambient_sources: Array = []
+	for _i in range(int(entry.get("ambience", 0))):
+		ambient_sources.append(
+			world.sample_free_position(rng, SandboxConfig.ENEMY_RADIUS, SandboxConfig.AGENT_HEIGHT)
+		)
+
 	return {
 		"map_id": str(entry["id"]),
 		"label": str(entry["label"]),
@@ -292,5 +316,6 @@ static func resolve(map_id: String, seed_value: int = 0) -> Dictionary:
 		"lighting": lighting,
 		"lighting_id": lighting_id,
 		"half_extent": half_extent,
+		"ambient_sources": ambient_sources,
 		"metadata": metadata(str(entry["id"])),
 	}

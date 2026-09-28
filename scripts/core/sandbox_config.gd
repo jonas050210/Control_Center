@@ -225,6 +225,10 @@ const SOUND_LAND_RADIUS: float = 11.0
 const SOUND_SHOT_RADIUS: float = 26.0
 const SOUND_IMPACT_RADIUS: float = 13.0
 const SOUND_DEATH_RADIUS: float = 15.0
+## Ambient / environmental noise (doors, debris, machinery). Not produced by
+## any character, so it is a genuine distractor: it must NOT be treated as
+## evidence of an enemy.
+const SOUND_ENVIRONMENT_RADIUS: float = 12.0
 ## Multiplier applied to the audible radius for every wall between the
 ## source and the listener.
 const SOUND_OCCLUSION_ATTENUATION: float = 0.55
@@ -244,6 +248,23 @@ const SOUND_DETECTION_DELAY: float = 0.08
 ## identifies WHICH enemy made the noise, so sound-only contacts are keyed
 ## separately from the per-enemy visual tracks.
 const SOUND_UNKNOWN_SOURCE_ID: int = -999
+## Masking between simultaneous sounds. A quiet event heard at the same
+## time as a loud one loses this fraction of the loud event's perceived
+## loudness; below SOUND_MASK_FLOOR it is not registered at all. This is
+## what makes a footstep during a gunshot unhearable.
+const SOUND_MASKING_STRENGTH: float = 0.7
+const SOUND_MASK_FLOOR: float = 0.04
+## Extra directional error per occluding wall, as a multiple of
+## SOUND_DIRECTION_ERROR_DEG. A muffled sound is harder to place.
+const SOUND_OCCLUSION_ERROR_GAIN: float = 0.8
+## Extra directional error at the very edge of the audible radius, as a
+## multiple of SOUND_DIRECTION_ERROR_DEG.
+const SOUND_RANGE_ERROR_GAIN: float = 0.5
+## Two heard events whose perceived bearings differ by more than this are
+## counted as separate sources by SoundBus.summarize().
+const SOUND_DISTINCT_SOURCE_ANGLE_DEG: float = 35.0
+## Seconds between ambient emissions on a map that declares ambience.
+const SOUND_AMBIENCE_INTERVAL: float = 3.5
 
 # ---------------------------------------------------------------------------
 # Enemy memory

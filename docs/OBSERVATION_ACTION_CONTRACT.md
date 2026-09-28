@@ -134,7 +134,7 @@ pre-world dynamics exactly.
 | 55 | `last_sound_bearing_norm` | Signed horizontal offset to that event | angle / 180°, [-1,1] |
 | 56 | `last_sound_age_norm` | Age of that event | seconds / 2.0 s lifetime, [0,1] |
 | 57 | `last_sound_loudness` | Loudness after distance and per-wall occlusion attenuation | [0,1] |
-| 58 | `last_sound_category_norm` | Category ordinal: footstep/jump/land/shot/impact/death | ordinal / 5, [0,1] |
+| 58 | `last_sound_category_norm` | Category ordinal: footstep/jump/land/shot/impact/death/environment | ordinal / 6, [0,1] |
 | 59 | `audible_event_count_norm` | How many events are audible this tick | count / 8, clamped [0,1] |
 | 60 | `nearest_obstacle_distance_norm` | Distance to the nearest piece of cover/geometry | / max arena diagonal, [0,1] |
 | 61 | `nearest_obstacle_bearing_norm` | Signed horizontal offset to that obstacle | angle / 180°, [-1,1] |

@@ -98,7 +98,7 @@ OBSERVATION_SPEC: tuple[ObservationField, ...] = (
     ObservationField(55, 1, "last_sound_bearing_norm", "Signed horizontal offset to the loudest audible event", "angle / 180 degrees, in [-1, 1]"),
     ObservationField(56, 1, "last_sound_age_norm", "Age of the loudest audible event", "seconds / SOUND_EVENT_LIFETIME, in [0, 1]"),
     ObservationField(57, 1, "last_sound_loudness", "Perceived loudness after distance and occlusion attenuation", "in [0, 1]"),
-    ObservationField(58, 1, "last_sound_category_norm", "Event category ordinal (footstep/jump/land/shot/impact/death)", "ordinal / 5, in [0, 1]"),
+    ObservationField(58, 1, "last_sound_category_norm", "Event category ordinal (footstep/jump/land/shot/impact/death/environment)", "ordinal / 6, in [0, 1]"),
     ObservationField(59, 1, "audible_event_count_norm", "How many events are audible this tick", "count / 8, clamped to [0, 1]"),
     ObservationField(60, 1, "nearest_obstacle_distance_norm", "Distance to the nearest piece of cover/geometry", "divided by max arena diagonal distance, in [0, 1]"),
     ObservationField(61, 1, "nearest_obstacle_bearing_norm", "Signed horizontal offset to the nearest obstacle", "angle / 180 degrees, in [-1, 1]"),

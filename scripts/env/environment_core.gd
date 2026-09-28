@@ -374,6 +374,7 @@ func _reset_with_world() -> void:
 			resolved_id, layout_seed, map_instance["world"], enemies.size()
 		)
 	_apply_lighting(layout_seed)
+	sound_bus.configure_ambience(map_instance.get("ambient_sources", []))
 	world = scenario["world"]
 
 	agent.reset(scenario["agent_spawn"], float(scenario["agent_yaw_deg"]))
@@ -806,6 +807,11 @@ func get_agent_field_of_view() -> Dictionary:
 ## at once; every cell in it was earned by the agent looking at it.
 func get_exploration_state() -> Dictionary:
 	return EnvironmentIntrospection.exploration_state(self)
+
+
+## Aggregate hearing state for the SOUND panel.
+func get_sound_summary() -> Dictionary:
+	return EnvironmentIntrospection.sound_summary(self)
 
 
 ## Raw line-of-sight query against the current geometry.

@@ -62,6 +62,28 @@ const OPTIONAL_FEATURES: Array = [
 		"unavailable_note": "This environment exposes no sound-event hook.",
 	},
 	{
+		"id": "sound_summary",
+		"label": "Hearing uncertainty / masking",
+		"method": "get_sound_summary",
+		"unavailable_note":
+		"This environment reports individual sounds but no aggregate hearing "
+		+ "state, so masking and bearing uncertainty cannot be shown.",
+	},
+	{
+		"id": "exploration",
+		"label": "Map knowledge / exploration",
+		"method": "get_exploration_state",
+		"unavailable_note":
+		"This environment exposes no exploration hook, so the agent's map "
+		+ "knowledge cannot be inspected.",
+	},
+	{
+		"id": "environment_conditions",
+		"label": "Lighting / map conditions",
+		"method": "get_environment_conditions",
+		"unavailable_note": "This environment exposes no lighting/condition hook.",
+	},
+	{
 		"id": "target_memory",
 		"label": "Target memory / last-known position",
 		"method": "get_target_memory",
@@ -202,6 +224,9 @@ static func _build_perception_state(env, caps: Dictionary) -> Dictionary:
 		"beliefs": [],
 		"target_reason": "",
 		"sounds": [],
+		"sound_summary": {},
+		"exploration": {},
+		"conditions": {},
 		"obstacles": [],
 		"corpses": [],
 		"navigation": {},
@@ -217,6 +242,12 @@ static func _build_perception_state(env, caps: Dictionary) -> Dictionary:
 		state["target_reason"] = str(memory.get("target_reason", ""))
 	if _available(caps, "sound_events"):
 		state["sounds"] = env.get_sound_events()
+	if _available(caps, "sound_summary"):
+		state["sound_summary"] = env.get_sound_summary()
+	if _available(caps, "exploration"):
+		state["exploration"] = env.get_exploration_state()
+	if _available(caps, "environment_conditions"):
+		state["conditions"] = env.get_environment_conditions()
 	if _available(caps, "obstacles_cover"):
 		state["obstacles"] = env.get_obstacles()
 	if _available(caps, "dead_bodies"):
@@ -497,14 +528,69 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			var sound: Dictionary = sound_value
 			lines.append(
 				(
-					"  %-8s %5.1fm %+6.1f deg  loudness %3.0f%%  age %4.2fs  walls %d"
+					"  %-11s %5.1fm %+6.1f +/-%4.1f deg  loud %3.0f%%  conf %3.0f%%  age %4.2fs  walls %d%s"
 					% [
 						str(sound["category_name"]),
 						float(sound["distance"]),
 						float(sound["bearing_deg"]),
+						float(sound.get("direction_error_deg", 0.0)),
 						float(sound["loudness"]) * 100.0,
+						float(sound.get("confidence", 0.0)) * 100.0,
 						float(sound["age"]),
 						int(sound["occluders"]),
+						"  (masked)" if bool(sound.get("masked", false)) else "",
+					]
+				)
+			)
+		var sound_summary: Dictionary = state.get("sound_summary", {})
+		if not sound_summary.is_empty():
+			lines.append(
+				(
+					"  sources heard: %d in %d direction(s), %d masked, mean confidence %3.0f%%"
+					% [
+						int(sound_summary.get("count", 0)),
+						int(sound_summary.get("distinct_sources", 0)),
+						int(sound_summary.get("masked_count", 0)),
+						float(sound_summary.get("mean_confidence", 0.0)) * 100.0,
+					]
+				)
+			)
+			lines.append(
+				"  ambient emitters on this map: %d (environmental, not a contact)"
+				% int(sound_summary.get("ambient_emitters", 0))
+			)
+
+		var conditions: Dictionary = state.get("conditions", {})
+		if not conditions.is_empty():
+			lines.append("")
+			lines.append("CONDITIONS (the policy feels these, it is never told the mode)")
+			var lighting: Dictionary = conditions.get("lighting", {})
+			lines.append(
+				(
+					"  lighting %-13s here %3.0f%% lit   map %s"
+					% [
+						str(lighting.get("mode_id", "?")),
+						float(conditions.get("local_illumination", 1.0)) * 100.0,
+						str((conditions.get("map", {}) as Dictionary).get("label", "-")),
+					]
+				)
+			)
+
+		var exploration: Dictionary = state.get("exploration", {})
+		if bool(exploration.get("enabled", false)):
+			lines.append("")
+			lines.append("MAP KNOWLEDGE (built by looking; unknown really is unknown)")
+			var memory_payload: Dictionary = exploration.get("memory", {})
+			lines.append(
+				(
+					"  coverage %3.0f%%  known %d/%d cells  visited %d  uncertainty %3.0f%%%s"
+					% [
+						float(exploration.get("coverage", 0.0)) * 100.0,
+						int(memory_payload.get("known_cells", 0)),
+						int(memory_payload.get("cell_count", 0)),
+						int(memory_payload.get("visited_cells", 0)),
+						float(memory_payload.get("uncertainty", 0.0)) * 100.0,
+						"  [MAP ANALYZER MODE]" if bool(exploration.get("mode", false)) else "",
 					]
 				)
 			)

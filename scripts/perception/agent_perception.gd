@@ -59,6 +59,10 @@ var contact_timers: Dictionary = {}
 var loss_timers: Dictionary = {}
 ## Last audible sound sample (loudest first) and its count.
 var heard: Array = []
+## Aggregate description of that sample: how many distinct directions noise
+## came from, how much of it was masked, and how much the agent should
+## trust the bearings (SoundBus.summarize()).
+var sound_summary: Dictionary = SoundBus.summarize([])
 ## Distance to the first occluder straight ahead.
 var forward_clearance: float = SandboxConfig.VISION_RANGE
 ## Whether geometry currently hides the agent from every living enemy.
@@ -91,6 +95,7 @@ func reset() -> void:
 	contact_timers.clear()
 	loss_timers.clear()
 	heard.clear()
+	sound_summary = SoundBus.summarize([])
 	forward_clearance = vision_range
 	in_cover = true
 	threat_count = 0
@@ -299,6 +304,7 @@ func _evaluate_enemy(
 
 func _sample_sound(agent, world, sound_bus) -> void:
 	heard.clear()
+	sound_summary = SoundBus.summarize(heard)
 	if not sound_enabled or sound_bus == null:
 		return
 	heard = (sound_bus as SoundBus).sample(
@@ -308,6 +314,7 @@ func _sample_sound(agent, world, sound_bus) -> void:
 		-1,
 		SandboxConfig.SOUND_DETECTION_DELAY
 	)
+	sound_summary = SoundBus.summarize(heard)
 	if not memory_enabled or heard.is_empty():
 		return
 	# The loudest event becomes a low-confidence memory track keyed to an
