@@ -89,14 +89,22 @@ func update(dt: float, context: Dictionary) -> Dictionary:
 	# Sounds are perceived information too: hearing a shot from a bearing
 	# tells the agent something happened over there, but NOT what is there,
 	# so it only raises danger, never marks the cell as observed geometry.
+	# A heard event carries no source position (hearing is directional), so
+	# the danger is placed at the agent's own estimate from the perceived
+	# direction and distance — the same estimate AgentPerception builds for
+	# its memory track. Reading a "position" key here was dead code: the
+	# heard events never carry one.
 	var sounds: Array = context.get("sounds", [])
 	for sound_value in sounds:
 		var sound: Dictionary = sound_value
-		if not sound.has("position"):
-			continue
 		var category: int = int(sound.get("category", -1))
-		if category == 3 or category == 4 or category == 5:  # SHOT / IMPACT / DEATH
-			memory.mark_danger(sound["position"], 0.35 * float(sound.get("loudness", 1.0)))
+		if category != 3 and category != 4 and category != 5:  # SHOT / IMPACT / DEATH
+			continue
+		if not sound.has("direction") or not sound.has("distance"):
+			continue
+		var estimate: Vector3 = position + (sound["direction"] as Vector3) * float(sound["distance"])
+		estimate.y = 0.0
+		memory.mark_danger(estimate, 0.35 * float(sound.get("loudness", 1.0)))
 
 	var damage_from = context.get("damage_taken_from", null)
 	if damage_from != null:

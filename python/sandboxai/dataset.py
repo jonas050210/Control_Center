@@ -162,7 +162,9 @@ class DemonstrationDataset:
             "schema": SCHEMA,
             "schema_version": 1,
             "observation_dim": len(self.transitions[0]["observation"]) if self.transitions else OBSERVATION_FIELD_COUNT,
-            "action_encoding": "[move, strafe, yaw, pitch, shoot, look_delta_x, look_delta_y]",
+            # Matches the Godot recorder: the contract-v2 log array with
+            # `jump` at index 5 and the look deltas at 6/7.
+            "action_encoding": "[move, strafe, yaw, pitch, shoot, jump, look_delta_x, look_delta_y]",
             "created_unix": time.time(),
             **self.metadata,
         }

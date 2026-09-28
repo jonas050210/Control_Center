@@ -44,7 +44,7 @@ engine-coupled part is the label text assignment and the button wiring
   (`SimulationManager.get_last_actions()`).
 - A condensed observation summary (agent health, primary-enemy
   distance/bearing/aliveness, alive-enemy-count fraction, in-combat flag) —
-  not the full 33-float raw vector, to stay readable.
+  not the full 84-float raw vector, to stay readable.
 
 ### Controls
 
@@ -104,7 +104,7 @@ bottleneck predictable and worth stating honestly instead of guessing at
 numbers:
 
 - **Not VRAM/GPU compute.** The policy is a tiny 2-layer MLP (default
-  `net_arch=(128,128)`) over a 33-float vector. This needs a few hundred KB
+  `net_arch=(128,128)`) over an 84-float vector. This needs a few hundred KB
   of parameters; an RTX 4060 Ti 8GB is enormous overkill for this network,
   and training is very unlikely to be GPU-compute-bound. GPU time is mostly
   idle waiting for environment steps.

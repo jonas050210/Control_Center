@@ -531,6 +531,13 @@ static func _try_attack(enemy: EnemyState, context: Dictionary, events: Dictiona
 		if roll <= hit_chance:
 			events["hit"] = true
 			events["damage"] = float(events["damage"]) + SandboxConfig.ENEMY_FIRE_DAMAGE
+		# The ranged attack was made this tick (the weapon cooldown was
+		# consumed whether the roll hit or missed), so the enemy is done:
+		# falling through to the melee check made a MISSED point-blank shot
+		# deal melee damage on top (and more than a hit: 10 vs 9) while a
+		# hit or a cooling-down weapon dealt none. Ranged enemies melee
+		# only when `allow_ranged` is off, per the curriculum contract
+		# ("enemies shoot instead of meleeing").
 		return
 
 	if distance <= enemy.attack_range and enemy.attack_cooldown_remaining <= 0.0:

@@ -53,12 +53,15 @@ FORBIDDEN_LABEL_TOKENS: tuple[str, ...] = (
 )
 
 ## Spawn rules understood by ScenarioLibrary (scripts/scenario/scenario_library.gd).
+## Mirrors the SPAWN_* constants there; python/tests/test_conditions.py parses
+## the GDScript source and fails if the two lists drift apart.
 SPAWN_RULES: tuple[str, ...] = (
     "ahead",
     "ring",
-    "spread",
-    "flank",
-    "cover",
+    "out_of_sight",
+    "behind_cover",
+    "surround",
+    "elevated",
     "random",
 )
 
@@ -239,12 +242,17 @@ class TrainingDistribution:
         return [self.episode_plan(start + offset) for offset in range(count)]
 
     def stream_for_environment(self, environment_index: int, count: int) -> list[EpisodePlan]:
-        """Interleaved stream for one of N parallel environments.
+        """Per-environment episode stream for parallel training.
 
-        Environment ``k`` plays episodes ``k, k+N, k+2N, ...`` of the same
-        global stream, so parallel environments cover the distribution
-        without duplicating each other, and the stream is still a pure
-        function of the master seed.
+        Environment ``k`` plays episodes ``k, k + 1000003, k + 2*1000003,
+        ...`` of the global stream. The stride is a fixed large prime rather
+        than the environment count on purpose: this method does not need to
+        know how many environments exist, and a fixed stride means changing
+        the environment count never re-maps which episodes a given
+        environment has already played. Streams stay disjoint (different
+        residues mod the stride), each is still a pure function of the
+        master seed, and because ``episode_plan`` is hash-derived the
+        sampled indices remain an unbiased draw from the distribution.
         """
         if environment_index < 0:
             raise ValueError("environment_index must be >= 0")

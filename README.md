@@ -103,7 +103,7 @@ It provides:
   (decoded from the observation vector only) side by side, with enemies
   that are hidden from the AI flagged explicitly and unimplemented
   perception features marked as unavailable
-- an Observation Inspector for all 33 contract fields, driven by
+- an Observation Inspector for all 84 contract fields, driven by
   `Observation.FIELD_SPEC` (no duplicated field lists)
 - results/metrics with HUMAN vs AI comparison and JSON export
 - a throttled, filterable event log (`ALL/COMBAT/PERCEPTION/SYSTEM/
@@ -215,7 +215,7 @@ sandboxai bc-train \
 The result contains `latest.pt`, `best.pt`, periodic epoch checkpoints,
 `metrics.jsonl`, `loss.csv` and `config.json`. The model is a small two-hidden-
 layer PyTorch MLP with one categorical head per action field. Validation
-reports component accuracy and exact five-field action accuracy.
+reports component accuracy and exact six-field action accuracy.
 
 Resume BC training:
 
@@ -228,8 +228,8 @@ sandboxai bc-train --dataset training/datasets/human_demo.jsonl \
 ### PPO training
 
 The trainer starts one Godot headless process containing the requested number
-of independent environments and uses a `MultiDiscrete([3,3,3,3,2])` action
-space. The structured observation is a 33-float `Box` (see
+of independent environments and uses a `MultiDiscrete([3,3,3,3,2,2])` action
+space. The structured observation is an 84-float `Box` (see
 [`docs/OBSERVATION_ACTION_CONTRACT.md`](docs/OBSERVATION_ACTION_CONTRACT.md)
 for the full field-by-field table, including the multi-enemy tracking
 fields added for curriculum levels with more than one enemy).

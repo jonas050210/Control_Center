@@ -8,11 +8,29 @@ extends RefCounted
 const Action = preload("res://scripts/core/action.gd")
 const AIStubController = preload("res://scripts/input/ai_stub_controller.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
+const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+
+
+## Deterministic stand-in for RandomNumberGenerator whose randf() always
+## fails a hit roll, so a test can force the ranged miss branch without
+## depending on any particular engine RNG sequence.
+class MissRng:
+	extends RefCounted
+
+	func randf() -> float:
+		return 0.999999
+
+	func randf_range(from: float, _to: float) -> float:
+		return from
+
+	func randi_range(from: int, _to: int) -> int:
+		return from
 
 
 ## Bug: SimulationManager.build() called _clear(), which emptied
@@ -161,4 +179,55 @@ func test_legacy_action_encodings_still_decode() -> SandboxTest:
 	t.assert_true(jump_discrete.jump)
 	t.assert_eq(Action.MULTI_DISCRETE_SIZE, 6)
 	t.assert_eq(Action.idle().to_array().size(), Action.LOG_ARRAY_SIZE)
+	return t
+
+
+## Bug: a MISSED ranged shot at point-blank range fell through to the melee
+## check, so the same tick dealt ENEMY_ATTACK_DAMAGE on top of the missed
+## shot — a miss dealt MORE damage than a hit (10 vs 9), a hit dealt no
+## melee, and a weapon-cooldown tick dealt nothing. A fired shot must end
+## the attack for that tick; melee belongs to enemies without ranged
+## capability (`allow_ranged` false), per the curriculum contract
+## "enemies shoot instead of meleeing".
+func test_missed_point_blank_shot_does_not_also_melee() -> SandboxTest:
+	var t := SandboxTest.new("missed_point_blank_shot_does_not_also_melee")
+	var enemy: EnemyState = EnemyState.new()
+	enemy.reset(Vector3(0.0, 0.0, -1.5))  # inside the 2 m melee range
+	enemy.state_time = 10.0  # past the REGULAR archetype reaction delays
+	var context: Dictionary = {
+		"allow_attack": true,
+		"agent_alive": true,
+		"agent_position": Vector3.ZERO,
+		"allow_ranged": true,
+		"world": null,  # no geometry: line of sight is clear
+		"rng": MissRng.new(),
+	}
+	var events: Dictionary = {}
+	EnemyBrain._try_attack(enemy, context, events)
+	t.assert_true(bool(events.get("shot", false)), "the ranged attempt must fire")
+	t.assert_false(bool(events.get("hit", false)), "the rigged roll must miss")
+	t.assert_almost_eq(
+		float(events.get("damage", 0.0)),
+		0.0,
+		0.0001,
+		"a missed point-blank shot must not convert into melee damage"
+	)
+	t.assert_almost_eq(
+		enemy.attack_cooldown_remaining,
+		0.0,
+		0.0001,
+		"the melee cooldown must stay untouched when a shot was fired"
+	)
+
+	# The same enemy without ranged capability must still melee in range.
+	var melee_events: Dictionary = {}
+	context["allow_ranged"] = false
+	EnemyBrain._try_attack(enemy, context, melee_events)
+	t.assert_true(bool(melee_events.get("hit", false)), "a non-ranged enemy in range attacks")
+	t.assert_almost_eq(
+		float(melee_events.get("damage", 0.0)),
+		SandboxConfig.ENEMY_ATTACK_DAMAGE,
+		0.0001,
+		"melee damage must stay available when ranged is disabled"
+	)
 	return t

@@ -167,7 +167,10 @@ def build_parser() -> argparse.ArgumentParser:
     control_center.add_argument(
         "--scenario",
         default="",
-        help="optional scenario preset id (target_practice, duel, three_way, overwhelmed)",
+        help=(
+            "optional scenario preset id (target_practice, duel, three_way, overwhelmed, "
+            "cover_fight, corner_fight, sound_only, lost_target, vertical, randomized)"
+        ),
     )
     control_center.add_argument("--godot-executable", default="godot")
     control_center.add_argument("--project-path", default="")
