@@ -25,9 +25,26 @@ OBS_DIM = __OBS_DIM__
 SELF_PLAY = "--self-play" in sys.argv
 SLOT_SEED_STRIDE = 1000003
 
+def env_count_from_argv(default=1):
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--env-count" and i + 1 < len(argv):
+            try:
+                return max(1, int(argv[i + 1]))
+            except ValueError:
+                return default
+    return default
+
+ENV_COUNT = env_count_from_argv()
+
 def out(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
+
+if "--version" in sys.argv:
+    sys.stdout.write("4.7.2.fake\n")
+    sys.stdout.flush()
+    sys.exit(0)
 
 flood = int(os.environ.get("FAKE_BRIDGE_STDERR_FLOOD", "0"))
 if flood:
@@ -36,6 +53,20 @@ if flood:
         sys.stderr.write(line)
     sys.stderr.flush()
 silent_after_spaces = os.environ.get("FAKE_BRIDGE_SILENT", "") == "1"
+
+# Reproduces the exact real-server behavior of the self-play regression: a
+# script that fails to compile makes SelfPlayEnvironmentCore.new() return
+# null, SelfPlayAdapter._init aborts on the null reset() call before the
+# append, `environments` stays empty, and every reset answers
+# {"ok": true, "observations": []} while the engine's SCRIPT ERROR only ever
+# appears on stderr.
+EMPTY_SELF_PLAY_RESET = SELF_PLAY and os.environ.get("FAKE_BRIDGE_SELF_PLAY_EMPTY_RESET", "") == "1"
+if EMPTY_SELF_PLAY_RESET:
+    sys.stderr.write(
+        'SCRIPT ERROR: Static function "mode()" not found in base "LightingProfile".\n'
+        '   at: reset (res://scripts/self_play/self_play_environment.gd)\n'
+    )
+    sys.stderr.flush()
 
 step_count = 0
 staged = []
@@ -67,7 +98,13 @@ for line in sys.stdin:
         break
     if SELF_PLAY:
         # --self-play channel: pair-shaped wire, explicit seeds, no auto-reset.
-        if command == "reset":
+        if EMPTY_SELF_PLAY_RESET and command in ("reset", "step"):
+            if command == "reset":
+                out({"ok": True, "observations": [], "env_seeds": []})
+            else:
+                out({"ok": True, "observations": [], "rewards": [],
+                     "dones": [], "infos": []})
+        elif command == "reset":
             seed = int(request.get("seed", 0))
             match_steps = 0
             out({"ok": True,
@@ -93,7 +130,11 @@ for line in sys.stdin:
         continue
     if command == "reset":
         step_count = 0
-        out({"ok": True, "observations": [[0.0] * OBS_DIM], "infos": [{"seed": request.get("seed")}]})
+        out({"ok": True,
+             "observations": [[0.0] * OBS_DIM for _ in range(ENV_COUNT)],
+             "infos": [{"seed": request.get("seed")} for _ in range(ENV_COUNT)]})
+    elif command == "health_check":
+        out({"ok": True, "health": [{"healthy": True} for _ in range(ENV_COUNT)]})
     elif command == "set_episode_plans":
         plans = request.get("plans", [])
         indices = []
@@ -127,8 +168,11 @@ for line in sys.stdin:
             info["terminal_observation"] = [0.5] * OBS_DIM
             info["TimeLimit.truncated"] = True
             step_count = 0
-        out({"ok": True, "observations": [[0.25] * OBS_DIM], "rewards": [1.0],
-             "dones": [done], "infos": [info]})
+        out({"ok": True,
+             "observations": [[0.25] * OBS_DIM for _ in range(ENV_COUNT)],
+             "rewards": [1.0 for _ in range(ENV_COUNT)],
+             "dones": [done for _ in range(ENV_COUNT)],
+             "infos": [info for _ in range(ENV_COUNT)]})
     else:
         out({"ok": False, "error": "unknown command"})
 '''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
@@ -340,6 +384,68 @@ class SelfPlayBridgeTest(FakeBridgeTestCase):
         with self.assertRaises(RuntimeError) as ctx:
             play_self_play_match(_Broken(), _Predictor(), _Predictor(), seed=1)
         self.assertIn("malformed observations", str(ctx.exception))
+
+
+@unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
+class RuntimeValidatorSelfPlayRegressionTests(FakeBridgeTestCase):
+    """End-to-end regression for the real-Godot self-play failure.
+
+    The reported local failure (6/7 checks passing, only the self-play check
+    failing with ``Self play reset observation shape invalid: []``) was
+    caused INSIDE the engine process: ``self_play_environment.gd`` called
+    ``LightingProfile.mode(...)``, an instance variable, through the script
+    class — a Godot COMPILE error. The invalid script still preloads, so the
+    single-agent path (which never instantiates it) kept passing every
+    check; ``SelfPlayEnvironmentCore.new()`` returned null, the adapter was
+    left with zero environments, and reset answered
+    ``{"ok": true, "observations": []}``.
+
+    These tests replay that exact wire behavior through the REAL
+    RuntimeValidator with a fake bridge standing in for Godot.
+    """
+
+    def _validate(self):
+        from sandboxai.runtime_validation import RuntimeValidator
+
+        validator = RuntimeValidator(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            timeout=20.0,
+        )
+        return validator.validate(env_count=1, test_self_play=True)
+
+    def _self_play_check(self, report):
+        matches = [c for c in report.checks if c.check_id == "self_play_channel"]
+        self.assertEqual(len(matches), 1)
+        return matches[0]
+
+    def test_all_checks_pass_with_a_healthy_self_play_bridge(self):
+        report = self._validate()
+        self.assertEqual(report.status, "passed", report.to_dict())
+        self.assertEqual(report.failed_checks, 0)
+        check = self._self_play_check(report)
+        self.assertTrue(check.passed, check.error)
+        self.assertEqual(check.details.get("slot_0_obs_dim"), OBSERVATION_FIELD_COUNT)
+        self.assertEqual(check.details.get("slot_1_obs_dim"), OBSERVATION_FIELD_COUNT)
+
+    def test_empty_self_play_reset_fails_only_the_self_play_check_with_stderr_context(self):
+        os.environ["FAKE_BRIDGE_SELF_PLAY_EMPTY_RESET"] = "1"
+        try:
+            report = self._validate()
+        finally:
+            del os.environ["FAKE_BRIDGE_SELF_PLAY_EMPTY_RESET"]
+
+        # The broken script only executes in --self-play mode, so exactly the
+        # self-play check fails — the reported 6/7 signature.
+        self.assertEqual(report.status, "failed")
+        self.assertEqual(report.failed_checks, 1)
+        check = self._self_play_check(report)
+        self.assertFalse(check.passed)
+        # The exact reported failure text:
+        self.assertIn("Self play reset observation shape invalid: []", check.error)
+        # The engine-side root cause must be surfaced with the stderr tail:
+        self.assertIn("Godot stderr tail", check.error)
+        self.assertIn('Static function "mode()" not found', check.error)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ extends RefCounted
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
+const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
@@ -135,6 +136,46 @@ func test_self_play_map_and_lighting_configuration() -> SandboxTest:
 	var cond: Dictionary = env.get_episode_condition()
 	t.assert_eq(cond.map_id, "two_rooms")
 	t.assert_eq(cond.lighting, "low_light")
+	return t
+
+
+## Regression test for the reset-path lighting resolution. The reset()
+## lighting branches used to call `LightingProfile.mode(...)`, an instance
+## VARIABLE, through the script class — a Godot COMPILE error that
+## invalidated the whole self-play environment script, made
+## `SelfPlayEnvironmentCore.new()` return null, and turned every self-play
+## reset over the bridge into a silent `observations: []`. These branches
+## (map default lighting, explicit lighting override with and without a map,
+## and the world-less branch) were previously never executed by any test.
+func test_self_play_reset_resolves_lighting_in_all_branches() -> SandboxTest:
+	var t := SandboxTest.new("self_play_reset_resolves_lighting_in_all_branches")
+
+	# Map set, no explicit lighting: the map's declared lighting must apply.
+	var with_map := SelfPlayEnvironmentCore.new()
+	with_map.set_map("two_rooms")
+	var obs_map: Array = with_map.reset(31, 32)
+	t.assert_eq(obs_map.size(), 2)
+	t.assert_eq(obs_map[0].to_array().size(), Observation.FIELD_COUNT)
+	t.assert_eq(obs_map[1].to_array().size(), Observation.FIELD_COUNT)
+	t.assert_eq(
+		LightingProfile.mode_id(with_map.lighting.mode), "normal",
+		"the map's declared lighting must resolve"
+	)
+
+	# Map set plus explicit override: the override wins.
+	var overridden := SelfPlayEnvironmentCore.new()
+	overridden.set_map("two_rooms")
+	overridden.set_lighting_mode("low_light")
+	var obs_override: Array = overridden.reset(41, 42)
+	t.assert_eq(obs_override[0].to_array().size(), Observation.FIELD_COUNT)
+	t.assert_eq(LightingProfile.mode_id(overridden.lighting.mode), "low_light")
+
+	# No map (generated layout) plus explicit override.
+	var layout_only := SelfPlayEnvironmentCore.new()
+	layout_only.set_lighting_mode("night")
+	var obs_layout: Array = layout_only.reset(51, 52)
+	t.assert_eq(obs_layout[0].to_array().size(), Observation.FIELD_COUNT)
+	t.assert_eq(LightingProfile.mode_id(layout_only.lighting.mode), "night")
 	return t
 
 
