@@ -1,8 +1,14 @@
 ## ControlCenterUI
 ##
-## Root CanvasLayer of the Control Center (Phase 2). It owns the layout
-## and the refresh loop; every panel is a child that receives the same
-## immutable snapshot dictionary.
+## Root CanvasLayer of the Control Center. It owns the layout and the
+## refresh loop; every panel is a child that receives the same immutable
+## snapshot dictionary.
+##
+## The dashboard is organised as PAGES behind one persistent navigation
+## rail (HOME / AGENTS / HEADLESS / TRAINING / SIMULATION / ANALYTICS /
+## HISTORY / SETTINGS). The simulation page contains the classic 3D view
+## with its docks; every other page is an opaque full-area panel. Only the
+## active page's content is refreshed.
 ##
 ## Performance rules (Phase 15):
 ##   * the UI is only created when a real display server is present; the
@@ -11,15 +17,22 @@
 ##   * in TRAINING mode the session returns an empty snapshot, so the
 ##     expensive telemetry build never runs and the panels show
 ##     "telemetry disabled"
-##   * the centre of the screen is a mouse-ignoring overlay so the 3D view
-##     keeps receiving gameplay input
+##   * the centre of the simulation page is a mouse-ignoring overlay so
+##     the 3D view keeps receiving gameplay input
 class_name ControlCenterUI
 extends CanvasLayer
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterAgentPanel = preload("res://scripts/control_center/ui/agent_panel.gd")
+const ControlCenterAgentsPanel = preload("res://scripts/control_center/ui/agents_panel.gd")
+const ControlCenterAnalyticsPanel = preload(
+	"res://scripts/control_center/ui/analytics_panel.gd"
+)
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterControlsPanel = preload("res://scripts/control_center/ui/controls_panel.gd")
+const ControlCenterHeadlessPanel = preload("res://scripts/control_center/ui/headless_panel.gd")
+const ControlCenterHistoryPanel = preload("res://scripts/control_center/ui/history_panel.gd")
+const ControlCenterHomePanel = preload("res://scripts/control_center/ui/home_panel.gd")
 const ControlCenterHud = preload("res://scripts/control_center/ui/hud.gd")
 const ControlCenterLogPanel = preload("res://scripts/control_center/ui/log_panel.gd")
 const ControlCenterMetricsPanel = preload("res://scripts/control_center/ui/metrics_panel.gd")
@@ -43,10 +56,25 @@ const ControlCenterTrainingControlsPanel = preload(
 const ControlCenterTrainingDashboardPanel = preload(
 	"res://scripts/control_center/ui/training_dashboard_panel.gd"
 )
+const ControlCenterTrainingLaunchPanel = preload(
+	"res://scripts/control_center/ui/training_launch_panel.gd"
+)
 
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
 const RIGHT_PANEL_WIDTH: float = 380.0
+
+## Navigation entries: page id -> label, in display order.
+const PAGES: Array = [
+	["home", "HOME"],
+	["agents", "AGENTS"],
+	["headless", "HEADLESS"],
+	["training", "TRAINING"],
+	["simulation", "SIMULATION"],
+	["analytics", "ANALYTICS"],
+	["history", "HISTORY"],
+	["settings", "SETTINGS"],
+]
 
 var session
 var hud: ControlCenterHud
@@ -64,6 +92,12 @@ var training_config_panel: ControlCenterTrainingConfigPanel
 var training_controls_panel: ControlCenterTrainingControlsPanel
 var training_dashboard_panel: ControlCenterTrainingDashboardPanel
 var training_monitor_panel: ControlCenterTrainingDashboardPanel
+var training_launch_panel: ControlCenterTrainingLaunchPanel
+var home_panel: ControlCenterHomePanel
+var agents_panel: ControlCenterAgentsPanel
+var headless_panel: ControlCenterHeadlessPanel
+var analytics_panel: ControlCenterAnalyticsPanel
+var history_panel: ControlCenterHistoryPanel
 
 var _left_container: Control
 var _right_container: Control
@@ -73,6 +107,9 @@ var _tabs: TabContainer
 var _body_split: VSplitContainer
 var _left_split: HSplitContainer
 var _right_split: HSplitContainer
+var _page_container: Control
+var _pages: Dictionary = {}  # page id -> Control
+var _nav_buttons: Dictionary = {}  # page id -> Button
 var _refresh_accumulator: float = 0.0
 var _last_snapshot: Dictionary = {}
 
@@ -82,6 +119,7 @@ func setup(p_session) -> void:
 	layer = 10
 	_build_layout()
 	_connect_session()
+	set_page(session.config.active_page, false)
 	refresh_now()
 
 
@@ -104,14 +142,62 @@ func _build_layout() -> void:
 	status_bar.setup(session)
 	column.add_child(status_bar)
 
+	column.add_child(_build_navigation())
+
 	training_controls_panel = ControlCenterTrainingControlsPanel.new()
 	training_controls_panel.setup(session)
 	column.add_child(training_controls_panel)
 
+	_page_container = Control.new()
+	_page_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_page_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(_page_container)
+
+	_build_simulation_page()
+	_build_dashboard_pages()
+
+	_left_split.split_offset = session.config.left_dock_width
+	_right_split.split_offset = -session.config.right_dock_width
+	_body_split.split_offset = -session.config.bottom_dock_height
+	_left_split.dragged.connect(_on_left_split_dragged)
+	_right_split.dragged.connect(_on_right_split_dragged)
+	_body_split.dragged.connect(_on_body_split_dragged)
+	_apply_tile_order()
+	_apply_panel_visibility()
+
+
+func _build_navigation() -> Control:
+	var bar := PanelContainer.new()
+	bar.add_theme_stylebox_override(
+		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
+	)
+	var row := ControlCenterTheme.make_row()
+	bar.add_child(row)
+	for page_value in PAGES:
+		var page_id: String = str(page_value[0])
+		var button := ControlCenterTheme.make_toggle(
+			str(page_value[1]), false, "Open the %s page" % str(page_value[1])
+		)
+		button.pressed.connect(_on_nav_pressed.bind(page_id))
+		row.add_child(button)
+		_nav_buttons[page_id] = button
+	return bar
+
+
+## The classic simulation operator view (3D view + docks) as one page.
+func _build_simulation_page() -> void:
+	var page := VBoxContainer.new()
+	page.name = "SimulationPage"
+	page.set_anchors_preset(Control.PRESET_FULL_RECT)
+	page.add_theme_constant_override("separation", 6)
+	page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_page_container.add_child(page)
+	_pages["simulation"] = page
+
 	_body_split = VSplitContainer.new()
 	_body_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body_split.mouse_filter = Control.MOUSE_FILTER_PASS
-	column.add_child(_body_split)
+	page.add_child(_body_split)
 
 	_left_split = HSplitContainer.new()
 	_left_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -161,14 +247,62 @@ func _build_layout() -> void:
 	log_panel.setup(session)
 	_bottom_container.add_child(log_panel)
 
-	_left_split.split_offset = session.config.left_dock_width
-	_right_split.split_offset = -session.config.right_dock_width
-	_body_split.split_offset = -session.config.bottom_dock_height
-	_left_split.dragged.connect(_on_left_split_dragged)
-	_right_split.dragged.connect(_on_right_split_dragged)
-	_body_split.dragged.connect(_on_body_split_dragged)
-	_apply_tile_order()
-	_apply_panel_visibility()
+
+## Dashboard pages around the simulation: overview, agent management,
+## live headless monitoring, training launch, analytics, history and
+## settings.
+func _build_dashboard_pages() -> void:
+	home_panel = ControlCenterHomePanel.new()
+	home_panel.setup(session)
+	home_panel.open_agent_requested.connect(_on_open_agent_requested)
+	_add_page("home", home_panel)
+
+	agents_panel = ControlCenterAgentsPanel.new()
+	agents_panel.setup(session)
+	agents_panel.open_agent_requested.connect(_on_open_agent_requested)
+	agents_panel.configure_requested.connect(func(): set_page("training"))
+	_add_page("agents", agents_panel)
+
+	headless_panel = ControlCenterHeadlessPanel.new()
+	headless_panel.setup(session)
+	_add_page("headless", headless_panel)
+
+	training_config_panel = ControlCenterTrainingConfigPanel.new()
+	training_config_panel.setup(session)
+	training_config_panel.configuration_changed.connect(_on_training_configuration_changed)
+	training_launch_panel = ControlCenterTrainingLaunchPanel.new()
+	training_launch_panel.setup(session, training_config_panel)
+	training_launch_panel.training_started.connect(_on_training_started)
+	_add_page("training", training_launch_panel)
+
+	analytics_panel = ControlCenterAnalyticsPanel.new()
+	analytics_panel.setup(session)
+	_add_page("analytics", analytics_panel)
+
+	history_panel = ControlCenterHistoryPanel.new()
+	history_panel.setup(session)
+	_add_page("history", history_panel)
+
+	settings_panel = ControlCenterSettingsPanel.new()
+	settings_panel.setup(session)
+	settings_panel.settings_rebuilt.connect(_on_settings_rebuilt)
+	settings_panel.tile_layout_changed.connect(_on_tile_layout_changed)
+	var settings_page := PanelContainer.new()
+	settings_page.add_theme_stylebox_override(
+		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
+	)
+	var settings_scroll := ControlCenterTheme.make_scroll()
+	settings_page.add_child(settings_scroll)
+	settings_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	settings_scroll.add_child(settings_panel)
+	_add_page("settings", settings_page)
+
+
+func _add_page(page_id: String, page: Control) -> void:
+	page.set_anchors_preset(Control.PRESET_FULL_RECT)
+	page.visible = false
+	_page_container.add_child(page)
+	_pages[page_id] = page
 
 
 func _make_side_column(width: float) -> Control:
@@ -185,11 +319,6 @@ func _build_tabs(parent: Control) -> void:
 	_tabs.add_theme_stylebox_override("panel", ControlCenterTheme.panel_style())
 	_tabs.add_theme_font_size_override("font_size", ControlCenterTheme.FONT_SIZE_SMALL)
 	parent.add_child(_tabs)
-
-	training_config_panel = ControlCenterTrainingConfigPanel.new()
-	training_config_panel.setup(session)
-	training_config_panel.configuration_changed.connect(_on_training_configuration_changed)
-	_tabs.add_child(_wrap_scroll(training_config_panel, "Training"))
 
 	training_monitor_panel = ControlCenterTrainingDashboardPanel.new()
 	training_monitor_panel.setup(session)
@@ -215,12 +344,6 @@ func _build_tabs(parent: Control) -> void:
 	replay_panel.setup(session)
 	_tabs.add_child(_wrap_scroll(replay_panel, "Replay"))
 
-	settings_panel = ControlCenterSettingsPanel.new()
-	settings_panel.setup(session)
-	settings_panel.settings_rebuilt.connect(_on_settings_rebuilt)
-	settings_panel.tile_layout_changed.connect(_on_tile_layout_changed)
-	_tabs.add_child(_wrap_scroll(settings_panel, "Settings"))
-
 
 func _wrap_scroll(content: Control, title: String) -> ScrollContainer:
 	var scroll := ControlCenterTheme.make_scroll()
@@ -235,6 +358,7 @@ func _connect_session() -> void:
 	session.environments_rebuilt.connect(_on_environments_rebuilt)
 	session.selection_changed.connect(_on_selection_changed)
 	session.training_state_changed.connect(_on_training_state_changed)
+	session.agent_manager.agents_changed.connect(_on_agents_changed)
 
 
 func _process(delta: float) -> void:
@@ -243,6 +367,49 @@ func _process(delta: float) -> void:
 	if _refresh_accumulator < interval:
 		return
 	_refresh_accumulator = 0.0
+	refresh_now()
+
+
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
+
+
+func active_page() -> String:
+	return session.config.active_page if session != null else "home"
+
+
+func set_page(page_id: String, persist: bool = true) -> void:
+	var resolved: String = page_id if _pages.has(page_id) else ControlCenterConfig.DEFAULT_PAGE
+	session.config.active_page = resolved
+	if persist:
+		session.config.save_preferences()
+	for existing_id in _pages:
+		(_pages[existing_id] as Control).visible = str(existing_id) == resolved
+	for nav_id in _nav_buttons:
+		(_nav_buttons[nav_id] as Button).button_pressed = str(nav_id) == resolved
+	if resolved == "history":
+		# History is disk state; rescan when the operator opens the page.
+		history_panel.reload_runs()
+	refresh_now()
+
+
+func _on_nav_pressed(page_id: String) -> void:
+	set_page(page_id)
+
+
+func _on_open_agent_requested(agent_id: int) -> void:
+	headless_panel.focus_agent(agent_id)
+	set_page("headless")
+
+
+func _on_training_started(agent_id: int) -> void:
+	# Follow the launch to the live monitor, as a real dashboard would.
+	headless_panel.focus_agent(agent_id)
+	set_page("headless")
+
+
+func _on_agents_changed() -> void:
 	refresh_now()
 
 
@@ -273,6 +440,27 @@ func refresh_now() -> void:
 		_refresh_active_tab(snapshot)
 	if _bottom_container.visible:
 		log_panel.refresh(snapshot)
+	_refresh_active_page(snapshot)
+
+
+func _refresh_active_page(snapshot: Dictionary) -> void:
+	match active_page():
+		"home":
+			home_panel.refresh(snapshot)
+		"agents":
+			agents_panel.refresh(snapshot)
+		"headless":
+			headless_panel.refresh(snapshot)
+		"training":
+			training_launch_panel.refresh(snapshot)
+		"analytics":
+			analytics_panel.refresh(snapshot)
+		"history":
+			history_panel.refresh(snapshot)
+		"settings":
+			settings_panel.refresh(snapshot)
+		_:
+			pass
 
 
 func _refresh_active_tab(snapshot: Dictionary) -> void:
@@ -280,24 +468,22 @@ func _refresh_active_tab(snapshot: Dictionary) -> void:
 	# text nobody can read.
 	match _tabs.current_tab:
 		0:
-			training_config_panel.refresh(snapshot)
-		1:
 			training_monitor_panel.refresh(snapshot)
-		2:
+		1:
 			perception_panel.refresh(snapshot)
-		3:
+		2:
 			observation_panel.refresh(snapshot)
-		4:
+		3:
 			results_panel.refresh(snapshot)
-		5:
+		4:
 			metrics_panel.refresh(snapshot)
-		6:
+		5:
 			# Replay playback advances on wall-clock time, independently of
 			# whether the live simulation is running or paused.
 			replay_panel.advance(1.0 / REFRESH_HZ)
 			replay_panel.refresh(snapshot)
 		_:
-			settings_panel.refresh(snapshot)
+			pass
 
 
 ## Only the sections some visible panel will actually read are built.
@@ -307,9 +493,9 @@ func _snapshot_options() -> Dictionary:
 	var needs_perception: bool = _left_container.visible
 	var needs_observation: bool = false
 	if _right_container.visible:
-		if _tabs.current_tab == 2:
+		if _tabs.current_tab == 1:
 			needs_perception = true
-		elif _tabs.current_tab == 3:
+		elif _tabs.current_tab == 2:
 			needs_observation = true
 	return {"observation": needs_observation, "perception": needs_perception}
 

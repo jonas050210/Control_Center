@@ -82,6 +82,14 @@ const MAX_TRAINING_STEPS: int = 2_000_000_000
 const MAX_BC_EPOCHS: int = 100_000
 const PREFERENCES_PATH: String = "user://control_center.cfg"
 
+## Stable dashboard page identifiers for the persistent navigation. The
+## presentation maps these onto its page panels; unknown values sanitize
+## back to "home".
+const PAGE_IDS: Array = [
+	"home", "agents", "headless", "training", "simulation", "analytics", "history", "settings"
+]
+const DEFAULT_PAGE: String = "home"
+
 ## Stable tile identifiers. The presentation uses these rather than node
 ## names so visibility/order survives a UI refactor.
 const TILE_IDS: Array = [
@@ -228,6 +236,8 @@ var show_bottom_panel: bool = true
 var show_perception_overlay: bool = true
 var show_reward_components: bool = true
 var log_filter: int = -1  # ControlCenterEventLog.FILTER_ALL
+## Which dashboard page the persistent navigation shows (see PAGE_IDS).
+var active_page: String = DEFAULT_PAGE
 var tile_order: Array = DEFAULT_TILE_ORDER.duplicate()
 var tile_visibility: Dictionary = {
 	"simulation": true,
@@ -415,6 +425,8 @@ func sanitize() -> void:
 	left_dock_width = clampi(left_dock_width, 220, 700)
 	right_dock_width = clampi(right_dock_width, 280, 800)
 	bottom_dock_height = clampi(bottom_dock_height, 140, 600)
+	if not PAGE_IDS.has(active_page):
+		active_page = DEFAULT_PAGE
 	_sanitize_tiles()
 
 
@@ -457,6 +469,7 @@ func to_dict() -> Dictionary:
 		"show_perception_overlay": show_perception_overlay,
 		"show_reward_components": show_reward_components,
 		"log_filter": log_filter,
+		"active_page": active_page,
 		"tile_order": tile_order.duplicate(),
 		"tile_visibility": tile_visibility.duplicate(),
 		"left_dock_width": left_dock_width,
@@ -502,6 +515,7 @@ func apply_dict(values: Dictionary) -> void:
 	show_perception_overlay = bool(values.get("show_perception_overlay", show_perception_overlay))
 	show_reward_components = bool(values.get("show_reward_components", show_reward_components))
 	log_filter = int(values.get("log_filter", log_filter))
+	active_page = str(values.get("active_page", active_page))
 	tile_order = (values.get("tile_order", tile_order) as Array).duplicate()
 	tile_visibility = (values.get("tile_visibility", tile_visibility) as Dictionary).duplicate()
 	left_dock_width = int(values.get("left_dock_width", left_dock_width))

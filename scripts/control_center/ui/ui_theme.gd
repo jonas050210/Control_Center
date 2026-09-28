@@ -142,6 +142,49 @@ static func make_spin_box(
 	return spin
 
 
+## Colour for a managed-run lifecycle state name (TrainingRunController
+## state names). One mapping shared by every card/panel/badge.
+static func state_color(state_name: String) -> Color:
+	match state_name.strip_edges().to_lower():
+		"running":
+			return COLOR_OK
+		"starting", "paused", "stopping":
+			return COLOR_WARN
+		"error":
+			return COLOR_BAD
+		"finished":
+			return COLOR_TITLE
+		_:
+			return COLOR_MUTED
+
+
+## Value string for an optional backend metric: the real number when the
+## backend published the key, "n/a" otherwise. Never fabricates.
+static func optional_metric(
+	status: Dictionary, key: String, decimals: int, scale: float = 1.0, suffix: String = ""
+) -> String:
+	if not status.has(key) or status[key] == null:
+		return "n/a"
+	return String.num(float(status[key]) * scale, maxi(0, decimals)) + suffix
+
+
+## "HH:MM:SS" for a duration; "n/a" for null/negative input.
+static func format_duration(seconds) -> String:
+	if seconds == null or float(seconds) < 0.0:
+		return "n/a"
+	var total: int = int(seconds)
+	return "%02d:%02d:%02d" % [total / 3600, (total % 3600) / 60, total % 60]
+
+
+## "HH:MM:SS" wall-clock label for a unix timestamp (local time).
+static func format_clock(unix_time: float) -> String:
+	var bias_minutes: int = int(Time.get_time_zone_from_system().get("bias", 0))
+	var parts: Dictionary = Time.get_datetime_dict_from_unix_time(
+		int(unix_time) + bias_minutes * 60
+	)
+	return "%02d:%02d:%02d" % [parts["hour"], parts["minute"], parts["second"]]
+
+
 ## Colour for a 0..1 ratio: green when high, amber mid, red when low.
 static func ratio_color(ratio: float) -> Color:
 	if ratio >= 0.66:
