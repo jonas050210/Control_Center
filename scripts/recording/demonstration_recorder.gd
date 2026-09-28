@@ -28,7 +28,9 @@ func start_recording(metadata: Dictionary = {}) -> void:
 		"schema": "sandboxai.demonstrations",
 		"schema_version": SCHEMA_VERSION,
 		"observation_dim": Observation.FIELD_COUNT,
-		"action_encoding": "[move, strafe, yaw, pitch, shoot, look_delta_x, look_delta_y]",
+		# Matches Action.to_array(): the contract-v2 log array with `jump`
+		# at index 5 and the look deltas at 6/7.
+		"action_encoding": "[move, strafe, yaw, pitch, shoot, jump, look_delta_x, look_delta_y]",
 		"created_ticks_usec": Time.get_ticks_usec(),
 	}
 	for key in metadata:

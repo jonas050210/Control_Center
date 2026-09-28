@@ -46,9 +46,9 @@ Command-line settings are passed after `--` and parsed by
 | `--mode=` | `training` \| `watch` \| `human` | start mode |
 | `--env-count=` | 1..64 | parallel environments in the process |
 | `--enemy-count=` | 1..12 | enemies per environment |
-| `--curriculum-level=` | 1..5 | curriculum level (see `CurriculumConfig`) |
+| `--curriculum-level=` | 1..11 | curriculum level (see `CurriculumConfig`) |
 | `--seed=` | int | base seed; environment *i* uses `seed + i` |
-| `--scenario=` | `target_practice`, `duel`, `three_way`, `overwhelmed` | preset bundle |
+| `--scenario=` | `target_practice`, `duel`, `three_way`, `overwhelmed`, `cover_fight`, `corner_fight`, `sound_only`, `lost_target`, `vertical`, `randomized` | preset bundle |
 | `--force-gui=` | `1` \| `0` | build the GUI even on a headless display server (test escape hatch; off by default) |
 
 `scenes/main.tscn` is still the project's main scene, and headless training
@@ -161,7 +161,7 @@ tracked enemies, dashed red lines to hidden enemies, a target ring, the
 agent's forward vector and the weapon-range circle.
 
 ### Observation inspector
-All 33 fields of the observation vector with index, name, group and live
+All 84 fields of the observation vector with index, name, group and live
 value, plus the action rows (multi-discrete value + canonical value) and
 the reward components for the current episode.
 

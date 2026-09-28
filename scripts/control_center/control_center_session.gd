@@ -525,9 +525,11 @@ func _physics_process(delta: float) -> void:
 ## fixed dt as headless training, so trajectories are identical regardless
 ## of frame rate, speed multiplier or pauses.
 func advance(steps: int = 1) -> void:
+	if steps <= 0:
+		return
 	if simulation_manager == null or simulation_manager.environments.is_empty():
 		return
-	for _index in range(maxi(1, steps)):
+	for _index in range(steps):
 		var step_results: Array = simulation_manager.step_all(
 			_collect_actions(), SandboxConfig.SIMULATION_DT
 		)
@@ -586,7 +588,7 @@ func _observe_step(step_results: Array) -> void:
 		if index == selected:
 			_track_selected_events(events)
 		if bool(result.get("done", false)):
-			_record_episode(index, info)
+			_record_episode(index, result)
 	if selected < simulation_manager.environments.size():
 		_track_target_change(simulation_manager.environments[selected])
 
@@ -660,18 +662,26 @@ func _track_target_change(env) -> void:
 		_episode_probe["engagement_step"] = int(_episode_probe.get("steps", 0))
 
 
-func _record_episode(env_index: int, info: Dictionary) -> void:
+func _record_episode(env_index: int, result: Dictionary) -> void:
+	var info: Dictionary = result.get("info", {})
 	var metrics: Dictionary = info.get("metrics", {})
 	if metrics.is_empty():
 		return
 	var is_selected: bool = env_index == config.selected_environment
+	# SimulationManager.step_all() auto-resets a finished environment
+	# BEFORE the result reaches this method, so episode_count already
+	# refers to the NEXT episode. The episode that just finished — the one
+	# this record is about — is one less.
+	var episode_number: int = int(
+		simulation_manager.environments[env_index].episode.episode_count
+	)
+	if bool(result.get("auto_reset", false)):
+		episode_number -= 1
 	var record: Dictionary = {
 		"source": _action_source_for(env_index),
 		"mode": ControlCenterConfig.mode_name(config.mode),
 		"env_index": env_index,
-		"episode": int(
-			simulation_manager.environments[env_index].episode.episode_count
-		),
+		"episode": episode_number,
 		"seed": config.seed + env_index,
 		"curriculum_level": config.curriculum_level,
 		"enemy_count": int(metrics.get("enemy_count", 0)),

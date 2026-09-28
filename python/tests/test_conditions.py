@@ -21,6 +21,7 @@ from sandboxai.conditions import (
     format_generalization_report,
     generalization_report,
 )
+from sandboxai.randomization import SPAWN_RULES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,9 +41,25 @@ class SourceDriftTests(unittest.TestCase):
         ids = re.findall(r'"([a-z_]+)"', match.group(1))
         self.assertEqual(list(LIGHTING_IDS), ids)
 
+    def test_spawn_rules_match_scenario_library(self):
+        """SPAWN_RULES must mirror ScenarioLibrary's SPAWN_* constants.
+
+        Regression: the list used to name three rules that do not exist in
+        the engine ("spread", "flank", "cover") and miss four that do, so a
+        plan carrying one of those rules would silently degrade to default
+        placement and the real rules could never be drawn.
+        """
+        source = (REPO_ROOT / "scripts/scenario/scenario_library.gd").read_text(encoding="utf-8")
+        matches = re.findall(r'^const SPAWN_(\w+): String = "([a-z_]+)"', source, re.M)
+        self.assertTrue(matches, "could not locate SPAWN_* constants")
+        declared = [value for _name, value in matches]
+        self.assertEqual(sorted(declared), sorted(set(declared)), "duplicate SPAWN_* value")
+        self.assertEqual(sorted(SPAWN_RULES), sorted(declared))
+
     def test_ids_are_unique(self):
         self.assertEqual(len(set(MAP_IDS)), len(MAP_IDS))
         self.assertEqual(len(set(LIGHTING_IDS)), len(LIGHTING_IDS))
+        self.assertEqual(len(set(SPAWN_RULES)), len(SPAWN_RULES))
 
 
 class ConditionTests(unittest.TestCase):

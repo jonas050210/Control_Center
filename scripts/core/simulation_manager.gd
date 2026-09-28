@@ -219,7 +219,7 @@ func step_all(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Array:
 			actions[i] if i < actions.size() and actions[i] != null else Action.idle()
 		)
 		# The pre-step observation is only needed by an attached recorder.
-		# Building the 33-float array for every environment on every step
+		# Building the 84-float array for every environment on every step
 		# would be pure wasted work on the headless training path, where no
 		# recorder ever exists, so it is computed lazily here.
 		var recorder = recorders.get(i)

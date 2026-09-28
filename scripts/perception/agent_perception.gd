@@ -226,8 +226,10 @@ func _evaluate_enemy(
 	)
 	# Threat accounting uses pure geometry (does the enemy see me?), not the
 	# agent's own FOV, and never leaks into the observation as a position.
+	# The agent's own height (not a hardcoded constant) defines the target
+	# capsule, matching how EnemyBrain tests LOS toward the agent.
 	var threatening: bool = PerceptionSystem.has_line_of_sight(
-		world, enemy.get_eye_position(), agent.position, 1.8
+		world, enemy.get_eye_position(), agent.position, agent.height
 	)
 	if threatening:
 		threat_count += 1

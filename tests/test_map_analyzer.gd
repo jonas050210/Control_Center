@@ -132,6 +132,51 @@ func test_exploration_is_off_by_default() -> SandboxTest:
 	return t
 
 
+## Bug: the analyzer read a "position" key from the heard events, but a
+## heard event carries direction and distance only (hearing is
+## directional), so combat sounds never raised a danger belief. The danger
+## must be placed at the agent's own estimate, exactly like the perception
+## memory track does.
+func test_heard_combat_sound_marks_danger_at_the_estimated_location() -> SandboxTest:
+	var t := SandboxTest.new("heard_combat_sound_marks_danger_at_the_estimated_location")
+	var analyzer: MapAnalyzer = MapAnalyzer.create(10.0)
+	var context: Dictionary = {
+		"position": Vector3(0.0, 0.0, 8.0),
+		"forward": Vector3.FORWARD,
+		"world": null,
+		"lighting": null,
+		"vision_range": 0.0,
+		"sounds": [
+			{
+				"category": 3,  # SHOT
+				"direction": Vector3(0.0, 0.0, -1.0),
+				"distance": 4.0,
+				"loudness": 1.0,
+			},
+			{
+				"category": 0,  # FOOTSTEP: not combat, must not raise danger
+				"direction": Vector3(1.0, 0.0, 0.0),
+				"distance": 2.0,
+				"loudness": 1.0,
+			},
+		],
+	}
+	analyzer.update(SandboxConfig.SIMULATION_DT, context)
+	var danger: Dictionary = analyzer.memory.nearest_remembered_danger(Vector3(0.0, 0.0, 8.0))
+	t.assert_false(danger.is_empty(), "a heard shot must raise a danger belief")
+	t.assert_eq(
+		int(danger["index"]),
+		analyzer.memory.cell_index(Vector3(0.0, 0.0, 4.0)),
+		"the danger belief sits at the estimated source cell"
+	)
+	var danger_cells: int = 0
+	for cell_value in (analyzer.memory.to_dict()["cells"] as Array):
+		if float((cell_value as Dictionary)["danger"]) >= 0.2:
+			danger_cells += 1
+	t.assert_eq(danger_cells, 1, "only the combat sound raises danger")
+	return t
+
+
 func test_tracking_can_run_alongside_combat_without_paying_reward() -> SandboxTest:
 	var t := SandboxTest.new("tracking_can_run_alongside_combat_without_paying_reward")
 	var env := EnvironmentCore.new(0, 2)

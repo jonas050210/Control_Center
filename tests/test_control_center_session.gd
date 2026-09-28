@@ -208,6 +208,23 @@ func test_pause_resume_and_single_step() -> SandboxTest:
 	return t
 
 
+## Bug: advance(0) stepped the simulation once anyway (the loop clamped the
+## count to 1), so a zero-step request silently advanced every environment.
+func test_advance_zero_advances_nothing() -> SandboxTest:
+	var t := SandboxTest.new("session_advance_zero_is_a_noop")
+	var session = _make_session(ControlCenterConfig.Mode.WATCH)
+	var before: int = session.get_selected_environment().episode.step_count
+	session.advance(0)
+	session.advance(-3)
+	t.assert_eq(
+		session.get_selected_environment().episode.step_count,
+		before,
+		"a non-positive step count must not advance the simulation"
+	)
+	_destroy(session)
+	return t
+
+
 func test_speed_multiplier_is_bounded_per_frame() -> SandboxTest:
 	var t := SandboxTest.new("session_speed_is_bounded")
 	var session = _make_session(ControlCenterConfig.Mode.WATCH)
@@ -450,6 +467,10 @@ func test_episode_results_are_recorded_with_their_action_source() -> SandboxTest
 	var record: Dictionary = session.results.history("", 1, true)[0]
 	t.assert_eq(str(record["source"]), "ai", "WATCH episodes are attributed to the AI")
 	t.assert_eq(int(record["env_index"]), 0)
+	t.assert_eq(
+		int(record["episode"]), 1,
+		"the FIRST finished episode is episode 1, not 2 (auto-reset had already bumped the counter)"
+	)
 	t.assert_false(str(record["done_reason"]).is_empty())
 	t.assert_gte(float(session.event_log.size()), 1.0, "discrete events are logged")
 	_destroy(session)

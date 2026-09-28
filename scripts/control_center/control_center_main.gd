@@ -34,7 +34,11 @@ const OVERLAY_HZ: float = 20.0
 @export var start_mode: int = ControlCenterConfig.Mode.WATCH
 @export var environment_count: int = SandboxConfig.DEFAULT_ENVIRONMENT_COUNT
 @export var enemy_count: int = SandboxConfig.ENEMY_COUNT_DEFAULT
-@export_range(1, 5) var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS
+## Full curriculum range (1..11), matching ControlCenterConfig.sanitize(),
+## ControlCenterSession.set_curriculum_level() and the settings panel's own
+## level picker. It used to clamp to 5, which silently downgraded
+## `--curriculum-level=8` even though the scenario presets go up to 10.
+@export_range(1, 11) var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS
 @export var random_seed: int = SandboxConfig.DEFAULT_RANDOM_SEED
 ## Escape hatch for tests: build the GUI even when the display server is
 ## headless. Off by default so training never pays for it.
@@ -116,7 +120,11 @@ func _apply_command_line(config: ControlCenterConfig) -> void:
 			"enemy-count", "enemies":
 				config.enemy_count = maxi(1, int(value))
 			"curriculum-level", "level":
-				config.curriculum_level = clampi(int(value), 1, 5)
+				config.curriculum_level = clampi(
+					int(value),
+					CurriculumConfig.Level.STATIONARY_TARGET,
+					CurriculumConfig.Level.AGENT_VS_AGENT
+				)
 			"seed":
 				config.seed = int(value)
 			"scenario":
