@@ -79,7 +79,8 @@ class GodotProcessTransport:
         except OSError as exc:
             raise RuntimeError(
                 f"Could not launch Godot executable {executable!r}. "
-                "Install Godot 4.7.2 and put it on PATH or pass --godot-executable."
+                "Install Godot 4.7.2 and put it on PATH, set the GODOT_PATH "
+                "environment variable, or pass --godot-executable."
             ) from exc
         self._closed = False
         # Both output pipes are drained by daemon threads. Draining stderr is

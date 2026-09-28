@@ -13,29 +13,125 @@ from typing import Any
 ## scripts/core/curriculum_config.gd.
 CURRICULUM_LEVEL_COUNT: int = 11
 
+# Machine-local settings directory/file (relative to the repository root).
+# The last explicitly used --godot-executable is remembered here so that a
+# Godot binary configured once (e.g. for `validate-runtime`) is used by every
+# later command (`train`, `resume`, `benchmark`, ...) without repeating the
+# flag. The file is gitignored; delete it to return to the `godot`-on-PATH
+# default.
+_SETTINGS_DIR_NAME: str = ".sandboxai"
+_SETTINGS_FILE_NAME: str = "settings.json"
+
+# Well-known executable names/locations probed when neither an explicit
+# executable, GODOT_PATH/GODOT_EXECUTABLE, nor a remembered setting resolves.
+# A module-level constant so tests can neutralise it for hermetic assertions.
+_GODOT_CANDIDATES: tuple[str, ...] = (
+    "godot4",
+    "godot",
+    "godot.exe",
+    "Godot_v4.7.2-stable_linux.x86_64",
+    "Godot_v4.7.2-stable_win64.exe",
+    "Godot_v4.7.2-stable_win64_console.exe",
+    "Godot_v4.3-stable_linux.x86_64",
+    "Godot_v4.2-stable_linux.x86_64",
+    "/usr/local/bin/godot",
+    "/usr/bin/godot",
+    "C:\\Program Files\\Godot\\godot.exe",
+)
+
+
+def _settings_path() -> Path:
+    """Location of the machine-local settings file (repository root)."""
+    # python/sandboxai/config.py -> repository root
+    return Path(__file__).resolve().parents[2] / _SETTINGS_DIR_NAME / _SETTINGS_FILE_NAME
+
+
+def _resolve_executable(candidate: str | None) -> str | None:
+    """Verbatim/absolute form of `candidate` when it names a real command.
+
+    Accepts absolute paths, ``~``-relative paths and bare PATH command names
+    (``shutil.which`` on Windows also applies PATHEXT, so ``godot`` finds
+    ``godot.exe``). Returns None when `candidate` cannot be resolved, so
+    callers can keep probing their next fallback.
+    """
+    if not candidate:
+        return None
+    found = shutil.which(candidate)
+    if found:
+        return found
+    expanded = Path(candidate).expanduser()
+    if expanded.is_file():
+        return str(expanded)
+    return None
+
+
+def load_godot_executable_setting() -> str | None:
+    """The remembered Godot executable, or None when unset/unreadable.
+
+    Reading is deliberately defensive: a missing, corrupt or hand-mangled
+    settings file must never break a training run, it only drops the
+    remembered-executable fallback.
+    """
+    try:
+        data = json.loads(_settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = data.get("godot_executable") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip()
+
+
+def save_godot_executable_setting(executable: str) -> Path | None:
+    """Remember `executable` for future runs; returns the settings path.
+
+    The value is stored expanded and absolute so it keeps working regardless
+    of the caller's working directory. Writing is refused when the settings
+    location is not inside a SandboxAI checkout (detected via project.godot),
+    e.g. when the package was installed into site-packages: a library
+    install must never scatter config files outside the repository.
+    """
+    resolved = _resolve_executable(executable)
+    if resolved is None:
+        return None
+    settings = _settings_path()
+    # Only a real checkout owns a settings file.
+    if not (settings.parent.parent / "project.godot").is_file():
+        return None
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        json.dumps({"godot_executable": resolved}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return settings
+
 
 def find_godot_executable(preferred: str = "godot") -> str:
-    """Find a usable Godot executable across PATH, environment variables and common platform locations."""
-    if preferred and (shutil.which(preferred) or Path(preferred).is_file()):
-        return preferred
+    """Find a usable Godot executable across explicit paths, environment variables, the remembered local setting and common platform locations.
+
+    Resolution order (first hit wins):
+    1. ``preferred`` when it names an existing file or PATH command — an
+       explicit ``--godot-executable`` always wins.
+    2. the ``GODOT_PATH`` / ``GODOT_EXECUTABLE`` environment variables.
+    3. the remembered executable in ``.sandboxai/settings.json`` (written by
+       the CLI whenever an explicit ``--godot-executable`` resolves).
+    4. well-known candidate names on PATH (``godot4``, ``godot.exe``, ...).
+    5. ``preferred`` unchanged (the documented default is ``godot`` on PATH).
+    """
+    explicit = _resolve_executable(preferred)
+    if explicit:
+        return explicit
     env_path = os.environ.get("GODOT_PATH") or os.environ.get("GODOT_EXECUTABLE")
-    if env_path and (shutil.which(env_path) or Path(env_path).is_file()):
-        return env_path
-    candidates = [
-        "godot4",
-        "godot",
-        "godot.exe",
-        "Godot_v4.7.2-stable_linux.x86_64",
-        "Godot_v4.7.2-stable_win64.exe",
-        "Godot_v4.3-stable_linux.x86_64",
-        "Godot_v4.2-stable_linux.x86_64",
-        "/usr/local/bin/godot",
-        "/usr/bin/godot",
-        "C:\\Program Files\\Godot\\godot.exe",
-    ]
-    for candidate in candidates:
-        if shutil.which(candidate) or Path(candidate).is_file():
-            return candidate
+    env_resolved = _resolve_executable(env_path)
+    if env_resolved:
+        return env_resolved
+    saved = _resolve_executable(load_godot_executable_setting())
+    if saved:
+        return saved
+    for candidate in _GODOT_CANDIDATES:
+        found = _resolve_executable(candidate)
+        if found:
+            return found
     return preferred or "godot"
 
 
