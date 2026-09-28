@@ -34,6 +34,15 @@ const ControlCenterResultsPanel = preload("res://scripts/control_center/ui/resul
 const ControlCenterSettingsPanel = preload("res://scripts/control_center/ui/settings_panel.gd")
 const ControlCenterStatusBar = preload("res://scripts/control_center/ui/status_bar.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
+const ControlCenterTrainingConfigPanel = preload(
+	"res://scripts/control_center/ui/training_config_panel.gd"
+)
+const ControlCenterTrainingControlsPanel = preload(
+	"res://scripts/control_center/ui/training_controls_panel.gd"
+)
+const ControlCenterTrainingDashboardPanel = preload(
+	"res://scripts/control_center/ui/training_dashboard_panel.gd"
+)
 
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
@@ -51,11 +60,19 @@ var replay_panel: ControlCenterReplayPanel
 var settings_panel: ControlCenterSettingsPanel
 var controls_panel: ControlCenterControlsPanel
 var log_panel: ControlCenterLogPanel
+var training_config_panel: ControlCenterTrainingConfigPanel
+var training_controls_panel: ControlCenterTrainingControlsPanel
+var training_dashboard_panel: ControlCenterTrainingDashboardPanel
+var training_monitor_panel: ControlCenterTrainingDashboardPanel
 
 var _left_container: Control
 var _right_container: Control
 var _bottom_container: Control
+var _centre_container: Control
 var _tabs: TabContainer
+var _body_split: VSplitContainer
+var _left_split: HSplitContainer
+var _right_split: HSplitContainer
 var _refresh_accumulator: float = 0.0
 var _last_snapshot: Dictionary = {}
 
@@ -87,35 +104,54 @@ func _build_layout() -> void:
 	status_bar.setup(session)
 	column.add_child(status_bar)
 
-	var middle := HBoxContainer.new()
-	middle.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	middle.add_theme_constant_override("separation", 6)
-	middle.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(middle)
+	training_controls_panel = ControlCenterTrainingControlsPanel.new()
+	training_controls_panel.setup(session)
+	column.add_child(training_controls_panel)
+
+	_body_split = VSplitContainer.new()
+	_body_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_body_split.mouse_filter = Control.MOUSE_FILTER_PASS
+	column.add_child(_body_split)
+
+	_left_split = HSplitContainer.new()
+	_left_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_left_split.mouse_filter = Control.MOUSE_FILTER_PASS
+	_body_split.add_child(_left_split)
 
 	_left_container = _make_side_column(LEFT_PANEL_WIDTH)
-	middle.add_child(_left_container)
+	_left_split.add_child(_left_container)
 	agent_panel = ControlCenterAgentPanel.new()
 	agent_panel.setup()
 	agent_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_left_container.add_child(agent_panel)
 
-	var centre := Control.new()
-	centre.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	centre.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	middle.add_child(centre)
+	_right_split = HSplitContainer.new()
+	_right_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_right_split.mouse_filter = Control.MOUSE_FILTER_PASS
+	_left_split.add_child(_right_split)
+
+	_centre_container = Control.new()
+	_centre_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_centre_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_centre_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_right_split.add_child(_centre_container)
 	hud = ControlCenterHud.new()
 	hud.setup()
-	centre.add_child(hud)
+	_centre_container.add_child(hud)
+	training_dashboard_panel = ControlCenterTrainingDashboardPanel.new()
+	training_dashboard_panel.setup(session)
+	training_dashboard_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	training_dashboard_panel.visible = false
+	_centre_container.add_child(training_dashboard_panel)
 
 	_right_container = _make_side_column(RIGHT_PANEL_WIDTH)
-	middle.add_child(_right_container)
+	_right_split.add_child(_right_container)
 	_build_tabs(_right_container)
 
 	_bottom_container = VBoxContainer.new()
+	_bottom_container.custom_minimum_size = Vector2(0.0, 140.0)
 	_bottom_container.add_theme_constant_override("separation", 6)
-	column.add_child(_bottom_container)
+	_body_split.add_child(_bottom_container)
 
 	controls_panel = ControlCenterControlsPanel.new()
 	controls_panel.setup(session)
@@ -125,6 +161,13 @@ func _build_layout() -> void:
 	log_panel.setup(session)
 	_bottom_container.add_child(log_panel)
 
+	_left_split.split_offset = session.config.left_dock_width
+	_right_split.split_offset = -session.config.right_dock_width
+	_body_split.split_offset = -session.config.bottom_dock_height
+	_left_split.dragged.connect(_on_left_split_dragged)
+	_right_split.dragged.connect(_on_right_split_dragged)
+	_body_split.dragged.connect(_on_body_split_dragged)
+	_apply_tile_order()
 	_apply_panel_visibility()
 
 
@@ -142,6 +185,15 @@ func _build_tabs(parent: Control) -> void:
 	_tabs.add_theme_stylebox_override("panel", ControlCenterTheme.panel_style())
 	_tabs.add_theme_font_size_override("font_size", ControlCenterTheme.FONT_SIZE_SMALL)
 	parent.add_child(_tabs)
+
+	training_config_panel = ControlCenterTrainingConfigPanel.new()
+	training_config_panel.setup(session)
+	training_config_panel.configuration_changed.connect(_on_training_configuration_changed)
+	_tabs.add_child(_wrap_scroll(training_config_panel, "Training"))
+
+	training_monitor_panel = ControlCenterTrainingDashboardPanel.new()
+	training_monitor_panel.setup(session)
+	_tabs.add_child(_wrap_scroll(training_monitor_panel, "Run"))
 
 	perception_panel = ControlCenterPerceptionPanel.new()
 	perception_panel.setup(session)
@@ -166,6 +218,7 @@ func _build_tabs(parent: Control) -> void:
 	settings_panel = ControlCenterSettingsPanel.new()
 	settings_panel.setup(session)
 	settings_panel.settings_rebuilt.connect(_on_settings_rebuilt)
+	settings_panel.tile_layout_changed.connect(_on_tile_layout_changed)
 	_tabs.add_child(_wrap_scroll(settings_panel, "Settings"))
 
 
@@ -181,6 +234,7 @@ func _connect_session() -> void:
 	session.mode_changed.connect(_on_mode_changed)
 	session.environments_rebuilt.connect(_on_environments_rebuilt)
 	session.selection_changed.connect(_on_selection_changed)
+	session.training_state_changed.connect(_on_training_state_changed)
 
 
 func _process(delta: float) -> void:
@@ -201,9 +255,17 @@ func refresh_now() -> void:
 	_last_snapshot = snapshot
 
 	status_bar.refresh(snapshot)
+	training_controls_panel.refresh(snapshot)
 	controls_panel.refresh(snapshot)
+	training_dashboard_panel.refresh(snapshot)
+	var headless_dashboard: bool = (
+		session.config.training_mode == ControlCenterConfig.TrainingMode.HEADLESS
+	)
+	training_dashboard_panel.visible = (
+		headless_dashboard and session.config.is_tile_visible("training")
+	)
 	hud.refresh(snapshot, session.config.mode, session.human_input_enabled)
-	hud.visible = not session.is_training_mode()
+	hud.visible = not headless_dashboard and session.config.is_tile_visible("simulation")
 
 	if _left_container.visible:
 		agent_panel.refresh(snapshot)
@@ -218,14 +280,18 @@ func _refresh_active_tab(snapshot: Dictionary) -> void:
 	# text nobody can read.
 	match _tabs.current_tab:
 		0:
-			perception_panel.refresh(snapshot)
+			training_config_panel.refresh(snapshot)
 		1:
-			observation_panel.refresh(snapshot)
+			training_monitor_panel.refresh(snapshot)
 		2:
-			results_panel.refresh(snapshot)
+			perception_panel.refresh(snapshot)
 		3:
-			metrics_panel.refresh(snapshot)
+			observation_panel.refresh(snapshot)
 		4:
+			results_panel.refresh(snapshot)
+		5:
+			metrics_panel.refresh(snapshot)
+		6:
 			# Replay playback advances on wall-clock time, independently of
 			# whether the live simulation is running or paused.
 			replay_panel.advance(1.0 / REFRESH_HZ)
@@ -241,17 +307,70 @@ func _snapshot_options() -> Dictionary:
 	var needs_perception: bool = _left_container.visible
 	var needs_observation: bool = false
 	if _right_container.visible:
-		if _tabs.current_tab == 0:
+		if _tabs.current_tab == 2:
 			needs_perception = true
-		elif _tabs.current_tab == 1:
+		elif _tabs.current_tab == 3:
 			needs_observation = true
 	return {"observation": needs_observation, "perception": needs_perception}
 
 
 func _apply_panel_visibility() -> void:
-	_left_container.visible = session.config.show_left_panel and not session.is_training_mode()
-	_right_container.visible = session.config.show_right_panel
-	_bottom_container.visible = session.config.show_bottom_panel
+	var headless_dashboard: bool = (
+		session.config.training_mode == ControlCenterConfig.TrainingMode.HEADLESS
+	)
+	var viewport_width: float = get_viewport().get_visible_rect().size.x
+	var inspector_visible: bool = session.config.is_tile_visible("inspector")
+	_left_container.visible = (
+		session.config.is_tile_visible("agent")
+		and not session.is_training_mode()
+		and not headless_dashboard
+		and viewport_width >= 1200.0
+	)
+	_right_container.visible = (
+		inspector_visible and (not headless_dashboard or viewport_width >= 900.0)
+	)
+	# On a narrow visual dashboard preserve configuration; on a narrow
+	# headless dashboard preserve progress/metrics instead.
+	_centre_container.visible = (
+		headless_dashboard or viewport_width >= 900.0 or not inspector_visible
+	)
+	var controls_visible: bool = (
+		session.config.is_tile_visible("controls") and not headless_dashboard
+	)
+	var logs_visible: bool = session.config.is_tile_visible("logs")
+	_bottom_container.visible = (controls_visible or logs_visible) and not headless_dashboard
+	training_controls_panel.visible = session.config.is_tile_visible("training")
+	controls_panel.visible = controls_visible
+	log_panel.visible = logs_visible
+
+
+## Reordering is deliberately constrained to the vertical utility tiles.
+## The simulation remains central and the inspector remains a dock, while
+## Controls and Logs can swap without reparenting the 3D view or losing UI
+## state.
+func _apply_tile_order() -> void:
+	if controls_panel == null or log_panel == null:
+		return
+	var controls_index: int = session.config.tile_order.find("controls")
+	var logs_index: int = session.config.tile_order.find("logs")
+	var controls_first: bool = controls_index <= logs_index
+	_bottom_container.move_child(controls_panel, 0 if controls_first else 1)
+	_bottom_container.move_child(log_panel, 1 if controls_first else 0)
+
+
+func _on_left_split_dragged(offset: int) -> void:
+	session.config.left_dock_width = clampi(offset, 220, 700)
+	session.config.save_preferences()
+
+
+func _on_right_split_dragged(_offset: int) -> void:
+	session.config.right_dock_width = clampi(int(_right_container.size.x), 280, 800)
+	session.config.save_preferences()
+
+
+func _on_body_split_dragged(_offset: int) -> void:
+	session.config.bottom_dock_height = clampi(int(_bottom_container.size.y), 140, 600)
+	session.config.save_preferences()
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -262,15 +381,24 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var gameplay_active: bool = session.is_human_mode() and session.human_input_enabled
 	match key_event.keycode:
 		KEY_F1:
-			session.config.show_left_panel = not session.config.show_left_panel
+			session.config.set_tile_visible(
+				"agent", not session.config.is_tile_visible("agent")
+			)
+			session.config.save_preferences()
 			_apply_panel_visibility()
 			get_viewport().set_input_as_handled()
 		KEY_F2:
-			session.config.show_right_panel = not session.config.show_right_panel
+			session.config.set_tile_visible(
+				"inspector", not session.config.is_tile_visible("inspector")
+			)
+			session.config.save_preferences()
 			_apply_panel_visibility()
 			get_viewport().set_input_as_handled()
 		KEY_F3:
-			session.config.show_bottom_panel = not session.config.show_bottom_panel
+			session.config.set_tile_visible(
+				"logs", not session.config.is_tile_visible("logs")
+			)
+			session.config.save_preferences()
 			_apply_panel_visibility()
 			get_viewport().set_input_as_handled()
 		KEY_SPACE:
@@ -307,4 +435,21 @@ func _on_selection_changed(_environment_index: int, _agent_slot: int) -> void:
 
 func _on_settings_rebuilt() -> void:
 	status_bar.refresh_options()
+	refresh_now()
+
+
+func _on_training_configuration_changed() -> void:
+	_apply_tile_order()
+	_apply_panel_visibility()
+	refresh_now()
+
+
+func _on_training_state_changed(_state: int) -> void:
+	_apply_panel_visibility()
+	refresh_now()
+
+
+func _on_tile_layout_changed() -> void:
+	_apply_tile_order()
+	_apply_panel_visibility()
 	refresh_now()

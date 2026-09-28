@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .config import TrainingConfig
 from .evaluation import evaluate_model
 from .godot_env import GodotVecEnv
 from .telemetry import JsonlTelemetry, resource_snapshot
+
+if TYPE_CHECKING:
+    from .run_control import RunControl
 
 
 def _require_sb3():
@@ -35,7 +38,11 @@ def _env_kwargs(config: TrainingConfig) -> dict[str, Any]:
     }
 
 
-def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = None) -> dict[str, Any]:
+def train_ppo(
+    config: TrainingConfig,
+    resume_checkpoint: str | Path | None = None,
+    run_control: "RunControl | None" = None,
+) -> dict[str, Any]:
     config.validate()
     PPO, BaseCallback, CallbackList, CheckpointCallback = _require_sb3()
     device = config.resolved_device()
@@ -109,20 +116,32 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             self.last_telemetry_step = 0
             self.episode_count = 0
             self.episode_metrics_buffer: list[dict[str, Any]] = []
+            self.start_timesteps = 0
+            self.target_timesteps = config.total_training_steps
 
         def _on_training_start(self) -> None:
-            telemetry.write(
-                {
-                    "event": "training_start",
-                    "environment_count": config.environment_count,
-                    "device": device,
-                    "total_training_steps": config.total_training_steps,
-                    "net_arch": list(config.net_arch),
-                    "learning_rate": config.learning_rate,
-                }
-            )
+            self.start_timesteps = self.num_timesteps
+            self.target_timesteps = self.start_timesteps + config.total_training_steps
+            self.last_telemetry_step = self.start_timesteps
+            start_values = {
+                "event": "training_start",
+                "environment_count": config.environment_count,
+                "device": device,
+                "run_start_timesteps": self.start_timesteps,
+                "total_training_steps": self.target_timesteps,
+                "net_arch": list(config.net_arch),
+                "learning_rate": config.learning_rate,
+            }
+            telemetry.write(start_values)
+            if run_control is not None:
+                run_control.running(**start_values)
+                run_control.event("system", "PPO optimization started", start_values)
 
         def _on_step(self) -> bool:
+            nonlocal stop_training
+            if run_control is not None and not run_control.checkpoint():
+                stop_training = True
+                return False
             if pipeline is not None:
                 # One attribute write per vector step: the pipeline stamps
                 # episode rows / curriculum transitions with real PPO time.
@@ -137,13 +156,22 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                     self.episode_metrics_buffer.append(metrics)
             if self.num_timesteps - self.last_telemetry_step >= max(config.environment_count, 1) * 100:
                 elapsed = max(time.perf_counter() - self.started, 1e-9)
+                completed_steps = max(0, self.num_timesteps - self.start_timesteps)
+                steps_per_second = completed_steps / elapsed
+                remaining_steps = max(0, self.target_timesteps - self.num_timesteps)
                 payload: dict[str, Any] = {
                     "event": "progress",
                     "timesteps": self.num_timesteps,
-                    "progress": self.num_timesteps / config.total_training_steps,
-                    "steps_per_second": self.num_timesteps / elapsed,
+                    "run_start_timesteps": self.start_timesteps,
+                    "total_training_steps": self.target_timesteps,
+                    "progress": min(1.0, completed_steps / config.total_training_steps),
+                    "steps_per_second": steps_per_second,
+                    # Based on the measured run-average throughput. It is
+                    # omitted until a positive rate exists rather than faked.
+                    "eta_seconds": remaining_steps / steps_per_second if steps_per_second > 0 else None,
                     "episodes": self.episode_count,
                     "environment_count": config.environment_count,
+                    "device": device,
                     "current_checkpoint": str(checkpoints),
                     **resource_snapshot(),
                 }
@@ -151,8 +179,15 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                     buf = self.episode_metrics_buffer
                     payload["mean_episode_reward"] = sum(float(item.get("episode_reward", 0.0)) for item in buf) / len(buf)
                     payload["mean_kills"] = sum(float(item.get("kills", 0.0)) for item in buf) / len(buf)
+                    payload["mean_deaths"] = sum(float(item.get("deaths", 0.0)) for item in buf) / len(buf)
+                    payload["mean_damage_dealt"] = sum(float(item.get("damage_dealt", 0.0)) for item in buf) / len(buf)
+                    payload["mean_damage_received"] = sum(float(item.get("damage_received", 0.0)) for item in buf) / len(buf)
+                    payload["mean_shots_fired"] = sum(float(item.get("shots_fired", 0.0)) for item in buf) / len(buf)
+                    payload["mean_shots_hit"] = sum(float(item.get("shots_hit", 0.0)) for item in buf) / len(buf)
+                    payload["mean_survival_time"] = sum(float(item.get("survival_time", 0.0)) for item in buf) / len(buf)
                     payload["mean_accuracy"] = sum(float(item.get("accuracy", 0.0)) for item in buf) / len(buf)
                     payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in buf) / len(buf)
+                    payload["loss_rate"] = sum(float(item.get("loss", 0.0)) for item in buf) / len(buf)
                     if config.reward_breakdown_logging:
                         payload["reward_breakdown"] = {
                             "hits": sum(float(item.get("reward_breakdown", {}).get("reward_hits", 0.0)) for item in buf) / len(buf),
@@ -170,11 +205,22 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                         }
                     self.episode_metrics_buffer.clear()
                 telemetry.write(payload)
+                if run_control is not None:
+                    run_control.update(**payload)
                 self.last_telemetry_step = self.num_timesteps
             return not stop_training
 
         def _on_training_end(self) -> None:
-            telemetry.write({"event": "training_end", "timesteps": self.num_timesteps, "episodes": self.episode_count})
+            values = {
+                "event": "training_end",
+                "timesteps": self.num_timesteps,
+                "episodes": self.episode_count,
+            }
+            telemetry.write(values)
+            if run_control is not None:
+                # CLI publishes Finished only after final checkpoints are
+                # safely written. Until then this is still stopping work.
+                run_control.update(state="Stopping" if run_control.stop_requested else "Running", **values)
 
     class EvaluationCallback(BaseCallback):
         def __init__(self):
@@ -192,6 +238,8 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
 
         def _on_step(self) -> bool:
             nonlocal best_score, eval_patience_counter, stop_training
+            if stop_training:
+                return False
             if self.num_timesteps < self.next_evaluation:
                 return True
             eval_kwargs = _env_kwargs(config)
@@ -237,14 +285,15 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                     summary[section] = {
                         key: value for key, value in body.items() if not key.endswith("_detail")
                     }
-                telemetry.write(
-                    {
-                        "event": "checkpoint_evaluation",
-                        "timesteps": self.num_timesteps,
-                        "curriculum_level": pipeline.driver.level,
-                        "report": str(evaluations / f"step_{self.num_timesteps:09d}" / "report.json"),
-                    }
-                )
+                checkpoint_event = {
+                    "event": "checkpoint_evaluation",
+                    "timesteps": self.num_timesteps,
+                    "curriculum_level": pipeline.driver.level,
+                    "report": str(evaluations / f"step_{self.num_timesteps:09d}" / "report.json"),
+                }
+                telemetry.write(checkpoint_event)
+                if run_control is not None:
+                    run_control.event("system", "checkpoint evaluation completed", checkpoint_event)
             (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
             if reward > best_score:
                 best_score = reward
@@ -276,7 +325,8 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
         save_replay_buffer=False,
         save_vecnormalize=False,
     )
-    callbacks = CallbackList([checkpoint_callback, MetricsCallback(), EvaluationCallback()])
+    metrics_callback = MetricsCallback()
+    callbacks = CallbackList([checkpoint_callback, metrics_callback, EvaluationCallback()])
     try:
         if checkpoint_path:
             model = PPO.load(str(checkpoint_path), env=env, device=device)
@@ -320,7 +370,9 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             "final_checkpoint": str(run_dir / "final.zip"),
             "best_checkpoint": str(best_path) if best_path.exists() else None,
             "device": device,
-            "timesteps": config.total_training_steps,
+            "timesteps": model.num_timesteps,
+            "training_steps_completed": max(0, model.num_timesteps - metrics_callback.start_timesteps),
+            "stopped": bool(run_control is not None and run_control.stop_requested),
             "warm_start": warm_start,
         }
         if pipeline is not None:

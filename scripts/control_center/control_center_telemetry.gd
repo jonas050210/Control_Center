@@ -82,8 +82,11 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 	snapshot["agent"] = {
 		"position": env.agent.position,
 		"velocity": env.agent.velocity,
+		"forward": env.agent.get_forward_vector(),
 		"yaw_deg": env.agent.yaw_deg,
 		"pitch_deg": env.agent.pitch_deg,
+		"on_ground": env.agent.on_ground,
+		"in_combat": observation.in_combat,
 		"health": env.agent.health,
 		"max_health": env.agent.max_health,
 		"alive": env.agent.alive,
@@ -97,6 +100,7 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 		"step": env.episode.step_count,
 		"max_steps": env.max_steps,
 		"time_seconds": float(env.episode.step_count) * SandboxConfig.SIMULATION_DT,
+		"survival_time": float(env.episode.survival_steps) * SandboxConfig.SIMULATION_DT,
 		"reward": env.episode.cumulative_reward,
 		"last_reward": env.episode.last_reward,
 		"kills": env.episode.kills,
@@ -137,4 +141,5 @@ static func _target_info(env) -> Dictionary:
 		"health": enemy.health,
 		"max_health": enemy.max_health,
 		"position": enemy.position,
+		"direction": to_enemy.normalized() if not to_enemy.is_zero_approx() else Vector3.ZERO,
 	}

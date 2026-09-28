@@ -4,11 +4,12 @@ The Control Center is the interactive front-end of the simulator: one
 window from which you can **operate**, **watch**, **play**, **inspect** and
 **evaluate** the exact same simulation the RL trainer uses.
 
-It is a presentation layer, not a second implementation. Every number it
-shows is read from `EnvironmentCore` / `Observation` / `EpisodeState`, and
-every control it offers calls an existing simulation method. Anything the
-simulation cannot actually do is shown as **unavailable** with the reason,
-never faked.
+It is a presentation layer, not a second implementation. Local simulation
+values come from `EnvironmentCore` / `Observation` / `EpisodeState`; managed
+training values come from the existing Python PPO/BC telemetry. Every control
+calls an existing simulation method or sends a cooperative command to the
+Python backend. Anything the backend cannot actually do is shown as
+**unavailable** with the reason, never faked.
 
 ```
                       +---------------------------+
@@ -58,7 +59,43 @@ Center node.
 
 ---
 
-## The three modes
+## Managed training workspace
+
+The **Training** inspector tab configures and launches the repository's real
+Python backends. PPO maps to `sandboxai train`/`resume`; Behavior Cloning maps
+to `sandboxai bc-train`. Steps/epochs, environment count, curriculum, seed,
+device, checkpoint/resume selection and the backend's supported optimizer
+parameters are passed through unchanged. The exact command is visible before
+launch.
+
+Start, pause, resume and stop use a small file-based control boundary in
+`python/sandboxai/run_control.py`. Python acknowledges state only at safe
+callback/batch boundaries and atomically publishes status. Stop is graceful:
+the normal final checkpoint path runs before the process reports `Finished`.
+The GUI never suspends a process behind the trainer's back or infers a state
+from button clicks.
+
+* **Visual Mode** keeps the selected in-process simulation and observation
+  inspector visible as a deterministic preview using the same requested
+  environment settings. PPO itself still uses its separate headless Godot
+  bridge, so the preview is not claimed to be the learner's exact live arena.
+* **Headless Mode** disables local rendering/telemetry and gives the central
+  tile to backend progress, RL/BC metrics, measured CPU/VRAM values and the
+  backend event log. GPU utilization remains `n/a` because PyTorch does not
+  expose it here; allocator VRAM is shown when CUDA supplies it.
+* **Self-Play** is selectable and described, but Start is disabled. The
+  repository currently has a real two-slot match bridge and frozen-checkpoint
+  league for evaluation, not a self-play optimizer. It is not silently mapped
+  to single-agent PPO.
+
+The dashboard docks use split handles, visibility controls and persisted
+ordering/preferences (`user://control_center.cfg`). At narrow widths the agent
+preview collapses first; the training configuration or headless progress tile
+keeps the available space.
+
+---
+
+## The three local simulation modes
 
 All three drive the **same** `EnvironmentCore`, the same `Action` struct and
 the same `Observation` vector. They differ only in who produces actions and
@@ -70,12 +107,11 @@ how much presentation work is permitted.
 | **WATCH** | `AIStubController` (or idle) | selected environment only | on | on |
 | **HUMAN** | `HumanController` (selected env only) | selected environment only | on | on |
 
-* TRAINING runs a frame-budgeted batch loop (`TRAINING_FRAME_BUDGET_MS`,
-  default 8 ms/frame) with views hidden, telemetry short-circuited and the
-  log buffer disabled, so mode switching is a genuine throughput mode and
-  not a "GUI with the panels closed". Real PPO weight updates still belong
-  to the Python trainer (`sandboxai train`) — the Settings tab prints the
-  exact command for the current settings.
+* TRAINING runs the **local preview session** as a frame-budgeted batch loop
+  (`TRAINING_FRAME_BUDGET_MS`, default 8 ms/frame) with views hidden,
+  telemetry short-circuited and the local log buffer disabled. Managed PPO
+  and BC weight updates remain in the Python trainer launched from the
+  Training tab; this local mode is not relabelled as gradient training.
 * HUMAN mode rebinds **only** the selected environment to the existing
   `HumanController`. The other environments keep their AI controller, which
   is what makes the HUMAN vs AI comparison meaningful.
@@ -185,7 +221,8 @@ elsewhere instead of a fabricated number.
 * **Requires reset** (marked, applied by *Apply & reset*): environment
   count, enemy count, seed. A *Randomize seed* button is provided.
 * Panel visibility toggles.
-* The exact headless training command for the current settings.
+* Legacy local-preview settings and panel/tile visibility. The Training tab
+  owns the full PPO/BC configuration and exact managed command.
 
 ### Controls
 Play/pause, single step, step ×10, reset environment (deterministic or with
