@@ -183,24 +183,44 @@ func refresh(snapshot: Dictionary) -> void:
 		(_mode_buttons[mode] as Button).button_pressed = int(status["mode"]) == int(mode)
 
 	var running: bool = bool(status["running"])
-	var state_text: String = "RUNNING" if running else "PAUSED"
+	var training: Dictionary = session.training_run.snapshot()
+	var training_state: String = str(training.get("state", "Idle"))
+	var show_training_state: bool = training_state != "Idle"
+	var state_text: String = (
+		"TRAINING: %s" % training_state.to_upper()
+		if show_training_state
+		else ("RUNNING" if running else "PAUSED")
+	)
 	if int(status["mode"]) == ControlCenterConfig.Mode.HUMAN:
 		state_text += (
 			"  |  input: CAPTURED" if bool(status["human_input_enabled"]) else "  |  input: released"
 		)
 	_state_label.text = state_text
-	_state_label.add_theme_color_override(
-		"font_color", ControlCenterTheme.COLOR_OK if running else ControlCenterTheme.COLOR_WARN
-	)
+	var state_color: Color = ControlCenterTheme.COLOR_OK if running else ControlCenterTheme.COLOR_WARN
+	if training_state in ["Starting", "Paused", "Stopping"]:
+		state_color = ControlCenterTheme.COLOR_WARN
+	elif training_state == "Error":
+		state_color = ControlCenterTheme.COLOR_BAD
+	_state_label.add_theme_color_override("font_color", state_color)
 
-	_rate_label.text = (
-		"%.0f sim steps/s   %d fps   %d env"
-		% [
-			float(status["steps_per_second"]),
-			int(status["render_fps"]),
-			int(status["environment_count"]),
-		]
-	)
+	if training.has("steps_per_second"):
+		_rate_label.text = (
+			"%.0f train steps/s   %d fps   %s env"
+			% [
+				float(training["steps_per_second"]),
+				int(status["render_fps"]),
+				str(training.get("environment_count", "n/a")),
+			]
+		)
+	else:
+		_rate_label.text = (
+			"%.0f sim steps/s   %d fps   %d env"
+			% [
+				float(status["steps_per_second"]),
+				int(status["render_fps"]),
+				int(status["environment_count"]),
+			]
+		)
 	var pending: PackedStringArray = status["pending_settings"]
 	_pending_label.text = (
 		"" if pending.is_empty() else "pending reset: %s" % ", ".join(pending)

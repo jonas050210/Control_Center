@@ -570,7 +570,7 @@ func test_status_and_training_command_describe_reality() -> SandboxTest:
 	t.assert_eq(int(status["seed"]), 4321)
 
 	var command: String = session.training_command_line()
-	t.assert_true(command.begins_with("sandboxai train"))
+	t.assert_true(command.begins_with("python -m sandboxai train"))
 	t.assert_true(command.contains("--env-count 2"))
 	t.assert_true(command.contains("--seed 4321"))
 	_destroy(session)

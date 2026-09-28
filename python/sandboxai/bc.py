@@ -5,10 +5,14 @@ import csv
 import json
 from pathlib import Path
 import random
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .config import BCConfig
 from .dataset import ACTION_NVECS, DemonstrationDataset
+from .telemetry import resource_snapshot
+
+if TYPE_CHECKING:
+    from .run_control import RunControl
 
 try:
     import torch  # type: ignore
@@ -99,6 +103,7 @@ def train_behavior_cloning(
     config: BCConfig | None = None,
     output_dir: str | Path | None = None,
     resume_checkpoint: str | Path | None = None,
+    run_control: "RunControl | None" = None,
 ) -> dict[str, Any]:
     _require_torch()
     config = (config or BCConfig()).validate()
@@ -148,12 +153,27 @@ def train_behavior_cloning(
         # Tracks the number of completed epochs; stays at start_epoch when the
         # resume checkpoint already reached config.epochs (empty loop below).
         completed_epochs = start_epoch
+        stopped = False
+        if run_control is not None:
+            run_control.running(
+                training_type="behavior_cloning",
+                device=device,
+                total_epochs=config.epochs,
+                epoch=start_epoch,
+                dataset=str(dataset_path),
+            )
+            run_control.event("system", "behavior-cloning optimization started")
         for epoch in range(start_epoch, config.epochs):
             model.train()
             permutation = torch.randperm(train_observations.shape[0], generator=generator)
             train_loss_total = 0.0
             train_batches = 0
-            for batch_indices in permutation.split(config.batch_size):
+            batches = permutation.split(config.batch_size)
+            total_batches = len(batches)
+            for batch_number, batch_indices in enumerate(batches, start=1):
+                if run_control is not None and not run_control.checkpoint():
+                    stopped = True
+                    break
                 batch_observations = train_observations[batch_indices].to(device)
                 batch_actions = train_actions[batch_indices].to(device)
                 optimizer.zero_grad(set_to_none=True)
@@ -162,6 +182,36 @@ def train_behavior_cloning(
                 optimizer.step()
                 train_loss_total += float(loss.item())
                 train_batches += 1
+                if run_control is not None and (
+                    batch_number == total_batches or batch_number % 10 == 0
+                ):
+                    run_control.update(
+                        epoch=epoch,
+                        total_epochs=config.epochs,
+                        batch=batch_number,
+                        total_batches=total_batches,
+                        progress=(epoch + batch_number / max(total_batches, 1)) / config.epochs,
+                        **resource_snapshot(),
+                    )
+            if stopped:
+                # Keep the normal resumable checkpoint contract even when
+                # stopping between epochs. ``epoch`` is the number of fully
+                # completed epochs, so resume intentionally restarts this
+                # partially consumed epoch with the saved optimizer state.
+                interrupted_checkpoint = {
+                    "format": "sandboxai.bc.v1",
+                    "epoch": epoch,
+                    "observation_dim": model.observation_dim,
+                    "hidden_sizes": list(model.hidden_sizes),
+                    "action_nvec": list(model.action_nvec),
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "best_validation_loss": best_validation,
+                    "metrics": {"interrupted": True, "completed_batches": train_batches},
+                    "dataset": str(dataset_path),
+                }
+                _atomic_torch_save(interrupted_checkpoint, destination / "latest.pt")
+                break
             model.eval()
             with torch.no_grad():
                 validation_loss, component_accuracy, exact_accuracy = _metrics_from_logits(
@@ -181,6 +231,15 @@ def train_behavior_cloning(
             csv_stream.flush()
             with metrics_path.open("a", encoding="utf-8") as metrics_stream:
                 metrics_stream.write(json.dumps(row) + "\n")
+            if run_control is not None:
+                run_control.update(
+                    **row,
+                    total_epochs=config.epochs,
+                    progress=(epoch + 1) / config.epochs,
+                    device=device,
+                    **resource_snapshot(),
+                )
+                run_control.event("metric", "epoch %d completed" % (epoch + 1), row)
             checkpoint = {
                 "format": "sandboxai.bc.v1",
                 "epoch": epoch + 1,
@@ -205,12 +264,15 @@ def train_behavior_cloning(
             if (epoch + 1) % config.checkpoint_frequency == 0:
                 _atomic_torch_save(checkpoint, destination / f"epoch_{epoch + 1:05d}.pt")
 
+    latest_path = destination / "latest.pt"
+    best_path = destination / "best.pt"
     return {
         "output_dir": str(destination),
-        "latest_checkpoint": str(destination / "latest.pt"),
-        "best_checkpoint": str(destination / "best.pt"),
+        "latest_checkpoint": str(latest_path) if latest_path.exists() else None,
+        "best_checkpoint": str(best_path) if best_path.exists() else None,
         "epochs": completed_epochs,
         "validation_loss": best_validation,
+        "stopped": stopped,
     }
 
 

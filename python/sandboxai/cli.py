@@ -80,6 +80,11 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--league-matches-per-checkpoint", type=int, default=None)
     parser.add_argument("--league-max-opponents", type=int, default=None)
+    # Cooperative process boundary used by the Godot Control Center. These
+    # stay optional: an ordinary terminal run does not create or poll files.
+    parser.add_argument("--control-file", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--status-file", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--event-log-file", default=None, help=argparse.SUPPRESS)
 
 
 def _resolve_project_path(project_path: str | None) -> Path:
@@ -229,6 +234,9 @@ def build_parser() -> argparse.ArgumentParser:
     bc.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     bc.add_argument("--output-dir", default="training/bc_runs/latest")
     bc.add_argument("--resume-checkpoint")
+    bc.add_argument("--control-file", default=None, help=argparse.SUPPRESS)
+    bc.add_argument("--status-file", default=None, help=argparse.SUPPRESS)
+    bc.add_argument("--event-log-file", default=None, help=argparse.SUPPRESS)
 
     inspect = sub.add_parser("inspect-dataset", help="validate and summarise a demonstration JSONL")
     inspect.add_argument("--dataset", required=True)
@@ -447,6 +455,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     if args.command == "bc-train":
         from .bc import train_behavior_cloning
+        from .run_control import from_cli_paths
+
+        control = from_cli_paths(args.control_file, args.status_file, args.event_log_file)
         config = BCConfig(
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -456,12 +467,48 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             output_root=str(Path(args.output_dir).parent),
         )
-        print(json.dumps(train_behavior_cloning(args.dataset, config, args.output_dir, args.resume_checkpoint), indent=2))
+        if control is not None:
+            control.start(training_type="behavior_cloning", total_epochs=config.epochs)
+        try:
+            result = train_behavior_cloning(
+                args.dataset,
+                config,
+                args.output_dir,
+                args.resume_checkpoint,
+                run_control=control,
+            )
+        except Exception as exc:
+            if control is not None:
+                control.fail(exc)
+            raise
+        if control is not None:
+            control.finish(**result)
+        print(json.dumps(result, indent=2))
         return 0
     if args.command in {"train", "resume"}:
         from .ppo import train_ppo
+        from .run_control import from_cli_paths
+
+        control = from_cli_paths(args.control_file, args.status_file, args.event_log_file)
         config = _config_from_args(args)
-        result = train_ppo(config, args.checkpoint if args.command == "resume" else None)
+        if control is not None:
+            control.start(
+                training_type="ppo",
+                total_training_steps=config.total_training_steps,
+                environment_count=config.environment_count,
+            )
+        try:
+            result = train_ppo(
+                config,
+                args.checkpoint if args.command == "resume" else None,
+                run_control=control,
+            )
+        except Exception as exc:
+            if control is not None:
+                control.fail(exc)
+            raise
+        if control is not None:
+            control.finish(**result)
         print(json.dumps(result, indent=2, default=str))
         return 0
     if args.command == "evaluate":

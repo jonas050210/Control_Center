@@ -16,6 +16,7 @@ class_name ControlCenterSettingsPanel
 extends VBoxContainer
 
 signal settings_rebuilt
+signal tile_layout_changed
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
@@ -160,9 +161,32 @@ func setup(p_session) -> void:
 	)
 	var panel_row := ControlCenterTheme.make_row()
 	add_child(panel_row)
-	panel_row.add_child(_make_panel_toggle("Agent (F1)", "show_left_panel"))
-	panel_row.add_child(_make_panel_toggle("Inspector (F2)", "show_right_panel"))
-	panel_row.add_child(_make_panel_toggle("Logs (F3)", "show_bottom_panel"))
+	panel_row.add_child(_make_tile_toggle("Simulation", "simulation"))
+	panel_row.add_child(_make_tile_toggle("Agent (F1)", "agent"))
+	panel_row.add_child(_make_tile_toggle("Inspector (F2)", "inspector"))
+	panel_row.add_child(_make_tile_toggle("Training", "training"))
+	panel_row.add_child(_make_tile_toggle("Controls", "controls"))
+	panel_row.add_child(_make_tile_toggle("Logs (F3)", "logs"))
+	var order_row := ControlCenterTheme.make_row()
+	add_child(order_row)
+	order_row.add_child(
+		ControlCenterTheme.make_label(
+			"utility order", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
+	var controls_first := ControlCenterTheme.make_button("Simulation controls ↑")
+	controls_first.pressed.connect(_move_tile.bind("controls", -1))
+	order_row.add_child(controls_first)
+	var logs_first := ControlCenterTheme.make_button("Logs ↑")
+	logs_first.pressed.connect(_move_tile.bind("logs", -1))
+	order_row.add_child(logs_first)
+	var persistence_note := ControlCenterTheme.make_label(
+		"Dock sizes, visibility and order persist in user://control_center.cfg.",
+		ControlCenterTheme.FONT_SIZE_SMALL,
+		ControlCenterTheme.COLOR_MUTED
+	)
+	persistence_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	add_child(persistence_note)
 
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
@@ -194,9 +218,11 @@ func setup(p_session) -> void:
 	_sync_from_config()
 
 
-func _make_panel_toggle(text: String, property: String) -> Button:
-	var toggle := ControlCenterTheme.make_toggle(text, bool(session.config.get(property)))
-	toggle.toggled.connect(_on_panel_toggled.bind(property))
+func _make_tile_toggle(text: String, tile_id: String) -> Button:
+	var toggle := ControlCenterTheme.make_toggle(
+		text, session.config.is_tile_visible(tile_id)
+	)
+	toggle.toggled.connect(_on_tile_toggled.bind(tile_id))
 	return toggle
 
 
@@ -226,7 +252,9 @@ func _sync_from_config() -> void:
 	_scenario_option.selected = scenario_index
 	var scenario_entry: Dictionary = ControlCenterConfig.SCENARIOS[scenario_index]
 	_scenario_note.text = str(scenario_entry.get("description", ""))
-	_curriculum_option.selected = clampi(session.config.curriculum_level - 1, 0, 4)
+	_curriculum_option.selected = clampi(
+		session.config.curriculum_level - 1, 0, _curriculum_option.item_count - 1
+	)
 	_environment_spin.value = float(session.config.environment_count)
 	_enemy_spin.value = float(session.config.enemy_count)
 	_seed_spin.value = float(session.config.seed)
@@ -277,8 +305,16 @@ func _on_apply_pressed() -> void:
 	settings_rebuilt.emit()
 
 
-func _on_panel_toggled(pressed: bool, property: String) -> void:
-	session.config.set(property, pressed)
+func _on_tile_toggled(pressed: bool, tile_id: String) -> void:
+	session.config.set_tile_visible(tile_id, pressed)
+	session.config.save_preferences()
+	tile_layout_changed.emit()
+
+
+func _move_tile(tile_id: String, direction: int) -> void:
+	if session.config.move_tile(tile_id, direction):
+		session.config.save_preferences()
+		tile_layout_changed.emit()
 
 
 func _on_copy_command() -> void:

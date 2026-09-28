@@ -57,6 +57,12 @@ var _last_camera_mode: int = -1
 
 func _ready() -> void:
 	var config := ControlCenterConfig.new(start_mode)
+	# Automated/headless scene tests use force_gui and intentionally start
+	# from clean exported defaults. Normal desktop launches restore operator
+	# layout and training preferences before command-line overrides apply.
+	if not force_gui:
+		config.load_preferences()
+	config.mode = start_mode
 	config.environment_count = environment_count
 	config.enemy_count = enemy_count
 	config.curriculum_level = curriculum_level

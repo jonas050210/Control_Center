@@ -33,12 +33,21 @@ func setup() -> void:
 	box.add_child(grid)
 	for key in [
 		"mode",
+		"alive",
+		"position",
+		"direction",
+		"orientation",
+		"velocity",
+		"movement",
+		"combat",
+		"tactical",
 		"health",
 		"enemies",
 		"target",
 		"weapon",
 		"episode",
 		"time",
+		"survival",
 		"reward",
 		"kills",
 		"deaths",
@@ -95,6 +104,17 @@ func refresh(snapshot: Dictionary) -> void:
 	)
 
 	_set_row("mode", "%s (%s)" % [str(status["mode_name"]), str(status["policy_source_name"])])
+	_set_row("alive", "alive" if bool(agent["alive"]) else "dead")
+	_set_row("position", _vector_text(agent["position"] as Vector3))
+	_set_row("direction", _vector_text(agent["forward"] as Vector3))
+	_set_row(
+		"orientation", "yaw %.1f° / pitch %.1f°" % [float(agent["yaw_deg"]), float(agent["pitch_deg"])]
+	)
+	var velocity: Vector3 = agent["velocity"]
+	_set_row("velocity", "%s  %.2f m/s" % [_vector_text(velocity), velocity.length()])
+	_set_row("movement", "moving" if velocity.length() > 0.05 else "idle")
+	_set_row("combat", "engaged" if bool(agent["in_combat"]) else "not engaged")
+	_set_row("tactical", "n/a (agent tactical state is not modeled)")
 	var health_ratio: float = float(agent["health"]) / maxf(1.0, float(agent["max_health"]))
 	_set_row("health", "%.0f / %.0f" % [float(agent["health"]), float(agent["max_health"])])
 	(_rows["health"] as Label).add_theme_color_override(
@@ -129,6 +149,7 @@ func refresh(snapshot: Dictionary) -> void:
 		int(episode["episode"]), int(episode["step"]), int(episode["max_steps"])
 	])
 	_set_row("time", "%.2f s" % float(episode["time_seconds"]))
+	_set_row("survival", "%.2f s" % float(episode["survival_time"]))
 	_set_row("reward", "%.2f  (last %+.3f)" % [
 		float(episode["reward"]), float(episode["last_reward"])
 	])
@@ -191,3 +212,7 @@ func _set_row(key: String, value: String) -> void:
 	var label: Label = _rows.get(key)
 	if label != null:
 		label.text = value
+
+
+static func _vector_text(value: Vector3) -> String:
+	return "(%.2f, %.2f, %.2f)" % [value.x, value.y, value.z]

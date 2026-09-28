@@ -4,32 +4,10 @@
 # method that forwards to an existing SimulationManager/EnvironmentCore API.
 # Splitting it further would only spread that mapping across more files.
 ## ControlCenterSession
-##
-## The Control Center's simulation driver. It owns a SimulationManager,
-## decides who produces actions (heuristic AI, idle, or the human input
-## pipeline), and advances the simulation under explicit play/pause/step/
-## speed control.
-##
-## Deliberately a plain Node with NO Control/UI dependency: the UI reads
-## `build_snapshot()` and calls the public methods below, and every one of
-## those methods forwards to an existing public SimulationManager /
-## EnvironmentCore API. Nothing in this class implements gameplay.
-##
-## Relationship to training (Phase 15):
-##   * `SimulationManager.auto_tick` is OFF; this session is the only
-##     stepper, so pausing is free and does NOT abuse `Engine.time_scale`
-##     (the GUI stays responsive while the simulation is frozen).
-##   * In TRAINING mode every presentation cost is switched off: views are
-##     hidden and never synced, the event log is disabled, and no telemetry
-##     snapshot or perception model is built. Steps run in a per-frame time
-##     budget for maximum throughput.
-##   * The headless RL bridge (scripts/rl/rl_server.gd) never instantiates
-##     this class. Real PPO training runs in a separate headless Godot
-##     process with no Control Center in it at all.
-##
-## All three modes share one EnvironmentCore, one Action type, one
-## Observation contract and one reward system; only the action source and
-## the amount of presentation work differ.
+## Plain, UI-independent facade over SimulationManager. It drives the local
+## preview with fixed simulation steps and delegates real Python optimization
+## to TrainingRunController. TRAINING mode disables views, telemetry and logs;
+## the headless RL bridge never instantiates this class.
 class_name ControlCenterSession
 extends Node
 
@@ -39,6 +17,7 @@ signal selection_changed(environment_index: int, agent_slot: int)
 signal settings_applied(changed_keys: PackedStringArray)
 signal episode_recorded(record: Dictionary)
 signal environments_rebuilt
+signal training_state_changed(state: int)
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
@@ -54,11 +33,15 @@ const HumanController = preload("res://scripts/input/human_controller.gd")
 const PerceptionModel = preload("res://scripts/control_center/perception_model.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
+const TrainingRunController = preload(
+	"res://scripts/control_center/training_run_controller.gd"
+)
 
 var config: ControlCenterConfig
 var simulation_manager: SimulationManager
 var event_log: ControlCenterEventLog
 var results: ControlCenterResults
+var training_run: TrainingRunController
 
 ## Whether the human input pipeline is currently allowed to drive the
 ## agent. The UI sets this from the mouse-capture state so clicking a
@@ -104,6 +87,8 @@ func _init() -> void:
 	config = ControlCenterConfig.new()
 	event_log = ControlCenterEventLog.new()
 	results = ControlCenterResults.new()
+	training_run = TrainingRunController.new()
+	training_run.name = "TrainingRunController"
 
 
 ## Creates (or adopts) the SimulationManager and wires controllers.
@@ -112,6 +97,12 @@ func setup(p_config: ControlCenterConfig = null, p_manager: SimulationManager = 
 	if p_config != null:
 		config = p_config
 	config.sanitize()
+	if training_run.get_parent() == null:
+		add_child(training_run)
+	if not training_run.state_changed.is_connected(_on_training_state_changed):
+		training_run.state_changed.connect(_on_training_state_changed)
+	if not training_run.training_event.is_connected(_on_training_event):
+		training_run.training_event.connect(_on_training_event)
 
 	simulation_manager = p_manager if p_manager != null else SimulationManager.new()
 	simulation_manager.name = "SimulationManager"
@@ -140,6 +131,55 @@ func setup(p_config: ControlCenterConfig = null, p_manager: SimulationManager = 
 			% [simulation_manager.environments.size(), config.curriculum_level, config.seed]
 		)
 	)
+
+
+# ---------------------------------------------------------------------------
+# Python training lifecycle
+# ---------------------------------------------------------------------------
+
+
+func start_training() -> bool:
+	if training_run == null:
+		return false
+	config.sanitize()
+	# Visual mode keeps the real local simulation view available as a
+	# deterministic preview. Headless mode removes all presentation work and
+	# dedicates the dashboard to metrics from the Python backend.
+	set_mode(
+		ControlCenterConfig.Mode.WATCH
+		if config.training_mode == ControlCenterConfig.TrainingMode.VISUAL
+		else ControlCenterConfig.Mode.TRAINING
+	)
+	if config.training_mode == ControlCenterConfig.TrainingMode.HEADLESS:
+		# The external PPO process owns simulation throughput. Do not run an
+		# unrelated local heuristic batch beside it and steal CPU time.
+		set_running(false)
+	if config.training_mode == ControlCenterConfig.TrainingMode.VISUAL and has_pending_settings():
+		apply_pending_settings()
+	var started: bool = training_run.start(config)
+	if not started:
+		log_warning(training_run.last_error)
+	return started
+
+
+func _on_training_state_changed(state: int) -> void:
+	training_state_changed.emit(state)
+
+
+func _on_training_event(entry: Dictionary) -> void:
+	# Preserve the Python event in its own recent-events buffer even when the
+	# in-process simulation log is intentionally disabled in headless mode.
+	# In visual mode it is also mirrored into the familiar event log.
+	if event_log.enabled:
+		var category: String = str(entry.get("category", "system"))
+		if category == "error":
+			event_log.log_event(
+				ControlCenterEventLog.Category.ERROR, str(entry.get("message", "training error"))
+			)
+		else:
+			event_log.log_event(
+				ControlCenterEventLog.Category.SYSTEM, str(entry.get("message", "training event"))
+			)
 
 
 # ---------------------------------------------------------------------------
@@ -902,6 +942,18 @@ func get_status() -> Dictionary:
 		"pending_settings": _pending_setting_keys.duplicate(),
 		"log_dropped": event_log.dropped_count,
 		"episodes_recorded": results.size(),
+		"training_state": (
+			training_run.state if training_run != null else TrainingRunController.State.IDLE
+		),
+		"training_state_name": (
+			TrainingRunController.state_name(training_run.state)
+			if training_run != null
+			else "Idle"
+		),
+		"training_type": config.training_type,
+		"training_type_name": ControlCenterConfig.training_type_name(config.training_type),
+		"training_mode": config.training_mode,
+		"training_mode_name": ControlCenterConfig.training_mode_name(config.training_mode),
 	}
 
 
@@ -932,7 +984,12 @@ func log_warning(message: String) -> void:
 ## TRAINING panel because real PPO updates happen in the Python trainer,
 ## not in this window.
 func training_command_line() -> String:
-	return (
-		"sandboxai train --env-count %d --enemy-count %d --curriculum-level %d --seed %d"
-		% [config.environment_count, config.enemy_count, config.curriculum_level, config.seed]
-	)
+	if training_run == null:
+		return ""
+	var built: PackedStringArray = training_run.build_command(config)
+	if built.size() < 4:
+		return ""
+	var parts := PackedStringArray()
+	for value in built:
+		parts.append('"%s"' % value if value.contains(" ") else value)
+	return " ".join(parts)

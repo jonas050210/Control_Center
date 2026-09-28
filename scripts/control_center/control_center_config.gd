@@ -43,6 +43,26 @@ enum PolicySource {
 	EXTERNAL_POLICY = 2,
 }
 
+## Python training workflows exposed by the Control Center. SELF_PLAY is
+## visible because the repository has a real two-slot bridge and league, but
+## is reported unavailable for optimization until a self-play trainer exists.
+enum TrainingType {
+	PPO = 0,
+	BEHAVIOR_CLONING = 1,
+	SELF_PLAY = 2,
+}
+
+enum TrainingMode {
+	VISUAL = 0,
+	HEADLESS = 1,
+}
+
+enum TrainingDevice {
+	AUTO = 0,
+	CPU = 1,
+	GPU = 2,
+}
+
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
@@ -58,6 +78,18 @@ const MAX_STEPS_PER_FRAME_INTERACTIVE: int = 32
 const TRAINING_FRAME_BUDGET_MS: float = 8.0
 const MAX_ENVIRONMENT_COUNT: int = 64
 const MAX_ENEMY_COUNT: int = 12
+const MAX_TRAINING_STEPS: int = 2_000_000_000
+const MAX_BC_EPOCHS: int = 100_000
+const PREFERENCES_PATH: String = "user://control_center.cfg"
+
+## Stable tile identifiers. The presentation uses these rather than node
+## names so visibility/order survives a UI refactor.
+const TILE_IDS: Array = [
+	"simulation", "agent", "inspector", "training", "controls", "logs"
+]
+const DEFAULT_TILE_ORDER: Array = [
+	"simulation", "agent", "training", "inspector", "controls", "logs"
+]
 
 ## Settings that cannot be applied to running environments and therefore
 ## need an explicit rebuild/reset. The UI marks them and only applies them
@@ -157,6 +189,28 @@ var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS
 var seed: int = SandboxConfig.DEFAULT_RANDOM_SEED
 var scenario_id: String = "custom"
 
+## Real Python-backend training configuration. Defaults mirror
+## python/sandboxai/config.py and python/sandboxai/cli.py.
+var training_type: int = TrainingType.PPO
+var training_mode: int = TrainingMode.VISUAL
+var training_device: int = TrainingDevice.AUTO
+var total_training_steps: int = 1_000_000
+var bc_epochs: int = 25
+var bc_dataset_path: String = "training/datasets/human_demo.jsonl"
+var checkpoint_path: String = ""
+var resume_from_checkpoint: bool = false
+var learning_rate: float = 0.0003
+var rollout_length: int = 2048
+var batch_size: int = 256
+var gamma: float = 0.99
+var gae_lambda: float = 0.95
+var entropy_coefficient: float = 0.01
+var clip_range: float = 0.2
+var checkpoint_frequency: int = 100_000
+var evaluation_frequency: int = 50_000
+var python_executable: String = "python"
+var godot_executable: String = "godot"
+
 var simulation_speed: float = 1.0
 var selected_environment: int = 0
 ## Agent/policy slot inside the selected environment. The canonical
@@ -174,6 +228,18 @@ var show_bottom_panel: bool = true
 var show_perception_overlay: bool = true
 var show_reward_components: bool = true
 var log_filter: int = -1  # ControlCenterEventLog.FILTER_ALL
+var tile_order: Array = DEFAULT_TILE_ORDER.duplicate()
+var tile_visibility: Dictionary = {
+	"simulation": true,
+	"agent": true,
+	"inspector": true,
+	"training": true,
+	"controls": true,
+	"logs": true,
+}
+var left_dock_width: int = 310
+var right_dock_width: int = 380
+var bottom_dock_height: int = 250
 
 
 func _init(p_mode: int = Mode.WATCH) -> void:
@@ -202,6 +268,46 @@ static func mode_from_name(value: String) -> int:
 			return Mode.HUMAN
 		_:
 			return Mode.WATCH
+
+
+static func training_type_name(value: int) -> String:
+	match value:
+		TrainingType.PPO:
+			return "PPO"
+		TrainingType.BEHAVIOR_CLONING:
+			return "Behavior Cloning"
+		TrainingType.SELF_PLAY:
+			return "Self-Play"
+		_:
+			return "Unknown"
+
+
+static func training_type_available(value: int) -> bool:
+	return value == TrainingType.PPO or value == TrainingType.BEHAVIOR_CLONING
+
+
+static func training_type_unavailable_reason(value: int) -> String:
+	if value == TrainingType.SELF_PLAY:
+		return (
+			"The two-policy bridge and league are implemented for evaluation, "
+			+ "but no self-play optimizer exists yet. Start is disabled rather "
+			+ "than launching single-agent PPO under a misleading label."
+		)
+	return ""
+
+
+static func training_mode_name(value: int) -> String:
+	return "Visual Mode" if value == TrainingMode.VISUAL else "Headless Mode"
+
+
+static func training_device_argument(value: int) -> String:
+	match value:
+		TrainingDevice.CPU:
+			return "cpu"
+		TrainingDevice.GPU:
+			return "cuda"
+		_:
+			return "auto"
 
 
 static func camera_mode_name(value: int) -> String:
@@ -286,6 +392,30 @@ func sanitize() -> void:
 	selected_agent_slot = maxi(0, selected_agent_slot)
 	camera_mode = clampi(camera_mode, CameraMode.FIRST_PERSON, CameraMode.TOP_DOWN)
 	policy_source = clampi(policy_source, PolicySource.HEURISTIC, PolicySource.EXTERNAL_POLICY)
+	training_type = clampi(training_type, TrainingType.PPO, TrainingType.SELF_PLAY)
+	training_mode = clampi(training_mode, TrainingMode.VISUAL, TrainingMode.HEADLESS)
+	training_device = clampi(training_device, TrainingDevice.AUTO, TrainingDevice.GPU)
+	total_training_steps = clampi(total_training_steps, 1, MAX_TRAINING_STEPS)
+	bc_epochs = clampi(bc_epochs, 1, MAX_BC_EPOCHS)
+	learning_rate = maxf(0.0000001, learning_rate)
+	rollout_length = maxi(1, rollout_length)
+	batch_size = clampi(batch_size, 1, rollout_length * environment_count)
+	gamma = clampf(gamma, 0.000001, 1.0)
+	gae_lambda = clampf(gae_lambda, 0.0, 1.0)
+	entropy_coefficient = maxf(0.0, entropy_coefficient)
+	clip_range = maxf(0.000001, clip_range)
+	checkpoint_frequency = maxi(1, checkpoint_frequency)
+	evaluation_frequency = maxi(1, evaluation_frequency)
+	python_executable = python_executable.strip_edges()
+	if python_executable.is_empty():
+		python_executable = "python"
+	godot_executable = godot_executable.strip_edges()
+	if godot_executable.is_empty():
+		godot_executable = "godot"
+	left_dock_width = clampi(left_dock_width, 220, 700)
+	right_dock_width = clampi(right_dock_width, 280, 800)
+	bottom_dock_height = clampi(bottom_dock_height, 140, 600)
+	_sanitize_tiles()
 
 
 func to_dict() -> Dictionary:
@@ -297,6 +427,25 @@ func to_dict() -> Dictionary:
 		"curriculum_level": curriculum_level,
 		"seed": seed,
 		"scenario_id": scenario_id,
+		"training_type": training_type,
+		"training_mode": training_mode,
+		"training_device": training_device,
+		"total_training_steps": total_training_steps,
+		"bc_epochs": bc_epochs,
+		"bc_dataset_path": bc_dataset_path,
+		"checkpoint_path": checkpoint_path,
+		"resume_from_checkpoint": resume_from_checkpoint,
+		"learning_rate": learning_rate,
+		"rollout_length": rollout_length,
+		"batch_size": batch_size,
+		"gamma": gamma,
+		"gae_lambda": gae_lambda,
+		"entropy_coefficient": entropy_coefficient,
+		"clip_range": clip_range,
+		"checkpoint_frequency": checkpoint_frequency,
+		"evaluation_frequency": evaluation_frequency,
+		"python_executable": python_executable,
+		"godot_executable": godot_executable,
 		"simulation_speed": simulation_speed,
 		"selected_environment": selected_environment,
 		"selected_agent_slot": selected_agent_slot,
@@ -308,6 +457,11 @@ func to_dict() -> Dictionary:
 		"show_perception_overlay": show_perception_overlay,
 		"show_reward_components": show_reward_components,
 		"log_filter": log_filter,
+		"tile_order": tile_order.duplicate(),
+		"tile_visibility": tile_visibility.duplicate(),
+		"left_dock_width": left_dock_width,
+		"right_dock_width": right_dock_width,
+		"bottom_dock_height": bottom_dock_height,
 	}
 
 
@@ -318,6 +472,25 @@ func apply_dict(values: Dictionary) -> void:
 	curriculum_level = int(values.get("curriculum_level", curriculum_level))
 	seed = int(values.get("seed", seed))
 	scenario_id = str(values.get("scenario_id", scenario_id))
+	training_type = int(values.get("training_type", training_type))
+	training_mode = int(values.get("training_mode", training_mode))
+	training_device = int(values.get("training_device", training_device))
+	total_training_steps = int(values.get("total_training_steps", total_training_steps))
+	bc_epochs = int(values.get("bc_epochs", bc_epochs))
+	bc_dataset_path = str(values.get("bc_dataset_path", bc_dataset_path))
+	checkpoint_path = str(values.get("checkpoint_path", checkpoint_path))
+	resume_from_checkpoint = bool(values.get("resume_from_checkpoint", resume_from_checkpoint))
+	learning_rate = float(values.get("learning_rate", learning_rate))
+	rollout_length = int(values.get("rollout_length", rollout_length))
+	batch_size = int(values.get("batch_size", batch_size))
+	gamma = float(values.get("gamma", gamma))
+	gae_lambda = float(values.get("gae_lambda", gae_lambda))
+	entropy_coefficient = float(values.get("entropy_coefficient", entropy_coefficient))
+	clip_range = float(values.get("clip_range", clip_range))
+	checkpoint_frequency = int(values.get("checkpoint_frequency", checkpoint_frequency))
+	evaluation_frequency = int(values.get("evaluation_frequency", evaluation_frequency))
+	python_executable = str(values.get("python_executable", python_executable))
+	godot_executable = str(values.get("godot_executable", godot_executable))
 	simulation_speed = float(values.get("simulation_speed", simulation_speed))
 	selected_environment = int(values.get("selected_environment", selected_environment))
 	selected_agent_slot = int(values.get("selected_agent_slot", selected_agent_slot))
@@ -329,7 +502,78 @@ func apply_dict(values: Dictionary) -> void:
 	show_perception_overlay = bool(values.get("show_perception_overlay", show_perception_overlay))
 	show_reward_components = bool(values.get("show_reward_components", show_reward_components))
 	log_filter = int(values.get("log_filter", log_filter))
+	tile_order = (values.get("tile_order", tile_order) as Array).duplicate()
+	tile_visibility = (values.get("tile_visibility", tile_visibility) as Dictionary).duplicate()
+	left_dock_width = int(values.get("left_dock_width", left_dock_width))
+	right_dock_width = int(values.get("right_dock_width", right_dock_width))
+	bottom_dock_height = int(values.get("bottom_dock_height", bottom_dock_height))
 	sanitize()
+
+
+func set_tile_visible(tile_id: String, visible: bool) -> bool:
+	if not TILE_IDS.has(tile_id):
+		return false
+	tile_visibility[tile_id] = visible
+	match tile_id:
+		"agent":
+			show_left_panel = visible
+		"inspector":
+			show_right_panel = visible
+		"logs":
+			show_bottom_panel = visible
+	return true
+
+
+func is_tile_visible(tile_id: String) -> bool:
+	return bool(tile_visibility.get(tile_id, true))
+
+
+func move_tile(tile_id: String, direction: int) -> bool:
+	var index: int = tile_order.find(tile_id)
+	if index < 0:
+		return false
+	var destination: int = clampi(index + signi(direction), 0, tile_order.size() - 1)
+	if destination == index:
+		return false
+	var swap_value = tile_order[destination]
+	tile_order[destination] = tile_order[index]
+	tile_order[index] = swap_value
+	return true
+
+
+func save_preferences(path: String = PREFERENCES_PATH) -> bool:
+	var file := ConfigFile.new()
+	file.set_value("control_center", "configuration", to_dict())
+	return file.save(path) == OK
+
+
+func load_preferences(path: String = PREFERENCES_PATH) -> bool:
+	var file := ConfigFile.new()
+	if file.load(path) != OK:
+		return false
+	var values = file.get_value("control_center", "configuration", {})
+	if not (values is Dictionary):
+		return false
+	apply_dict(values)
+	return true
+
+
+func _sanitize_tiles() -> void:
+	var cleaned: Array = []
+	for tile_value in tile_order:
+		var tile_id: String = str(tile_value)
+		if TILE_IDS.has(tile_id) and not cleaned.has(tile_id):
+			cleaned.append(tile_id)
+	for tile_id in TILE_IDS:
+		if not cleaned.has(tile_id):
+			cleaned.append(tile_id)
+	tile_order = cleaned
+	for tile_id in TILE_IDS:
+		if not tile_visibility.has(tile_id):
+			tile_visibility[tile_id] = true
+	set_tile_visible("agent", show_left_panel)
+	set_tile_visible("inspector", show_right_panel)
+	set_tile_visible("logs", show_bottom_panel)
 
 
 func duplicate_config() -> ControlCenterConfig:

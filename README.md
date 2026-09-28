@@ -90,7 +90,15 @@ sandboxai control-center --mode watch --env-count 4 --enemy-count 1 \
 
 It provides:
 
-- three modes over one simulation — **TRAINING** (headless-style
+- managed **PPO** and **Behavior Cloning** configuration and real process
+  controls (start, graceful stop, cooperative pause/resume, reset), with
+  checkpoint resume, CPU/CUDA/Auto selection and backend-published progress;
+  **Self-Play** is exposed honestly as evaluation-only until an optimizer is
+  implemented
+- responsive Visual/Headless dashboards with resizable, hideable, persisted
+  tiles; Visual keeps an actual local 3D simulation preview while Headless
+  prioritizes progress, RL metrics, measured resources and training logs
+- three local modes over one simulation — **TRAINING** (headless-style
   throughput, rendering/telemetry/logging off), **WATCH** (render the
   selected environment while the AI drives) and **HUMAN** (drive the same
   agent through the same `HumanController` -> `Action` pipeline)
@@ -113,10 +121,11 @@ It provides:
 Shortcuts: `F1`/`F2`/`F3` toggle the docks, `Space` pauses, `N` steps, `R`
 resets, `Tab` cycles inspector tabs.
 
-The Control Center is **never** part of the RL training path: it is not
-constructed at all when the display server is headless, `scenes/main.tscn`
-remains the project's main scene, and `sandboxai train` still launches
-`scripts/rl/rl_server.gd` with `--headless`.
+The Control Center remains **outside** the RL hot path: it is not constructed
+when the display server is headless, `scenes/main.tscn` remains the main
+scene, and managed PPO still launches `scripts/rl/rl_server.gd` with
+`--headless` in a separate Python process. The GUI exchanges only cooperative
+commands and read-only status files with that process.
 
 Full documentation: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
