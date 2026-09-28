@@ -149,6 +149,46 @@ class PPOSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_vec_env_launches_the_configured_executable(self):
+        # Regression (Windows WinError 2): the executable passed to
+        # GodotVecEnv must be the binary GodotProcessTransport actually
+        # launches — never a silent fallback to bare `godot` from PATH.
+        env = GodotVecEnv(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            environment_count=2,
+            seed=1234,
+            curriculum_level=4,
+        )
+        try:
+            self.assertEqual(env.client.transport.executable, self.executable)
+            self.assertEqual(env.num_envs, 2)
+            self.assertTrue(env.client.ping().get("pong"))
+        finally:
+            env.close()
+
+
+class EnvKwargsPropagationTests(unittest.TestCase):
+    """TrainingConfig values must flow into the training env construction."""
+
+    def test_env_kwargs_carry_the_configured_godot_executable(self):
+        from sandboxai.config import TrainingConfig
+        from sandboxai.ppo import _env_kwargs
+
+        config = TrainingConfig(
+            godot_executable="/opt/godot/Godot_v4.7.2-stable_win64_console.exe",
+            environment_count=3,
+            enemy_count=2,
+            seed=77,
+            curriculum_level=5,
+        ).validate()
+        kwargs = _env_kwargs(config)
+        self.assertEqual(kwargs["godot_executable"], "/opt/godot/Godot_v4.7.2-stable_win64_console.exe")
+        self.assertEqual(kwargs["environment_count"], 3)
+        self.assertEqual(kwargs["enemy_count"], 2)
+        self.assertEqual(kwargs["seed"], 77)
+        self.assertEqual(kwargs["curriculum_level"], 5)
+
 
 @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
 class PPOTrainingWorkflowTests(unittest.TestCase):

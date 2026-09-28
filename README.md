@@ -37,7 +37,17 @@ observations, but CPU mode is fully supported.
 ## Installation
 
 Install Godot separately and make the executable available as `godot`, or
-pass `--godot-executable` to commands. Then from the repository root:
+configure its location once with `--godot-executable`. The last verified
+executable is remembered in `.sandboxai/settings.json` (gitignored), so
+configuring it for one command — for example
+`python -m sandboxai validate-runtime --godot-executable "C:\path\to\Godot.exe"`
+— makes every later command (`train`, `resume`, `benchmark`, ...) use it
+without repeating the flag. Resolution order: an explicit
+`--godot-executable`, then the `GODOT_PATH`/`GODOT_EXECUTABLE` environment
+variables, then the remembered setting, then `godot` on PATH. Delete
+`.sandboxai/settings.json` to return to the PATH default.
+
+Then from the repository root:
 
 ```bash
 python -m venv .venv

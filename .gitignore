@@ -27,3 +27,6 @@ __pycache__/
 /training/datasets/*.jsonl
 /training/evaluations/
 /training/benchmarks/
+
+# Machine-local tool settings (remembered --godot-executable, etc.)
+/.sandboxai/

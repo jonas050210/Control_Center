@@ -1,6 +1,8 @@
+import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -127,6 +129,173 @@ class CliTests(unittest.TestCase):
         # A failing smoke test must exit non-zero, not report success.
         self.assertIn('"all_passed": true', result.stdout)
         self.assertNotIn("sb3_weight_transfer_error", result.stdout)
+
+
+class _StopTraining(Exception):
+    """Raised by the fake transport to stop train_ppo right after capture."""
+
+
+class _FakeCheckoutTestCase(unittest.TestCase):
+    """Shared fixture: a hermetic settings location inside a fake checkout."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        tmp = Path(self._tmp.name)
+        # The settings file lives under the fake checkout's .sandboxai/, so
+        # these tests never touch (nor depend on) the developer's real
+        # .sandboxai/settings.json or its remembered Godot executable.
+        self.checkout = tmp / "checkout"
+        (self.checkout / ".sandboxai").mkdir(parents=True)
+        (self.checkout / "project.godot").touch()
+        self.settings_path = self.checkout / ".sandboxai" / "settings.json"
+        self.output_root = tmp / "runs"
+        self.executable = tmp / "Godot_v4.7.2-stable_win64_console.exe"
+        self.executable.touch()
+        patcher = mock.patch("sandboxai.config._settings_path", return_value=self.settings_path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def read_remembered_executable(self):
+        if not self.settings_path.exists():
+            return None
+        return json.loads(self.settings_path.read_text(encoding="utf-8")).get("godot_executable")
+
+
+@unittest.skipUnless(HAS_TORCH, TORCH_REASON)
+class TrainGodotExecutablePropagationTests(_FakeCheckoutTestCase):
+    """The configured Godot executable must reach the training transport.
+
+    Regression (Windows WinError 2): `validate-runtime --godot-executable X`
+    worked, but `python -m sandboxai train --steps ... --env-count ...
+    --curriculum-level ...` still launched bare `godot` from PATH and died.
+    These tests pin the whole CLI -> train_ppo -> GodotVecEnv ->
+    GodotBatchClient -> GodotProcessTransport configuration chain.
+    """
+
+    def _run_train_capturing_transport(self, argv):
+        captured = {}
+
+        class FakeTransport:
+            def __init__(self, *args, **kwargs):
+                captured.update(kwargs)
+                raise _StopTraining()
+
+        with mock.patch("sandboxai.godot_env.GodotProcessTransport", FakeTransport):
+            try:
+                main(argv)
+            except _StopTraining:
+                pass
+        return captured
+
+    def test_explicit_godot_executable_reaches_the_training_transport(self):
+        captured = self._run_train_capturing_transport([
+            "train",
+            "--steps", "2048",
+            "--env-count", "2",
+            "--curriculum-level", "3",
+            "--godot-executable", str(self.executable),
+            "--output-root", str(self.output_root),
+        ])
+        self.assertEqual(captured.get("godot_executable"), str(self.executable))
+        # The rest of the environment configuration keeps flowing too.
+        self.assertEqual(captured.get("environment_count"), 2)
+        self.assertEqual(captured.get("curriculum_level"), 3)
+        # A verified explicit executable is remembered for later runs.
+        self.assertEqual(self.read_remembered_executable(), str(self.executable))
+
+    def test_train_defaults_to_godot_when_nothing_is_configured(self):
+        # No flag, no remembered setting: the documented default (`godot` on
+        # PATH) is passed to the transport unchanged.
+        captured = self._run_train_capturing_transport([
+            "train",
+            "--steps", "2048",
+            "--env-count", "2",
+            "--curriculum-level", "3",
+            "--output-root", str(self.output_root),
+        ])
+        self.assertEqual(captured.get("godot_executable"), "godot")
+
+    def test_train_uses_remembered_godot_executable_without_the_flag(self):
+        # The reported bug, verbatim: configure the executable once (here:
+        # as if a previous validate-runtime had remembered it), then run
+        # `train` without --godot-executable — the transport must receive
+        # the configured binary, not the PATH default.
+        self.settings_path.write_text(
+            json.dumps({"godot_executable": str(self.executable)}), encoding="utf-8"
+        )
+        captured = self._run_train_capturing_transport([
+            "train",
+            "--steps", "2048",
+            "--env-count", "2",
+            "--curriculum-level", "3",
+            "--output-root", str(self.output_root),
+        ])
+        self.assertEqual(captured.get("godot_executable"), str(self.executable))
+        # Provenance: the run's saved config records the binary actually used.
+        config_files = list(Path(self.output_root).glob("**/config.json"))
+        self.assertTrue(config_files, "train_ppo must save config.json before building the env")
+        saved = json.loads(config_files[0].read_text(encoding="utf-8"))
+        self.assertEqual(saved["godot_executable"], str(self.executable))
+
+    def test_config_file_godot_executable_wins_over_remembered(self):
+        config_file = Path(self._tmp.name) / "training_config.json"
+        config_file.write_text(
+            json.dumps({
+                "environment_count": 2,
+                "rollout_length": 64,
+                "batch_size": 32,
+                "total_training_steps": 2048,
+                "godot_executable": "godot_from_config_file",
+            }),
+            encoding="utf-8",
+        )
+        self.settings_path.write_text(
+            json.dumps({"godot_executable": str(self.executable)}), encoding="utf-8"
+        )
+        captured = self._run_train_capturing_transport([
+            "train",
+            "--config", str(config_file),
+            "--output-root", str(self.output_root),
+        ])
+        self.assertEqual(captured.get("godot_executable"), "godot_from_config_file")
+
+
+class RememberedGodotExecutableTests(_FakeCheckoutTestCase):
+    """How the CLI remembers (and refuses to remember) an executable."""
+
+    def _run_validate_runtime(self, executable):
+        # RuntimeValidator is mocked: the persistence hook must run for the
+        # command exactly as it would before any real Godot launch.
+        fake_report = mock.MagicMock()
+        fake_report.status = "unavailable"
+        fake_report.to_dict.return_value = {"status": "unavailable"}
+        with mock.patch("sandboxai.runtime_validation.RuntimeValidator") as validator_cls:
+            validator_cls.return_value.validate.return_value = fake_report
+            exit_code = main(["validate-runtime", "--godot-executable", executable, "--json"])
+        self.assertEqual(exit_code, 0)
+        validator_cls.assert_called_once_with(
+            project_path="", godot_executable=executable, timeout=15.0
+        )
+
+    def test_validate_runtime_remembers_explicit_executable(self):
+        self._run_validate_runtime(str(self.executable))
+        self.assertEqual(self.read_remembered_executable(), str(self.executable))
+
+    def test_unresolvable_executable_is_not_remembered(self):
+        self.settings_path.write_text(
+            json.dumps({"godot_executable": str(self.executable)}), encoding="utf-8"
+        )
+        self._run_validate_runtime("definitely_not_a_real_godot_binary")
+        # The typo must not poison the previously remembered setting.
+        self.assertEqual(self.read_remembered_executable(), str(self.executable))
+
+    def test_default_godot_flag_is_not_remembered(self):
+        self.settings_path.write_text(
+            json.dumps({"godot_executable": str(self.executable)}), encoding="utf-8"
+        )
+        self._run_validate_runtime("godot")
+        self.assertEqual(self.read_remembered_executable(), str(self.executable))
 
 
 if __name__ == "__main__":

@@ -4,12 +4,19 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 from typing import Any
 
-from .config import BCConfig, TrainingConfig, find_godot_executable
+from .config import (
+    BCConfig,
+    TrainingConfig,
+    find_godot_executable,
+    load_godot_executable_setting,
+    save_godot_executable_setting,
+)
 
 
 def _add_training_options(parser: argparse.ArgumentParser) -> None:
@@ -168,7 +175,48 @@ def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
     for key, value in vars(args).items():
         if key in fields and value is not None:
             values[key] = value
+    # A Godot executable configured once (e.g. via `validate-runtime
+    # --godot-executable ...`) is remembered in .sandboxai/settings.json.
+    # When neither the CLI flag nor a --config file names one, seed it into
+    # the training config explicitly so GodotVecEnv/GodotProcessTransport
+    # receive the configured executable and the run's config.json records
+    # the binary that was actually used.
+    if "godot_executable" not in values:
+        remembered = load_godot_executable_setting()
+        if remembered:
+            values["godot_executable"] = remembered
     return TrainingConfig.from_dict(values)
+
+
+def _remember_godot_executable(args: argparse.Namespace) -> None:
+    """Remember an explicitly-passed --godot-executable for future runs.
+
+    Every Godot-touching command resolves its binary through
+    ``config.find_godot_executable``, which consults the remembered setting,
+    so configuring the executable once (for validation, recording, a
+    benchmark, ...) makes it available to every later command — training
+    included — without repeating the flag. Only verified-resolvable
+    executables are remembered (typos never poison later runs), and the
+    documented default (``godot`` on PATH) is never persisted.
+    """
+    executable = getattr(args, "godot_executable", None)
+    if not executable or executable == "godot":
+        return
+    if not (shutil.which(executable) or Path(executable).expanduser().is_file()):
+        return
+    previous = load_godot_executable_setting()
+    try:
+        saved = save_godot_executable_setting(executable)
+    except OSError:
+        return  # persistence is best-effort; this command still runs
+    if saved is None:
+        return
+    remembered = load_godot_executable_setting()
+    if remembered and remembered != previous:
+        print(
+            f"Remembered Godot executable for future runs: {remembered} ({saved})",
+            file=sys.stderr,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -400,6 +448,10 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    # A verified --godot-executable is remembered so later commands (train
+    # in particular) can use the configured binary without repeating the
+    # flag. Runs before any dispatch: every subcommand accepts the option.
+    _remember_godot_executable(args)
     if args.command == "install":
         print("python -m pip install -e '.[training]'")
         if args.cuda:
