@@ -34,6 +34,8 @@ func _run_all_tests() -> int:
 	var total: int = 0
 	var failed: int = 0
 	var failure_lines: Array = []
+	## Names of the failing tests, in run order, for the final summary.
+	var failed_tests: Array = []
 
 	print("SandboxAI automated tests")
 	print("==========================================================")
@@ -41,8 +43,10 @@ func _run_all_tests() -> int:
 	for script_path in test_scripts:
 		var script_resource: Script = load(script_path) as Script
 		if script_resource == null:
+			total += 1
 			failed += 1
 			print("ERROR %s (failed to load)" % script_path)
+			failed_tests.append("%s (script failed to load)" % script_path)
 			failure_lines.append("%s -> script failed to load" % script_path)
 			continue
 		# A script with a compilation/dependency failure can still load() as a
@@ -50,14 +54,18 @@ func _run_all_tests() -> int:
 		# "Nonexistent function 'new' in base 'GDScript'", so guard first and
 		# report it as a proper failure instead of crashing the runner.
 		if not script_resource.can_instantiate():
+			total += 1
 			failed += 1
 			print("ERROR %s (failed to compile)" % script_path)
+			failed_tests.append("%s (script failed to compile)" % script_path)
 			failure_lines.append("%s -> script failed to compile" % script_path)
 			continue
 		var instance: Object = script_resource.new()
 		if instance == null:
+			total += 1
 			failed += 1
 			print("ERROR %s (failed to instantiate)" % script_path)
+			failed_tests.append("%s (script failed to instantiate)" % script_path)
 			failure_lines.append("%s -> script failed to instantiate" % script_path)
 			continue
 		for method_info in instance.get_method_list():
@@ -68,6 +76,8 @@ func _run_all_tests() -> int:
 			var result = instance.call(method_name)
 			if not (result is SandboxTest):
 				failed += 1
+				failed_tests.append(method_name)
+				print("FAIL  %s::%s" % [script_path, method_name])
 				failure_lines.append(
 					"%s::%s -> did not return a SandboxTest" % [script_path, method_name]
 				)
@@ -76,14 +86,12 @@ func _run_all_tests() -> int:
 				print("PASS  %s::%s" % [script_path, method_name])
 			else:
 				failed += 1
+				failed_tests.append(method_name)
 				print("FAIL  %s::%s" % [script_path, method_name])
 				for failure_message in result.failures:
 					failure_lines.append(
 						"%s::%s -> %s" % [script_path, method_name, failure_message]
 					)
-
-	print("==========================================================")
-	print("Total: %d   Passed: %d   Failed: %d" % [total, total - failed, failed])
 
 	if failed > 0:
 		print("")
@@ -91,7 +99,31 @@ func _run_all_tests() -> int:
 		for line in failure_lines:
 			print(line)
 
+	_print_summary(total, failed, failed_tests)
 	return 1 if failed > 0 else 0
+
+
+## Final, paste-ready verdict. Every number is derived from the run that
+## just happened: `total` counts every collected test (including scripts
+## that could not even be loaded), `failed` counts the ones that did not
+## pass, and `failed_tests` names them in run order.
+func _print_summary(total: int, failed: int, failed_tests: Array) -> void:
+	var separator: String = "=========================================================="
+	print("")
+	print(separator)
+	print("SANDBOXAI TEST SUMMARY")
+	print(separator)
+	print("Total: %d" % total)
+	print("Passed: %d" % (total - failed))
+	print("Failed: %d" % failed)
+	if not failed_tests.is_empty():
+		print("")
+		print("FAILURES:")
+		for index in range(failed_tests.size()):
+			print("%d. %s" % [index + 1, str(failed_tests[index])])
+	print("")
+	print("Status: %s" % ("FAILED" if failed > 0 else "PASSED"))
+	print(separator)
 
 
 func _discover_test_scripts() -> Array:

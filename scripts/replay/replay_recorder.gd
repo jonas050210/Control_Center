@@ -114,14 +114,28 @@ func record_step(
 	return index
 
 
-## Records a discrete event at the current tick. Unknown kinds are
+## Tick an event recorded right now belongs to.
+##
+## Callers record a step and THEN translate that step's events, by which
+## point `_tick` already points at the next, not yet recorded tick. Anchoring
+## events to `_tick` therefore filed every event one tick after the thing it
+## describes, so `events_at(n)` never found them and "jump to next event"
+## landed one tick late. Before the first step (episode_start) the answer is
+## tick 0.
+func event_tick() -> int:
+	return maxi(0, _tick - 1) if not ticks.is_empty() else 0
+
+
+## Records a discrete event at the tick it describes. Unknown kinds are
 ## rejected rather than silently written, so a typo cannot create an event
 ## category the Python reader will later refuse.
 func add_event(kind: String, label: String = "", data: Dictionary = {}) -> bool:
 	if not ReplayFormat.is_known_event(kind):
 		push_warning("ReplayRecorder: unknown event kind '%s'" % kind)
 		return false
-	events.append({"tick": _tick, "kind": kind, "label": label, "data": data.duplicate(true)})
+	events.append(
+		{"tick": event_tick(), "kind": kind, "label": label, "data": data.duplicate(true)}
+	)
 	return true
 
 

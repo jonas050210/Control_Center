@@ -83,6 +83,36 @@ func test_training_mode_disables_logging_and_snapshots() -> SandboxTest:
 	return t
 
 
+## Regression: `presentation_enabled` was a plain variable, so turning
+## presentation on AFTER setup() (what the Control Center scene does once it
+## knows a display exists) left every derived flag stale — telemetry
+## reported enabled while the event log stayed off and nothing was logged.
+func test_toggling_presentation_reapplies_the_derived_runtime_state() -> SandboxTest:
+	var t := SandboxTest.new("session_presentation_toggle_reapplies_runtime")
+	var session = _make_session(ControlCenterConfig.Mode.WATCH, 1, 1)
+	t.assert_false(session.event_log.enabled, "headless setup leaves logging off")
+
+	session.presentation_enabled = true
+	t.assert_true(session.telemetry_enabled())
+	t.assert_true(session.event_log.enabled, "enabling presentation must enable the log")
+	t.assert_true(
+		session.get_selected_environment().debug_perception,
+		"the selected environment is instrumented for the overlay"
+	)
+	session.log_system("presentation probe")
+	t.assert_gte(float(session.event_log.size()), 1.0, "log entries are buffered again")
+	var logged: int = session.event_log.size()
+
+	session.presentation_enabled = false
+	t.assert_false(session.telemetry_enabled())
+	t.assert_false(session.event_log.enabled, "disabling presentation must disable the log")
+	t.assert_false(session.get_selected_environment().debug_perception)
+	session.log_system("ignored while headless")
+	t.assert_eq(session.event_log.size(), logged, "a disabled log buffers nothing")
+	_destroy(session)
+	return t
+
+
 func test_mode_switching_is_safe_and_rebinds_only_the_selected_environment() -> SandboxTest:
 	var t := SandboxTest.new("session_mode_switch_rebinds_selected_only")
 	var session = _make_session(ControlCenterConfig.Mode.WATCH)

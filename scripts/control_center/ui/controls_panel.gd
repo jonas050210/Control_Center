@@ -84,7 +84,12 @@ func setup(p_session) -> void:
 	for preset_value in ControlCenterConfig.SPEED_PRESETS:
 		var preset: float = float(preset_value)
 		var button := ControlCenterTheme.make_toggle(
-			"%gx" % preset, false, "Run %g simulation steps per real-time step" % preset
+			"%sx" % ControlCenterTheme.format_number(preset),
+			false,
+			(
+				"Run %s simulation steps per real-time step"
+				% ControlCenterTheme.format_number(preset)
+			)
 		)
 		button.pressed.connect(_on_speed_preset.bind(preset))
 		speed_row.add_child(button)
@@ -97,9 +102,13 @@ func setup(p_session) -> void:
 	_speed_slider.value = 1.0
 	_speed_slider.custom_minimum_size = Vector2(140.0, 0.0)
 	_speed_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_speed_slider.tooltip_text = "Free speed control between %gx and %gx" % [
-		ControlCenterConfig.MIN_SPEED, ControlCenterConfig.MAX_SPEED
-	]
+	_speed_slider.tooltip_text = (
+		"Free speed control between %sx and %sx"
+		% [
+			ControlCenterTheme.format_number(ControlCenterConfig.MIN_SPEED),
+			ControlCenterTheme.format_number(ControlCenterConfig.MAX_SPEED),
+		]
+	)
 	_speed_slider.value_changed.connect(_on_speed_slider_changed)
 	speed_row.add_child(_speed_slider)
 

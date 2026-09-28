@@ -248,6 +248,11 @@ class ReplayEpisode:
         return len(self.ticks)
 
     @property
+    def event_tick(self) -> int:
+        """Tick index an event recorded right now belongs to."""
+        return max(0, self._tick - 1) if self.ticks else 0
+
+    @property
     def detailed(self) -> bool:
         return self.header.detail == DetailLevel.DETAILED
 
@@ -349,6 +354,11 @@ class ReplayRecorder:
         return self._tick
 
     @property
+    def event_tick(self) -> int:
+        """Tick index an event recorded right now belongs to."""
+        return max(0, self._tick - 1) if self.ticks else 0
+
+    @property
     def detailed(self) -> bool:
         return self.header.detail == DetailLevel.DETAILED
 
@@ -407,10 +417,18 @@ class ReplayRecorder:
         return index
 
     def event(self, kind: str, label: str = "", data: dict[str, Any] | None = None) -> ReplayEvent:
-        """Records a discrete event at the current tick."""
+        """Records a discrete event, anchored to the tick it describes.
+
+        Callers record a step and *then* translate that step's events, by
+        which point ``self._tick`` already points at the next, not yet
+        recorded tick. Anchoring to it filed every event one tick after the
+        thing it described, so ``events_at(n)`` never found them and "jump
+        to next event" landed one tick late. Before the first step
+        (``episode_start``) the answer is tick 0.
+        """
         if kind not in EVENT_KINDS:
             raise ValueError(f"unknown replay event kind: {kind!r} (known: {EVENT_KINDS})")
-        event = ReplayEvent(tick=self._tick, kind=kind, label=label, data=dict(data or {}))
+        event = ReplayEvent(tick=self.event_tick, kind=kind, label=label, data=dict(data or {}))
         self.events.append(event)
         return event
 

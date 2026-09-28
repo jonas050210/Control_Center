@@ -113,13 +113,20 @@ func test_character_can_jump_onto_a_low_box_and_stand_on_it() -> SandboxTest:
 	var position := Vector3(0.0, 0.0, 3.0)
 	var velocity := Vector3.ZERO
 	var on_ground: bool = true
+	# The character walks into the box, jumps at tick 30 and lands on top of
+	# it. Forward input is released the moment it is standing up there:
+	# holding it for the remaining seconds would simply walk off the far
+	# edge of a 3 m wide box, which says nothing about jumping onto it.
+	var stood_on_box: bool = false
+	var highest: float = 0.0
 	for step_index in range(240):
 		var jump: bool = step_index == 30
+		var wish: Vector3 = Vector3.ZERO if stood_on_box else Vector3(0.0, 0.0, -1.0)
 		var result: Dictionary = CharacterMotor.step(
 			world,
 			position,
 			velocity,
-			Vector3(0.0, 0.0, -1.0),
+			wish,
 			4.5,
 			DT,
 			0.4,
@@ -131,8 +138,42 @@ func test_character_can_jump_onto_a_low_box_and_stand_on_it() -> SandboxTest:
 		position = result["position"]
 		velocity = result["velocity"]
 		on_ground = bool(result["on_ground"])
+		highest = maxf(highest, position.y)
+		if on_ground and position.y > 0.5:
+			stood_on_box = true
+	t.assert_true(stood_on_box, "the character must get on top of the box at all")
+	t.assert_gt(highest, 0.8, "the jump must clear the 0.8 m box top")
 	t.assert_almost_eq(position.y, 0.8, 0.05, "the character must end up standing on the box top")
 	t.assert_true(on_ground)
+	t.assert_true(
+		absf(position.z) <= 1.9, "the character must still be over the box footprint"
+	)
+	return t
+
+
+## Regression: a character descending onto the EDGE of a standable box used
+## to fall past its top (the support footprint was narrower than the
+## collision footprint) and end up wedged inside the box's collision volume
+## at floor level, hovering or stuck forever.
+func test_falling_onto_the_edge_of_a_platform_lands_on_top_of_it() -> SandboxTest:
+	var t := SandboxTest.new("falling_onto_the_edge_of_a_platform_lands_on_top")
+	var world: ArenaWorld = ArenaWorld.create(10.0)
+	world.add_box(Vector3(0.0, 0.4, 0.0), Vector3(1.5, 0.4, 1.5), Obstacle.Kind.PLATFORM)
+	var position := Vector3(1.8, 2.0, 0.0)
+	var velocity := Vector3.ZERO
+	var on_ground: bool = false
+	for _index in range(180):
+		var result: Dictionary = CharacterMotor.step(
+			world, position, velocity, Vector3.ZERO, 4.5, DT, 0.4, 1.8, false, on_ground, 10.0
+		)
+		position = result["position"]
+		velocity = result["velocity"]
+		on_ground = bool(result["on_ground"])
+	t.assert_true(on_ground, "the character must come to rest")
+	t.assert_almost_eq(position.y, 0.8, 0.01, "it must rest on the platform top")
+	t.assert_false(
+		world.is_blocked(position, 0.4, 1.8), "it must never end up inside the box"
+	)
 	return t
 
 

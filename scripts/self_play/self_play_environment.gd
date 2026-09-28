@@ -214,8 +214,6 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 
 	_time_seconds += dt
 	var sound_on: bool = _sound_enabled()
-	if sound_on:
-		sound_bus.tick(dt)
 
 	var action_a: Action = (
 		actions[0] if actions.size() > 0 and actions[0] is Action else Action.idle()
@@ -361,6 +359,14 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		episode_b.mark_done(done_reason)
 
 	_sync_proxies()
+
+	# Ages the sounds emitted DURING this step, exactly like EnvironmentCore
+	# does: the bus was ticked before the emissions here, so every sound was
+	# still zero seconds old when perception sampled it and could never pass
+	# the SOUND_DETECTION_DELAY gate. A listener was therefore always one
+	# full tick behind the single-agent environment.
+	if sound_on:
+		sound_bus.tick(dt)
 
 	if _perception_enabled():
 		_beliefs_a = perception_a.update(agent_a, [proxy_b], world, sound_bus, dt, 0)

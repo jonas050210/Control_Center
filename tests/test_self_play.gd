@@ -8,6 +8,7 @@ const Action = preload("res://scripts/core/action.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const Observation = preload("res://scripts/core/observation.gd")
+const Obstacle = preload("res://scripts/world/obstacle.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 const SelfPlayAdapter = preload("res://scripts/rl/self_play_adapter.gd")
@@ -47,33 +48,63 @@ func test_self_play_step_returns_per_agent_rewards_and_infos() -> SandboxTest:
 	return t
 
 
+## Geometry between two agents must stop a hitscan shot.
+##
+## The occluder is placed EXPLICITLY instead of trusting whatever the seeded
+## "corner" generator happened to build: the L-wall's arms, flips and offsets
+## are randomized, so for most seeds the diagonal between the two spawn
+## points is wide open and the test proved nothing (or failed outright). The
+## clear-world case is kept as the positive control, so "no damage" can only
+## mean "occluded", never "the ray missed".
 func test_self_play_with_world_blocks_weapon_ray_occlusion() -> SandboxTest:
 	var t := SandboxTest.new("self_play_with_world_blocks_weapon_ray_occlusion")
+	var clear_result: Dictionary = _fire_across_arena(false)
+	t.assert_true(bool(clear_result["hit"]), "an unobstructed shot must connect")
+	t.assert_gt(float(clear_result["damage"]), 0.0)
+
+	var blocked_result: Dictionary = _fire_across_arena(true)
+	t.assert_false(bool(blocked_result["hit"]), "a wall between the agents must stop the shot")
+	t.assert_eq(blocked_result["damage"], 0.0)
+	t.assert_eq(blocked_result["health_b"], blocked_result["max_health_b"])
+	return t
+
+
+## Fires one shot from agent A at agent B across the arena diagonal, with or
+## without a sight-blocking wall halfway between them. Returns the shot
+## outcome for slot 0 plus agent B's health.
+static func _fire_across_arena(with_occluder: bool) -> Dictionary:
 	var env := SelfPlayEnvironmentCore.new()
 	env.set_layout("corner")
 	env.set_curriculum_level(CurriculumConfig.Level.OBSTACLES_COVER)
 	env.reset(42, 42)
 
-	# Position agent A on one side of corner and agent B on the other side
+	# Deterministic geometry: only the wall we place ourselves is between the
+	# two agents.
+	env.world.clear()
+	if with_occluder:
+		env.world.add_box(Vector3.ZERO, Vector3(2.0, 2.0, 2.0), Obstacle.Kind.WALL)
+
 	env.agent_a.reset(Vector3(-4.0, 0.0, -4.0), 0.0)
 	env.agent_b.reset(Vector3(4.0, 0.0, 4.0), 180.0)
 	env._sync_proxies()
 
-	# Agent A aims towards B and shoots
-	var aim_dir: Vector3 = (env.agent_b.position - env.agent_a.position).normalized()
 	# AgentState stores aim as yaw/pitch; it has no writable `forward`.
-	env.agent_a.set_forward_horizontal(aim_dir)
+	env.agent_a.set_forward_horizontal(env.agent_b.position - env.agent_a.position)
 
 	var shoot_action := Action.new(0, 0, 0, 0, true, Vector2.ZERO, false)
 	var res: Dictionary = env.step([shoot_action, Action.idle()])
+	var events: Dictionary = res.infos[0].events
+	return {
+		"hit": bool(events["hit"]),
+		"damage": float(events["damage_dealt"]),
+		"shot_fired": bool(events["shot_fired"]),
+		"health_b": env.agent_b.health,
+		"max_health_b": env.agent_b.max_health,
+	}
 
-	# Ray is occluded by corner wall, so agent B should take 0 damage
-	t.assert_false(res.infos[0].events.hit)
-	t.assert_eq(res.infos[0].events.damage_dealt, 0.0)
-	t.assert_eq(env.agent_b.health, env.agent_b.max_health)
-	return t
 
-
+## Perception must be gated by geometry, not by ground truth: an agent behind
+## a wall is neither visible nor LOS-clear, and the same agent in the open is.
 func test_self_play_perception_gating_detects_visible_and_hidden() -> SandboxTest:
 	var t := SandboxTest.new("self_play_perception_gating_detects_visible_and_hidden")
 	var env := SelfPlayEnvironmentCore.new()
@@ -81,27 +112,51 @@ func test_self_play_perception_gating_detects_visible_and_hidden() -> SandboxTes
 	env.set_curriculum_level(CurriculumConfig.Level.FOV_LOS)
 	env.reset(100, 100)
 
-	# Hidden around corner
+	# Deterministic geometry again: one wall, placed by us, halfway between
+	# the two agents.
+	env.world.clear()
+	env.world.add_box(Vector3.ZERO, Vector3(2.0, 2.0, 2.0), Obstacle.Kind.WALL)
+
 	env.agent_a.reset(Vector3(-4.0, 0.0, -4.0), 0.0)
 	env.agent_b.reset(Vector3(4.0, 0.0, 4.0), 180.0)
+	env.agent_a.set_forward_horizontal(env.agent_b.position - env.agent_a.position)
 	env._sync_proxies()
+	# Perception is refreshed by a step; reading observations straight after
+	# repositioning would report the beliefs computed during reset().
+	for _index in range(_visual_confirmation_ticks()):
+		env.step([Action.idle(), Action.idle()])
 
 	var obs: Array = env.get_observations()
-	# Agent A cannot see Agent B
-	t.assert_false(obs[0].primary_enemy_visible)
+	t.assert_false(obs[0].primary_enemy_visible, "a wall must hide agent B")
 	t.assert_false(obs[0].primary_enemy_los_clear)
 
-	# Move into direct line of sight
+	# Same bearing, but now in the open: agent B moves to the near side of
+	# the wall, straight ahead of agent A.
 	env.agent_b.reset(Vector3(-4.0, 0.0, 4.0), 180.0)
 	env.agent_a.set_forward_horizontal(Vector3(0.0, 0.0, 1.0))
 	env._sync_proxies()
-	env.step([Action.idle(), Action.idle()])
+	# Visual contact is confirmed only after AGENT_VISUAL_DETECTION_DELAY of
+	# uninterrupted sight (perception has reaction latency by design), so a
+	# single tick is not enough to report the target.
+	for _index in range(_visual_confirmation_ticks()):
+		env.step([Action.idle(), Action.idle()])
 
 	var obs_los: Array = env.get_observations()
-	t.assert_true(obs_los[0].primary_enemy_los_clear)
+	t.assert_true(obs_los[0].primary_enemy_los_clear, "an unobstructed enemy must be LOS-clear")
+	t.assert_true(obs_los[0].primary_enemy_visible)
 	return t
 
 
+## Ticks of uninterrupted sight needed before perception confirms a target,
+## plus one so the comparison is strictly satisfied.
+static func _visual_confirmation_ticks() -> int:
+	return (
+		int(ceil(SandboxConfig.AGENT_VISUAL_DETECTION_DELAY / SandboxConfig.SIMULATION_DT)) + 1
+	)
+
+
+## A shot is audible to the other agent, after (and only after) the sound
+## model's detection delay has elapsed.
 func test_self_play_sound_emission_and_hearing() -> SandboxTest:
 	var t := SandboxTest.new("self_play_sound_emission_and_hearing")
 	var env := SelfPlayEnvironmentCore.new()
@@ -109,20 +164,34 @@ func test_self_play_sound_emission_and_hearing() -> SandboxTest:
 	env.set_curriculum_level(CurriculumConfig.Level.SOUND)
 	env.reset(1, 2)
 
-	# Place agents near each other
+	# Place agents near each other.
 	env.agent_a.reset(Vector3(0.0, 0.0, -2.0), 0.0)
 	env.agent_b.reset(Vector3(0.0, 0.0, 2.0), 180.0)
 	env._sync_proxies()
 
-	# Agent A fires a shot
+	# Agent A fires a shot.
 	var shoot_action := Action.new(0, 0, 0, 0, true, Vector2.ZERO, false)
 	env.step([shoot_action, Action.idle()])
+	t.assert_true(
+		env.perception_b.heard.is_empty(),
+		"SOUND_DETECTION_DELAY means a shot is not registered on its own tick"
+	)
 
-	# Agent B's perception should hear Agent A's shot
+	# Sounds are consciously registered once they are older than
+	# SandboxConfig.SOUND_DETECTION_DELAY (a handful of ticks at 60 Hz).
+	var delay_ticks: int = int(
+		ceil(SandboxConfig.SOUND_DETECTION_DELAY / SandboxConfig.SIMULATION_DT)
+	)
+	for _index in range(delay_ticks):
+		env.step([Action.idle(), Action.idle()])
+
 	var heard_b: Array = env.perception_b.heard
-	t.assert_false(heard_b.is_empty())
+	t.assert_false(heard_b.is_empty(), "agent B must hear agent A's shot")
 	if not heard_b.is_empty():
 		t.assert_eq(heard_b[0].category, 3)  # SHOT category
+	t.assert_true(
+		env.perception_a.heard.is_empty(), "an agent never hears its own weapon"
+	)
 	return t
 
 

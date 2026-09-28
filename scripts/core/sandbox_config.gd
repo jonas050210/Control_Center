@@ -29,6 +29,13 @@ const ARENA_WALL_HEIGHT: float = 3.0
 ## normalize distance-based observations).
 const ARENA_MAX_DISTANCE: float = ARENA_HALF_EXTENT * 2.0 * 1.4142136
 
+## Safety margin subtracted from every arena-bounds clamp (meters).
+## `half_extent - radius` is computed in 32-bit floats inside a Vector3, so
+## a clamped coordinate can round a few 1e-7 OUTSIDE the nominal bound. The
+## margin is 1/400 of a character radius — invisible to gameplay, but it
+## makes "clamped means inside" exactly true.
+const ARENA_BOUNDS_EPSILON: float = 0.001
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
