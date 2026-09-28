@@ -155,6 +155,11 @@ func to_metrics(simulation_dt: float, enemy_count: int, won: bool = false) -> Di
 	var accuracy: float = float(shots_hit) / float(shots_fired) if shots_fired > 0 else 0.0
 	var truncated: bool = done_reason == "timeout"
 	return {
+		# The episode these metrics describe. Captured here — inside the
+		# episode — so a consumer that receives the metrics after the
+		# environment has already been auto-reset still reports the number
+		# of the episode that produced them.
+		"episode": episode_count,
 		"episode_reward": cumulative_reward,
 		"episode_length": step_count,
 		"kills": kills,

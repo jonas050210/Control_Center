@@ -494,15 +494,68 @@ func test_episode_results_are_recorded_with_their_action_source() -> SandboxTest
 	session.get_selected_environment().max_steps = 8
 	session.advance(30)
 	t.assert_gte(float(session.results.size()), 1.0, "finished episodes are recorded")
-	var record: Dictionary = session.results.history("", 1, true)[0]
+	# Oldest first: history(..., newest_first = false)[0] is the FIRST
+	# episode that finished, which is the one this test is about.
+	var history: Array = session.results.history("", 0, false)
+	var record: Dictionary = history[0]
 	t.assert_eq(str(record["source"]), "ai", "WATCH episodes are attributed to the AI")
 	t.assert_eq(int(record["env_index"]), 0)
 	t.assert_eq(
 		int(record["episode"]), 1,
 		"the FIRST finished episode is episode 1, not 2 (auto-reset had already bumped the counter)"
 	)
+	for position in range(history.size()):
+		var entry: Dictionary = history[position]
+		t.assert_eq(
+			int(entry["episode"]),
+			position + 1,
+			"records keep the finished episode numbers in order (record %d)" % position
+		)
 	t.assert_false(str(record["done_reason"]).is_empty())
 	t.assert_gte(float(session.event_log.size()), 1.0, "discrete events are logged")
+	_destroy(session)
+	return t
+
+
+## Regression: the record for a finished episode must keep THAT episode's
+## number and action source even though SimulationManager.step_all() has
+## already auto-reset the environment (and therefore already incremented
+## `episode.episode_count`) by the time the result reaches the session.
+func test_episode_record_keeps_its_number_after_auto_reset() -> SandboxTest:
+	var t := SandboxTest.new("session_record_survives_auto_reset")
+	var session = _make_session(ControlCenterConfig.Mode.WATCH, 1, 1)
+	session.presentation_enabled = true
+	var env = session.get_selected_environment()
+	env.max_steps = 4
+	t.assert_true(
+		session.simulation_manager.auto_reset_on_done, "the Control Center runs with auto-reset on"
+	)
+
+	var expected_episode: int = 1
+	while expected_episode <= 2:
+		var guard: int = 0
+		while session.results.size() < expected_episode and guard < 50:
+			session.advance(1)
+			guard += 1
+		t.assert_eq(
+			session.results.size(),
+			expected_episode,
+			"exactly one record per finished episode (episode %d)" % expected_episode
+		)
+		var record: Dictionary = session.results.history("", 0, false)[expected_episode - 1]
+		t.assert_eq(
+			int(record["episode"]),
+			expected_episode,
+			"the record keeps the finished episode's number, not the auto-reset one"
+		)
+		t.assert_eq(str(record["source"]), "ai", "the finished episode's action source is kept")
+		t.assert_eq(
+			int(env.episode.episode_count),
+			expected_episode + 1,
+			"the environment has already been auto-reset into the next episode"
+		)
+		expected_episode += 1
+
 	_destroy(session)
 	return t
 

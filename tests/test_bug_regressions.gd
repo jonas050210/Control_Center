@@ -64,6 +64,11 @@ func test_rebuilding_environments_preserves_controllers() -> SandboxTest:
 	t.assert_eq(manager.controllers.size(), 2)
 	t.assert_eq(manager.controllers[1], controller)
 	manager.free()
+	# AIStubController is a Node, not a RefCounted: it was created outside
+	# the SceneTree and never parented, so nothing else can free it. Without
+	# this the controller (and the script resource it holds) survived the
+	# whole run and was reported as a leaked ObjectDB instance at exit.
+	controller.free()
 	return t
 
 
