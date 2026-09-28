@@ -5,6 +5,7 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const RewardSystem = preload("res://scripts/reward/reward_system.gd")
 
 
 var step_count: int = 0
@@ -28,6 +29,10 @@ var reward_hits: float = 0.0
 var reward_kills: float = 0.0
 var reward_survive: float = 0.0
 var reward_positioning: float = 0.0
+var reward_aiming: float = 0.0
+var penalty_passivity: float = 0.0
+var reward_exploration: float = 0.0
+var reward_exploration_complete: float = 0.0
 var penalty_damage: float = 0.0
 var penalty_death: float = 0.0
 var penalty_useless_shot: float = 0.0
@@ -56,6 +61,10 @@ func start_new_episode() -> void:
 	reward_kills = 0.0
 	reward_survive = 0.0
 	reward_positioning = 0.0
+	reward_aiming = 0.0
+	penalty_passivity = 0.0
+	reward_exploration = 0.0
+	reward_exploration_complete = 0.0
 	penalty_damage = 0.0
 	penalty_death = 0.0
 	penalty_useless_shot = 0.0
@@ -71,28 +80,19 @@ func record_step(reward: float) -> void:
 
 
 func record_reward_breakdown(events: Dictionary) -> void:
-	if events.get("hit", false):
-		reward_hits += SandboxConfig.REWARD_HIT
-	if events.get("kill", false):
-		reward_kills += SandboxConfig.REWARD_KILL
-	var dmg: float = float(events.get("damage_taken", 0.0))
-	if dmg > 0.0:
-		penalty_damage += dmg * SandboxConfig.PENALTY_DAMAGE_TAKEN_PER_HP
-	if events.get("died", false):
-		penalty_death += SandboxConfig.PENALTY_DEATH
-	if events.get("useless_shot", false):
-		penalty_useless_shot += SandboxConfig.PENALTY_USELESS_SHOT
-	if events.get("missed_shot", false):
-		penalty_missed_shot += SandboxConfig.PENALTY_MISSED_SHOT
-	var pos_delta: float = float(events.get("positioning_delta", 0.0))
-	if pos_delta != 0.0:
-		reward_positioning += clampf(
-			pos_delta * SandboxConfig.REWARD_POSITIONING_SCALE,
-			-SandboxConfig.REWARD_POSITIONING_MAX,
-			SandboxConfig.REWARD_POSITIONING_MAX
-		)
-	if events.get("alive", true) and not events.get("died", false):
-		reward_survive += SandboxConfig.REWARD_SURVIVE_TICK
+	var components: Dictionary = RewardSystem.compute_components(events)
+	reward_hits += float(components.get("reward_hit", 0.0))
+	reward_kills += float(components.get("reward_kill", 0.0))
+	penalty_damage += float(components.get("penalty_damage", 0.0))
+	penalty_death += float(components.get("penalty_death", 0.0))
+	penalty_useless_shot += float(components.get("penalty_useless_shot", 0.0))
+	penalty_missed_shot += float(components.get("penalty_missed_shot", 0.0))
+	reward_positioning += float(components.get("reward_positioning", 0.0))
+	reward_aiming += float(components.get("reward_aiming", 0.0))
+	penalty_passivity += float(components.get("penalty_passivity", 0.0))
+	reward_exploration += float(components.get("reward_exploration", 0.0))
+	reward_exploration_complete += float(components.get("reward_exploration_complete", 0.0))
+	reward_survive += float(components.get("reward_survive", 0.0))
 
 
 func record_shot(hit: bool) -> void:
@@ -134,6 +134,10 @@ func get_reward_breakdown() -> Dictionary:
 		"reward_kills": reward_kills,
 		"reward_survive": reward_survive,
 		"reward_positioning": reward_positioning,
+		"reward_aiming": reward_aiming,
+		"penalty_passivity": penalty_passivity,
+		"reward_exploration": reward_exploration,
+		"reward_exploration_complete": reward_exploration_complete,
 		"penalty_damage": penalty_damage,
 		"penalty_death": penalty_death,
 		"penalty_useless_shot": penalty_useless_shot,

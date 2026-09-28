@@ -31,6 +31,10 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##                                 this tick while not already at an
 ##                                 effective engagement range (can be
 ##                                 negative if it moved away)
+##   aiming_delta: float       -- change in forward-vector alignment toward
+##                                 the live target this tick
+##   valid_target: bool        -- a live target exists
+##   meaningful_action: bool   -- movement/aiming progress or a fired shot
 ##   alive: bool               -- whether the agent is alive at the end of
 ##                                 the tick (drives the small survive bonus)
 ##   exploration_gain: float   -- Map Analyzer mode only: value of the map
@@ -40,45 +44,52 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##                                 combat reward is byte-identical to before.
 ##   exploration_complete: bool -- the map reached the target coverage this
 ##                                 tick (paid once per episode)
-static func compute(events: Dictionary) -> float:
-	var reward: float = 0.0
-
-	if events.get("hit", false):
-		reward += SandboxConfig.REWARD_HIT
-
-	if events.get("kill", false):
-		reward += SandboxConfig.REWARD_KILL
+static func compute_components(events: Dictionary) -> Dictionary:
+	var components: Dictionary = {}
+	components["reward_hit"] = SandboxConfig.REWARD_HIT if events.get("hit", false) else 0.0
+	components["reward_kill"] = SandboxConfig.REWARD_KILL if events.get("kill", false) else 0.0
 
 	var damage_taken: float = float(events.get("damage_taken", 0.0))
-	if damage_taken > 0.0:
-		reward += damage_taken * SandboxConfig.PENALTY_DAMAGE_TAKEN_PER_HP
-
-	if events.get("died", false):
-		reward += SandboxConfig.PENALTY_DEATH
-
-	if events.get("useless_shot", false):
-		reward += SandboxConfig.PENALTY_USELESS_SHOT
-
-	if events.get("missed_shot", false):
-		reward += SandboxConfig.PENALTY_MISSED_SHOT
+	components["penalty_damage"] = damage_taken * SandboxConfig.PENALTY_DAMAGE_TAKEN_PER_HP if damage_taken > 0.0 else 0.0
+	components["penalty_death"] = SandboxConfig.PENALTY_DEATH if events.get("died", false) else 0.0
+	components["penalty_useless_shot"] = SandboxConfig.PENALTY_USELESS_SHOT if events.get("useless_shot", false) else 0.0
+	components["penalty_missed_shot"] = SandboxConfig.PENALTY_MISSED_SHOT if events.get("missed_shot", false) else 0.0
 
 	var positioning_delta: float = float(events.get("positioning_delta", 0.0))
-	if positioning_delta != 0.0:
-		var shaped: float = clampf(
-			positioning_delta * SandboxConfig.REWARD_POSITIONING_SCALE,
-			-SandboxConfig.REWARD_POSITIONING_MAX,
-			SandboxConfig.REWARD_POSITIONING_MAX
-		)
-		reward += shaped
+	components["reward_positioning"] = clampf(
+		positioning_delta * SandboxConfig.REWARD_POSITIONING_SCALE,
+		-SandboxConfig.REWARD_POSITIONING_MAX, SandboxConfig.REWARD_POSITIONING_MAX
+	) if positioning_delta != 0.0 else 0.0
 
+	var aiming_delta: float = float(events.get("aiming_delta", 0.0))
+	components["reward_aiming"] = clampf(
+		aiming_delta * SandboxConfig.REWARD_AIMING_SCALE,
+		-SandboxConfig.REWARD_AIMING_MAX, SandboxConfig.REWARD_AIMING_MAX
+	) if aiming_delta != 0.0 else 0.0
+	components["penalty_passivity"] = (
+		SandboxConfig.PENALTY_PASSIVITY
+		if events.get("valid_target", false) and not events.get("meaningful_action", false)
+		else 0.0
+	)
 	var exploration_gain: float = float(events.get("exploration_gain", 0.0))
-	if exploration_gain != 0.0:
-		reward += exploration_gain
-
-	if events.get("exploration_complete", false):
-		reward += SandboxConfig.REWARD_EXPLORATION_COMPLETE
+	components["reward_exploration"] = exploration_gain
+	components["reward_exploration_complete"] = SandboxConfig.REWARD_EXPLORATION_COMPLETE if events.get("exploration_complete", false) else 0.0
 
 	if events.get("alive", true) and not events.get("died", false):
-		reward += SandboxConfig.REWARD_SURVIVE_TICK
+		var valid_target: bool = events.get("valid_target", false)
+		var combat_progress: bool = events.get("shot_fired", false) or positioning_delta > 0.0
+		components["reward_survive"] = SandboxConfig.REWARD_SURVIVE_TICK if not valid_target or combat_progress else 0.0
+	else:
+		components["reward_survive"] = 0.0
+	return components
 
-	return reward
+
+static func components_total(components: Dictionary) -> float:
+	var total: float = 0.0
+	for value in components.values():
+		total += float(value)
+	return total
+
+
+static func compute(events: Dictionary) -> float:
+	return components_total(compute_components(events))

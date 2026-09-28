@@ -387,6 +387,13 @@ const REWARD_KILL: float = 10.0
 const REWARD_SURVIVE_TICK: float = 0.01
 const REWARD_POSITIONING_SCALE: float = 0.05  # per meter closed toward the enemy, clamped
 const REWARD_POSITIONING_MAX: float = 0.05
+## Small shaping for turning the crosshair toward a live target.
+const REWARD_AIMING_SCALE: float = 0.10
+const REWARD_AIMING_MAX: float = 0.02
+## Applied only when a live target exists and the agent neither moves toward,
+## aims toward, nor fires. This makes timeout farming unprofitable without
+## forcing constant shooting.
+const PENALTY_PASSIVITY: float = -0.012
 const PENALTY_DAMAGE_TAKEN_PER_HP: float = -0.05
 const PENALTY_DEATH: float = -10.0
 ## Trigger pulls that could not possibly connect: the weapon is still on
