@@ -8,7 +8,7 @@ except ImportError:
     torch = None
 
 from sandboxai.bc import create_bc_policy, load_bc_checkpoint
-from sandboxai.contract import OBSERVATION_FIELD_COUNT
+from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
 
 @unittest.skipUnless(torch is not None, "PyTorch is optional in the static test environment")
@@ -22,14 +22,14 @@ class CheckpointTests(unittest.TestCase):
                     "format": "sandboxai.bc.v1",
                     "observation_dim": OBSERVATION_FIELD_COUNT,
                     "hidden_sizes": [128, 128],
-                    "action_nvec": [3, 3, 3, 3, 2],
+                    "action_nvec": list(ACTION_NVEC),
                     "model_state_dict": model.state_dict(),
                 },
                 path,
             )
             loaded = load_bc_checkpoint(path)
             self.assertEqual(loaded.observation_dim, OBSERVATION_FIELD_COUNT)
-            self.assertEqual(tuple(loaded.predict(torch.zeros((1, OBSERVATION_FIELD_COUNT))).shape), (1, 5))
+            self.assertEqual(tuple(loaded.predict(torch.zeros((1, OBSERVATION_FIELD_COUNT))).shape), (1, len(ACTION_NVEC)))
 
 
 if __name__ == "__main__":

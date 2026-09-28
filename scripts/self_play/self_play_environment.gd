@@ -94,10 +94,16 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var damage_a: float = 0.0
 	var damage_b: float = 0.0
 
+	# Aim point consistency with EnvironmentCore: the main environment
+	# resolves hits against the target's CHEST (ENEMY_CHEST_HEIGHT), while
+	# this file used to aim at the opponent's EYE. The two heights differ by
+	# 0.4 m, so an identical policy had a measurably different hit rate in
+	# self-play than in the normal environment and the two win-rate metrics
+	# were not comparable. Both now use the chest.
 	if action_a.shoot and agent_a.weapon.try_fire():
 		shot_a = true
 		if agent_a.weapon.ray_hits_sphere(
-			agent_a.get_eye_position(), agent_a.get_forward_vector(), agent_b.get_eye_position()
+			agent_a.get_eye_position(), agent_a.get_forward_vector(), _chest_position(agent_b)
 		):
 			damage_a = agent_b.take_damage(agent_a.weapon.damage)
 			hit_a = damage_a > 0.0
@@ -105,7 +111,7 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	if action_b.shoot and agent_b.weapon.try_fire():
 		shot_b = true
 		if agent_b.weapon.ray_hits_sphere(
-			agent_b.get_eye_position(), agent_b.get_forward_vector(), agent_a.get_eye_position()
+			agent_b.get_eye_position(), agent_b.get_forward_vector(), _chest_position(agent_a)
 		):
 			damage_b = agent_a.take_damage(agent_b.weapon.damage)
 			hit_b = damage_b > 0.0
@@ -236,3 +242,9 @@ func health_check() -> Dictionary:
 		"done": done,
 		"done_reason": done_reason,
 	}
+
+
+## Chest aim point, matching EnvironmentCore's enemy hit height so the
+## self-play and single-agent accuracy/win metrics stay comparable.
+static func _chest_position(agent) -> Vector3:
+	return agent.position + Vector3(0.0, SandboxConfig.ENEMY_CHEST_HEIGHT, 0.0)

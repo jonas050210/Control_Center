@@ -216,7 +216,7 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     # 2. Dataset creation and validation. Observations use the real
     # 33-field contract dimension so the smoke test exercises (and produces
     # checkpoints compatible with) the actual observation space.
-    from .contract import OBSERVATION_FIELD_COUNT
+    from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
     from .dataset import DemonstrationDataset, DemonstrationRecorder
     recorder = DemonstrationRecorder({"source": "smoke_test"})
     recorder.start()
@@ -248,14 +248,15 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
         model = load_bc_checkpoint(bc_result["best_checkpoint"], device=device)
         sample_pred = model.predict([0.0] * OBSERVATION_FIELD_COUNT)
         results["bc_prediction_shape"] = list(sample_pred.shape)
-        if list(sample_pred.shape) != [5]:
-            failures.append(f"BC prediction shape {list(sample_pred.shape)} != [5]")
+        expected_action_dim = [len(ACTION_NVEC)]
+        if list(sample_pred.shape) != expected_action_dim:
+            failures.append(f"BC prediction shape {list(sample_pred.shape)} != {expected_action_dim}")
 
         # 5. SB3 warm start verification
         try:
             import gymnasium as gym
             from stable_baselines3 import PPO
-            action_space = gym.spaces.MultiDiscrete([3, 3, 3, 3, 2])
+            action_space = gym.spaces.MultiDiscrete(list(ACTION_NVEC))
             obs_space = gym.spaces.Box(-1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,))
 
             class MockGymEnv(gym.Env):
@@ -376,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "project_path": config.project,
                 "godot_executable": config.godot_executable,
-                "environment_count": 1,
+                "environment_count": max(1, int(args.environment_count or 1)),
                 "enemy_count": config.enemy_count,
                 "seed": config.seed,
                 "curriculum_level": config.curriculum_level,

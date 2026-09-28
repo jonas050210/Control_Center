@@ -218,6 +218,7 @@ func select_environment(index: int) -> void:
 		simulation_manager.ensure_view(resolved)
 		_apply_view_visibility()
 	_bind_controllers()
+	_apply_debug_perception()
 	_reset_episode_probe()
 	log_system("selected environment %d" % resolved)
 	selection_changed.emit(resolved, config.selected_agent_slot)
@@ -361,11 +362,40 @@ func has_pending_settings() -> bool:
 	return not _pending_setting_keys.is_empty()
 
 
+## Queues a new random seed as a PENDING setting (it is applied when the
+## user hits Apply, like every other edited field).
 func randomize_seed() -> int:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
 	var value: int = rng.randi_range(0, 1_000_000)
 	request_setting("seed", value)
+	return value
+
+
+## Draws a fresh seed and immediately restarts the selected environment
+## with it.
+##
+## The "Reset (random)" button used to call `randomize_seed()` followed by
+## `reset_selected_environment(false)`. The first call only QUEUED the new
+## seed and the second passed -1 ("continue the current RNG stream"), so
+## the freshly drawn seed was never applied to anything and the button was
+## indistinguishable from a plain non-deterministic reset. This applies the
+## seed for real and returns it so the UI can report it.
+func reset_selected_environment_with_random_seed() -> int:
+	if simulation_manager == null or simulation_manager.environments.is_empty():
+		return -1
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var value: int = rng.randi_range(0, 1_000_000)
+	config.seed = value
+	var pending_index: int = _pending_setting_keys.find("seed")
+	if pending_index >= 0:
+		_pending_setting_keys.remove_at(pending_index)
+	var index: int = config.selected_environment
+	simulation_manager.base_seed = value
+	simulation_manager.reset_indices([index], value)
+	_reset_episode_probe()
+	log_system("reset environment %d (random seed %d)" % [index, value + index])
 	return value
 
 
@@ -768,6 +798,23 @@ func _bind_controllers() -> void:
 		simulation_manager.set_controller(index, controller)
 
 
+## Enables perception evaluation for debug drawing on the selected
+## environment only, and only outside TRAINING mode.
+##
+## This is what lets the Control Center draw FOV cones and LOS rays even on
+## the curriculum levels that do not gate the observation. It is
+## deliberately one-way: `EnvironmentCore._build_observation()` ignores
+## `debug_perception`, so looking at perception can never change what the
+## policy sees, and headless training never sets the flag at all.
+func _apply_debug_perception() -> void:
+	if simulation_manager == null:
+		return
+	var enable: bool = presentation_enabled and not is_training_mode()
+	for index in range(simulation_manager.environments.size()):
+		var env = simulation_manager.environments[index]
+		env.debug_perception = enable and index == config.selected_environment
+
+
 func _apply_mode_to_runtime() -> void:
 	var training: bool = is_training_mode()
 	event_log.enabled = telemetry_enabled()
@@ -775,6 +822,7 @@ func _apply_mode_to_runtime() -> void:
 		# Leaving HUMAN mode always disarms input and releases the mouse.
 		set_human_input_enabled(false)
 	_bind_controllers()
+	_apply_debug_perception()
 	_apply_view_visibility()
 	if presentation_enabled and not training:
 		simulation_manager.ensure_view(config.selected_environment)

@@ -54,5 +54,8 @@ func test_from_discrete_maps_all_ten_actions() -> SandboxTest:
 	t.assert_eq(idle_action.move_axis, 0, "idle has no move")
 	t.assert_false(idle_action.shoot, "idle does not shoot")
 
-	t.assert_eq(Action.DISCRETE_COUNT, 10, "exactly 10 discrete actions")
+	t.assert_eq(Action.DISCRETE_COUNT, 11, "10 v1 actions + JUMP")
+	var jump_action := Action.from_discrete(Action.Discrete.JUMP)
+	t.assert_true(jump_action.jump, "jump")
+	t.assert_false(jump_action.shoot, "jump does not shoot")
 	return t

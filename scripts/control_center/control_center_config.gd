@@ -104,6 +104,48 @@ const SCENARIOS: Array = [
 		"description": "Level 4 with 6 enemies: more enemies than the "
 		+ "observation tracks, so some are invisible to the policy.",
 	},
+	{
+		"id": "cover_fight",
+		"label": "Cover fight",
+		"curriculum_level": CurriculumConfig.Level.OBSTACLES_COVER,
+		"enemy_count": 2,
+		"description": "Level 5: staggered cover, ranged enemies that peek and retreat.",
+	},
+	{
+		"id": "corner_fight",
+		"label": "Corner fight",
+		"curriculum_level": CurriculumConfig.Level.FOV_LOS,
+		"enemy_count": 1,
+		"description": "Level 6: FOV + occlusion. The enemy starts out of sight around a corner.",
+	},
+	{
+		"id": "sound_only",
+		"label": "Sound-only contact",
+		"curriculum_level": CurriculumConfig.Level.SOUND,
+		"enemy_count": 1,
+		"description": "Level 7: the enemy is fully occluded; footsteps and shots are the cue.",
+	},
+	{
+		"id": "lost_target",
+		"label": "Target breaks contact",
+		"curriculum_level": CurriculumConfig.Level.MEMORY_LOST_TARGETS,
+		"enemy_count": 1,
+		"description": "Level 8: memory decay. The target leaves your sight line on purpose.",
+	},
+	{
+		"id": "vertical",
+		"label": "Vertical encounter",
+		"curriculum_level": CurriculumConfig.Level.VERTICAL_COMBAT,
+		"enemy_count": 2,
+		"description": "Level 9: platforms; jumping changes the available sight lines.",
+	},
+	{
+		"id": "randomized",
+		"label": "Randomized arena",
+		"curriculum_level": CurriculumConfig.Level.MIXED_RANDOMIZED,
+		"enemy_count": 3,
+		"description": "Level 10: a new seeded layout and scenario every episode.",
+	},
 ]
 
 var mode: int = Mode.WATCH

@@ -148,14 +148,23 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
     class EvaluationCallback(BaseCallback):
         def __init__(self):
             super().__init__()
+            # Anchored in _on_training_start, not here: `num_timesteps` is
+            # restored from the checkpoint when resuming, so an absolute
+            # threshold of `evaluation_frequency` was already in the past
+            # and the callback evaluated on EVERY step for the rest of the
+            # run. Anchoring to the current step makes the schedule
+            # relative to wherever training actually starts.
             self.next_evaluation = config.evaluation_frequency
+
+        def _on_training_start(self) -> None:
+            self.next_evaluation = self.num_timesteps + config.evaluation_frequency
 
         def _on_step(self) -> bool:
             nonlocal best_score, eval_patience_counter, stop_training
             if self.num_timesteps < self.next_evaluation:
                 return True
             eval_kwargs = _env_kwargs(config)
-            eval_kwargs["environment_count"] = 1
+            eval_kwargs["environment_count"] = max(1, config.evaluation_environment_count)
             summary = evaluate_model(
                 self.model,
                 eval_kwargs,
@@ -180,7 +189,13 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
                     stop_training = True
             if config.min_eval_reward is not None and reward >= config.min_eval_reward:
                 stop_training = True
-            self.next_evaluation += config.evaluation_frequency
+            # Advance past the current step rather than by a fixed stride:
+            # with N parallel environments `num_timesteps` jumps by N per
+            # rollout and can overshoot the threshold by more than one
+            # frequency, which would otherwise queue up back-to-back
+            # evaluations.
+            while self.next_evaluation <= self.num_timesteps:
+                self.next_evaluation += config.evaluation_frequency
             return not stop_training
 
     checkpoint_callback = CheckpointCallback(

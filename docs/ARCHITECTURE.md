@@ -17,6 +17,11 @@ paths. One Godot process owns a batch of independent environments.
 Godot rl_server.gd
   -> SimulationManager
     -> EnvironmentCore[0..N)
+      -> ArenaWorld            (seeded geometry, collision + ray queries)
+      -> CharacterMotor        (shared gravity/jump/collision integration)
+      -> SoundBus              (transient audible events)
+      -> AgentPerception       (what the POLICY may know: FOV/LOS/memory)
+      -> EnemyBrain            (what the OPPONENTS know and do)
       -> AgentState / EnemyState[] / WeaponState / EpisodeState
   -> RLAdapter
   <==== JSON lines ====>
@@ -30,7 +35,7 @@ per line:
 ```text
 {"cmd":"spaces"}
 {"cmd":"reset","seed":1234}
-{"cmd":"step","actions":[[1,1,1,1,0]]}
+{"cmd":"step","actions":[[1,1,1,1,0,0]]}
 {"cmd":"close"}
 ```
 
@@ -201,10 +206,15 @@ SimulationManager -> EnvironmentCore * N     unchanged simulation
 
 ```text
 scripts/
-  core/       Action, Observation, config, curriculum, episode, manager
+  core/       Action, Observation, config, curriculum, curriculum
+              controller, episode, manager
+  world/      Obstacle, ArenaWorld, WorldGenerator, CharacterMotor
+  perception/ PerceptionSystem (FOV/LOS), SoundBus, EnemyMemory,
+              ReactionProfile, AgentPerception
+  scenario/   ScenarioLibrary (twelve seedable encounters)
   env/        EnvironmentCore and optional EnvironmentView
   agent/      Agent state/view
-  enemy/      Enemy state/view
+  enemy/      Enemy state/view, EnemyBrain (tactical behavior)
   weapon/     Weapon state
   reward/     Reward calculation
   rl/         RLAdapter and headless JSON-lines server
@@ -239,17 +249,22 @@ python/sandboxai/
   implemented yet.
 - Self-play is a two-slot/match foundation. It does not yet implement a
   population scheduler, league or opponent sampling algorithm.
-- The analytic arena has no physics collision response, recoil, ammo,
-  verticality/elevation, navmesh-based obstacle avoidance, or complex FPS
-  navigation. Enemy movement (including the new strafing pattern) is
-  straight-line/sinusoidal blending, not pathfinding.
+- The arena now has seeded geometry, axis-separated collision response,
+  gravity, jumping and standable platforms, but still no recoil, no ammo,
+  no navmesh and no path planner. Enemies steer directly toward their
+  chosen destination and slide along walls; in a maze-like layout they can
+  get stuck against a corner rather than routing around it. Adding a real
+  navigation graph is the obvious next structural step.
 - Only the 3 nearest alive enemies are individually reported in the
   observation vector even if more exist and fight simultaneously (see
   `docs/OBSERVATION_ACTION_CONTRACT.md`).
 - The Control Center cannot run a trained policy in-engine (no neural
   network runtime in Godot); its TRAINING mode is a throughput mode, not a
-  trainer. Agent slot 1, field-of-view, line-of-sight, sound and memory
-  models do not exist in the simulation and are reported as unavailable.
+  trainer. Agent slot 1 still does not exist outside the self-play
+  foundation and is reported as unavailable. Field-of-view, line-of-sight,
+  sound, memory, obstacles, navigation state and corpses DO exist now and
+  are exposed through the seven read-only hooks `PerceptionModel` probes
+  for; the Control Center picks them up automatically.
 - No Roblox integration exists. `python/sandboxai/contract.py` defines the
   abstract adapter boundary a future implementation would need to satisfy;
   see `docs/ROBLOX_ADAPTER.md` for exactly what is and is not implemented.
@@ -263,8 +278,24 @@ python/sandboxai/
   development environment. Run `sandboxai benchmark` on the target machine
   before relying on its throughput numbers for a training-scale decision.
 
-The next useful milestone is training against the new multi-enemy
-curriculum (levels 3–4) on the target machine, validating the benchmark
-sweep to pick a practical environment count, and then starting the real
-external Roblox Player adapter implementation against the contract in
+## Perception and information boundaries
+
+The single most important architectural rule after this milestone: the
+policy's observation is produced from `AgentPerception`, not from the
+simulation state. `EnvironmentCore._build_observation()` passes the
+perception context into `Observation.build()` only when
+`CurriculumConfig.perception_enabled()` is true, and the `debug_perception`
+flag used by the Control Center deliberately does **not** feed that context
+— the debug GUI may look at perception, but it can never change what the
+policy sees.
+
+The same rule applies to the opponents: `EnemyBrain` receives the agent's
+true position only to run the perception queries, and every decision
+downstream reads its own `EnemyMemory` track instead. That is what makes an
+enemy genuinely lose you around a corner rather than pretending to.
+
+The next useful milestone is training against the new perception curriculum
+(levels 5–8) on the target machine, validating the benchmark sweep to pick a
+practical environment count, and then starting the real external Roblox
+Player adapter implementation against the contract in
 `docs/ROBLOX_ADAPTER.md`.

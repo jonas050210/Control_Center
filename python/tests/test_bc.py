@@ -6,7 +6,7 @@ except ImportError:
     torch = None
 
 from sandboxai.bc import create_bc_policy
-from sandboxai.contract import OBSERVATION_FIELD_COUNT
+from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
 
 @unittest.skipUnless(torch is not None, "PyTorch is optional in the static test environment")
@@ -14,7 +14,7 @@ class BehaviorCloningTests(unittest.TestCase):
     def test_model_creation_and_action_shape(self):
         model = create_bc_policy(OBSERVATION_FIELD_COUNT)
         output = model.predict(torch.zeros((3, OBSERVATION_FIELD_COUNT)))
-        self.assertEqual(tuple(output.shape), (3, 5))
+        self.assertEqual(tuple(output.shape), (3, len(ACTION_NVEC)))
 
     def test_resume_from_completed_run_returns_cleanly(self):
         # Regression: resuming with a checkpoint whose epoch >= config.epochs

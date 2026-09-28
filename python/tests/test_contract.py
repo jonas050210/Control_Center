@@ -33,7 +33,7 @@ class ObservationContractTests(unittest.TestCase):
 
     def test_observation_field_count_matches_godot_contract(self):
         # Mirrors Observation.FIELD_COUNT in scripts/core/observation.gd.
-        self.assertEqual(OBSERVATION_FIELD_COUNT, 33)
+        self.assertEqual(OBSERVATION_FIELD_COUNT, 65)
 
     def test_observation_bounds_are_symmetric_and_normalized(self):
         self.assertEqual(OBSERVATION_LOW, -1.0)
@@ -50,7 +50,7 @@ class ObservationContractTests(unittest.TestCase):
 
 class ActionContractTests(unittest.TestCase):
     def test_action_nvec_matches_multidiscrete_shape(self):
-        self.assertEqual(ACTION_NVEC, (3, 3, 3, 3, 2))
+        self.assertEqual(ACTION_NVEC, (3, 3, 3, 3, 2, 2))
 
     def test_action_field_indices_are_sequential(self):
         for expected_index, field in enumerate(ACTION_SPEC):
@@ -234,3 +234,31 @@ class GodotSourceDriftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ObservationGroupTests(unittest.TestCase):
+    """The adapter-channel split (Phase 14 boundary prep)."""
+
+    def test_groups_partition_every_field_exactly_once(self):
+        from sandboxai.contract import OBSERVATION_GROUPS
+
+        grouped = [name for names in OBSERVATION_GROUPS.values() for name in names]
+        self.assertEqual(len(grouped), len(set(grouped)))
+        self.assertEqual(set(grouped), {field.name for field in OBSERVATION_SPEC})
+
+    def test_every_adapter_channel_is_present(self):
+        from sandboxai.contract import OBSERVATION_GROUPS
+
+        self.assertEqual(
+            set(OBSERVATION_GROUPS),
+            {
+                "self_state",
+                "movement",
+                "combat",
+                "targets",
+                "perception",
+                "memory",
+                "sound",
+                "world",
+            },
+        )

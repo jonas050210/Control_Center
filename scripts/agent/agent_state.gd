@@ -8,12 +8,18 @@
 ##
 ## Movement/aiming is resolved analytically (no PhysicsServer stepping) so
 ## that many environments can be simulated far faster than real time and
-## with fully deterministic results.
+## with fully deterministic results. Since the world layer landed, movement
+## also supports gravity, jumping, landing and axis-separated collision
+## against `ArenaWorld` obstacles — all through the shared `CharacterMotor`
+## so the agent and the scripted enemies obey identical physics. Passing
+## `world = null` reproduces the original flat, obstacle-free behavior
+## exactly, which is what the pre-world curriculum levels still use.
 class_name AgentState
 extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
+const CharacterMotor = preload("res://scripts/world/character_motor.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
@@ -32,6 +38,15 @@ var turn_speed_deg: float = SandboxConfig.AGENT_TURN_SPEED_DEG
 var pitch_limit_deg: float = SandboxConfig.AGENT_PITCH_LIMIT_DEG
 var eye_height: float = SandboxConfig.AGENT_EYE_HEIGHT
 var radius: float = SandboxConfig.AGENT_RADIUS
+var height: float = SandboxConfig.AGENT_HEIGHT
+
+## Vertical movement state (Phase 2). `on_ground` is true while standing on
+## the floor or on a standable box; jumping is only possible from there.
+var on_ground: bool = true
+## Seconds until the next footstep sound is emitted while moving. Counted
+## down by apply_action() so footstep cadence is a function of simulation
+## time rather than of frame rate.
+var footstep_timer: float = 0.0
 
 var weapon: WeaponState = WeaponState.new()
 
@@ -51,6 +66,7 @@ func _init(
 	pitch_limit_deg = maxf(0.0, p_pitch_limit)
 	eye_height = maxf(0.1, p_eye_height)
 	radius = maxf(0.01, p_radius)
+	height = maxf(eye_height + 0.05, SandboxConfig.AGENT_HEIGHT)
 	alive = true
 	weapon = WeaponState.new()
 
@@ -66,6 +82,8 @@ func reset(
 	pitch_deg = 0.0
 	health = max_health
 	alive = true
+	on_ground = true
+	footstep_timer = 0.0
 	weapon.reset()
 
 
@@ -95,11 +113,19 @@ func get_eye_position() -> Vector3:
 ## Applies one tick of a structured Action to movement, aim and weapon
 ## cooldown. Does NOT resolve combat (hit-testing/damage) — that is the
 ## responsibility of EnvironmentCore, which needs the enemy list.
-func apply_action(action: Action, dt: float, arena_half_extent: float) -> void:
+##
+## Returns the motion events the caller turns into sound:
+##   {"jumped": bool, "landed": bool, "footstep": bool, "moving": bool}
+func apply_action(
+	action: Action, dt: float, arena_half_extent: float, world = null
+) -> Dictionary:
 	weapon.tick(dt)
+	var events: Dictionary = {
+		"jumped": false, "landed": false, "footstep": false, "moving": false
+	}
 	if not alive:
 		velocity = Vector3.ZERO
-		return
+		return events
 
 	# --- Aim ---
 	yaw_deg += action.look_yaw_axis * turn_speed_deg * dt
@@ -109,20 +135,43 @@ func apply_action(action: Action, dt: float, arena_half_extent: float) -> void:
 	pitch_deg = clampf(pitch_deg, -pitch_limit_deg, pitch_limit_deg)
 	yaw_deg = wrapf(yaw_deg, 0.0, 360.0)
 
-	# --- Movement (horizontal only, no jumping/gravity in milestone 1) ---
+	# --- Movement ---
 	var forward: Vector3 = get_forward_horizontal()
 	var right: Vector3 = get_right_horizontal()
 	var move_dir: Vector3 = forward * float(action.move_axis) + right * float(action.strafe_axis)
 	if move_dir.length_squared() > 1.0:
 		move_dir = move_dir.normalized()
-	velocity = move_dir * move_speed
-	position += velocity * dt
 
-	# --- Arena bounds clamp (walls) ---
-	var limit: float = arena_half_extent - radius
-	position.x = clampf(position.x, -limit, limit)
-	position.z = clampf(position.z, -limit, limit)
-	position.y = 0.0
+	var motion: Dictionary = CharacterMotor.step(
+		world,
+		position,
+		velocity,
+		move_dir,
+		move_speed,
+		dt,
+		radius,
+		height,
+		action.jump,
+		on_ground,
+		arena_half_extent
+	)
+	position = motion["position"]
+	velocity = motion["velocity"]
+	on_ground = bool(motion["on_ground"])
+	events["jumped"] = bool(motion["jumped"])
+	events["landed"] = bool(motion["landed"])
+
+	# --- Footsteps ---
+	var horizontal_speed: float = Vector2(velocity.x, velocity.z).length()
+	events["moving"] = horizontal_speed > 0.05
+	if on_ground and events["moving"]:
+		footstep_timer -= dt
+		if footstep_timer <= 0.0:
+			footstep_timer = SandboxConfig.FOOTSTEP_INTERVAL
+			events["footstep"] = true
+	else:
+		footstep_timer = minf(footstep_timer, SandboxConfig.FOOTSTEP_INTERVAL * 0.5)
+	return events
 
 
 func take_damage(amount: float) -> float:
@@ -145,5 +194,7 @@ func to_dict() -> Dictionary:
 		"health": health,
 		"max_health": max_health,
 		"alive": alive,
+		"on_ground": on_ground,
+		"height": height,
 		"weapon": weapon.to_dict(),
 	}

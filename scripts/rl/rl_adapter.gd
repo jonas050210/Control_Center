@@ -27,7 +27,9 @@ static func action_space_info() -> Dictionary:
 		"dimension": Action.MULTI_DISCRETE_SIZE,
 		# Kept for backwards compatibility with single-discrete API.
 		"discrete_choices": Action.DISCRETE_COUNT,
-		"fields": ["move_axis", "strafe_axis", "look_yaw_axis", "look_pitch_axis", "shoot"],
+		"fields": [
+			"move_axis", "strafe_axis", "look_yaw_axis", "look_pitch_axis", "shoot", "jump"
+		],
 		"continuous_reserved": ["look_delta.x", "look_delta.y"],
 	}
 
@@ -124,16 +126,7 @@ func _resolve_action(action_value) -> Action:
 	if typeof(action_value) == TYPE_INT or typeof(action_value) == TYPE_FLOAT:
 		return Action.from_discrete(int(action_value))
 	if action_value is Array:
-		if action_value.size() >= 7:
-			return Action.new(
-				int(action_value[0]),
-				int(action_value[1]),
-				int(action_value[2]),
-				int(action_value[3]),
-				bool(action_value[4]),
-				Vector2(float(action_value[5]), float(action_value[6]))
-			)
-		return Action.from_multidiscrete(action_value)
+		return _resolve_array_action(action_value)
 	if action_value is Dictionary:
 		return Action.new(
 			int(action_value.get("move_axis", 0)),
@@ -144,9 +137,38 @@ func _resolve_action(action_value) -> Action:
 			Vector2(
 				float(action_value.get("look_delta_x", 0.0)),
 				float(action_value.get("look_delta_y", 0.0))
-			)
+			),
+			bool(action_value.get("jump", false))
 		)
 	return Action.idle()
+
+
+## Decodes the array forms of an action.
+func _resolve_array_action(action_value: Array) -> Action:
+	# An 8-value array is the contract-v2 canonical log
+	# [move, strafe, yaw, pitch, shoot, jump, look_dx, look_dy]; a
+	# 7-value array is the v1 log without `jump`. Anything shorter is a
+	# MultiDiscrete action (5 = v1, 6 = v2).
+	if action_value.size() >= 8:
+		return Action.new(
+			int(action_value[0]),
+			int(action_value[1]),
+			int(action_value[2]),
+			int(action_value[3]),
+			bool(action_value[4]),
+			Vector2(float(action_value[6]), float(action_value[7])),
+			bool(action_value[5])
+		)
+	if action_value.size() == 7:
+		return Action.new(
+			int(action_value[0]),
+			int(action_value[1]),
+			int(action_value[2]),
+			int(action_value[3]),
+			bool(action_value[4]),
+			Vector2(float(action_value[5]), float(action_value[6]))
+		)
+	return Action.from_multidiscrete(action_value)
 
 
 static func _observation_to_array(observation) -> Array:

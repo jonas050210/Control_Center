@@ -33,56 +33,63 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ## Optional perception features and the EnvironmentCore method that would
 ## provide each one. Probed with `has_method()` so the Control Center
 ## consumes a perception system when it lands instead of re-implementing it.
+##
+## EnvironmentCore now implements all seven. The notes below are still used
+## verbatim for any OTHER environment type that does not (for example the
+## self-play environment), which is exactly why the probe is dynamic
+## instead of a compile-time assumption.
 const OPTIONAL_FEATURES: Array = [
 	{
 		"id": "field_of_view",
 		"label": "Field of view gating",
 		"method": "get_agent_field_of_view",
 		"unavailable_note":
-		"The contract gives the policy bearing/distance to the nearest "
-		+ "tracked enemies regardless of facing; there is no FOV limit yet.",
+		"This environment exposes no FOV hook, so the policy sees tracked "
+		+ "enemies regardless of facing.",
 	},
 	{
 		"id": "line_of_sight",
 		"label": "Line of sight / occlusion",
 		"method": "has_line_of_sight",
 		"unavailable_note":
-		"The arena is an empty box: no walls, cover or occluders exist "
-		+ "between agent and enemies, so nothing can be hidden by geometry.",
+		"This environment exposes no line-of-sight hook, so nothing can be "
+		+ "hidden by geometry.",
 	},
 	{
 		"id": "sound_events",
 		"label": "Sound events / hearing",
 		"method": "get_sound_events",
-		"unavailable_note": "The simulation emits no audio events.",
+		"unavailable_note": "This environment exposes no sound-event hook.",
 	},
 	{
 		"id": "target_memory",
 		"label": "Target memory / last-known position",
 		"method": "get_target_memory",
 		"unavailable_note":
-		"The observation is memoryless: it reports current positions only, "
-		+ "with no decay, confidence or last-known-position tracking.",
+		"This environment exposes no memory hook, so the observation is "
+		+ "memoryless: current positions only, no decay or confidence.",
 	},
 	{
 		"id": "obstacles_cover",
 		"label": "Obstacles / cover",
 		"method": "get_obstacles",
-		"unavailable_note": "The arena has perimeter walls only, no interior geometry.",
+		"unavailable_note": "This environment exposes no obstacle hook.",
 	},
 	{
 		"id": "navigation",
 		"label": "Navigation / pathfinding",
 		"method": "get_navigation_state",
-		"unavailable_note": "Movement is analytic; there is no navmesh or path planner.",
+		"unavailable_note":
+		"This environment exposes no navigation hook. Movement is analytic; "
+		+ "there is no navmesh or path planner in any case.",
 	},
 	{
 		"id": "dead_bodies",
 		"label": "Corpses / dead bodies",
 		"method": "get_dead_bodies",
 		"unavailable_note":
-		"Dead enemies are simply flagged not-alive and disappear from the "
-		+ "observation; no corpse entity is kept.",
+		"This environment exposes no corpse hook, so dead enemies are only "
+		+ "flagged not-alive and keep no body.",
 	},
 ]
 
@@ -117,24 +124,42 @@ static func build(env, observation = null) -> Dictionary:
 	var ai_perception: Dictionary = _build_ai_perception(obs)
 	var tracked_indices: Array = _tracked_enemy_indices(env)
 
+	var perception_state: Dictionary = _build_perception_state(env, caps)
+	var visible_ids: Array = []
+	for belief_value in (perception_state.get("beliefs", []) as Array):
+		if bool((belief_value as Dictionary).get("visible", false)):
+			visible_ids.append(int((belief_value as Dictionary).get("id", -1)))
+
 	var hidden: Array = []
 	for entry_value in (real_world["enemies"] as Array):
 		var entry: Dictionary = entry_value
 		if not bool(entry["alive"]):
 			continue
-		if tracked_indices.has(int(entry["index"])):
+		var index: int = int(entry["index"])
+		var tracked: bool = tracked_indices.has(index)
+		var perceivable: bool = (
+			visible_ids.has(index) if bool(perception_state.get("gated", false)) else true
+		)
+		if tracked and perceivable:
 			continue
+		var reason: String = "beyond_tracked_enemy_budget"
+		var detail: String = (
+			"only the %d nearest alive enemies are in the observation contract"
+			% Observation.MAX_TRACKED_ENEMIES
+		)
+		if not perceivable:
+			reason = "not_perceived"
+			detail = (
+				"outside the agent's field of view or occluded by geometry; "
+				+ "the observation reports a decaying memory or nothing at all"
+			)
 		hidden.append(
 			{
-				"index": int(entry["index"]),
+				"index": index,
 				"distance_m": float(entry["distance_m"]),
 				"bearing_deg": float(entry["bearing_deg"]),
-				"reason": "beyond_tracked_enemy_budget",
-				"detail":
-				(
-					"only the %d nearest alive enemies are in the observation contract"
-					% Observation.MAX_TRACKED_ENEMIES
-				),
+				"reason": reason,
+				"detail": detail,
 			}
 		)
 
@@ -159,7 +184,50 @@ static func build(env, observation = null) -> Dictionary:
 		"target_index": int(tracked_indices[0]) if tracked_indices.size() > 0 else -1,
 		"unavailable_features": unavailable,
 		"max_tracked_enemies": Observation.MAX_TRACKED_ENEMIES,
+		"perception_state": perception_state,
 	}
+
+
+## Pulls the optional perception hooks into one debug-only payload for the
+## overlay and the AI PERCEPTION / AI MEMORY / SOUND panels.
+##
+## Every hook is probed first, so this degrades cleanly to {} entries on an
+## environment that does not implement them (the self-play environment, a
+## future adapter) instead of inventing data.
+static func _build_perception_state(env, caps: Dictionary) -> Dictionary:
+	var state: Dictionary = {
+		"gated": false,
+		"field_of_view": {},
+		"memory": [],
+		"beliefs": [],
+		"target_reason": "",
+		"sounds": [],
+		"obstacles": [],
+		"corpses": [],
+		"navigation": {},
+	}
+	if _available(caps, "field_of_view"):
+		var fov: Dictionary = env.get_agent_field_of_view()
+		state["field_of_view"] = fov
+		state["gated"] = bool(fov.get("enabled", false))
+	if _available(caps, "target_memory"):
+		var memory: Dictionary = env.get_target_memory()
+		state["memory"] = memory.get("tracks", [])
+		state["beliefs"] = memory.get("beliefs", [])
+		state["target_reason"] = str(memory.get("target_reason", ""))
+	if _available(caps, "sound_events"):
+		state["sounds"] = env.get_sound_events()
+	if _available(caps, "obstacles_cover"):
+		state["obstacles"] = env.get_obstacles()
+	if _available(caps, "dead_bodies"):
+		state["corpses"] = env.get_dead_bodies()
+	if _available(caps, "navigation"):
+		state["navigation"] = env.get_navigation_state()
+	return state
+
+
+static func _available(caps: Dictionary, feature_id: String) -> bool:
+	return bool((caps.get(feature_id, {}) as Dictionary).get("available", false))
 
 
 ## Ground-truth enemy/agent state. Debug-only: the policy never sees this.
@@ -282,7 +350,26 @@ static func _slot(vector: Dictionary, label: String, prefix: String, alive: bool
 ## Indices (into env.enemies) of the enemies that the observation contract
 ## actually reports, in rank order. Uses Observation.rank_alive_enemies so
 ## the GUI cannot drift from the contract's own ranking rule.
+## Enemy indices occupying the observation's primary/secondary/tertiary
+## slots, in slot order.
+##
+## When perception gating is active the slots follow the agent's BELIEF
+## ranking (visible first, then confidence, then distance), not raw
+## proximity, so the overlay must read the same list the observation was
+## built from. Falls back to the contract's own distance ranking on
+## environments without the hook.
 static func _tracked_enemy_indices(env) -> Array:
+	if env.has_method("get_target_memory"):
+		var memory: Dictionary = env.get_target_memory()
+		var beliefs: Array = memory.get("beliefs", [])
+		if not beliefs.is_empty():
+			var belief_indices: Array = []
+			for belief_value in beliefs:
+				if belief_indices.size() >= Observation.MAX_TRACKED_ENEMIES:
+					break
+				belief_indices.append(int((belief_value as Dictionary).get("id", -1)))
+			if not belief_indices.is_empty():
+				return belief_indices
 	var ranked: Array = Observation.rank_alive_enemies(env.enemies, env.agent.position)
 	var indices: Array = []
 	for rank in range(mini(ranked.size(), Observation.MAX_TRACKED_ENEMIES)):
@@ -375,6 +462,69 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			]
 		)
 	)
+
+	var state: Dictionary = perception.get("perception_state", {})
+	if not state.is_empty():
+		lines.append("")
+		lines.append("AI MEMORY (last known positions, decaying)")
+		var tracks: Array = state.get("memory", [])
+		if tracks.is_empty():
+			lines.append("  (no remembered contacts)")
+		for track_value in tracks:
+			var track: Dictionary = track_value
+			lines.append(
+				(
+					"  #%d via %-6s age %4.1fs  confidence %3.0f%%  at (%.1f, %.1f)"
+					% [
+						int(track["id"]),
+						str(track["source_name"]),
+						float(track["age"]),
+						float(track["confidence"]) * 100.0,
+						float((track["position"] as Vector3).x),
+						float((track["position"] as Vector3).z),
+					]
+				)
+			)
+		if not str(state.get("target_reason", "")).is_empty():
+			lines.append("  current target: %s" % str(state["target_reason"]))
+
+		lines.append("")
+		lines.append("SOUND (heard this tick, direction is approximate)")
+		var sounds: Array = state.get("sounds", [])
+		if sounds.is_empty():
+			lines.append("  (silence)")
+		for sound_value in sounds:
+			var sound: Dictionary = sound_value
+			lines.append(
+				(
+					"  %-8s %5.1fm %+6.1f deg  loudness %3.0f%%  age %4.2fs  walls %d"
+					% [
+						str(sound["category_name"]),
+						float(sound["distance"]),
+						float(sound["bearing_deg"]),
+						float(sound["loudness"]) * 100.0,
+						float(sound["age"]),
+						int(sound["occluders"]),
+					]
+				)
+			)
+
+		var corpses: Array = state.get("corpses", [])
+		if not corpses.is_empty():
+			lines.append("")
+			lines.append("CORPSES (environmental information, never targetable)")
+			for corpse_value in corpses:
+				var corpse: Dictionary = corpse_value
+				lines.append(
+					(
+						"  #%d at (%.1f, %.1f)"
+						% [
+							int(corpse["id"]),
+							float((corpse["position"] as Vector3).x),
+							float((corpse["position"] as Vector3).z),
+						]
+					)
+				)
 
 	var hidden: Array = perception["hidden_from_ai"]
 	lines.append("")

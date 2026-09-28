@@ -181,8 +181,7 @@ func _on_reset_pressed() -> void:
 
 
 func _on_reset_random_pressed() -> void:
-	session.randomize_seed()
-	session.reset_selected_environment(false)
+	session.reset_selected_environment_with_random_seed()
 
 
 func _on_reset_all_pressed() -> void:

@@ -2,10 +2,17 @@
 
 This describes the extended curriculum and enemy behavior added in this
 milestone. It **extends** `scripts/core/curriculum_config.gd`
-(`CurriculumConfig`) rather than replacing it — the same 5-level enum from
-the original implementation is kept so existing configs/checkpoints/tests
-that only reference level *numbers* stay meaningful; each level now bundles
-a richer, still-deterministic set of behaviors.
+(`CurriculumConfig`) rather than replacing it; each level bundles a richer,
+still-deterministic set of behaviors.
+
+The ladder is now 10 combat levels plus the self-play hook. Levels 1–4 are
+unchanged from the original implementation (same flags, same spawn
+distributions, same analytic melee enemies), so a checkpoint or a
+reproduction run targeting them behaves exactly as before. Levels 5–10 are
+new and progressively enable the world, perception, sound, memory and
+vertical systems. `AGENT_VS_AGENT` kept its enum NAME but moved from 5 to
+11; anything that referenced it symbolically is unaffected, anything that
+hard-coded the number 5 for self-play must be updated.
 
 ## Why: avoiding a trivial policy
 
@@ -34,7 +41,57 @@ The changes below force the policy to actually:
 | 2 | `moving_target` | 1 (configurable) | chase | no | yes (±70°, 4–13 m) | no |
 | 3 | `enemy_attacks` | 1 (configurable, 2+ supported) | chase | yes | yes (±110°, 4–13 m) | yes |
 | 4 | `multiple_enemies` | 3+ (bumped up from any configured value < 3) | chase, faster (1.15x speed) | yes, more often (0.85x cooldown) | yes (±150°, 4–13 m) | yes |
-| 5 | `agent_vs_agent` | n/a — two-policy self-play (`SelfPlayEnvironmentCore`) | — | — | — | — |
+| 5 | `obstacles_cover` | 3+ | tactical (`EnemyBrain`) | ranged | scenario-driven (`cover_fight`) | yes |
+| 6 | `fov_los` | 3+ | tactical | ranged | scenario-driven (`corner_fight`) | yes |
+| 7 | `sound` | 3+ | tactical | ranged | scenario-driven (`sound_only`) | yes |
+| 8 | `memory_lost_targets` | 3+ | tactical + search | ranged | scenario-driven (`target_disappears`) | yes |
+| 9 | `vertical_combat` | 3+ | tactical + jumping | ranged | scenario-driven (`vertical_encounter`) | yes |
+| 10 | `mixed_randomized` | 3+ | tactical + jumping | ranged | a new random scenario every episode | yes |
+| 11 | `agent_vs_agent` | n/a — two-policy self-play (`SelfPlayEnvironmentCore`) | — | — | — | — |
+
+### What each new level turns on
+
+| Level | Geometry | Enemy AI | FOV/LOS gating | Sound | Memory | Jumping | Enemy archetype |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1–4 | none | analytic chase | off | off | off | off (agent may still jump) | — |
+| 5 | `scattered_cover` / `cover_field` | `EnemyBrain` | off | off | off | off | rookie |
+| 6 | `corner` | `EnemyBrain` | **on** | off | off | off | regular |
+| 7 | `rooms` | `EnemyBrain` | on | **on** | off | off | regular |
+| 8 | `corridor` | `EnemyBrain` + search | on | on | **on** | off | veteran |
+| 9 | `vertical` | `EnemyBrain` + jumping | on | on | on | **on** | veteran |
+| 10 | randomized | all of the above | on | on | on | on | veteran |
+
+The exact predicates are `obstacles_enabled()`, `tactical_enemies_enabled()`,
+`ranged_enemies_enabled()`, `perception_enabled()`, `sound_enabled()`,
+`memory_enabled()`, `vertical_enabled()` and
+`randomized_scenarios_enabled()` on `CurriculumConfig`. Every one of them
+returns `false` for levels 1–4, which is what keeps the cheap levels cheap.
+
+## Automatic progression
+
+`scripts/core/curriculum_controller.gd` (`CurriculumController`) advances the
+level from measured performance instead of a fixed step schedule: over a
+rolling window of episodes it promotes when the success rate reaches
+`promote_threshold` and demotes when it falls to `demote_threshold`, with a
+cooldown so a level is never skipped on one lucky episode. A step-count
+schedule promotes a policy that is still failing and holds back one that
+already generalizes; a performance gate does neither. It is opt-in
+(`enabled = false` by default) and leaves the operator's level untouched
+while still collecting statistics.
+
+## Scenarios
+
+`scripts/scenario/scenario_library.gd` defines twelve seedable encounters —
+`open_arena`, `single_target`, `multiple_targets`, `corner_fight`,
+`cover_fight`, `corridor_fight`, `ambush`, `target_disappears`,
+`sound_only`, `multi_direction`, `vertical_encounter`, `randomized_arena`.
+A scenario is pure data (layout id, enemy count, spawn rule, required
+capabilities); `ScenarioLibrary.resolve(id, seed)` is a pure function, so
+the same `(id, seed)` pair always produces the same geometry AND the same
+spawn points. The occlusion-based spawn rules (`out_of_sight`,
+`behind_cover`) sample until the spawn is genuinely not visible from the
+agent's eye, so an "ambush" scenario really starts without visual contact
+instead of merely hoping for it.
 
 All of the per-level knobs live in `CurriculumConfig` methods
 (`spawn_variety_enabled()`, `strafing_enabled()`, `spawn_angle_spread_deg()`,

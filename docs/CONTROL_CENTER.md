@@ -307,3 +307,45 @@ PYTHONPATH=python python -m unittest discover -s python/tests -v
   JSON export; no plotting widget is included (the dependency-free rule).
 * **TRAINING mode inside the window is throughput-only.** It does not train
   weights; use `sandboxai train` for that.
+
+## Perception visualization (world/perception milestone)
+
+`EnvironmentCore` now implements all seven optional hooks `PerceptionModel`
+probes for (`get_agent_field_of_view`, `has_line_of_sight`,
+`get_sound_events`, `get_target_memory`, `get_obstacles`,
+`get_navigation_state`, `get_dead_bodies`), so the Control Center picks
+them up automatically — no panel needed changing to light them up.
+
+The perception tab now separates five layers:
+
+- **REAL WORLD** — ground truth. Debug only; the policy never sees it.
+- **AI PERCEPTION** — decoded from the observation vector, so it is by
+  construction exactly what the policy received.
+- **AI MEMORY** — remembered contacts with their source (visual/sound),
+  age and decaying confidence, plus the reason the current target was
+  selected.
+- **SOUND** — audible events this tick with category, approximate bearing,
+  loudness after occlusion, age, and how many walls the sound passed
+  through.
+- **HIDDEN FROM AI** — alive enemies absent from the observation, now with
+  a distinguished reason: `beyond_tracked_enemy_budget` (the enemy is
+  perceivable but the contract only carries three) versus `not_perceived`
+  (outside the FOV cone or occluded).
+
+`PerceptionOverlay3D` draws the same data in-world: the FOV cone clipped to
+vision range, cover footprints, violet rings at remembered last-known
+positions (radius shrinking with confidence), orange rings for sound
+events, and grey crosses on corpses. `EnvironmentView` additionally renders
+the solid obstacle boxes, colour-coded by kind (olive = low cover you can
+shoot over, blue-grey = standable platform, grey = wall/high cover).
+
+### The isolation guarantee
+
+The session sets `EnvironmentCore.debug_perception = true` only for the
+selected environment, only while presentation is enabled, and only outside
+TRAINING mode. That flag makes the environment *evaluate* perception so it
+can be drawn; it deliberately does **not** feed the perception context into
+`Observation.build()`. Watching the AI can never change what the AI sees.
+`tests/test_perception_isolation.gd` asserts this by running the same
+seeded episode with the flag on and off and comparing every observation
+field at every step.

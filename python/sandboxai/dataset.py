@@ -16,34 +16,54 @@ ACTION_NVECS = ACTION_NVEC
 SCHEMA = "sandboxai.demonstrations"
 
 
+# Mirrors Action.Discrete in scripts/core/action.gd. Index 10 (JUMP) was
+# added with contract v2.
+_DISCRETE_MAPPING: dict[int, list[int]] = {
+    0: [1, 1, 1, 1, 0, 0],
+    1: [2, 1, 1, 1, 0, 0],
+    2: [0, 1, 1, 1, 0, 0],
+    3: [1, 0, 1, 1, 0, 0],
+    4: [1, 2, 1, 1, 0, 0],
+    5: [1, 1, 0, 1, 0, 0],
+    6: [1, 1, 2, 1, 0, 0],
+    7: [1, 1, 1, 2, 0, 0],
+    8: [1, 1, 1, 0, 0, 0],
+    9: [1, 1, 1, 1, 1, 0],
+    10: [1, 1, 1, 1, 0, 1],
+}
+
+
 def discrete_to_multidiscrete(value: int) -> list[int]:
-    mapping = {
-        0: [1, 1, 1, 1, 0],
-        1: [2, 1, 1, 1, 0],
-        2: [0, 1, 1, 1, 0],
-        3: [1, 0, 1, 1, 0],
-        4: [1, 2, 1, 1, 0],
-        5: [1, 1, 0, 1, 0],
-        6: [1, 1, 2, 1, 0],
-        7: [1, 1, 1, 2, 0],
-        8: [1, 1, 1, 0, 0],
-        9: [1, 1, 1, 1, 1],
-    }
-    if value not in mapping:
-        raise ValueError(f"discrete action must be in [0, 9], got {value}")
-    return mapping[value]
+    if value not in _DISCRETE_MAPPING:
+        maximum = max(_DISCRETE_MAPPING)
+        raise ValueError(f"discrete action must be in [0, {maximum}], got {value}")
+    return list(_DISCRETE_MAPPING[value])
 
 
 def action_to_multidiscrete(action: Any) -> list[int]:
-    """Normalise Godot's 7-field Action log or a PPO action to nvec values."""
+    """Normalise a logged Godot Action or a PPO action to nvec values.
+
+    Accepted inputs, all of which are still produced somewhere in the repo:
+
+      * an int discrete action (0-10),
+      * the canonical Godot log array: 7 values (contract v1) or 8 values
+        (contract v2, with ``jump`` at index 5), using -1/0/+1 axes,
+      * a PPO MultiDiscrete action: 5 values (v1) or 6 values (v2), using
+        0/1/2 axes.
+
+    The result always has ``len(ACTION_NVEC)`` entries; a v1 input is padded
+    with ``jump = 0`` so old recorded demonstrations remain trainable
+    against the extended action head instead of silently mis-shaping the
+    batch.
+    """
     if isinstance(action, (int, float)):
         return discrete_to_multidiscrete(int(action))
     values = list(action)
     if len(values) < 5:
         raise ValueError(f"action needs at least 5 fields, got {len(values)}")
-    # Godot demonstrations use 7 values with -1, 0, +1 axes. External PPO uses 5 values with 0, 1, 2.
+    canonical_log = len(values) >= 7
     first = [int(values[index]) for index in range(4)]
-    if len(values) >= 7 or any(value < 0 for value in first):
+    if canonical_log or any(value < 0 for value in first):
         if not all(-1 <= value <= 1 for value in first):
             raise ValueError(f"invalid canonical action axis values: {first}")
         encoded = [value + 1 for value in first]
@@ -54,7 +74,16 @@ def action_to_multidiscrete(action: Any) -> list[int]:
     shoot = int(bool(values[4]))
     if shoot not in (0, 1):
         raise ValueError("shoot action must be binary")
-    return encoded + [shoot]
+    # Jump lives at index 5 in both the v2 log array and the v2 PPO action;
+    # a 7-value v1 log has continuous look deltas there instead, so it is
+    # only read when the payload is long enough to be v2.
+    jump = 0
+    if canonical_log:
+        if len(values) >= 8:
+            jump = int(bool(values[5]))
+    elif len(values) >= 6:
+        jump = int(bool(values[5]))
+    return encoded + [shoot, jump]
 
 
 @dataclass

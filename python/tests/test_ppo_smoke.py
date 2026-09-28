@@ -20,7 +20,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sandboxai.contract import OBSERVATION_FIELD_COUNT
+from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.godot_env import GodotVecEnv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -131,7 +131,7 @@ class PPOSmokeTest(unittest.TestCase):
             model.learn(total_timesteps=64)
             observation = env.reset()
             action, _ = model.predict(observation, deterministic=True)
-            self.assertEqual(action.shape, (2, 5))
+            self.assertEqual(action.shape, (2, len(ACTION_NVEC)))
         finally:
             env.close()
 

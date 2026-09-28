@@ -38,6 +38,10 @@ const AGENT_TURN_SPEED_DEG: float = 110.0  # degrees / second (yaw & pitch)
 const AGENT_PITCH_LIMIT_DEG: float = 80.0  # +/- clamp from horizontal
 const AGENT_EYE_HEIGHT: float = 1.6
 const AGENT_RADIUS: float = 0.4
+## Standing collision height (feet -> top of head), used by the world
+## collision queries. Slightly above the eye height so a character cannot
+## slip under a box its eyes clear.
+const AGENT_HEIGHT: float = 1.8
 const AGENT_SPAWN_POSITION: Vector3 = Vector3(0.0, 0.0, 6.0)
 ## yaw=0 corresponds to forward=(0,0,-1); the enemy spawns at negative Z, so
 ## yaw=0 already faces the agent directly at the enemy on episode start.
@@ -90,6 +94,121 @@ const ENEMY_STRAFE_ANGULAR_SPEED: float = 1.6
 ## nearest few threats, matching what a human/Roblox player could plausibly
 ## track. Kept small deliberately to keep the observation cheap.
 const OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
+
+# ---------------------------------------------------------------------------
+# Vertical movement (gravity / jumping)
+#
+# Analytic, fixed-timestep integration — no PhysicsServer. Numbers are
+# chosen so a jump clears a 1.0 m low-cover crate but not a 2.4 m high
+# cover wall, which is what makes "jump onto the platform to change the
+# sight line" a real tactical decision instead of a free win.
+# ---------------------------------------------------------------------------
+const GRAVITY: float = -19.0  # meters / second^2
+const JUMP_VELOCITY: float = 6.0  # meters / second, apex ~0.95 m
+## Fraction of full ground acceleration available while airborne. Keeps
+## bunny-hopping from being strictly better than running.
+const AIR_CONTROL: float = 0.45
+## Vertical speed below which a falling character is considered landed.
+const LANDING_EPSILON: float = 0.01
+## Maximum vertical extent used to normalize height-related observations.
+const MAX_VERTICAL_EXTENT: float = 6.0
+
+# ---------------------------------------------------------------------------
+# Perception: field of view, line of sight, detection latency
+# ---------------------------------------------------------------------------
+## Horizontal field of view (total cone angle, degrees) used to decide
+## whether a target is visually perceivable at all. 100 deg approximates a
+## typical FPS horizontal FOV.
+const AGENT_FOV_DEG: float = 100.0
+const ENEMY_FOV_DEG: float = 110.0
+## Maximum distance at which a target can be visually acquired.
+const VISION_RANGE: float = 28.0
+## How long a target must remain continuously inside FOV with clear line of
+## sight before the observer registers it (seconds). Prevents impossible
+## zero-latency reactions; set to 0.0 for instantaneous perception.
+const AGENT_VISUAL_DETECTION_DELAY: float = 0.12
+## How long a visible target keeps being reported after it leaves FOV/LOS.
+## Models the fact that losing a target is not instantaneous either.
+const VISUAL_LOSS_GRACE: float = 0.10
+
+# ---------------------------------------------------------------------------
+# Sound
+#
+# Sound is modelled as discrete, decaying events with a base audible radius
+# that is attenuated once per sight-blocking box between source and
+# listener. A listener receives direction + distance + category + age, never
+# the emitter's identity or exact coordinates.
+# ---------------------------------------------------------------------------
+const SOUND_FOOTSTEP_RADIUS: float = 9.0
+const SOUND_JUMP_RADIUS: float = 7.0
+const SOUND_LAND_RADIUS: float = 11.0
+const SOUND_SHOT_RADIUS: float = 26.0
+const SOUND_IMPACT_RADIUS: float = 13.0
+const SOUND_DEATH_RADIUS: float = 15.0
+## Multiplier applied to the audible radius for every wall between the
+## source and the listener.
+const SOUND_OCCLUSION_ATTENUATION: float = 0.55
+## Seconds a sound event stays in the bus before being discarded.
+const SOUND_EVENT_LIFETIME: float = 2.0
+## Hard cap on simultaneously tracked sound events per environment. Keeps
+## the perception update allocation-free and bounded.
+const SOUND_MAX_ACTIVE: int = 24
+## Seconds between footstep emissions while moving on the ground.
+const FOOTSTEP_INTERVAL: float = 0.38
+## Perceived-direction error, in degrees, applied deterministically to a
+## heard event. Hearing is directional but not pinpoint.
+const SOUND_DIRECTION_ERROR_DEG: float = 14.0
+## Delay before a sound event is consciously registered (seconds).
+const SOUND_DETECTION_DELAY: float = 0.08
+## Memory-track id used for "something I only heard". Hearing never
+## identifies WHICH enemy made the noise, so sound-only contacts are keyed
+## separately from the per-enemy visual tracks.
+const SOUND_UNKNOWN_SOURCE_ID: int = -999
+
+# ---------------------------------------------------------------------------
+# Enemy memory
+# ---------------------------------------------------------------------------
+## Confidence decays exponentially with this half-life (seconds) once
+## contact is lost.
+const MEMORY_HALF_LIFE: float = 3.0
+## A track below this confidence is forgotten entirely.
+const MEMORY_FORGET_CONFIDENCE: float = 0.05
+## Hard cap on remembered tracks per observer.
+const MEMORY_MAX_TRACKS: int = 8
+## Age (seconds) used to normalize the memory-age observation fields.
+const MEMORY_MAX_AGE: float = 12.0
+
+# ---------------------------------------------------------------------------
+# Enemy tactical behavior
+# ---------------------------------------------------------------------------
+## Ranged enemy fire (enabled from the obstacles/cover curriculum level on).
+const ENEMY_FIRE_RANGE: float = 16.0
+const ENEMY_FIRE_DAMAGE: float = 9.0
+const ENEMY_FIRE_COOLDOWN: float = 0.85
+## Radius searched for a cover / peek position around the enemy.
+const ENEMY_COVER_SEARCH_RADIUS: float = 4.0
+## Distance the enemy tries to hold from the agent while engaging.
+const ENEMY_PREFERRED_RANGE: float = 7.0
+## Health fraction below which an engaging enemy breaks for cover.
+const ENEMY_RETREAT_HEALTH_FRACTION: float = 0.35
+## Seconds an enemy stays behind cover before peeking again.
+const ENEMY_COVER_DWELL: float = 1.2
+## Seconds an enemy spends searching a lost target's last known position
+## before giving up and returning to idle.
+const ENEMY_SEARCH_DURATION: float = 7.0
+## Radius the enemy wanders around the last known position while searching.
+const ENEMY_SEARCH_RADIUS: float = 3.0
+## Probability an enemy jumps when it needs to climb onto a standable box
+## that is directly in its path.
+const ENEMY_JUMP_PROBABILITY: float = 0.35
+
+# ---------------------------------------------------------------------------
+# Corpses
+# ---------------------------------------------------------------------------
+## Dead characters remain in the world as inert corpses for the rest of the
+## episode. A corpse is never a target, never perceived as an enemy and
+## never emits sound; it exists only as environmental information.
+const CORPSES_PERSIST: bool = true
 
 # ---------------------------------------------------------------------------
 # Weapon

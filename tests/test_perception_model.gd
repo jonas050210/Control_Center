@@ -157,28 +157,61 @@ func test_tracked_indices_follow_the_observation_ranking_rule() -> SandboxTest:
 	return t
 
 
-func test_unimplemented_perception_features_are_reported_unavailable() -> SandboxTest:
-	var t := SandboxTest.new("perception_unavailable_features")
+## Originally asserted that FOV/LOS/sound/memory were all unavailable,
+## because none of them existed. They exist now, so the invariant this
+## guards has been inverted rather than deleted: a feature is reported
+## available if and only if the environment really implements the hook, and
+## an unavailable one must still carry an explanation instead of being
+## silently faked.
+func test_perception_features_are_reported_honestly() -> SandboxTest:
+	var t := SandboxTest.new("perception_features_reported_honestly")
 	var env := EnvironmentCore.new(0, 1)
 	env.reset(9)
 	var perception: Dictionary = PerceptionModel.build(env)
 	var capabilities: Dictionary = perception["capabilities"]
 
-	for feature_id in ["field_of_view", "line_of_sight", "sound_events", "target_memory"]:
+	for feature_id in [
+		"field_of_view",
+		"line_of_sight",
+		"sound_events",
+		"target_memory",
+		"obstacles_cover",
+		"navigation",
+		"dead_bodies"
+	]:
 		t.assert_true(capabilities.has(feature_id), "%s must be described" % feature_id)
 		var capability: Dictionary = capabilities[feature_id]
-		t.assert_false(
+		var method_name: String = str(capability["method"])
+		t.assert_eq(
 			bool(capability["available"]),
-			"%s does not exist in this simulation and must not be faked" % feature_id
+			env.has_method(method_name),
+			"%s availability must match has_method(%s)" % [feature_id, method_name]
 		)
-		t.assert_false(
-			str(capability["note"]).is_empty(), "%s must explain why it is unavailable" % feature_id
-		)
+		if not bool(capability["available"]):
+			t.assert_false(
+				str(capability["note"]).is_empty(),
+				"%s must explain why it is unavailable" % feature_id
+			)
+
 	t.assert_eq(
 		(perception["unavailable_features"] as Array).size(),
-		capabilities.size(),
-		"no perception feature is silently claimed as working"
+		0,
+		"EnvironmentCore implements every perception hook"
 	)
+	return t
+
+
+## An environment WITHOUT the hooks must still be described honestly: this
+## is what keeps the Control Center from inventing perception data for the
+## self-play environment or a future adapter.
+func test_environment_without_hooks_reports_every_feature_unavailable() -> SandboxTest:
+	var t := SandboxTest.new("environment_without_hooks_reports_unavailable")
+	var capabilities: Dictionary = PerceptionModel.capabilities(RefCounted.new())
+	t.assert_eq(capabilities.size(), PerceptionModel.OPTIONAL_FEATURES.size())
+	for feature_id in capabilities.keys():
+		var capability: Dictionary = capabilities[feature_id]
+		t.assert_false(bool(capability["available"]), "%s must not be faked" % feature_id)
+		t.assert_false(str(capability["note"]).is_empty())
 	return t
 
 
