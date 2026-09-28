@@ -5,6 +5,15 @@
 ## `NOTIFICATION_WM_CLOSE_REQUEST` in a SceneTree script), which no test
 ## caught because nothing ever loaded them. Loading them here ensures they
 ## at least compile against the running engine version.
+##
+## The preload-closure test below extends the same idea to every script the
+## entry points pull in: an invalid DEPENDENCY does not stop its preloader
+## from compiling (a failed script still loads as a resource), so checking
+## only the entry point itself cannot see it. That is exactly how a broken
+## call (`LightingProfile.mode(...)`, an instance variable, called through
+## the script class) once made SelfPlayEnvironmentCore.new() return null and
+## the whole self-play bridge silently answer `observations: []` while every
+## single-agent check still passed.
 class_name TestHeadlessEntrypoints
 extends RefCounted
 
@@ -28,3 +37,67 @@ func test_scene_tree_entry_points_compile() -> SandboxTest:
 		var base: StringName = script.get_instance_base_type()
 		t.assert_eq(String(base), "SceneTree", "%s must extend SceneTree" % path)
 	return t
+
+
+## Every script in the transitive preload closure of every headless entry
+## point must load AND compile (can_instantiate). A script that fails to
+## compile still loads as an (invalid) resource, so `load()` alone proves
+## nothing — can_instantiate() is what actually fails for an invalid script.
+func test_entry_point_preload_closures_compile() -> SandboxTest:
+	var t := SandboxTest.new("entry_point_preload_closures_compile")
+	var closure: Array = _preload_closure(ENTRY_POINT_PATHS)
+	t.assert_gt(float(closure.size()), 20.0, "closure should cover dozens of scripts")
+	for path in closure:
+		var script: Script = load(path) as Script
+		t.assert_not_null(script, "%s should load" % path)
+		if script == null:
+			continue
+		t.assert_true(
+			script.can_instantiate(),
+			"%s should compile (an invalid script makes .new() return null)" % path
+		)
+	return t
+
+
+## Walks every preload/load resource-literal (res:// path) starting
+## from `roots` and returns the sorted, de-duplicated res:// paths.
+static func _preload_closure(roots: Array) -> Array:
+	var seen: Dictionary = {}
+	var stack: Array = roots.duplicate()
+	while not stack.is_empty():
+		var path: String = stack.pop_back()
+		if seen.has(path):
+			continue
+		seen[path] = true
+		var script: Script = load(path) as Script
+		if script == null or script.source_code.is_empty():
+			continue
+		for dependency in _literal_resource_paths(script.source_code):
+			if not seen.has(dependency):
+				stack.append(dependency)
+	var paths: Array = seen.keys()
+	paths.sort()
+	return paths
+
+
+## Extracts the `res://...` string literals passed to `preload(...)` /
+## `load(...)` in one script's source. Plain string scanning (rather than a
+## RegEx pattern) keeps the pattern text itself from looking like a resource
+## literal to the repository's static analyzer.
+static func _literal_resource_paths(source: String) -> Array:
+	var paths: Array = []
+	var needle := "load(\""
+	var cursor := 0
+	while true:
+		var hit: int = source.find(needle, cursor)
+		if hit < 0:
+			break
+		var start: int = hit + needle.length()
+		var end: int = source.find("\")", start)
+		if end < 0:
+			break
+		var candidate: String = source.substr(start, end - start)
+		if candidate.begins_with("res://") and not candidate.contains("%"):
+			paths.append(candidate)
+		cursor = end
+	return paths

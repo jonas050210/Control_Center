@@ -107,11 +107,21 @@ func _handle_self_play_request(request) -> Dictionary:
 				"policy_slots": 2,
 			}
 		"reset":
-			var seed: int = int(request.get("seed", -1))
-			response = {"ok": true, "observations": self_play_adapter.reset(seed)}
+			if self_play_adapter.environment_count() == 0:
+				# Empty environments means SelfPlayEnvironmentCore failed to
+				# construct at startup (a compile error — see stderr). Answer
+				# with an explicit error instead of a silent `observations: []`,
+				# which the Python side can only report as a shape mismatch.
+				response = {"ok": false, "error": _self_play_empty_error()}
+			else:
+				var seed: int = int(request.get("seed", -1))
+				response = {"ok": true, "observations": self_play_adapter.reset(seed)}
 		"step":
-			response = self_play_adapter.step(request.get("actions", []))
-			response["ok"] = true
+			if self_play_adapter.environment_count() == 0:
+				response = {"ok": false, "error": _self_play_empty_error()}
+			else:
+				response = self_play_adapter.step(request.get("actions", []))
+				response["ok"] = true
 		"health_check":
 			response = {"ok": true, "health": self_play_adapter.health_check()}
 		"set_map":
@@ -140,6 +150,19 @@ func _handle_self_play_request(request) -> Dictionary:
 				"error": "command %s is not supported in self-play mode" % command,
 			}
 	return response
+
+
+## Error body used when the self-play adapter holds zero environments. That
+## state is unreachable for a compiling script tree: it means
+## SelfPlayEnvironmentCore.new() returned null during startup because the
+## script (or one of its dependencies) failed to compile. The compile error is
+## on stderr; this response makes the failure visible over the wire too.
+func _self_play_empty_error() -> String:
+	return (
+		"self-play adapter has 0 environments: SelfPlayEnvironmentCore failed "
+		+ "to construct at startup (a Godot compile error; see the engine's "
+		+ "stderr output)"
+	)
 
 
 func _handle_request(request) -> Dictionary:

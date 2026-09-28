@@ -415,7 +415,19 @@ class RuntimeValidator:
                 }
             except Exception as exc:
                 check_self_play.passed = False
-                check_self_play.error = str(exc)
+                error_text = str(exc)
+                # Self-play failures are usually caused inside the Godot
+                # process (e.g. a script that failed to compile makes
+                # SelfPlayEnvironmentCore.new() return null, the adapter then
+                # holds zero environments and reset answers a silent
+                # `observations: []`). The engine's SCRIPT ERROR for that is
+                # on stderr only, so attach the tail to the report; without it
+                # the check can only show the downstream shape mismatch.
+                if sp_transport is not None:
+                    stderr_tail = sp_transport.stderr_tail().strip()
+                    if stderr_tail:
+                        error_text = f"{error_text} | Godot stderr tail: {stderr_tail}"
+                check_self_play.error = error_text
             finally:
                 if sp_transport is not None:
                     try:

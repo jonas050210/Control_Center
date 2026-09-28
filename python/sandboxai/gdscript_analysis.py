@@ -39,6 +39,9 @@ _CLASS_NAME_RE = re.compile(r"^\s*class_name\s+([A-Za-z_]\w*)")
 _EXTENDS_RE = re.compile(r"^\s*extends\s+([A-Za-z_][\w\.]*)")
 _CONST_RE = re.compile(r"^\s*const\s+([A-Za-z_]\w*)")
 _VAR_RE = re.compile(r"^\s*(?:@export[^\s]*\s+|@onready\s+|static\s+)*var\s+([A-Za-z_]\w*)")
+## Captures the optional `static` prefix separately so the analyzer can tell
+## class-level (static) functions from instance functions.
+_FUNC_DECL_RE = re.compile(r"^\s*(static\s+)?func\s+([A-Za-z_]\w*)\s*\(")
 _FUNC_RE = re.compile(r"^\s*(?:static\s+)?func\s+([A-Za-z_]\w*)\s*\(")
 _SIGNAL_RE = re.compile(r"^\s*signal\s+([A-Za-z_]\w*)")
 _ENUM_RE = re.compile(r"^\s*enum\s+([A-Za-z_]\w*)?\s*\{")
@@ -103,6 +106,10 @@ class ScriptInfo:
     extends: str | None = None
     members: set[str] = field(default_factory=set)
     functions: dict[str, tuple[int, int]] = field(default_factory=dict)
+    ## Names declared as `static func`: the ONLY functions that may be called
+    ## through the script class itself (`Alias.name(...)`), besides the
+    ## constructor and the Script-resource methods.
+    static_functions: set[str] = field(default_factory=set)
     preloads: dict[str, str] = field(default_factory=dict)
     res_references: set[str] = field(default_factory=set)
     lines: list[str] = field(default_factory=list)
@@ -284,10 +291,12 @@ def parse_script(path: Path, root: Path) -> ScriptInfo:
             else:
                 info.members.update(_parse_enum_values(lines, index))
             continue
-        func_match = _FUNC_RE.match(cleaned)
+        func_match = _FUNC_DECL_RE.match(cleaned)
         if func_match:
-            name = func_match.group(1)
+            name = func_match.group(2)
             info.members.add(name)
+            if func_match.group(1):
+                info.static_functions.add(name)
             # A GDScript signature may wrap across several lines; accumulate
             # until the parameter parentheses balance before counting.
             signature = cleaned
@@ -357,6 +366,34 @@ class ProjectIndex:
         if parent_members is None:
             return None
         return members | parent_members
+
+    def all_static_functions(self, info: ScriptInfo, _seen: set[str] | None = None) -> set[str] | None:
+        """Static functions of ``info`` plus its project-local base classes.
+
+        Static functions are inherited like any other member, so a call
+        through a derived script's alias may resolve into a base script.
+        Returns ``None`` when the chain leaves the project.
+        """
+        seen = _seen or set()
+        if info.res_path in seen:
+            return set(info.static_functions)
+        seen.add(info.res_path)
+        statics = set(info.static_functions)
+        base = info.extends
+        if not base or base in ("RefCounted", "Object"):
+            return statics
+        if base in BUILTIN_TYPES or "." in base:
+            return None
+        base_info = self.by_class.get(base) or self.by_res.get(base)
+        if base_info is None:
+            base_res = info.preloads.get(base)
+            base_info = self.by_res.get(base_res) if base_res else None
+        if base_info is None:
+            return None
+        parent_statics = self.all_static_functions(base_info, seen)
+        if parent_statics is None:
+            return None
+        return statics | parent_statics
 
 
 def check_resource_paths(index: ProjectIndex) -> list[Finding]:
@@ -471,6 +508,63 @@ def _extract_call_args(source: str, start: int) -> tuple[str, bool]:
     return "".join(out), False
 
 
+def check_static_calls(index: ProjectIndex) -> list[Finding]:
+    """Flags ``Alias.member(...)`` where ``Alias`` resolves to a project
+    script and ``member`` exists there but is NOT a static function.
+
+    Godot 4.x rejects this at COMPILE time ("Static function ... not found in
+    base ..." / "Cannot call non-static function ... on the class ... directly"
+    / "Member ... is not a function."), which invalidates the whole calling
+    script. An invalid script still loads as a resource, so ``preload`` chains
+    survive and the engine keeps running: ``Alias.new()`` silently returns
+    ``null`` and every structure built from it comes back empty. That exact
+    cascade turned the self-play reset observation into ``[]`` while every
+    single-agent check still passed, which is why it deserves its own static
+    check rather than trust in the (Godot-only) test suite.
+
+    Members that do not exist at all are already reported by
+    :func:`check_symbols` as ``unknown-member``; this check is only about the
+    "exists but is an instance member" case, which symbol resolution alone
+    cannot see.
+    """
+    findings: list[Finding] = []
+    call_re = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([a-z_]\w*)\s*\(")
+    for info in index.by_res.values():
+        source = "\n".join(_strip_strings_and_comments(line) for line in info.lines)
+        for match in call_re.finditer(source):
+            alias, member = match.group(1), match.group(2)
+            if alias in BUILTIN_TYPES or member in UNIVERSAL_MEMBERS:
+                continue
+            if alias not in info.preloads and alias not in index.by_class:
+                continue
+            target = index.resolve(alias, info)
+            if target is None:
+                continue
+            statics = index.all_static_functions(target)
+            if statics is None or member in statics:
+                continue
+            members = index.all_members(target)
+            if members is None or member not in members:
+                # Missing members are check_symbols' business; inheritance may
+                # also make this undecidable here.
+                continue
+            kind = "instance function" if member in target.functions else "instance member"
+            line_number = source[: match.start()].count("\n") + 1
+            findings.append(
+                Finding(
+                    info.res_path,
+                    line_number,
+                    "nonstatic-call",
+                    (
+                        f"{alias}.{member}() is an {kind} of {target.res_path}; "
+                        "calling it through the script class is a Godot compile "
+                        "error and invalidates this whole script"
+                    ),
+                )
+            )
+    return findings
+
+
 def parse_all(root: Path | str | None = None) -> list[Finding]:
     """Runs the gdtoolkit grammar over every project script."""
     root = Path(root) if root else project_root()
@@ -542,13 +636,14 @@ def lint_all(root: Path | str | None = None) -> list[Finding]:
 
 
 def analyze(root: Path | str | None = None) -> list[Finding]:
-    """Full static analysis: syntax + resources + symbols + call arity."""
+    """Full static analysis: syntax + resources + symbols + call arity + static calls."""
     root = Path(root) if root else project_root()
     index = ProjectIndex(root)
     findings = parse_all(root)
     findings.extend(check_resource_paths(index))
     findings.extend(check_symbols(index))
     findings.extend(check_call_arity(index))
+    findings.extend(check_static_calls(index))
     return findings
 
 

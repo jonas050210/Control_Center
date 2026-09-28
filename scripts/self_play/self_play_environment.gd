@@ -125,14 +125,16 @@ func reset(seed_a: int = SandboxConfig.DEFAULT_RANDOM_SEED, seed_b: int = -1) ->
 			)
 			arena_half_extent = world.half_extent
 			if lighting_mode_id.is_empty():
-				lighting = LightingProfile.mode(str(map_def.get("lighting", "normal")))
+				lighting = LightingProfile.from_id(
+					str(map_def.get("lighting", "normal")), seed_a
+				)
 			else:
-				lighting = LightingProfile.mode(lighting_mode_id)
+				lighting = LightingProfile.from_id(lighting_mode_id, seed_a)
 		else:
 			var l_id: String = layout_id if not layout_id.is_empty() else "scattered_cover"
 			world = WorldGenerator.build(l_id, seed_a, arena_half_extent)
 			lighting = (
-				LightingProfile.mode(lighting_mode_id)
+				LightingProfile.from_id(lighting_mode_id, seed_a)
 				if not lighting_mode_id.is_empty()
 				else LightingProfile.create()
 			)
@@ -140,7 +142,7 @@ func reset(seed_a: int = SandboxConfig.DEFAULT_RANDOM_SEED, seed_b: int = -1) ->
 		world = null
 		arena_half_extent = SandboxConfig.ARENA_HALF_EXTENT
 		lighting = (
-			LightingProfile.mode(lighting_mode_id)
+			LightingProfile.from_id(lighting_mode_id, seed_a)
 			if not lighting_mode_id.is_empty()
 			else LightingProfile.create()
 		)

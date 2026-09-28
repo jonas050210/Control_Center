@@ -35,6 +35,18 @@ func _init(environment_count: int = 1, base_seed: int = SandboxConfig.DEFAULT_RA
 	var count: int = maxi(1, environment_count)
 	for index in range(count):
 		var env := SelfPlayEnvironmentCore.new()
+		if env == null:
+			# A script that failed to COMPILE still loads as a resource, so
+			# this preload chain works, but .new() returns null. Without this
+			# guard the null reset() call below aborts _init BEFORE the
+			# append, leaving `environments` empty — every later reset then
+			# silently serializes as [] over the bridge. Fail loudly instead
+			# (the compile error itself is on stderr) and keep going with the
+			# environments that did construct.
+			push_error(
+				"SelfPlayEnvironmentCore.new() returned null: the script failed to compile"
+			)
+			continue
 		env.reset(base_seed + index)
 		environments.append(env)
 
