@@ -32,6 +32,66 @@ const FIELD_COUNT: int = 33
 ## Total number of enemies individually reported (primary + tracked extras).
 const MAX_TRACKED_ENEMIES: int = SandboxConfig.OBSERVATION_MAX_TRACKED_ENEMIES
 
+## Machine-readable layout of `to_array()` and the single Godot-side source
+## of truth for observation field names/indices/groups.
+##
+## It exists so tooling (the Control Center's Observation Inspector, any
+## future export/logging code) can label the raw vector WITHOUT hard-coding
+## a second field list that silently rots when the contract changes. Adding
+## or reordering a field means editing `to_array()`, this list, the field
+## table in docs/OBSERVATION_ACTION_CONTRACT.md and
+## python/sandboxai/contract.py together.
+##
+## Each entry is {"index": int, "width": int, "name": String, "group": String}.
+## `name` matches python/sandboxai/contract.py OBSERVATION_SPEC exactly, and
+## python/tests/test_contract.py statically compares the two lists so drift
+## fails a test instead of producing mislabeled UI.
+##
+## This is a constant: building it costs nothing at runtime and nothing on
+## the training hot path ever reads it (`to_array()` does not touch it).
+const FIELD_SPEC: Array = [
+	{"index": 0, "width": 3, "name": "agent_position_norm", "group": "agent"},
+	{"index": 3, "width": 3, "name": "agent_velocity_norm", "group": "agent"},
+	{"index": 6, "width": 3, "name": "agent_forward", "group": "agent"},
+	{"index": 9, "width": 1, "name": "agent_health_norm", "group": "agent"},
+	{
+		"index": 10,
+		"width": 3,
+		"name": "primary_enemy_relative_position_norm",
+		"group": "primary_enemy"
+	},
+	{"index": 13, "width": 1, "name": "primary_enemy_distance_norm", "group": "primary_enemy"},
+	{"index": 14, "width": 1, "name": "primary_enemy_health_norm", "group": "primary_enemy"},
+	{"index": 15, "width": 1, "name": "weapon_ready", "group": "weapon"},
+	{"index": 16, "width": 1, "name": "in_combat", "group": "weapon"},
+	{"index": 17, "width": 1, "name": "primary_enemy_bearing_norm", "group": "primary_enemy"},
+	{"index": 18, "width": 1, "name": "alive_enemy_count_norm", "group": "world"},
+	{
+		"index": 19,
+		"width": 3,
+		"name": "secondary_enemy_relative_position_norm",
+		"group": "secondary_enemy"
+	},
+	{"index": 22, "width": 1, "name": "secondary_enemy_distance_norm", "group": "secondary_enemy"},
+	{"index": 23, "width": 1, "name": "secondary_enemy_bearing_norm", "group": "secondary_enemy"},
+	{"index": 24, "width": 1, "name": "secondary_enemy_health_norm", "group": "secondary_enemy"},
+	{"index": 25, "width": 1, "name": "secondary_enemy_alive", "group": "secondary_enemy"},
+	{
+		"index": 26,
+		"width": 3,
+		"name": "tertiary_enemy_relative_position_norm",
+		"group": "tertiary_enemy"
+	},
+	{"index": 29, "width": 1, "name": "tertiary_enemy_distance_norm", "group": "tertiary_enemy"},
+	{"index": 30, "width": 1, "name": "tertiary_enemy_bearing_norm", "group": "tertiary_enemy"},
+	{"index": 31, "width": 1, "name": "tertiary_enemy_health_norm", "group": "tertiary_enemy"},
+	{"index": 32, "width": 1, "name": "tertiary_enemy_alive", "group": "tertiary_enemy"},
+]
+
+## Per-component suffixes appended to a multi-value field's name (a width-3
+## field covers three consecutive vector indices).
+const FIELD_COMPONENT_SUFFIXES: Array = [".x", ".y", ".z", ".w"]
+
 ## Absolute path to this very script. `build()` constructs a new instance via
 ## `load(SELF_PATH).new()` rather than `Observation.new()`: referencing the
 ## script's own `class_name` in a value context needs the editor global-class
@@ -98,7 +158,7 @@ static func build(agent: AgentState, enemies: Array, arena_half_extent: float) -
 	obs.agent_health_norm = agent.health / maxf(agent.max_health, 0.0001)
 	obs.weapon_ready = agent.weapon.is_ready()
 
-	var ranked_alive: Array = _rank_alive_enemies(enemies, agent.position)
+	var ranked_alive: Array = rank_alive_enemies(enemies, agent.position)
 	obs.alive_enemy_count_norm = (
 		float(ranked_alive.size()) / float(maxi(1, enemies.size())) if enemies.size() > 0 else 0.0
 	)
@@ -153,7 +213,13 @@ static func build(agent: AgentState, enemies: Array, arena_half_extent: float) -
 ## original enemy index as an explicit tie-breaker, so two enemies at the
 ## exact same distance always resolve in list order regardless of the
 ## engine's sort-stability guarantees (which Godot does not document).
-static func _rank_alive_enemies(enemies: Array, agent_position: Vector3) -> Array:
+##
+## Public because this ranking IS the contract's definition of
+## primary/secondary/tertiary enemy. Tooling that has to explain which
+## enemies ended up in the observation (the Control Center's perception
+## view) calls this instead of re-implementing the rule and drifting from
+## it.
+static func rank_alive_enemies(enemies: Array, agent_position: Vector3) -> Array:
 	var alive_list: Array = []
 	for i in range(enemies.size()):
 		var enemy: EnemyState = enemies[i]
@@ -288,3 +354,42 @@ func to_dict() -> Dictionary:
 		"tertiary_enemy_health_norm": tertiary_enemy_health_norm,
 		"tertiary_enemy_alive": tertiary_enemy_alive,
 	}
+
+
+## Deep copy of FIELD_SPEC, safe for callers that want to annotate entries.
+## Tooling only (Control Center inspector, exporters, tests); neither the
+## simulation nor the RL bridge ever calls it.
+static func field_layout() -> Array:
+	return FIELD_SPEC.duplicate(true)
+
+
+## One label per observation-vector index (length == FIELD_COUNT), derived
+## from FIELD_SPEC. Width-3 fields expand to `name.x`, `name.y`, `name.z`.
+static func field_names() -> PackedStringArray:
+	var names := PackedStringArray()
+	names.resize(FIELD_COUNT)
+	for entry_value in FIELD_SPEC:
+		var entry: Dictionary = entry_value
+		var start: int = int(entry["index"])
+		var width: int = int(entry["width"])
+		var base_name: String = str(entry["name"])
+		for offset in range(width):
+			var index: int = start + offset
+			if index < 0 or index >= FIELD_COUNT:
+				continue
+			if width == 1:
+				names[index] = base_name
+			else:
+				names[index] = base_name + str(FIELD_COMPONENT_SUFFIXES[offset])
+	return names
+
+
+## Group label for one observation-vector index ("agent", "primary_enemy",
+## ...), derived from FIELD_SPEC. Returns "" for an out-of-range index.
+static func field_group(index: int) -> String:
+	for entry_value in FIELD_SPEC:
+		var entry: Dictionary = entry_value
+		var start: int = int(entry["index"])
+		if index >= start and index < start + int(entry["width"]):
+			return str(entry["group"])
+	return ""

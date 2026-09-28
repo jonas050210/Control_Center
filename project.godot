@@ -17,8 +17,12 @@ run/flush_stdout_on_print=true
 
 [display]
 
-window/size/viewport_width=1280
-window/size/viewport_height=720
+; The Control Center packs a status bar, two side docks and a bottom dock
+; around the 3D view; 1600x900 keeps every panel readable at the default
+; size while still fitting a 1080p desktop. scenes/main.tscn is unaffected.
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/size/resizable=true
 window/stretch/mode="canvas_items"
 
 [physics]

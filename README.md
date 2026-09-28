@@ -74,6 +74,52 @@ The remaining default environments use the deterministic stub controller.
 Human and AI controllers both produce the same `Action` representation used
 by RL and recording.
 
+## Control Center
+
+The Control Center is the interactive front-end: one window to operate,
+watch, play, inspect and evaluate the same simulation the trainer uses.
+
+```bash
+# Godot directly
+godot --path . res://scenes/control_center.tscn
+
+# ... or through the CLI, with settings
+sandboxai control-center --mode watch --env-count 4 --enemy-count 1 \
+    --curriculum-level 3 --seed 1234
+```
+
+It provides:
+
+- three modes over one simulation — **TRAINING** (headless-style
+  throughput, rendering/telemetry/logging off), **WATCH** (render the
+  selected environment while the AI drives) and **HUMAN** (drive the same
+  agent through the same `HumanController` -> `Action` pipeline)
+- simulation controls: play/pause, single step, step x10, deterministic or
+  randomized reset, reset all, speed `0.25x`-`16x` (implemented as
+  simulation steps per frame, never `Engine.time_scale`)
+- a live agent panel (position, health, target, action, reward, kills,
+  damage, accuracy) and an in-world HUD with crosshair and hit feedback
+- **"What does the AI see?"** — REAL WORLD ground truth and AI PERCEPTION
+  (decoded from the observation vector only) side by side, with enemies
+  that are hidden from the AI flagged explicitly and unimplemented
+  perception features marked as unavailable
+- an Observation Inspector for all 33 contract fields, driven by
+  `Observation.FIELD_SPEC` (no duplicated field lists)
+- results/metrics with HUMAN vs AI comparison and JSON export
+- a throttled, filterable event log (`ALL/COMBAT/PERCEPTION/SYSTEM/
+  REWARD/ERROR`)
+- presentation-only cameras: first person, third person, free, top-down
+
+Shortcuts: `F1`/`F2`/`F3` toggle the docks, `Space` pauses, `N` steps, `R`
+resets, `Tab` cycles inspector tabs.
+
+The Control Center is **never** part of the RL training path: it is not
+constructed at all when the display server is headless, `scenes/main.tscn`
+remains the project's main scene, and `sandboxai train` still launches
+`scripts/rl/rl_server.gd` with `--headless`.
+
+Full documentation: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
+
 ## Automated tests
 
 Godot tests:
@@ -132,6 +178,17 @@ Inspect and validate a dataset without PyTorch:
 ```bash
 sandboxai inspect-dataset --dataset training/datasets/human_demo.jsonl
 ```
+
+### Open the Control Center
+
+```bash
+sandboxai control-center                      # WATCH mode, defaults
+sandboxai control-center --mode human         # play the agent yourself
+sandboxai control-center --scenario overwhelmed --env-count 8
+```
+
+This opens the graphical Godot scene `scenes/control_center.tscn` (never
+headless). See [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
 ### Behavior Cloning
 
@@ -305,6 +362,12 @@ location and best-effort resource utilization.
   GUI (FPS/telemetry + pause/reset/enemy-count/curriculum controls). It is
   never created by the headless RL bridge. See
   [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md).
+- `scripts/control_center/` is the Control Center: a data layer
+  (`control_center_config/session/event_log/results/telemetry`,
+  `observation_inspector`, `perception_model`) plus a UI layer
+  (`scripts/control_center/ui/`). It consumes simulation state only, reuses
+  the existing controller/observation pipeline, and is skipped entirely in
+  headless processes. See [`docs/CONTROL_CENTER.md`](docs/CONTROL_CENTER.md).
 - `python/sandboxai/contract.py` documents the Observation/Action contract
   as data and defines the abstract `GameAdapter` boundary a future external
   Roblox Player adapter would implement. No Roblox integration exists yet —

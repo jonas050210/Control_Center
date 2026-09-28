@@ -223,3 +223,63 @@ func test_deterministic_base_seed_gives_reproducible_environment_set() -> Sandbo
 	sim_a.free()
 	sim_b.free()
 	return t
+
+
+## Phase 15: the Control Center renders one environment at a time, so the
+## manager must be able to skip view creation for the rest.
+func test_visual_environment_indices_restrict_view_creation() -> SandboxTest:
+	var t := SandboxTest.new("visual_environment_indices_restrict_views")
+	var sim := SimulationManager.new()
+	sim.create_visuals = true
+	sim.auto_tick = false
+	sim.visual_environment_indices = PackedInt32Array([1])
+	sim.build(3, 1)
+
+	t.assert_eq(sim.environments.size(), 3, "all environments are still simulated")
+	t.assert_null(sim.views[0], "environment 0 should not get a view")
+	t.assert_not_null(sim.views[1], "the selected environment gets a view")
+	t.assert_null(sim.views[2], "environment 2 should not get a view")
+
+	sim.free()
+	return t
+
+
+func test_ensure_view_creates_the_view_lazily_and_only_once() -> SandboxTest:
+	var t := SandboxTest.new("ensure_view_creates_lazily_once")
+	var sim := SimulationManager.new()
+	sim.create_visuals = true
+	sim.auto_tick = false
+	sim.visual_environment_indices = PackedInt32Array([0])
+	sim.build(2, 1)
+
+	t.assert_null(sim.views[1], "environment 1 starts without a view")
+	var created: EnvironmentView = sim.ensure_view(1)
+	t.assert_not_null(created, "ensure_view should build the missing view")
+	t.assert_true(sim.views[1] == created, "the view is stored back into views[]")
+	var again: EnvironmentView = sim.ensure_view(1)
+	t.assert_true(again == created, "ensure_view must not duplicate an existing view")
+
+	# Selecting an environment must never disturb the simulation itself.
+	t.assert_eq(sim.environments.size(), 2, "ensure_view does not touch environments")
+
+	sim.free()
+	return t
+
+
+func test_view_helpers_are_inert_without_visuals() -> SandboxTest:
+	var t := SandboxTest.new("view_helpers_inert_without_visuals")
+	var sim := SimulationManager.new()
+	sim.create_visuals = false
+	sim.auto_tick = false
+	sim.build(2, 1)
+
+	t.assert_null(sim.ensure_view(0), "a headless manager never creates views")
+	t.assert_null(sim.ensure_view(99), "out-of-range indices return null")
+	# Must not crash on missing views or bad indices.
+	sim.sync_view(0)
+	sim.sync_view(-1)
+	sim.sync_view(99)
+	t.assert_true(sim.views[0] == null, "sync_view does not create anything")
+
+	sim.free()
+	return t

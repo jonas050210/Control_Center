@@ -1,5 +1,13 @@
 # Debug GUI and benchmarking
 
+> **See also:** the small overlay documented here is the *minimal* in-scene
+> debug GUI used by `scenes/main.tscn`. The full operator interface — modes,
+> simulation controls, agent/perception/observation inspection, results and
+> logs — is the Control Center: [`CONTROL_CENTER.md`](CONTROL_CENTER.md).
+> Both are presentation-only and neither is created in headless runs; the
+> Control Center reuses `DebugOverlay.build_telemetry_dict()` rather than
+> duplicating it.
+
 ## Debug / test GUI
 
 `scripts/debug/debug_overlay.gd` (`DebugOverlay`) is a small, presentation-only

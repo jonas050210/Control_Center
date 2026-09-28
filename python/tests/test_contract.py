@@ -132,6 +132,84 @@ class GodotSourceDriftTests(unittest.TestCase):
             "to_array() must pre-allocate the packed array to FIELD_COUNT",
         )
 
+    def test_godot_field_spec_matches_python_observation_spec(self):
+        """Observation.FIELD_SPEC is the Godot-side label source of truth.
+
+        The Control Center's Observation Inspector renders field names from
+        it instead of keeping its own list, so it must stay identical to
+        OBSERVATION_SPEC (names, indices and widths, in order).
+        """
+        source = self._godot_source("scripts/core/observation.gd")
+        start = source.find("const FIELD_SPEC")
+        self.assertGreater(start, -1, "Observation.FIELD_SPEC declaration not found")
+        end = source.find("\n]", start)
+        self.assertGreater(end, start, "Observation.FIELD_SPEC is not terminated")
+        body = source[start:end]
+        entries = re.findall(
+            r'"index":\s*(\d+),\s*"width":\s*(\d+),\s*"name":\s*"([a-z_0-9.]+)"',
+            re.sub(r"\s+", " ", body),
+        )
+        self.assertEqual(
+            len(entries),
+            len(OBSERVATION_SPEC),
+            "FIELD_SPEC in scripts/core/observation.gd has a different number of entries "
+            "than OBSERVATION_SPEC in python/sandboxai/contract.py",
+        )
+        parsed = [(int(index), int(width), name) for index, width, name in entries]
+        expected = [(field.index, field.width, field.name) for field in OBSERVATION_SPEC]
+        self.assertEqual(
+            parsed,
+            expected,
+            "FIELD_SPEC and OBSERVATION_SPEC disagree on field order, index or width",
+        )
+        self.assertEqual(
+            sum(width for _, width, _ in parsed),
+            OBSERVATION_FIELD_COUNT,
+            "FIELD_SPEC widths must sum to the contract field count",
+        )
+
+    def test_godot_field_name_helpers_are_derived_not_duplicated(self):
+        """field_names() must be generated from FIELD_SPEC, not a second list."""
+        source = self._godot_source("scripts/core/observation.gd")
+        start = source.find("static func field_names()")
+        self.assertGreater(start, -1, "Observation.field_names() not found")
+        end = source.find("\nstatic func ", start + 1)
+        body = source[start : end if end != -1 else len(source)]
+        self.assertIn("FIELD_SPEC", body, "field_names() must iterate FIELD_SPEC")
+
+    def test_control_center_inspector_uses_contract_helpers(self):
+        """The Observation Inspector must not hard-code field labels."""
+        source = self._godot_source("scripts/control_center/observation_inspector.gd")
+        self.assertIn("Observation.field_names()", source)
+        self.assertIn("Observation.field_group(", source)
+        for field in OBSERVATION_SPEC:
+            self.assertNotIn(
+                f'"{field.name}"',
+                source,
+                "observation_inspector.gd must not restate contract field names",
+            )
+
+    def test_perception_view_decodes_only_the_observation_vector(self):
+        """The "what does the AI see?" view must read the vector, nothing else.
+
+        `Observation` carries a few bookkeeping members (e.g. `enemy_alive`)
+        that `to_array()` never serialises. If the perception view read them
+        directly it would show the operator information the policy does not
+        actually receive, which is exactly the leak the Control Center is
+        supposed to make visible.
+        """
+        source = self._godot_source("scripts/control_center/perception_model.gd")
+        self.assertIn("Observation.field_names()", source)
+        start = source.index("static func _build_ai_perception")
+        end = source.index("static func _tracked_enemy_indices")
+        ai_branch = source[start:end]
+        self.assertIn("obs.to_array()", ai_branch)
+        self.assertEqual(
+            sorted(set(re.findall(r"\bobs\.(\w+)", ai_branch))),
+            ["to_array"],
+            "the AI perception branch may only touch the observation vector",
+        )
+
     def test_godot_action_nvec_matches_python_contract(self):
         source = self._godot_source("scripts/core/action.gd")
         match = re.search(
