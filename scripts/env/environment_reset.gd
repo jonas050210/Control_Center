@@ -20,10 +20,55 @@ class_name EnvironmentReset
 extends RefCounted
 
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const MapLibrary = preload("res://scripts/world/map_library.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
+
+
+## Validates an episode plan in the `set_episode_plans` wire format (seed,
+## map_id, scenario, lighting, enemy_count, curriculum_level), returning ""
+## when it can be applied and a human-readable reason otherwise. Kept next
+## to the reset path because a plan's semantics ARE the reset's inputs; the
+## level is passed explicitly (rather than read from an environment) so the
+## check is honest about which level the plan requests.
+static func validate_episode_plan(plan: Dictionary, current_level: int) -> String:
+	var level: int = int(plan.get("curriculum_level", current_level))
+	if (
+		level < CurriculumConfig.Level.STATIONARY_TARGET
+		or level > CurriculumConfig.Level.AGENT_VS_AGENT
+	):
+		return "curriculum_level %d out of range" % level
+	var p_map: String = str(plan.get("map_id", ""))
+	if not p_map.is_empty() and not MapLibrary.has_map(p_map):
+		return "unknown map_id: %s" % p_map
+	var p_lighting: String = str(plan.get("lighting", ""))
+	if not p_lighting.is_empty() and not LightingProfile.MODE_IDS.has(p_lighting):
+		return "unknown lighting: %s" % p_lighting
+	var p_scenario: String = str(plan.get("scenario", ""))
+	if not p_scenario.is_empty() and not ScenarioLibrary.has_scenario(p_scenario):
+		return "unknown scenario: %s" % p_scenario
+	if int(plan.get("enemy_count", 1)) < 1:
+		return "enemy_count must be >= 1"
+	return ""
+
+
+## The episode configuration `env` actually resolved, in the same field
+## names EpisodePlan.replay_header_fields() uses on the Python side. This
+## is the ground truth of what ran: the requested map/scenario could be
+## empty (curriculum-driven defaults), the enemy count is the RESOLVED
+## count after the curriculum minimum, and lighting is the RESOLVED mode
+## (explicit override, else map default, else normal).
+static func episode_condition(env) -> Dictionary:
+	return {
+		"seed": env.episode_seed,
+		"map_id": str((env.map_instance as Dictionary).get("map_id", env.map_id)),
+		"scenario": str((env.scenario as Dictionary).get("id", env.scenario_id)),
+		"lighting": LightingProfile.mode_id((env.lighting as LightingProfile).mode),
+		"enemy_count": env.enemies.size(),
+		"curriculum_level": env.curriculum.level,
+	}
 
 
 ## Original obstacle-free reset. Untouched so curriculum levels 1-4 keep

@@ -8,6 +8,7 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
+const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
@@ -112,6 +113,45 @@ func get_metrics() -> Array:
 	return simulation_manager.get_metrics()
 
 
+## Stages the next episode for every environment listed in `plans`
+## (entries: {"index": int, "seed": int, "map_id": String, "scenario":
+## String, "lighting": String, "enemy_count": int, "curriculum_level": int}
+## — the EpisodePlan.replay_header_fields() field names).
+##
+## Validation is ATOMIC: every plan must pass
+## EnvironmentCore.validate_episode_plan before any of them is staged, so
+## a single bad entry fails the whole batch loudly instead of leaving half
+## the environments on the new distribution and half on the old one.
+func set_episode_plans(plans: Array) -> Dictionary:
+	var problems: Array = []
+	for plan_value in plans:
+		var plan: Dictionary = plan_value
+		var index: int = int(plan.get("index", -1))
+		if index < 0 or index >= simulation_manager.environments.size():
+			problems.append("environment index %d out of range" % index)
+			continue
+		var env: EnvironmentCore = simulation_manager.environments[index]
+		var problem: String = env.validate_episode_plan(plan)
+		if not problem.is_empty():
+			problems.append("environment %d: %s" % [index, problem])
+	if not problems.is_empty():
+		return {"ok": false, "error": "; ".join(problems)}
+	var staged: Array = []
+	for plan_value in plans:
+		var plan: Dictionary = plan_value
+		var index: int = int(plan.get("index", -1))
+		simulation_manager.pending_plans[index] = plan
+		staged.append(index)
+	return {"ok": true, "staged": staged}
+
+
+## The resolved episode condition of every environment (what is actually
+## running, which can differ from the requested plan: enemy-count minimums,
+## map-less curriculum levels, resolved defaults).
+func get_episode_conditions() -> Array:
+	return simulation_manager.get_episode_conditions()
+
+
 func get_reward_breakdowns() -> Array:
 	return simulation_manager.get_reward_breakdowns()
 
@@ -120,7 +160,9 @@ func health_check() -> Array:
 	return simulation_manager.health_check_all()
 
 
-func _resolve_action(action_value) -> Action:
+## Static so both this adapter and SelfPlayAdapter resolve wire actions
+## through the same code path (there is one Action contract).
+static func _resolve_action(action_value) -> Action:
 	if action_value is Action:
 		return action_value
 	if typeof(action_value) == TYPE_INT or typeof(action_value) == TYPE_FLOAT:
@@ -144,7 +186,7 @@ func _resolve_action(action_value) -> Action:
 
 
 ## Decodes the array forms of an action.
-func _resolve_array_action(action_value: Array) -> Action:
+static func _resolve_array_action(action_value: Array) -> Action:
 	# An 8-value array is the contract-v2 canonical log
 	# [move, strafe, yaw, pitch, shoot, jump, look_dx, look_dy]; a
 	# 7-value array is the v1 log without `jump`. Anything shorter is a

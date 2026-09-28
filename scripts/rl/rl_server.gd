@@ -2,15 +2,21 @@
 ##
 ## Protocol: one JSON object per input line and one JSON object per output
 ## line. Commands are spaces, reset, reset_indices, step, metrics,
-## reward_breakdown, set_curriculum, health_check, ping, and close. This keeps the
-## simulation process independent from Python package versions and works on
-## Windows and Linux without native extensions or a renderer.
+## reward_breakdown, set_curriculum, set_episode_plans, episode_conditions,
+## health_check, ping, and close. This keeps the simulation process
+## independent from Python package versions and works on Windows and Linux
+## without native extensions or a renderer.
+##
+## With `--self-play 1` the server instead hosts a batch of deterministic
+## two-agent matches (SelfPlayEnvironmentCore) for league/checkpoint
+## evaluation; see self_play_adapter.gd for the two-slot wire shapes.
 extends SceneTree
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const RLAdapter = preload("res://scripts/rl/rl_adapter.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const SelfPlayAdapter = preload("res://scripts/rl/self_play_adapter.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
 
@@ -21,10 +27,18 @@ const STDIN_BUFFER_SIZE: int = 1 << 20
 
 var simulation_manager: SimulationManager
 var adapter: RLAdapter
+var self_play_adapter: SelfPlayAdapter
 
 
 func _initialize() -> void:
 	var options: Dictionary = _parse_user_args(OS.get_cmdline_user_args())
+	if int(options.get("self-play", 0)) > 0:
+		self_play_adapter = SelfPlayAdapter.new(
+			int(options.get("env-count", 1)),
+			int(options.get("seed", SandboxConfig.DEFAULT_RANDOM_SEED))
+		)
+		_serve_stdio()
+		return
 	simulation_manager = SimulationManager.new()
 	simulation_manager.create_visuals = false
 	simulation_manager.auto_tick = false
@@ -60,7 +74,11 @@ func _serve_stdio() -> void:
 			if line.strip_edges().is_empty():
 				continue
 			var request = JSON.parse_string(line)
-			var response: Dictionary = _handle_request(request)
+			var response: Dictionary = (
+				_handle_self_play_request(request)
+				if self_play_adapter != null
+				else _handle_request(request)
+			)
 			print(JSON.stringify(response))
 			if bool(response.get("close", false)):
 				closing = true
@@ -68,6 +86,42 @@ func _serve_stdio() -> void:
 	if simulation_manager != null and is_instance_valid(simulation_manager):
 		simulation_manager.free()
 	quit(0)
+
+
+## Self-play mode (two policy slots per environment). The wire shapes add a
+## slot axis of size 2 to the normal protocol; there is no auto-reset, so
+## match boundaries are driven by the caller.
+func _handle_self_play_request(request) -> Dictionary:
+	var response: Dictionary = {"ok": false, "error": "request must be a JSON object"}
+	if not (request is Dictionary):
+		return response
+	var command: String = str(request.get("cmd", ""))
+	match command:
+		"ping":
+			response = {"ok": true, "pong": true}
+		"spaces":
+			response = {
+				"ok": true,
+				"action_space": RLAdapter.action_space_info(),
+				"observation_space": RLAdapter.observation_space_info(),
+				"policy_slots": 2,
+			}
+		"reset":
+			var seed: int = int(request.get("seed", -1))
+			response = {"ok": true, "observations": self_play_adapter.reset(seed)}
+		"step":
+			response = self_play_adapter.step(request.get("actions", []))
+			response["ok"] = true
+		"health_check":
+			response = {"ok": true, "health": self_play_adapter.health_check()}
+		"close":
+			response = {"ok": true, "close": true}
+		_:
+			response = {
+				"ok": false,
+				"error": "command %s is not supported in self-play mode" % command,
+			}
+	return response
 
 
 func _handle_request(request) -> Dictionary:
@@ -112,6 +166,10 @@ func _handle_request(request) -> Dictionary:
 			var level: int = int(request.get("level", CurriculumConfig.Level.ENEMY_ATTACKS))
 			simulation_manager.set_curriculum_level(level)
 			response = {"ok": true, "curriculum_level": simulation_manager.curriculum_level}
+		"set_episode_plans":
+			response = adapter.set_episode_plans(request.get("plans", []))
+		"episode_conditions":
+			response = {"ok": true, "conditions": adapter.get_episode_conditions()}
 		"health_check":
 			response = {"ok": true, "health": simulation_manager.health_check_all()}
 		"close":

@@ -35,6 +35,8 @@ def out(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 
+staged_plans = []
+
 def make_obs():
     return [random.uniform(-1.0, 1.0) for _ in range(OBS_DIM)]
 
@@ -57,6 +59,18 @@ for line in sys.stdin:
         step_counts = {{i: 0 for i in range(n)}}
         out({{"ok": True, "observations": [make_obs() for _ in range(n)],
              "infos": [{{}} for _ in range(n)]}})
+    elif command == "reset_indices":
+        indices = request.get("indices", [])
+        for i in indices:
+            step_counts[i] = 0
+        out({{"ok": True, "results": [{{"index": i, "observation": make_obs()}} for i in indices]}})
+    elif command == "set_episode_plans":
+        plans = request.get("plans", [])
+        staged_plans.clear()
+        staged_plans.extend(plans)
+        out({{"ok": True, "staged": [int(p.get("index", -1)) for p in plans]}})
+    elif command == "episode_conditions":
+        out({{"ok": True, "conditions": staged_plans}})
     elif command == "step":
         actions = request.get("actions", [])
         n = len(actions)
@@ -210,6 +224,30 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         self.assertTrue((run_dir / "evaluations" / "latest.json").is_file())
         self.assertTrue((run_dir / "checkpoints" / "best_eval.zip").is_file())
         self.assertTrue(result["latest_checkpoint"].endswith("latest.zip"))
+        # Integrated pipeline artifacts (curriculum_mode "auto", default):
+        # manifest, per-episode log, resume-exact curriculum state, and the
+        # checkpoint-time battery report.
+        for relative in (
+            "run_manifest.json",
+            "checkpoints/curriculum_state.json",
+            "logs/episodes.jsonl",
+        ):
+            self.assertTrue((run_dir / relative).is_file(), f"missing pipeline artifact: {relative}")
+        import json
+
+        manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest.get("format"), "sandboxai.run_manifest/v1")
+        self.assertEqual(manifest.get("seed"), 1234)
+        reports = list((run_dir / "evaluations").glob("step_*/report.json"))
+        self.assertTrue(reports, "no checkpoint battery report was produced")
+        battery = json.loads(reports[-1].read_text(encoding="utf-8"))
+        self.assertIn("condition_evaluation", battery)
+        self.assertIn("curriculum", battery)
+        episodes = (run_dir / "logs" / "episodes.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        self.assertTrue(episodes, "episodes.jsonl must contain at least one episode row")
+        first_row = json.loads(episodes[0])
+        self.assertIn("plan", first_row)
+        self.assertIn("engine_metrics", first_row)
 
     def test_resume_from_latest_zip_stays_in_the_same_run_directory(self):
         from sandboxai.ppo import train_ppo

@@ -274,6 +274,73 @@ sandboxai resume \
   --steps 500000 --device auto
 ```
 
+### Integrated research pipeline (curriculum mode `auto`)
+
+By default `sandboxai train` runs the integrated physics-of-learning loop
+(`python/sandboxai/pipeline.py`, `python/sandboxai/checkpoint_eval.py`):
+
+- **Every episode is planned.** A `CurriculumDriver` draws a fully seeded
+  `EpisodePlan` (seed, map, scenario, lighting, enemy count, level) per
+  environment from one authoritative stream (`master_seed +
+  env_index + ordinal * 1_000_003`), stages it into Godot at episode
+  boundaries only (`set_episode_plans`), and the bridge applies it on the
+  consume-at-reset boundary. Resuming from a checkpoint restores the exact
+  staged plans and per-environment ordinals
+  (`checkpoints/curriculum_state.json`), so a resumed run produces the
+  identical episode sequence.
+- **Training and evaluation distributions are explicitly split.** The
+  per-checkpoint condition evaluation draws from a frozen union-of-ladder
+  distribution seeded with `seed + 707_000_017`, so eval seeds are
+  provably never training seeds and the eval plan list is identical at
+  every checkpoint (comparable across checkpoints). The generalization
+  suite builds its train/holdout split from the conditions the run
+  actually applied — a trained seed never lands in an unseen bucket, and
+  trained (map, seed) pairs only ever count as `known`.
+- **Levels 1-4 stay bit-for-bit legacy.** `applied_condition` strips
+  map/scenario/lighting below world level 5 and enforces the engine's
+  multi-enemy minimum (3) on levels 4-10; plans/tracker/metrics/replays
+  always record the *applied* condition, never the sampled one.
+- **Research metrics stay separate from rewards.** Per-tick skill metrics
+  (8 categories) are measurement only; PPO rewards flow untouched from the
+  engine. Aggregates flush per evaluation boundary into
+  `evaluations/step_<N>/report.json` with by-environment / by-map /
+  by-lighting / by-level groupings.
+- **Replay recording is configurable** (`--replay-mode
+  off|interesting|every_n|all|evaluation`, `--replay-every-n`,
+  `--replay-max-per-run`): existing v1 replay format and header
+  fingerprint unchanged, bounded per run, zero recorder allocation after
+  the cap.
+- **Optional league evaluation** (`--checkpoint-league-eval --league-matches-per-checkpoint 4`)
+  freezes each evaluated checkpoint into `league/policies/`, plays
+  deterministic two-slot matches on the `--self-play` bridge against older
+  frozen snapshots plus the scripted baseline, enforces frozen-opponent
+  integrity, and never loads league weights into the training policy.
+  Incompatible checkpoints (wrong observation/action contract) fail with
+  a named error.
+- **Adaptive curriculum is conservative and optional.** With
+  `--no-adaptive-curriculum` the same deterministic plans are issued but
+  measured results never promote/demote; every decision is logged to
+  `logs/curriculum.jsonl` with its evidence window. Adaptive feedback only
+  ever changes *what* is trained next, never rewards.
+- **A run manifest** (`run_manifest.json`) records the experiment id,
+  seed, contract fingerprint, curriculum config + current level,
+  hyperparameters, enabled systems, evaluation configuration and code
+  version (`git rev-parse` when available).
+
+Useful combinations:
+
+```bash
+# Fully deterministic, non-adaptive curriculum with extra eval replays:
+sandboxai train --no-adaptive-curriculum --replay-mode evaluation
+
+# Historic single-arena behavior (pre-pipeline), one fixed level:
+sandboxai train --curriculum-mode fixed --curriculum-level 3
+
+# Deeper checkpoint batteries with league matches:
+sandboxai train --checkpoint-league-eval --league-matches-per-checkpoint 8 \
+  --condition-eval-episodes 48 --generalization-episodes-per-cell 2
+```
+
 ### Evaluation
 
 Evaluation loads frozen weights and never calls an optimizer or updates model
@@ -317,17 +384,30 @@ training/
     warm_start.json
     final.zip
     run_summary.json
+    run_manifest.json                  # integrated pipeline (auto mode)
     checkpoints/
       ppo_<timesteps>_steps.zip
       latest.zip
       best_eval.zip
+      curriculum_state.json            # resume-exact curriculum/driver state
     logs/
       training.jsonl
+      episodes.jsonl                   # one row per episode: plan + metrics
+      curriculum.jsonl                 # adaptive decisions (promo/demotions)
       tensorboard/
     evaluations/
       latest.json
       best.json
-      step_<timesteps>/summary.json, episodes.csv, summary.txt
+      step_<timesteps>/
+        summary.json, episodes.csv, summary.txt
+        report.json                    # checkpoint battery (auto mode)
+        policy.zip                     # frozen policy under evaluation
+        generalization.json/.csv/.txt  # seen/unseen split results
+        replays/                       # when replay-mode all|evaluation
+    replays/                           # training replays (interesting/every_n/all)
+    league/                            # only when --checkpoint-league-eval
+      registry.json, history.json
+      policies/<experiment>@<step>.zip
   bc_runs/<run-id>/
     config.json, latest.pt, best.pt, epoch_*.pt
     metrics.jsonl, loss.csv

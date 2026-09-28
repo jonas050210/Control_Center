@@ -36,6 +36,7 @@ class GodotProcessTransport:
         seed: int = 1234,
         curriculum_level: int = 3,
         request_timeout: float = 30.0,
+        self_play: bool = False,
     ) -> None:
         project = Path(project_path).expanduser().resolve()
         if not project.exists():
@@ -61,6 +62,10 @@ class GodotProcessTransport:
             "--curriculum-level",
             str(curriculum_level),
         ]
+        if self_play:
+            # Two-agent match batch (league evaluation); see
+            # scripts/rl/self_play_adapter.gd for the wire shapes.
+            command += ["--self-play", "1"]
         try:
             self.process = subprocess.Popen(
                 command,
@@ -241,6 +246,24 @@ class GodotBatchClient:
         """Per-environment episode metrics (rl_server.gd `metrics` command)."""
         return self.transport.request({"cmd": "metrics"}).get("metrics", [])
 
+    def set_episode_plans(self, plans: list[dict[str, Any]]):
+        """Stages the next episode for each listed environment.
+
+        `plans` entries carry an `index` plus the
+        ``EpisodePlan.replay_header_fields()`` fields (seed, map_id,
+        scenario, lighting, enemy_count, curriculum_level). Validation is
+        atomic on the Godot side: one bad plan fails the whole batch, and
+        the staging semantics (pending/current/consumed-on-auto-reset) are
+        documented on ``SimulationManager.pending_plans``.
+        """
+        if not plans:
+            return {"ok": True, "staged": []}
+        return self.transport.request({"cmd": "set_episode_plans", "plans": plans})
+
+    def episode_conditions(self):
+        """The resolved per-environment episode configuration (ground truth)."""
+        return self.transport.request({"cmd": "episode_conditions"}).get("conditions", [])
+
     def ping(self):
         return self.transport.request({"cmd": "ping"})
 
@@ -307,7 +330,19 @@ except ImportError:  # pragma: no cover
 if VecEnv is not None:
 
     class GodotVecEnv(VecEnv):  # type: ignore[misc]
-        """One Godot process containing N independent vector environments."""
+        """One Godot process containing N independent vector environments.
+
+        Optional instrumentation hooks (used by the integrated training
+        pipeline; both default to None and cost nothing when unset):
+
+        ``reset_hook(observations)``
+            Called at the end of every ``reset()``.
+        ``step_hook(actions, observations, rewards, dones, infos)``
+            Called at the end of every ``step_wait()`` with the exact data
+            about to be returned, before SB3 consumes it. The hook runs in
+            the trainer thread, so it is race-free to issue further bridge
+            requests (e.g. staging the next episode plan) from inside it.
+        """
 
         def __init__(self, **kwargs: Any) -> None:
             if np is None or spaces is None:
@@ -324,6 +359,8 @@ if VecEnv is not None:
             super().__init__(self.environment_count, observation_space, action_space)
             self.actions = None
             self.reset_infos: list[dict[str, Any]] = [{} for _ in range(self.num_envs)]
+            self.reset_hook = None
+            self.step_hook = None
 
         def reset(self):
             # Honor seeds requested through VecEnv.seed() (SB3 calls it when a
@@ -335,6 +372,8 @@ if VecEnv is not None:
                 seed = int(pending[0])
             observations, self.reset_infos = self.client.reset(seed)
             self._reset_seeds()
+            if self.reset_hook is not None:
+                self.reset_hook(observations)
             return observations
 
         def step_async(self, actions):
@@ -349,6 +388,8 @@ if VecEnv is not None:
                         info["terminal_observation"] = np.asarray(info["terminal_observation"], dtype=np.float32)
                     reason = str(info.get("done_reason", info.get("metrics", {}).get("done_reason", "")))
                     info["TimeLimit.truncated"] = (reason == "timeout")
+            if self.step_hook is not None:
+                self.step_hook(self.actions, observations, rewards, dones, infos)
             return observations, rewards, dones, infos
 
         def close(self):

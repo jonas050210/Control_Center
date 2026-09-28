@@ -48,6 +48,26 @@ var recorders: Dictionary = {}  # env index -> DemoRecorder-like object
 ## SelfPlayEnvironmentCore and future multi-agent modes.
 var policy_slots: Array = []
 
+## Per-environment episode plans staged by the training pipeline (the
+## `set_episode_plans` bridge command). A plan is a Dictionary with the
+## EpisodePlan.replay_header_fields() field names: seed, map_id, scenario,
+## lighting, enemy_count, curriculum_level.
+##
+## Lifecycle, deliberately deterministic:
+##   * `pending_plans[i]` holds the NEXT episode to start in environment i.
+##     Any reset of that environment (an explicit reset_all/reset_indices,
+##     or the automatic reset after `done`) CONSUMES the pending plan and
+##     records it as `current_plans[i]`.
+##   * An explicit reset with no pending plan REPLAYS `current_plans[i]`
+##     (the plan carries its own seed, so the replay is exact). This keeps
+##     repeated VecEnv resets idempotent for the training loop.
+##   * The auto-reset with no pending plan falls back to the legacy
+##     behaviour (env.reset(-1)), i.e. continuing that environment's seeded
+##     RNG stream. With no plans staged at all, behaviour is bit-for-bit
+##     the pre-plan behaviour.
+var pending_plans: Dictionary = {}
+var current_plans: Dictionary = {}
+
 var steps_per_second: float = 0.0
 var _steps_since_report: int = 0
 var _report_timer: float = 0.0
@@ -163,6 +183,8 @@ func _clear() -> void:
 	views.clear()
 	controllers.clear()
 	recorders.clear()
+	pending_plans.clear()
+	current_plans.clear()
 	_last_step_rewards.clear()
 	_last_step_dones.clear()
 	_last_actions.clear()
@@ -180,11 +202,8 @@ func reset_all(seed_base_value: int = -1) -> Array:
 	for i in range(environments.size()):
 		var seed_value: int = (seed_base_value + i) if seed_base_value >= 0 else -1
 		var env: EnvironmentCore = environments[i]
-		env.reset(seed_value)
-		_last_step_rewards[i] = 0.0
-		_last_step_dones[i] = false
+		_reset_environment(i, seed_value)
 		observations.append(env.get_observations())
-		environment_reset.emit(i)
 	return observations
 
 
@@ -200,12 +219,59 @@ func reset_indices(indices: Array, seed_base_value: int = -1) -> Array:
 			continue
 		var seed_value: int = (seed_base_value + index) if seed_base_value >= 0 else -1
 		var env: EnvironmentCore = environments[index]
-		env.reset(seed_value)
-		_last_step_rewards[index] = 0.0
-		_last_step_dones[index] = false
+		_reset_environment(index, seed_value)
 		observations.append({"index": index, "observation": env.get_observations()})
-		environment_reset.emit(index)
 	return observations
+
+
+## Core reset path for one environment. A pending episode plan (staged via
+## set_episode_plan) is consumed and applied; otherwise the current plan is
+## replayed exactly; otherwise the legacy seed path runs.
+func _reset_environment(index: int, seed_value: int) -> void:
+	var env: EnvironmentCore = environments[index]
+	if pending_plans.has(index):
+		var plan: Dictionary = pending_plans[index]
+		pending_plans.erase(index)
+		current_plans[index] = plan
+		_apply_episode_plan(env, plan)
+	elif current_plans.has(index):
+		_apply_episode_plan(env, current_plans[index])
+	else:
+		env.reset(seed_value)
+	_last_step_rewards[index] = 0.0
+	_last_step_dones[index] = false
+	environment_reset.emit(index)
+
+
+## Applies one staged episode plan to an environment, in the same order
+## EpisodePlan.environment_commands() documents on the Python side:
+## curriculum level, enemy count, map, lighting, scenario, reset(seed).
+## Plans are validated when staged, so this path cannot half-configure an
+## environment on a typo'd id.
+func _apply_episode_plan(env: EnvironmentCore, plan: Dictionary) -> void:
+	env.set_curriculum_level(int(plan.get("curriculum_level", curriculum_level)))
+	env.set_enemy_count(int(plan.get("enemy_count", env.enemy_count)))
+	env.set_map(str(plan.get("map_id", "")))
+	env.set_lighting_mode(str(plan.get("lighting", "")))
+	env.set_scenario(str(plan.get("scenario", "")))
+	env.reset(int(plan.get("seed", -1)))
+
+
+## The episode configuration each environment actually resolved (the
+## ground truth of what ran), per environment.
+func get_episode_conditions() -> Array:
+	var conditions: Array = []
+	for env in environments:
+		conditions.append((env as EnvironmentCore).get_episode_condition())
+	return conditions
+
+
+## True while every environment has a staged next episode. Diagnostics only.
+func all_environments_planned() -> bool:
+	for i in range(environments.size()):
+		if not pending_plans.has(i):
+			return false
+	return true
 
 
 ## Steps every environment. When auto-reset is enabled, the returned result
@@ -238,7 +304,18 @@ func step_all(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Array:
 			environment_done.emit(i, env.episode.done_reason)
 			if auto_reset_on_done:
 				var terminal_observation = result.observation
-				env.reset(-1)
+				if pending_plans.has(i):
+					# The staged plan is consumed exactly once, here, so the
+					# fresh observation returned in `result.observation` is
+					# already from the NEW episode. Without this the
+					# trainer would see one stray observation from the old
+					# configuration at every episode boundary.
+					var plan: Dictionary = pending_plans[i]
+					pending_plans.erase(i)
+					current_plans[i] = plan
+					_apply_episode_plan(env, plan)
+				else:
+					env.reset(-1)
 				result["terminal_observation"] = terminal_observation
 				result["observation"] = env.get_observations()
 				result["auto_reset"] = true

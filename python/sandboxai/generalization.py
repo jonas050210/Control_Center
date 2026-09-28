@@ -47,6 +47,11 @@ EVALUATION_LIGHTINGS: tuple[str, ...] = ("normal", "low_light", "night", "fog", 
 ## policy has about most of the opposition, so it is the interesting one.
 ENEMY_COUNT_BUCKETS: tuple[int, ...] = (1, 2, 3, 5)
 
+## Evaluation axes, in report order. Kept explicit so a report can name an
+## axis that produced ZERO episodes (e.g. nothing held out yet) instead of
+## silently dropping it -- an empty axis is a finding, not an omission.
+EVALUATION_AXES: tuple[str, ...] = ("maps", "conditions", "combat", "scenarios")
+
 ## Scenario families, mapped to ScenarioLibrary ids in
 ## scripts/scenario/scenario_library.gd. A test checks that every id here
 ## exists in the GDScript source, so a renamed scenario fails loudly.
@@ -336,7 +341,7 @@ class GeneralizationSuite:
             },
             "by_axis": {
                 axis: self.axis_report(axis)
-                for axis in ("maps", "conditions", "combat", "scenarios")
+                for axis in EVALUATION_AXES
             },
             "by_map": self._by("map_id"),
             "by_lighting": self._by("lighting"),
