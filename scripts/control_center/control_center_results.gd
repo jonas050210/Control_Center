@@ -17,24 +17,24 @@ extends RefCounted
 const DEFAULT_CAPACITY: int = 200
 ## Metric keys averaged by `aggregate()`. Anything not in this list is kept
 ## on the individual record but not summarised.
-const AVERAGED_KEYS: PackedStringArray = PackedStringArray(
-	[
-		"reward",
-		"kills",
-		"deaths",
-		"damage_dealt",
-		"damage_received",
-		"shots_fired",
-		"shots_hit",
-		"accuracy",
-		"survival_time",
-		"episode_length",
-		"useless_shots",
-		"missed_shots",
-		"target_switches",
-		"distance_travelled",
-	]
-)
+## Declared as a plain Array literal: `PackedStringArray([...])` is not a
+## constant expression in Godot 4.7 and fails to compile.
+const AVERAGED_KEYS: Array = [
+	"reward",
+	"kills",
+	"deaths",
+	"damage_dealt",
+	"damage_received",
+	"shots_fired",
+	"shots_hit",
+	"accuracy",
+	"survival_time",
+	"episode_length",
+	"useless_shots",
+	"missed_shots",
+	"target_switches",
+	"distance_travelled",
+]
 
 var capacity: int = DEFAULT_CAPACITY
 var episodes: Array = []  # Array[Dictionary], oldest first

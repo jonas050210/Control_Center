@@ -53,12 +53,23 @@ func test_fresh_memory_knows_nothing() -> SandboxTest:
 func test_observation_marks_only_what_was_looked_at() -> SandboxTest:
 	var t := SandboxTest.new("observation_marks_only_what_was_looked_at")
 	var memory: SpatialMemory = _memory()
-	var origin := Vector3(0.0, 0.0, 8.0)
+	# The agent stands one full cell away from the south edge. With a 2 m
+	# grid over a 10 m half extent, the cells are [..., 6..8), [8..10): at
+	# z = 8.0 the agent occupied the LAST row, so the "behind" probe at
+	# z = 9.5 fell in the agent's OWN cell, which observe_self() marks known
+	# by definition. z = 6.0 puts the agent in row [6..8) so that z = 9.5 is
+	# a genuinely different, genuinely unobserved cell.
+	var origin := Vector3(0.0, 0.0, 6.0)
 	memory.observe_self(origin, 1.0)
 	# Look north (-Z) from the south edge: cells to the south (behind) must
 	# stay unknown because they are outside the field of view.
 	_look(memory, origin, Vector3.FORWARD, null)
 	t.assert_true(memory.is_known(Vector3(0.0, 0.0, 0.0)), "cell straight ahead must be known")
+	t.assert_ne(
+		memory.cell_index(Vector3(0.0, 0.0, 9.5)),
+		memory.cell_index(origin),
+		"the probe must not land in the agent's own cell"
+	)
 	t.assert_false(
 		memory.is_known(Vector3(0.0, 0.0, 9.5)), "cell behind the agent must stay unknown"
 	)
