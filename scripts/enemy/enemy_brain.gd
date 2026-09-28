@@ -32,6 +32,8 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
+const NavigationAgent = preload("res://scripts/world/navigation_agent.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
@@ -43,7 +45,7 @@ const AGENT_TRACK_ID: int = -1
 ## Advances one enemy by one tick.
 ##
 ## `context` carries the shared per-environment objects and flags:
-##   world, sound_bus, rng, arena_half_extent, agent_position,
+##   world, navigation, lighting, sound_bus, rng, arena_half_extent, agent_position,
 ##   agent_eye, agent_height, agent_alive, dt, time_seconds,
 ##   allow_ranged, allow_movement, allow_jump
 ##
@@ -93,6 +95,16 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 	var agent_alive: bool = bool(context.get("agent_alive", true))
 	var agent_height: float = float(context.get("agent_height", SandboxConfig.AGENT_HEIGHT))
 
+	# The opponents obey exactly the same visibility rules as the policy,
+	# including lighting: an enemy in the dark also loses you.
+	var lighting = context.get("lighting")
+	var range_limit: float = SandboxConfig.VISION_RANGE
+	var delay_scale: float = 1.0
+	if lighting != null:
+		var profile: LightingProfile = lighting
+		range_limit = profile.detection_range(SandboxConfig.VISION_RANGE, agent_position)
+		delay_scale = profile.detection_delay_scale(agent_position)
+
 	var visible: bool = false
 	if agent_alive:
 		var evaluation: Dictionary = PerceptionSystem.evaluate_target(
@@ -103,14 +115,21 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 			agent_position,
 			agent_height,
 			SandboxConfig.ENEMY_FOV_DEG,
-			SandboxConfig.VISION_RANGE
+			range_limit
 		)
 		visible = bool(evaluation["visible"])
+
+	# Line of sight is symmetric: while the enemy can see the agent, the
+	# agent could see it back, so this doubles as an exposure clock.
+	if visible:
+		enemy.exposure_time += dt
+	else:
+		enemy.exposure_time = 0.0
 
 	if visible:
 		enemy.visual_contact_time += dt
 		enemy.time_since_visual = 0.0
-		if enemy.visual_contact_time >= enemy.reaction.visual_detection_delay:
+		if enemy.visual_contact_time >= enemy.reaction.visual_detection_delay * delay_scale:
 			var direction: Vector3 = (agent_position - enemy.position)
 			direction.y = 0.0
 			enemy.memory.observe_visual(
@@ -129,7 +148,9 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 	if track.is_empty():
 		enemy.target_confirmed = false
 		return
-	var required: float = enemy.reaction.visual_detection_delay + enemy.reaction.target_confirm_delay
+	var required: float = (
+		enemy.reaction.visual_detection_delay * delay_scale + enemy.reaction.target_confirm_delay
+	)
 	if visible and enemy.visual_contact_time >= required:
 		enemy.target_confirmed = true
 	elif not visible and enemy.time_since_visual > SandboxConfig.VISUAL_LOSS_GRACE:
@@ -170,9 +191,29 @@ static func _decide(enemy: EnemyState, context: Dictionary) -> void:
 
 	if track.is_empty():
 		_set_state(enemy, EnemyState.AIState.IDLE, "no contact")
+	elif _should_retreat(enemy):
+		_set_state(enemy, EnemyState.AIState.RETREAT, "critically hurt, breaking away")
+		_choose_retreat(enemy, context, track)
 	elif enemy.target_confirmed and _should_take_cover(enemy):
 		_set_state(enemy, EnemyState.AIState.TAKE_COVER, "low health, breaking contact")
 		_choose_cover(enemy, context, track)
+	elif enemy.target_confirmed and _over_exposed(enemy):
+		_set_state(enemy, EnemyState.AIState.TAKE_COVER, "exposed too long, repositioning")
+		_choose_cover(enemy, context, track)
+	elif _only_heard(track) and not enemy.target_confirmed:
+		if enemy.ai_state != EnemyState.AIState.INVESTIGATE:
+			_set_state(enemy, EnemyState.AIState.INVESTIGATE, "heard something, investigating")
+			enemy.search_time = 0.0
+		enemy.search_time += float(context.get("dt", SandboxConfig.SIMULATION_DT))
+		if enemy.search_time >= SandboxConfig.ENEMY_SEARCH_DURATION:
+			enemy.memory.forget(AGENT_TRACK_ID)
+			_set_state(enemy, EnemyState.AIState.IDLE, "noise led nowhere")
+		elif _reached_destination(enemy):
+			enemy.memory.mark_investigated(AGENT_TRACK_ID)
+			_choose_search(enemy, context, track)
+		else:
+			enemy.tactical_destination = Vector3(track.get("position", enemy.position))
+			enemy.has_tactical_destination = true
 	elif enemy.ai_state == EnemyState.AIState.TAKE_COVER:
 		if enemy.state_time >= SandboxConfig.ENEMY_COVER_DWELL:
 			_set_state(enemy, EnemyState.AIState.PEEK, "cover dwell elapsed, peeking")
@@ -203,6 +244,49 @@ static func _decide(enemy: EnemyState, context: Dictionary) -> void:
 		_set_state(enemy, EnemyState.AIState.SEARCH, "moving to last known position")
 	if previous != enemy.ai_state:
 		enemy.state_time = 0.0
+
+
+## Critically hurt: stop trading entirely. Separate from `_should_take_cover`
+## because cover may not exist, and running is still better than dying.
+static func _should_retreat(enemy: EnemyState) -> bool:
+	if enemy.max_health <= 0.0:
+		return false
+	return enemy.health / enemy.max_health <= SandboxConfig.ENEMY_CRITICAL_HEALTH_FRACTION
+
+
+## Standing in the open for too long during an engagement. This is what
+## produces repositioning instead of a static firefight, and it comes from
+## the enemy's own (symmetric) line-of-sight information, not from anything
+## privileged.
+static func _over_exposed(enemy: EnemyState) -> bool:
+	return enemy.exposure_time >= SandboxConfig.ENEMY_MAX_EXPOSURE_TIME
+
+
+## True when the only information about the target came from hearing. A
+## sound track is an approximate position with no confirmation, so it earns
+## a cautious approach rather than an engagement.
+static func _only_heard(track: Dictionary) -> bool:
+	if track.is_empty():
+		return false
+	return int(track.get("source", EnemyMemory.Source.NONE)) == EnemyMemory.Source.SOUND
+
+
+## Destination directly away from the believed threat, clamped inside the
+## arena and rejected onto the enemy's own position when blocked.
+static func _choose_retreat(enemy: EnemyState, context: Dictionary, track: Dictionary) -> void:
+	var threat: Vector3 = Vector3(track.get("position", enemy.position))
+	var away := Vector3(enemy.position.x - threat.x, 0.0, enemy.position.z - threat.z)
+	if away.length() < 0.0001:
+		away = Vector3(1.0, 0.0, 0.0)
+	var limit: float = (
+		float(context.get("arena_half_extent", SandboxConfig.ARENA_HALF_EXTENT)) - enemy.radius
+	)
+	var candidate: Vector3 = enemy.position + away.normalized() * SandboxConfig.ENEMY_RETREAT_DISTANCE
+	candidate.x = clampf(candidate.x, -limit, limit)
+	candidate.z = clampf(candidate.z, -limit, limit)
+	candidate.y = 0.0
+	enemy.tactical_destination = candidate
+	enemy.has_tactical_destination = true
 
 
 static func _should_take_cover(enemy: EnemyState) -> bool:
@@ -284,6 +368,10 @@ static func _set_state(enemy: EnemyState, state: int, reason: String) -> void:
 	if enemy.ai_state != state:
 		enemy.ai_state = state
 		enemy.state_time = 0.0
+		# A route planned for the previous behavior's destination is stale
+		# the moment the behavior changes; keeping it would walk an
+		# engaging enemy back toward an abandoned cover spot.
+		enemy.navigation.abandon()
 	enemy.tactical_reason = reason
 
 
@@ -317,12 +405,38 @@ static func _act(
 				enemy.tactical_destination if enemy.has_tactical_destination else enemy.position
 			)
 			speed_scale = 0.85 if enemy.ai_state == EnemyState.AIState.SEARCH else 1.0
+		EnemyState.AIState.INVESTIGATE:
+			destination = (
+				enemy.tactical_destination if enemy.has_tactical_destination else enemy.position
+			)
+			speed_scale = SandboxConfig.ENEMY_INVESTIGATE_SPEED_SCALE
+		EnemyState.AIState.RETREAT:
+			destination = (
+				enemy.tactical_destination if enemy.has_tactical_destination else enemy.position
+			)
+			speed_scale = 1.0
 		_:
 			destination = enemy.position
 			speed_scale = 0.0
 
 	if not allow_movement:
 		speed_scale = 0.0
+
+	# Navigation is consulted only when the enemy is demonstrably blocked
+	# (see NavigationAgent): in the open field this is two float compares.
+	var steering: Vector3 = enemy.navigation.update(
+		context.get("navigation"),
+		world,
+		enemy.position,
+		destination,
+		speed_scale > 0.0,
+		dt
+	)
+	if enemy.navigation.status != NavigationAgent.STATUS_DIRECT:
+		enemy.tactical_reason = "%s (nav: %s)" % [
+			enemy.tactical_reason, enemy.navigation.status
+		]
+	destination = steering
 
 	var jump_requested: bool = _wants_jump(enemy, destination, context)
 	var motion: Dictionary = enemy.move_towards(

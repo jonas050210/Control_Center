@@ -114,6 +114,34 @@ const LANDING_EPSILON: float = 0.01
 const MAX_VERTICAL_EXTENT: float = 6.0
 
 # ---------------------------------------------------------------------------
+# Navigation
+#
+# A uniform walkable grid baked from the arena geometry (NavigationGraph).
+# It is only consulted when direct steering is blocked, so the open-field
+# case still costs nothing. The cell size is the single most important
+# knob: smaller means finer paths through narrow doorways but a quadratic
+# increase in bake cost, so it is tuned to just under the widest character
+# diameter (enemy radius 0.45 -> 0.9 m) plus clearance.
+# ---------------------------------------------------------------------------
+const NAV_CELL_SIZE: float = 1.1
+## Horizontal speed below which a character that IS asking to move counts as
+## blocked (meters/second).
+const NAV_STUCK_SPEED: float = 0.35
+## How long a character must be blocked before navigation takes over.
+const NAV_STUCK_TIME: float = 0.3
+## Minimum interval between path re-plans for one character (seconds).
+const NAV_REPATH_INTERVAL: float = 0.45
+## Distance at which a waypoint counts as reached (meters).
+const NAV_WAYPOINT_TOLERANCE: float = 0.55
+## How long a recovery nudge is committed to once triggered (seconds).
+## Committing prevents the character oscillating between "stuck" and
+## "free" on alternating ticks.
+const NAV_RECOVERY_TIME: float = 0.5
+## Hard cap on cached waypoints per character; a longer route is re-planned
+## when the tail is consumed.
+const NAV_MAX_WAYPOINTS: int = 32
+
+# ---------------------------------------------------------------------------
 # Perception: field of view, line of sight, detection latency
 # ---------------------------------------------------------------------------
 ## Horizontal field of view (total cone angle, degrees) used to decide
@@ -132,6 +160,61 @@ const AGENT_VISUAL_DETECTION_DELAY: float = 0.12
 const VISUAL_LOSS_GRACE: float = 0.10
 
 # ---------------------------------------------------------------------------
+# Lighting / visibility conditions (LightingProfile)
+#
+# Visibility conditions are expressed as multipliers on the EXISTING
+# perception pipeline rather than as a new observation flag. A policy is
+# meant to notice "I am acquiring targets late and losing them early" and
+# fall back on sound and memory, not to read a night bit.
+# ---------------------------------------------------------------------------
+## Fraction of the nominal vision range that survives total darkness. Never
+## zero: a target close enough is still visible with no light at all.
+const LIGHTING_MIN_RANGE_SCALE: float = 0.3
+## How much the visual detection delay grows in total darkness, as a
+## multiple of the nominal delay (1.0 = up to twice as slow).
+const LIGHTING_DELAY_GAIN: float = 1.4
+## Transmittance below which a sight line counts as lost in fog. Sets the
+## fog horizon together with the profile's density.
+const LIGHTING_MIN_TRANSMITTANCE: float = 0.25
+## Default lighting mode id for maps that do not declare one.
+const LIGHTING_DEFAULT_MODE_ID: String = "normal"
+
+# ---------------------------------------------------------------------------
+# Exploration / spatial memory (SpatialMemory, MapAnalyzer)
+#
+# The agent's map knowledge is a coarse grid it fills in by looking at
+# things. Cell size is deliberately large: this is a memory of places, not
+# a occupancy map, and it has to stay cheap enough to update inside the
+# simulation loop.
+# ---------------------------------------------------------------------------
+const EXPLORATION_CELL_SIZE: float = 2.0
+## Half-life (seconds) of per-cell confidence. Far longer than
+## MEMORY_HALF_LIFE: terrain does not walk away, but the agent still cannot
+## know whether a room it saw two minutes ago is still empty.
+const EXPLORATION_HALF_LIFE: float = 45.0
+## Confidence floor. A cell the agent has seen never returns to "unknown";
+## it becomes "known but unreliable", which is a different thing.
+const EXPLORATION_MIN_CONFIDENCE: float = 0.05
+## Seconds between visibility sweeps. The sweep is the expensive part, so it
+## runs on a fixed cadence driven by the simulation clock (deterministic),
+## not every tick.
+const EXPLORATION_UPDATE_INTERVAL: float = 0.2
+## Age (seconds) used to normalize "how long since I was last here". Beyond
+## this the field saturates: the agent only knows it has been a long time.
+const EXPLORATION_MAX_RECALL_AGE: float = 60.0
+## Cap on remembered route waypoints per episode.
+const EXPLORATION_MAX_ROUTE: int = 512
+## Map Analyzer mode: coverage fraction at which the map counts as explored
+## and the episode ends successfully.
+const EXPLORATION_TARGET_COVERAGE: float = 0.85
+## Reward per newly observed cell in Map Analyzer mode. Scaled by the grid
+## size at runtime so a big map is not worth more total reward than a small
+## one.
+const REWARD_EXPLORATION_COVERAGE: float = 5.0
+## Reward for reaching EXPLORATION_TARGET_COVERAGE.
+const REWARD_EXPLORATION_COMPLETE: float = 10.0
+
+# ---------------------------------------------------------------------------
 # Sound
 #
 # Sound is modelled as discrete, decaying events with a base audible radius
@@ -145,6 +228,10 @@ const SOUND_LAND_RADIUS: float = 11.0
 const SOUND_SHOT_RADIUS: float = 26.0
 const SOUND_IMPACT_RADIUS: float = 13.0
 const SOUND_DEATH_RADIUS: float = 15.0
+## Ambient / environmental noise (doors, debris, machinery). Not produced by
+## any character, so it is a genuine distractor: it must NOT be treated as
+## evidence of an enemy.
+const SOUND_ENVIRONMENT_RADIUS: float = 12.0
 ## Multiplier applied to the audible radius for every wall between the
 ## source and the listener.
 const SOUND_OCCLUSION_ATTENUATION: float = 0.55
@@ -164,6 +251,47 @@ const SOUND_DETECTION_DELAY: float = 0.08
 ## identifies WHICH enemy made the noise, so sound-only contacts are keyed
 ## separately from the per-enemy visual tracks.
 const SOUND_UNKNOWN_SOURCE_ID: int = -999
+## Masking between simultaneous sounds. A quiet event heard at the same
+## time as a loud one loses this fraction of the loud event's perceived
+## loudness; below SOUND_MASK_FLOOR it is not registered at all. This is
+## what makes a footstep during a gunshot unhearable.
+const SOUND_MASKING_STRENGTH: float = 0.7
+const SOUND_MASK_FLOOR: float = 0.04
+## Extra directional error per occluding wall, as a multiple of
+## SOUND_DIRECTION_ERROR_DEG. A muffled sound is harder to place.
+const SOUND_OCCLUSION_ERROR_GAIN: float = 0.8
+## Extra directional error at the very edge of the audible radius, as a
+## multiple of SOUND_DIRECTION_ERROR_DEG.
+const SOUND_RANGE_ERROR_GAIN: float = 0.5
+## Two heard events whose perceived bearings differ by more than this are
+## counted as separate sources by SoundBus.summarize().
+const SOUND_DISTINCT_SOURCE_ANGLE_DEG: float = 35.0
+## Seconds between ambient emissions on a map that declares ambience.
+const SOUND_AMBIENCE_INTERVAL: float = 3.5
+
+# ---------------------------------------------------------------------------
+# Target selection (TargetSelector)
+#
+# Weights on the factors that decide which contact fills the primary
+# observation slot. They describe what information is WORTH, not a play
+# style: the policy is free to shoot at something else entirely.
+# ---------------------------------------------------------------------------
+const TARGET_WEIGHT_VISIBLE: float = 100.0
+const TARGET_WEIGHT_DAMAGE_SOURCE: float = 40.0
+const TARGET_WEIGHT_CONFIDENCE: float = 20.0
+const TARGET_WEIGHT_PROXIMITY: float = 10.0
+## A contact that currently has line of sight to the agent.
+const TARGET_WEIGHT_THREAT: float = 15.0
+## Scales with missing health: a nearly dead contact is cheap to finish.
+const TARGET_WEIGHT_WOUNDED: float = 8.0
+## Hysteresis: a small bonus for keeping the current target, so two equal
+## threats do not make the primary slot oscillate every tick.
+const TARGET_WEIGHT_CONTINUITY: float = 6.0
+## Subtracted when the navigation graph says the contact cannot be reached.
+const TARGET_PENALTY_UNREACHABLE: float = 25.0
+## Seconds after a target switch during which the switch is still reported
+## as "recent" in the observation.
+const TARGET_SWITCH_RECENT_WINDOW: float = 1.5
 
 # ---------------------------------------------------------------------------
 # Enemy memory
@@ -191,6 +319,16 @@ const ENEMY_COVER_SEARCH_RADIUS: float = 4.0
 const ENEMY_PREFERRED_RANGE: float = 7.0
 ## Health fraction below which an engaging enemy breaks for cover.
 const ENEMY_RETREAT_HEALTH_FRACTION: float = 0.35
+## Below this fraction the enemy stops trying to trade at all and breaks
+## away from the believed threat, even without cover to run to.
+const ENEMY_CRITICAL_HEALTH_FRACTION: float = 0.15
+## How far a retreating enemy tries to get from the believed threat.
+const ENEMY_RETREAT_DISTANCE: float = 7.0
+## Continuous seconds an engaging enemy tolerates standing in the open
+## before repositioning to cover.
+const ENEMY_MAX_EXPOSURE_TIME: float = 3.5
+## Speed multiplier while walking toward a noise it has never seen.
+const ENEMY_INVESTIGATE_SPEED_SCALE: float = 0.7
 ## Seconds an enemy stays behind cover before peeking again.
 const ENEMY_COVER_DWELL: float = 1.2
 ## Seconds an enemy spends searching a lost target's last known position

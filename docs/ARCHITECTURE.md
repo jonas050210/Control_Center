@@ -54,11 +54,22 @@ Human, stub AI, external PPO and demonstrations all pass through `Action`.
 
 ## Observation contract
 
-`Observation.to_array()` always returns 33 float32-compatible values: the
-original 17-field single-enemy contract (agent state + primary/nearest-alive
-enemy + weapon-ready/in-combat flags), plus 16 additive fields (the primary
-enemy's aim bearing, an alive-enemy-count fraction, and two more
-individually-tracked enemies). See
+`Observation.to_array()` always returns **84** float32-compatible values
+(contract v3). The layout is strictly additive across three generations:
+
+- **0–32 (v1)** agent state, the primary/nearest-alive enemy, weapon-ready
+  and in-combat flags, two more individually tracked enemies.
+- **33–64 (v2)** vertical state, perception (FOV/LOS/visibility), memory
+  age and confidence, sound, and world context.
+- **65–83 (v3)** perceived brightness at the agent, statistics for contacts
+  beyond the three tracked slots, target-selection priority and switch
+  recency, second-sound bearing/loudness plus hearing uncertainty, and the
+  agent's own map knowledge (explored fraction, whether the current area is
+  known, time since it was last here, remembered cover and remembered
+  danger).
+
+No map id, lighting mode, enemy count, spawn list or geometry dump is ever
+part of the vector; a map is an environment, not a label. See
 [`docs/OBSERVATION_ACTION_CONTRACT.md`](OBSERVATION_ACTION_CONTRACT.md) for
 the full field-by-field table and normalization rules — it is the canonical
 reference; this section only summarizes it.
@@ -208,11 +219,18 @@ SimulationManager -> EnvironmentCore * N     unchanged simulation
 scripts/
   core/       Action, Observation, config, curriculum, curriculum
               controller, episode, manager
-  world/      Obstacle, ArenaWorld, WorldGenerator, CharacterMotor
+  world/      Obstacle, ArenaWorld, WorldGenerator, CharacterMotor,
+              NavigationGraph + NavigationAgent (A* over walkable cells),
+              MapLibrary (authored map catalog)
   perception/ PerceptionSystem (FOV/LOS), SoundBus, EnemyMemory,
-              ReactionProfile, AgentPerception
+              ReactionProfile, AgentPerception, LightingProfile,
+              TargetSelector
+  exploration/ SpatialMemory (perception-built map knowledge with decay),
+              MapAnalyzer (exploration mode + Control Center payload)
   scenario/   ScenarioLibrary (twelve seedable encounters)
-  env/        EnvironmentCore and optional EnvironmentView
+  env/        EnvironmentCore, EnvironmentReset (episode setup),
+              EnvironmentIntrospection (read-only Control Center views),
+              optional EnvironmentView
   agent/      Agent state/view
   enemy/      Enemy state/view, EnemyBrain (tactical behavior)
   weapon/     Weapon state
@@ -240,6 +258,9 @@ python/sandboxai/
   benchmark.py    throughput measurements and scaling analysis
   telemetry.py    structured metrics/resource snapshots
   self_play.py    policy slots and frozen-opponent lifecycle
+  league.py       checkpoint registry, opponent sampling, internal Elo
+  conditions.py   seeded condition space + per-condition tracking/report
+  auto_curriculum.py  rolling-window promotion/demotion with hysteresis
   cli.py          complete command line
 ```
 
@@ -247,17 +268,22 @@ python/sandboxai/
 
 - Only structured observations are trained; RGB and frame stacking are not
   implemented yet.
-- Self-play is a two-slot/match foundation. It does not yet implement a
-  population scheduler, league or opponent sampling algorithm.
-- The arena now has seeded geometry, axis-separated collision response,
-  gravity, jumping and standable platforms, but still no recoil, no ammo,
-  no navmesh and no path planner. Enemies steer directly toward their
-  chosen destination and slide along walls; in a maze-like layout they can
-  get stuck against a corner rather than routing around it. Adding a real
-  navigation graph is the obvious next structural step.
-- Only the 3 nearest alive enemies are individually reported in the
-  observation vector even if more exist and fight simultaneously (see
-  `docs/OBSERVATION_ACTION_CONTRACT.md`).
+- Self-play now has a league layer (`python/sandboxai/league.py`:
+  checkpoint registry, policy ids, snapshots, uniform/latest/prioritized
+  opponent sampling, deterministic tournaments, optional research-only
+  Elo), but it is not yet wired into `sandboxai train` — matches must be
+  driven by the caller.
+- The arena has seeded geometry, axis-separated collision response,
+  gravity, jumping, standable platforms and a deterministic navigation
+  graph (`NavigationGraph`, 8-connected walkable grid + A*). Enemies steer
+  directly and only fall back to path following once they are demonstrably
+  stuck, so open layouts pay nothing for it. Still missing: recoil and
+  ammunition.
+- Only the 3 highest-priority contacts are individually reported in the
+  observation vector. Contacts beyond that are no longer invisible: fields
+  66–69 describe them statistically (how many, how many visible, mean and
+  minimum distance), so the observation shape is independent of the enemy
+  count while still telling the policy it is outnumbered.
 - The Control Center cannot run a trained policy in-engine (no neural
   network runtime in Godot); its TRAINING mode is a throughput mode, not a
   trainer. Agent slot 1 still does not exist outside the self-play
@@ -294,8 +320,20 @@ true position only to run the perception queries, and every decision
 downstream reads its own `EnemyMemory` track instead. That is what makes an
 enemy genuinely lose you around a corner rather than pretending to.
 
-The next useful milestone is training against the new perception curriculum
-(levels 5–8) on the target machine, validating the benchmark sweep to pick a
-practical environment count, and then starting the real external Roblox
-Player adapter implementation against the contract in
-`docs/ROBLOX_ADAPTER.md`.
+## Testing workflow
+
+- Python: `python -m pytest -q` from the repository root (`conftest.py`
+  puts `python/` on `sys.path`). Optional-dependency tests skip cleanly
+  when torch / gymnasium / stable-baselines3 are absent.
+- GDScript static analysis and linting need the `gdscript` extra
+  (`pip install gdtoolkit`), and run as part of the Python suite via
+  `python/tests/test_gdscript_static.py`
+  (`sandboxai.gdscript_analysis.analyze()` for parse/resource/symbol/arity
+  checks, `lint_all()` for `gdlint`).
+- GDScript behaviour tests need a real engine:
+  `godot --headless --path . --script res://tests/run_tests.gd`.
+
+The next useful milestone is running the GDScript suite and the benchmark
+sweep on a machine with Godot 4.7.2 installed, then training against the
+map/lighting condition distribution (`sandboxai.conditions`) and reading
+the per-condition generalization report before touching hyperparameters.

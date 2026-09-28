@@ -129,12 +129,25 @@ godot --headless --path . --script res://tests/run_tests.gd
 ```
 
 The runner discovers `tests/test_*.gd`, reports every test, and exits nonzero
-on failure. Python tests (after editable installation, or with `PYTHONPATH`)
-are:
+on failure. Python tests run from the repository root; `conftest.py` puts
+`python/` on `sys.path`, so no `PYTHONPATH` is needed with pytest:
 
 ```bash
+python -m pytest -q
+# or, without pytest:
 PYTHONPATH=python python -m unittest discover -s python/tests -v
 ```
+
+The Python suite also statically analyses and lints the GDScript half of the
+repository (`python/tests/test_gdscript_static.py`). That requires the
+optional `gdscript` extra:
+
+```bash
+pip install -e ".[test,gdscript]"
+```
+
+Without it those tests skip rather than fail, so a machine without
+`gdtoolkit` still gets a green — but incomplete — run.
 
 Godot is not bundled in this repository. If the executable is unavailable,
 Python tests and static Python compilation can still run, but the Godot test

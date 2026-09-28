@@ -33,6 +33,13 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##                                 negative if it moved away)
 ##   alive: bool               -- whether the agent is alive at the end of
 ##                                 the tick (drives the small survive bonus)
+##   exploration_gain: float   -- Map Analyzer mode only: value of the map
+##                                 cells newly observed this tick, already
+##                                 normalized by grid size by MapAnalyzer.
+##                                 Absent (0) in every combat mode, so the
+##                                 combat reward is byte-identical to before.
+##   exploration_complete: bool -- the map reached the target coverage this
+##                                 tick (paid once per episode)
 static func compute(events: Dictionary) -> float:
 	var reward: float = 0.0
 
@@ -63,6 +70,13 @@ static func compute(events: Dictionary) -> float:
 			SandboxConfig.REWARD_POSITIONING_MAX
 		)
 		reward += shaped
+
+	var exploration_gain: float = float(events.get("exploration_gain", 0.0))
+	if exploration_gain != 0.0:
+		reward += exploration_gain
+
+	if events.get("exploration_complete", false):
+		reward += SandboxConfig.REWARD_EXPLORATION_COMPLETE
 
 	if events.get("alive", true) and not events.get("died", false):
 		reward += SandboxConfig.REWARD_SURVIVE_TICK

@@ -495,6 +495,46 @@ def parse_all(root: Path | None = None) -> list[Finding]:
     return findings
 
 
+def lint_all(root: Path | None = None) -> list[Finding]:
+    """Runs gdtoolkit's ``gdlint`` style/complexity rules over the project.
+
+    Separate from :func:`analyze` on purpose: ``analyze`` answers "is this
+    code *wrong*" (syntax, missing resources, unknown members, wrong arity)
+    while this answers "is this code *unidiomatic*". They fail different
+    tests so a style nit is never mistaken for a broken simulation.
+
+    Returns a ``parser-unavailable`` finding (never an exception) when
+    gdtoolkit is not installed, matching :func:`parse_all`.
+    """
+    root = root or project_root()
+    try:
+        from gdtoolkit.linter import lint_code  # type: ignore
+        from gdtoolkit.linter import DEFAULT_CONFIG  # type: ignore
+    except ImportError:
+        return [
+            Finding(
+                "<gdtoolkit>",
+                0,
+                "linter-unavailable",
+                "gdtoolkit is not installed; GDScript style was NOT verified",
+            )
+        ]
+    config = dict(DEFAULT_CONFIG)
+    findings: list[Finding] = []
+    for path in iter_gd_files(root):
+        res_path = RES_PREFIX + path.relative_to(root).as_posix()
+        try:
+            problems = lint_code(path.read_text(encoding="utf-8"), config)
+        except Exception as exc:  # noqa: BLE001 - lark/gdtoolkit raise many types
+            findings.append(Finding(res_path, 0, "lint-error", str(exc).splitlines()[0]))
+            continue
+        for problem in problems:
+            findings.append(
+                Finding(res_path, int(problem.line), str(problem.name), str(problem.description))
+            )
+    return findings
+
+
 def analyze(root: Path | None = None) -> list[Finding]:
     """Full static analysis: syntax + resources + symbols + call arity."""
     root = root or project_root()

@@ -24,9 +24,11 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
+const TargetSelector = preload("res://scripts/perception/target_selector.gd")
 
 const SELF_PATH: String = "res://scripts/perception/agent_perception.gd"
 
@@ -42,6 +44,15 @@ var fov_deg: float = SandboxConfig.AGENT_FOV_DEG
 var vision_range: float = SandboxConfig.VISION_RANGE
 var detection_delay: float = SandboxConfig.AGENT_VISUAL_DETECTION_DELAY
 
+## Environmental visibility conditions. Never observed as a mode; it acts
+## by shortening the acquisition range, slowing detection and shortening
+## the loss grace, so the policy experiences consequences rather than a
+## label. Defaults to NORMAL, i.e. exactly the pre-lighting behavior.
+var lighting: LightingProfile = LightingProfile.create()
+## Perceived brightness where the agent is standing, in [0, 1]. This IS
+## exposed to the policy: a human standing in a dark room knows it is dark.
+var local_illumination: float = 1.0
+
 var memory: EnemyMemory = EnemyMemory.create()
 ## enemy id -> continuous seconds of unbroken geometric visibility.
 var contact_timers: Dictionary = {}
@@ -49,6 +60,10 @@ var contact_timers: Dictionary = {}
 var loss_timers: Dictionary = {}
 ## Last audible sound sample (loudest first) and its count.
 var heard: Array = []
+## Aggregate description of that sample: how many distinct directions noise
+## came from, how much of it was masked, and how much the agent should
+## trust the bearings (SoundBus.summarize()).
+var sound_summary: Dictionary = SoundBus.summarize([])
 ## Distance to the first occluder straight ahead.
 var forward_clearance: float = SandboxConfig.VISION_RANGE
 ## Whether geometry currently hides the agent from every living enemy.
@@ -71,11 +86,17 @@ func configure(
 		detection_delay = p_detection_delay
 
 
+func set_lighting(profile) -> void:
+	lighting = profile if profile != null else LightingProfile.create()
+
+
 func reset() -> void:
 	memory.clear()
+	local_illumination = 1.0
 	contact_timers.clear()
 	loss_timers.clear()
 	heard.clear()
+	sound_summary = SoundBus.summarize([])
 	forward_clearance = vision_range
 	in_cover = true
 	threat_count = 0
@@ -94,7 +115,9 @@ func forget(enemy_id: int) -> void:
 ##
 ## Each belief entry:
 ##   {id, visible, in_fov, los_clear, distance, bearing_deg, elevation_deg,
-##    position, health_norm, age, confidence, source, alive}
+##    position, health_norm, age, confidence, source, threatening, alive}
+## `threatening` means that contact currently has line of sight to the
+## agent, i.e. the agent is exposed to it.
 ## `position` is the live position while visible and the last known
 ## position afterwards; `age`/`confidence`/`source` tell the policy which.
 func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
@@ -106,6 +129,7 @@ func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
 	var eye: Vector3 = agent.get_eye_position()
 	var forward: Vector3 = agent.get_forward_horizontal()
 	forward_clearance = PerceptionSystem.forward_clearance(world, eye, forward, vision_range)
+	local_illumination = lighting.illumination_at(agent.position)
 	threat_count = 0
 
 	var beliefs: Array = []
@@ -123,54 +147,73 @@ func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
 	return beliefs
 
 
-## Beliefs ranked for target selection (Phase 5): visible contacts first,
-## then by confidence, then by distance. A caller may pass `damage_source`
-## (the id of whatever last hurt the agent) to bias selection toward it.
+## Beliefs ranked for target selection. Thin wrapper kept for callers that
+## only have a damage source; the real logic lives in `TargetSelector`,
+## which scores named factors and can also report why it chose what it did.
 static func rank_beliefs(beliefs: Array, damage_source: int = -1) -> Array:
-	var ranked: Array = beliefs.duplicate()
-	ranked.sort_custom(
-		func(a, b):
-			var score_a: float = _selection_score(a, damage_source)
-			var score_b: float = _selection_score(b, damage_source)
-			if absf(score_a - score_b) > 0.000001:
-				return score_a > score_b
-			return float(a["distance"]) < float(b["distance"])
-	)
-	return ranked
-
-
-## Higher is a better target. Visibility dominates, then recent damage,
-## then confidence, then proximity — which is the ordering a human player
-## uses and the one the Control Center displays as "target reason".
-static func _selection_score(belief: Dictionary, damage_source: int) -> float:
-	var score: float = 0.0
-	if bool(belief.get("visible", false)):
-		score += 100.0
-	if int(belief.get("id", -1)) == damage_source:
-		score += 40.0
-	score += float(belief.get("confidence", 0.0)) * 20.0
-	score += clampf(
-		1.0 - float(belief.get("distance", 0.0)) / SandboxConfig.ARENA_MAX_DISTANCE, 0.0, 1.0
-	) * 10.0
-	return score
+	return TargetSelector.rank(beliefs, {"damage_source": damage_source})
 
 
 ## Human-readable justification for why a belief was chosen. Debug/UI only.
 static func selection_reason(belief: Dictionary, damage_source: int) -> String:
-	if belief.is_empty():
-		return "no target"
-	if bool(belief.get("visible", false)):
-		if int(belief.get("id", -1)) == damage_source:
-			return "visible and recently damaged me"
-		return "visible, nearest threat"
-	if int(belief.get("source", EnemyMemory.Source.NONE)) == EnemyMemory.Source.SOUND:
-		return "heard only, last known position"
-	return "remembered, %.1fs since contact" % float(belief.get("age", 0.0))
+	return TargetSelector.reason(belief, {"damage_source": damage_source})
+
+
+## Aggregate description of every contact the agent currently holds.
+##
+## This is what makes the observation independent of the enemy count: the
+## first `slot_count` contacts get individual slots, and everything beyond
+## them is summarized statistically. Eight enemies therefore produce the
+## same observation shape as one, and the policy still learns that it is
+## outnumbered.
+static func summarize_contacts(beliefs: Array, slot_count: int) -> Dictionary:
+	var visible_count: int = 0
+	var remembered_count: int = 0
+	var uncertainty_total: float = 0.0
+	var overflow_count: int = 0
+	var overflow_visible: int = 0
+	var overflow_distance_total: float = 0.0
+	var overflow_min_distance: float = -1.0
+	for index in range(beliefs.size()):
+		var belief: Dictionary = beliefs[index]
+		var visible: bool = bool(belief.get("visible", false))
+		if visible:
+			visible_count += 1
+		else:
+			remembered_count += 1
+			uncertainty_total += 1.0 - clampf(float(belief.get("confidence", 0.0)), 0.0, 1.0)
+		if index < slot_count:
+			continue
+		var distance: float = float(belief.get("distance", 0.0))
+		overflow_count += 1
+		overflow_distance_total += distance
+		if visible:
+			overflow_visible += 1
+		if overflow_min_distance < 0.0 or distance < overflow_min_distance:
+			overflow_min_distance = distance
+	return {
+		"contact_count": beliefs.size(),
+		"visible_count": visible_count,
+		"remembered_count": remembered_count,
+		"memory_uncertainty": (
+			uncertainty_total / float(remembered_count) if remembered_count > 0 else 0.0
+		),
+		"overflow_count": overflow_count,
+		"overflow_visible": overflow_visible,
+		"overflow_mean_distance": (
+			overflow_distance_total / float(overflow_count) if overflow_count > 0 else 0.0
+		),
+		"overflow_min_distance": maxf(overflow_min_distance, 0.0),
+	}
 
 
 func _evaluate_enemy(
 	agent, enemy: EnemyState, world, eye: Vector3, forward: Vector3, dt: float
 ) -> Dictionary:
+	# Lighting acts HERE, on the acquisition range, rather than being
+	# reported to the policy: a target standing in shadow simply has to be
+	# closer before it resolves at all.
+	var effective_range: float = lighting.detection_range(vision_range, enemy.position)
 	var evaluation: Dictionary = PerceptionSystem.evaluate_target(
 		world,
 		eye,
@@ -179,11 +222,14 @@ func _evaluate_enemy(
 		enemy.position,
 		enemy.height,
 		fov_deg,
-		vision_range
+		effective_range
 	)
 	# Threat accounting uses pure geometry (does the enemy see me?), not the
 	# agent's own FOV, and never leaks into the observation as a position.
-	if PerceptionSystem.has_line_of_sight(world, enemy.get_eye_position(), agent.position, 1.8):
+	var threatening: bool = PerceptionSystem.has_line_of_sight(
+		world, enemy.get_eye_position(), agent.position, 1.8
+	)
+	if threatening:
 		threat_count += 1
 
 	var health_norm: float = enemy.health / maxf(enemy.max_health, 0.0001)
@@ -202,6 +248,7 @@ func _evaluate_enemy(
 			"age": 0.0,
 			"confidence": 1.0,
 			"source": EnemyMemory.Source.VISUAL,
+			"threatening": threatening,
 			"alive": true,
 		}
 
@@ -216,10 +263,14 @@ func _evaluate_enemy(
 		loss_timers[enemy_id] = float(loss_timers.get(enemy_id, 0.0)) + dt
 	contact_timers[enemy_id] = contact
 
-	var confirmed: bool = geometric and contact >= detection_delay
+	# Poor light also costs reaction time and shortens how long a lost
+	# silhouette keeps being reported.
+	var required_contact: float = detection_delay * lighting.detection_delay_scale(enemy.position)
+	var grace: float = SandboxConfig.VISUAL_LOSS_GRACE * lighting.loss_grace_scale(enemy.position)
+	var confirmed: bool = geometric and contact >= required_contact
 	var within_grace: bool = (
 		not geometric
-		and float(loss_timers.get(enemy_id, 0.0)) <= SandboxConfig.VISUAL_LOSS_GRACE
+		and float(loss_timers.get(enemy_id, 0.0)) <= grace
 		and memory.has(enemy_id)
 	)
 	var visible: bool = confirmed or within_grace
@@ -248,6 +299,7 @@ func _evaluate_enemy(
 			"age": 0.0,
 			"confidence": 1.0,
 			"source": EnemyMemory.Source.VISUAL,
+			"threatening": threatening,
 			"alive": true,
 		}
 
@@ -269,12 +321,14 @@ func _evaluate_enemy(
 		"age": float(track["age"]),
 		"confidence": float(track["confidence"]),
 		"source": int(track["source"]),
+		"threatening": threatening,
 		"alive": true,
 	}
 
 
 func _sample_sound(agent, world, sound_bus) -> void:
 	heard.clear()
+	sound_summary = SoundBus.summarize(heard)
 	if not sound_enabled or sound_bus == null:
 		return
 	heard = (sound_bus as SoundBus).sample(
@@ -284,6 +338,7 @@ func _sample_sound(agent, world, sound_bus) -> void:
 		-1,
 		SandboxConfig.SOUND_DETECTION_DELAY
 	)
+	sound_summary = SoundBus.summarize(heard)
 	if not memory_enabled or heard.is_empty():
 		return
 	# The loudest event becomes a low-confidence memory track keyed to an

@@ -148,7 +148,7 @@ levels stay exactly as cheap as they were:
 
 | Level range | Per-step work added vs. the original implementation |
 | --- | --- |
-| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 65 floats instead of 33 (the extra 32 are written from already-computed values). |
+| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 84 floats instead of 33 (the extra 51 are written from already-computed values or left at their "no information" defaults). |
 | 5 | Collision + ground queries per character (O(obstacles) axis-separated box tests), `EnemyBrain` instead of `update_ai()`. |
 | 6 | Adds per-enemy FOV + line-of-sight: 2 ray samples per enemy per tick, each O(obstacles). |
 | 7 | Adds sound: bounded at `SOUND_MAX_ACTIVE = 24` events, each sampled with one occluder count per listener. |

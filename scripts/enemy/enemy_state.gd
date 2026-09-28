@@ -29,11 +29,18 @@ enum AIState {
 	TAKE_COVER = 6,
 	PEEK = 7,
 	SEARCH = 8,
+	## Moving toward a noise the enemy heard but has never seen. Kept
+	## distinct from SEARCH, which walks to a position it actually saw.
+	INVESTIGATE = 9,
+	## Critically hurt with no cover available: breaking away from the
+	## believed threat instead of trading.
+	RETREAT = 10,
 }
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const CharacterMotor = preload("res://scripts/world/character_motor.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
+const NavigationAgent = preload("res://scripts/world/navigation_agent.gd")
 const ReactionProfile = preload("res://scripts/perception/reaction_profile.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
@@ -99,6 +106,10 @@ var time_since_visual: float = 0.0
 var state_time: float = 0.0
 ## Seconds spent searching for a lost target.
 var search_time: float = 0.0
+## Continuous seconds spent standing in a mutually visible position while
+## engaging. Line of sight is symmetric, so an enemy that can see the agent
+## can also work out that it is itself standing in the open.
+var exposure_time: float = 0.0
 ## Whether this enemy has an active, reaction-confirmed target.
 var target_confirmed: bool = false
 ## Destination the tactical layer is currently moving toward.
@@ -106,6 +117,9 @@ var tactical_destination: Vector3 = Vector3.ZERO
 var has_tactical_destination: bool = false
 ## Human-readable reason the brain chose its current state. Debug/UI only.
 var tactical_reason: String = "idle"
+## Path-following / stuck-recovery state. Only consulted once direct
+## steering demonstrably fails, so open layouts pay nothing for it.
+var navigation: NavigationAgent = NavigationAgent.create()
 
 
 func _init(
@@ -144,10 +158,12 @@ func reset(spawn_position: Vector3 = SandboxConfig.ENEMY_SPAWN_POSITION) -> void
 	time_since_visual = 0.0
 	state_time = 0.0
 	search_time = 0.0
+	exposure_time = 0.0
 	target_confirmed = false
 	has_tactical_destination = false
 	tactical_destination = Vector3.ZERO
 	tactical_reason = "idle"
+	navigation.reset(spawn_position)
 	weapon.reset()
 	memory.clear()
 
@@ -379,6 +395,7 @@ func to_dict() -> Dictionary:
 		"tactical_reason": tactical_reason,
 		"target_confirmed": target_confirmed,
 		"time_since_visual": time_since_visual,
+		"navigation": navigation.to_dict(),
 	}
 
 
@@ -402,5 +419,9 @@ static func ai_state_name(state: int) -> String:
 			return "peek"
 		AIState.SEARCH:
 			return "search"
+		AIState.INVESTIGATE:
+			return "investigate"
+		AIState.RETREAT:
+			return "retreat"
 		_:
 			return "unknown"

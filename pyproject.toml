@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sandboxai"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local PPO, behavior cloning and evaluation tooling for SandboxAI"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,6 +21,12 @@ training = [
 ]
 test = [
   "pytest>=7.4",
+]
+# GDScript tooling: real grammar parsing (gdparse) and style rules (gdlint)
+# used by python/sandboxai/gdscript_analysis.py. Optional because it is only
+# needed to verify the Godot half of the repository.
+gdscript = [
+  "gdtoolkit>=4.3,<5",
 ]
 
 [project.scripts]

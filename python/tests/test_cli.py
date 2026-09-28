@@ -1,10 +1,29 @@
+import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from optional_deps import HAS_TORCH, TORCH_REASON
 from sandboxai.cli import build_control_center_command, build_record_command, main
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _subprocess_env() -> dict:
+    """Environment that lets a child ``python -m sandboxai`` find the package.
+
+    The package lives in ``python/`` and is not necessarily pip-installed in
+    the environment running the tests (conftest.py only patches the in-process
+    ``sys.path``). Without this the CLI subprocess tests only pass when the
+    caller happened to export PYTHONPATH by hand.
+    """
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    entries = [str(PACKAGE_ROOT)] + ([existing] if existing else [])
+    env["PYTHONPATH"] = os.pathsep.join(entries)
+    return env
 
 
 class CliTests(unittest.TestCase):
@@ -66,16 +85,17 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
 
     def test_help_lists_workflow_commands(self):
-        result = subprocess.run([sys.executable, "-m", "sandboxai", "--help"], capture_output=True, text=True, check=True)
+        result = subprocess.run([sys.executable, "-m", "sandboxai", "--help"], capture_output=True, text=True, check=True, env=_subprocess_env())
         for command in ("train", "evaluate", "record", "control-center", "bc-train", "resume", "benchmark", "inspect-dataset", "smoke-test"):
             self.assertIn(command, result.stdout)
 
     def test_install_is_dependency_only_and_does_not_launch_godot(self):
-        result = subprocess.run([sys.executable, "-m", "sandboxai", "install"], capture_output=True, text=True, check=True)
+        result = subprocess.run([sys.executable, "-m", "sandboxai", "install"], capture_output=True, text=True, check=True, env=_subprocess_env())
         self.assertIn("pip install", result.stdout)
 
+    @unittest.skipUnless(HAS_TORCH, TORCH_REASON)
     def test_smoke_test_command(self):
-        result = subprocess.run([sys.executable, "-m", "sandboxai", "smoke-test", "--device", "cpu"], capture_output=True, text=True, check=True)
+        result = subprocess.run([sys.executable, "-m", "sandboxai", "smoke-test", "--device", "cpu"], capture_output=True, text=True, check=True, env=_subprocess_env())
         self.assertIn("all_passed", result.stdout)
         # A failing smoke test must exit non-zero, not report success.
         self.assertIn('"all_passed": true', result.stdout)

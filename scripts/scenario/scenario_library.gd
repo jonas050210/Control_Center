@@ -211,7 +211,36 @@ static func resolve(
 	# The world uses its own derived seed so that changing the enemy count
 	# does not change the geometry for the same scenario seed.
 	var world: ArenaWorld = WorldGenerator.build(layout, seed_value, half_extent)
+	return _populate(entry, world, rng, seed_value, enemy_count_override)
 
+
+## Places the agent and the enemies of `scenario_id` into an ALREADY BUILT
+## world.
+##
+## This is what lets a `MapLibrary` map own the geometry while a scenario
+## still owns the encounter: the same "enemy waits out of sight" situation
+## can be played on a corridor, a compound or a foggy field. Splitting it
+## out (instead of duplicating the placement code) is what keeps the spawn
+## rules identical in both paths.
+static func resolve_on_world(
+	scenario_id: String, seed_value: int, world: ArenaWorld, enemy_count_override: int = -1
+) -> Dictionary:
+	var entry: Dictionary = definition(scenario_id)
+	if entry.is_empty():
+		entry = definition("open_arena")
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	return _populate(entry, world, rng, seed_value, enemy_count_override)
+
+
+static func _populate(
+	entry: Dictionary,
+	world: ArenaWorld,
+	rng: RandomNumberGenerator,
+	seed_value: int,
+	enemy_count_override: int
+) -> Dictionary:
+	var layout: String = str(entry["layout"])
 	var enemy_count: int = (
 		enemy_count_override if enemy_count_override > 0 else int(entry["enemy_count"])
 	)

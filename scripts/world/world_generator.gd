@@ -26,6 +26,9 @@ const LAYOUT_IDS: Array = [
 	"rooms",
 	"pillars",
 	"vertical",
+	"multi_room",
+	"ambush",
+	"sound_maze",
 	"randomized",
 ]
 
@@ -67,6 +70,12 @@ static func build(
 			_build_pillars(world, rng)
 		"vertical":
 			_build_vertical(world, rng)
+		"multi_room":
+			_build_multi_room(world, rng)
+		"ambush":
+			_build_ambush(world, rng)
+		"sound_maze":
+			_build_sound_maze(world, rng)
 		"randomized":
 			_build_randomized(world, rng)
 		_:
@@ -261,7 +270,16 @@ static func _build_vertical(world: ArenaWorld, rng: RandomNumberGenerator) -> vo
 ## couple of extra crates. Still fully deterministic for a given seed.
 static func _build_randomized(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
 	var candidates: Array = [
-		"scattered_cover", "corner", "cover_field", "corridor", "rooms", "pillars", "vertical"
+		"scattered_cover",
+		"corner",
+		"cover_field",
+		"corridor",
+		"rooms",
+		"pillars",
+		"vertical",
+		"multi_room",
+		"ambush",
+		"sound_maze",
 	]
 	var pick: String = str(candidates[rng.randi_range(0, candidates.size() - 1)])
 	match pick:
@@ -279,6 +297,12 @@ static func _build_randomized(world: ArenaWorld, rng: RandomNumberGenerator) -> 
 			_build_pillars(world, rng)
 		"vertical":
 			_build_vertical(world, rng)
+		"multi_room":
+			_build_multi_room(world, rng)
+		"ambush":
+			_build_ambush(world, rng)
+		"sound_maze":
+			_build_sound_maze(world, rng)
 	var extras: int = rng.randi_range(1, 3)
 	for _index in range(extras):
 		var height: float = rng.randf_range(0.8, 1.8)
@@ -291,3 +315,130 @@ static func _build_randomized(world: ArenaWorld, rng: RandomNumberGenerator) -> 
 			Vector3(rng.randf_range(0.6, 1.1), height * 0.5, rng.randf_range(0.6, 1.1)),
 			Obstacle.Kind.CRATE
 		)
+
+
+## Four rooms around a cross-shaped pair of dividing walls, each divider
+## pierced by one seeded doorway. This is the canonical multi-room combat
+## layout: there is no sight line longer than one room, every engagement
+## starts at a door, and a navigation graph is genuinely required to move
+## between rooms.
+static func _build_multi_room(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
+	var height: float = HIGH_COVER_HEIGHT
+	var span: float = world.half_extent
+	var center_x: float = rng.randf_range(-span * 0.2, span * 0.2)
+	var center_z: float = rng.randf_range(-span * 0.2, span * 0.2)
+	var door_half: float = rng.randf_range(1.0, 1.5)
+
+	# Vertical divider (constant x) split by two doorways, one per half.
+	var north_door: float = rng.randf_range(center_z + 1.5, span - 1.5)
+	var south_door: float = rng.randf_range(-span + 1.5, center_z - 1.5)
+	_add_split_wall(world, center_x, -span, span, north_door, door_half, height, true)
+	_add_split_wall(
+		world, center_x, -span, north_door - door_half, south_door, door_half, height, true
+	)
+	# Horizontal divider (constant z) with one doorway.
+	var east_door: float = rng.randf_range(center_x + 1.5, span - 1.5)
+	_add_split_wall(world, center_z, -span, span, east_door, door_half, height, false)
+
+	# One crate per quadrant so every room has usable cover.
+	for quadrant in range(4):
+		var sign_x: float = 1.0 if (quadrant % 2) == 0 else -1.0
+		var sign_z: float = 1.0 if quadrant < 2 else -1.0
+		world.add_box(
+			Vector3(
+				center_x + sign_x * rng.randf_range(2.0, span * 0.6),
+				LOW_COVER_HEIGHT * 0.5,
+				center_z + sign_z * rng.randf_range(2.0, span * 0.6)
+			),
+			Vector3(0.9, LOW_COVER_HEIGHT * 0.5, 0.9),
+			Obstacle.Kind.LOW_COVER
+		)
+
+
+## Adds a wall along one axis, split by a doorway. `vertical` selects a wall
+## of constant x (true) or constant z (false). Shared by the multi-room and
+## ambush layouts so a doorway is built exactly one way in the project.
+static func _add_split_wall(
+	world: ArenaWorld,
+	fixed_coordinate: float,
+	from_value: float,
+	to_value: float,
+	door_center: float,
+	door_half: float,
+	height: float,
+	vertical: bool
+) -> void:
+	if to_value - from_value <= 0.2:
+		return
+	var segments: Array = [
+		Vector2(from_value, clampf(door_center - door_half, from_value, to_value)),
+		Vector2(clampf(door_center + door_half, from_value, to_value), to_value),
+	]
+	for segment_value in segments:
+		var segment: Vector2 = segment_value
+		var length: float = segment.y - segment.x
+		if length <= 0.2:
+			continue
+		var middle: float = segment.x + length * 0.5
+		if vertical:
+			world.add_box(
+				Vector3(fixed_coordinate, height * 0.5, middle),
+				Vector3(WALL_HALF_THICKNESS, height * 0.5, length * 0.5),
+				Obstacle.Kind.WALL
+			)
+		else:
+			world.add_box(
+				Vector3(middle, height * 0.5, fixed_coordinate),
+				Vector3(length * 0.5, height * 0.5, WALL_HALF_THICKNESS),
+				Obstacle.Kind.WALL
+			)
+
+
+## A single approach lane flanked by two blind alcoves. Whoever walks the
+## lane is exposed from the side the moment they pass an alcove mouth, which
+## is what makes "check your corners" a learnable behavior rather than a
+## scripted one.
+static func _build_ambush(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
+	var height: float = HIGH_COVER_HEIGHT
+	var span: float = world.half_extent
+	var lane_half: float = rng.randf_range(1.8, 2.6)
+	_add_split_wall(world, -lane_half, -span, span, rng.randf_range(-2.0, 2.0), 1.2, height, true)
+	_add_split_wall(world, lane_half, -span, span, rng.randf_range(-2.0, 2.0), 1.2, height, true)
+
+	# Alcove back walls, one on each side, at staggered depths.
+	for side in range(2):
+		var sign_x: float = 1.0 if side == 0 else -1.0
+		var depth: float = rng.randf_range(2.5, 4.0)
+		var alcove_z: float = rng.randf_range(-span * 0.5, span * 0.5)
+		world.add_box(
+			Vector3(sign_x * (lane_half + depth), height * 0.5, alcove_z),
+			Vector3(WALL_HALF_THICKNESS, height * 0.5, rng.randf_range(1.6, 2.6)),
+			Obstacle.Kind.WALL
+		)
+		world.add_box(
+			Vector3(sign_x * (lane_half + depth * 0.5), LOW_COVER_HEIGHT * 0.5, alcove_z),
+			Vector3(0.7, LOW_COVER_HEIGHT * 0.5, 0.7),
+			Obstacle.Kind.LOW_COVER
+		)
+
+
+## Dense staggered wall stubs: almost nothing is ever visible, but sound
+## travels around the stubs with only one or two occluders. The intended
+## lesson is "navigate by hearing", so the geometry deliberately maximizes
+## occlusion while keeping the whole layout one connected region.
+static func _build_sound_maze(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
+	var height: float = HIGH_COVER_HEIGHT
+	var span: float = world.half_extent
+	var rows: int = rng.randi_range(3, 4)
+	var spacing: float = (span * 2.0) / float(rows + 1)
+	for row in range(rows):
+		var z: float = -span + spacing * float(row + 1)
+		var stub_count: int = rng.randi_range(2, 3)
+		for stub in range(stub_count):
+			var x: float = -span * 0.75 + (span * 1.5 / float(stub_count)) * (float(stub) + 0.5)
+			var length: float = rng.randf_range(1.6, 3.0)
+			world.add_box(
+				Vector3(x + rng.randf_range(-0.6, 0.6), height * 0.5, z),
+				Vector3(length * 0.5, height * 0.5, WALL_HALF_THICKNESS),
+				Obstacle.Kind.WALL
+			)
