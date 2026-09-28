@@ -26,11 +26,19 @@ const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 
-## Contract v2 = 33 (v1, unchanged) + 32 perception/memory/sound/vertical
-## fields. Indices [0-32] keep their exact v1 meaning and normalization;
-## everything new is strictly appended, so a v1 policy's weights still line
-## up with the same semantics for the first 33 inputs.
-const FIELD_COUNT: int = 65
+## Contract v3 = 65 (v2, unchanged) + 19 fields for conditions, contact
+## overflow, target selection, richer hearing and map knowledge. Indices
+## [0-32] keep their exact v1 meaning and [0-64] their exact v2 meaning;
+## everything new is strictly appended, so older weights still line up with
+## the same semantics for the prefix they were trained on.
+##
+## Every v3 field is something the agent could work out for itself from
+## what it perceived. There is no map id, no lighting mode, no enemy count,
+## no hidden geometry: "it is dark HERE", "two more contacts I am not
+## tracking individually", "I have seen 40% of this place".
+const FIELD_COUNT: int = 84
+## The v2 prefix length, for the same reason as LEGACY_FIELD_COUNT.
+const V2_FIELD_COUNT: int = 65
 ## The v1 prefix length, kept as a named constant because several tests and
 ## the Roblox adapter boundary assert the prefix is never reordered.
 const LEGACY_FIELD_COUNT: int = 33
@@ -133,6 +141,25 @@ const FIELD_SPEC: Array = [
 	{"index": 62, "width": 1, "name": "visible_enemy_count_norm", "group": "world"},
 	{"index": 63, "width": 1, "name": "remembered_enemy_count_norm", "group": "memory"},
 	{"index": 64, "width": 1, "name": "corpse_count_norm", "group": "world"},
+	{"index": 65, "width": 1, "name": "local_illumination", "group": "conditions"},
+	{"index": 66, "width": 1, "name": "overflow_contact_count_norm", "group": "contacts"},
+	{"index": 67, "width": 1, "name": "overflow_visible_count_norm", "group": "contacts"},
+	{"index": 68, "width": 1, "name": "overflow_mean_distance_norm", "group": "contacts"},
+	{"index": 69, "width": 1, "name": "overflow_min_distance_norm", "group": "contacts"},
+	{"index": 70, "width": 1, "name": "target_priority_norm", "group": "target"},
+	{"index": 71, "width": 1, "name": "target_switch_recent", "group": "target"},
+	{"index": 72, "width": 1, "name": "second_sound_bearing_norm", "group": "sound"},
+	{"index": 73, "width": 1, "name": "second_sound_loudness", "group": "sound"},
+	{"index": 74, "width": 1, "name": "sound_direction_error_norm", "group": "sound"},
+	{"index": 75, "width": 1, "name": "distinct_sound_source_count_norm", "group": "sound"},
+	{"index": 76, "width": 1, "name": "explored_fraction", "group": "exploration"},
+	{"index": 77, "width": 1, "name": "current_area_known", "group": "exploration"},
+	{"index": 78, "width": 1, "name": "time_since_area_visited_norm", "group": "exploration"},
+	{"index": 79, "width": 1, "name": "remembered_cover_distance_norm", "group": "exploration"},
+	{"index": 80, "width": 1, "name": "remembered_cover_bearing_norm", "group": "exploration"},
+	{"index": 81, "width": 1, "name": "remembered_danger_distance_norm", "group": "exploration"},
+	{"index": 82, "width": 1, "name": "remembered_danger_bearing_norm", "group": "exploration"},
+	{"index": 83, "width": 1, "name": "contact_uncertainty_norm", "group": "memory"},
 ]
 
 ## Per-component suffixes appended to a multi-value field's name (a width-3
@@ -232,6 +259,46 @@ var visible_enemy_count_norm: float = 0.0
 var remembered_enemy_count_norm: float = 0.0
 var corpse_count_norm: float = 0.0
 
+# ---------------------------------------------------------------------------
+# Contract v3: conditions, contact overflow, target selection, hearing
+# detail and map knowledge.
+#
+# Same rule as v2, applied to harder cases:
+#   * `local_illumination` is how bright it is WHERE THE AGENT STANDS. The
+#     lighting MODE is never exposed; a human in a dark room knows it is
+#     dark, but not that the level designer called it "night".
+#   * the overflow fields describe contacts beyond the individually
+#     tracked slots STATISTICALLY, so eight enemies and one enemy produce
+#     the same vector shape and the policy still knows it is outnumbered.
+#   * the exploration fields come from SpatialMemory, i.e. only from places
+#     the agent has actually looked at. Zeros mean "I know nothing", which
+#     is the honest answer when map tracking is off.
+# ---------------------------------------------------------------------------
+var local_illumination: float = 1.0
+
+var overflow_contact_count_norm: float = 0.0
+var overflow_visible_count_norm: float = 0.0
+var overflow_mean_distance_norm: float = 0.0
+var overflow_min_distance_norm: float = 0.0
+
+var target_priority_norm: float = 0.0
+var target_switch_recent: bool = false
+
+var second_sound_bearing_norm: float = 0.0
+var second_sound_loudness: float = 0.0
+var sound_direction_error_norm: float = 0.0
+var distinct_sound_source_count_norm: float = 0.0
+
+var explored_fraction: float = 0.0
+var current_area_known: bool = false
+var time_since_area_visited_norm: float = 1.0
+var remembered_cover_distance_norm: float = 0.0
+var remembered_cover_bearing_norm: float = 0.0
+var remembered_danger_distance_norm: float = 0.0
+var remembered_danger_bearing_norm: float = 0.0
+
+var contact_uncertainty_norm: float = 0.0
+
 
 ## Builds an Observation from the agent, the full enemy list, and arena
 ## configuration used for normalization. Up to MAX_TRACKED_ENEMIES nearest
@@ -255,6 +322,13 @@ var corpse_count_norm: float = 0.0
 ##   in_cover       bool
 ##   corpse_count   int
 ##   enemy_slots    int     total enemies the episode started with
+##   local_illumination float  perceived brightness at the agent (v3)
+##   sound_summary  Dictionary SoundBus.summarize() of `sounds` (v3)
+##   contact_summary Dictionary AgentPerception.summarize_contacts() (v3)
+##   target_priority_norm float  TargetSelector priority of the primary
+##   target_switch_recent bool   the primary slot changed recently
+##   exploration    Dictionary map-knowledge snapshot (v3, see
+##                             _apply_exploration_context)
 static func build(
 	agent: AgentState, enemies: Array, arena_half_extent: float, context: Dictionary = {}
 ) -> Observation:
@@ -384,6 +458,8 @@ static func _apply_context(
 	obs.corpse_count_norm = _count_norm(int(context.get("corpse_count", 0)))
 	_apply_world_context(obs, agent, context)
 	_apply_sound_context(obs, context)
+	_apply_condition_context(obs, context)
+	_apply_exploration_context(obs, context)
 
 	if not context.has("beliefs"):
 		return
@@ -450,6 +526,87 @@ static func _apply_sound_context(obs: Observation, context: Dictionary) -> void:
 	obs.last_sound_category_norm = clampf(
 		float(int(loudest.get("category", 0))) / float(maxi(1, SOUND_CATEGORY_COUNT - 1)), 0.0, 1.0
 	)
+	# v3: how trustworthy that bearing is, and whether noise is coming from
+	# more than one place at once.
+	obs.sound_direction_error_norm = clampf(
+		float(loudest.get("direction_error_deg", 0.0)) / 90.0, 0.0, 1.0
+	)
+	var summary: Dictionary = context.get("sound_summary", {})
+	if summary.is_empty():
+		return
+	obs.second_sound_bearing_norm = clampf(
+		float(summary.get("second_bearing_deg", 0.0)) / 180.0, -1.0, 1.0
+	)
+	obs.second_sound_loudness = clampf(float(summary.get("second_loudness", 0.0)), 0.0, 1.0)
+	obs.distinct_sound_source_count_norm = _count_norm(int(summary.get("distinct_sources", 0)))
+
+
+## v3 conditions, contact overflow and target-selection fields.
+static func _apply_condition_context(obs: Observation, context: Dictionary) -> void:
+	obs.local_illumination = clampf(float(context.get("local_illumination", 1.0)), 0.0, 1.0)
+	obs.target_priority_norm = clampf(float(context.get("target_priority_norm", 0.0)), 0.0, 1.0)
+	obs.target_switch_recent = bool(context.get("target_switch_recent", false))
+
+	var contacts: Dictionary = context.get("contact_summary", {})
+	if contacts.is_empty():
+		return
+	obs.overflow_contact_count_norm = _count_norm(int(contacts.get("overflow_count", 0)))
+	obs.overflow_visible_count_norm = _count_norm(int(contacts.get("overflow_visible", 0)))
+	obs.overflow_mean_distance_norm = clampf(
+		float(contacts.get("overflow_mean_distance", 0.0))
+		/ maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001),
+		0.0,
+		1.0
+	)
+	obs.overflow_min_distance_norm = clampf(
+		float(contacts.get("overflow_min_distance", 0.0))
+		/ maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001),
+		0.0,
+		1.0
+	)
+	obs.contact_uncertainty_norm = clampf(float(contacts.get("memory_uncertainty", 0.0)), 0.0, 1.0)
+
+
+## v3 map-knowledge fields.
+##
+## `exploration` is the dictionary produced by EnvironmentCore from the
+## agent's own SpatialMemory:
+##   {explored_fraction, area_known, time_since_visit, cover_distance,
+##    cover_bearing_deg, danger_distance, danger_bearing_deg}
+## A missing entry means "not known", which is why every default here is
+## the value that says "nothing remembered" rather than a plausible guess.
+static func _apply_exploration_context(obs: Observation, context: Dictionary) -> void:
+	var exploration: Dictionary = context.get("exploration", {})
+	if exploration.is_empty():
+		return
+	obs.explored_fraction = clampf(float(exploration.get("explored_fraction", 0.0)), 0.0, 1.0)
+	obs.current_area_known = bool(exploration.get("area_known", false))
+	var since: float = float(exploration.get("time_since_visit", -1.0))
+	obs.time_since_area_visited_norm = (
+		1.0
+		if since < 0.0
+		else clampf(since / maxf(SandboxConfig.EXPLORATION_MAX_RECALL_AGE, 0.0001), 0.0, 1.0)
+	)
+	obs.remembered_cover_distance_norm = _distance_norm(
+		float(exploration.get("cover_distance", -1.0))
+	)
+	obs.remembered_cover_bearing_norm = clampf(
+		float(exploration.get("cover_bearing_deg", 0.0)) / 180.0, -1.0, 1.0
+	)
+	obs.remembered_danger_distance_norm = _distance_norm(
+		float(exploration.get("danger_distance", -1.0))
+	)
+	obs.remembered_danger_bearing_norm = clampf(
+		float(exploration.get("danger_bearing_deg", 0.0)) / 180.0, -1.0, 1.0
+	)
+
+
+## Normalized distance where a negative input means "nothing remembered"
+## and maps to 0.0, i.e. the same value the field has at reset.
+static func _distance_norm(distance: float) -> float:
+	if distance < 0.0:
+		return 0.0
+	return clampf(distance / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), 0.0, 1.0)
 
 
 static func _clear_enemy_blocks(obs: Observation) -> void:
@@ -704,6 +861,25 @@ func to_array() -> PackedFloat32Array:
 	arr[62] = visible_enemy_count_norm
 	arr[63] = remembered_enemy_count_norm
 	arr[64] = corpse_count_norm
+	arr[65] = local_illumination
+	arr[66] = overflow_contact_count_norm
+	arr[67] = overflow_visible_count_norm
+	arr[68] = overflow_mean_distance_norm
+	arr[69] = overflow_min_distance_norm
+	arr[70] = target_priority_norm
+	arr[71] = 1.0 if target_switch_recent else 0.0
+	arr[72] = second_sound_bearing_norm
+	arr[73] = second_sound_loudness
+	arr[74] = sound_direction_error_norm
+	arr[75] = distinct_sound_source_count_norm
+	arr[76] = explored_fraction
+	arr[77] = 1.0 if current_area_known else 0.0
+	arr[78] = time_since_area_visited_norm
+	arr[79] = remembered_cover_distance_norm
+	arr[80] = remembered_cover_bearing_norm
+	arr[81] = remembered_danger_distance_norm
+	arr[82] = remembered_danger_bearing_norm
+	arr[83] = contact_uncertainty_norm
 	return arr
 
 
@@ -762,6 +938,25 @@ func to_dict() -> Dictionary:
 		"visible_enemy_count_norm": visible_enemy_count_norm,
 		"remembered_enemy_count_norm": remembered_enemy_count_norm,
 		"corpse_count_norm": corpse_count_norm,
+		"local_illumination": local_illumination,
+		"overflow_contact_count_norm": overflow_contact_count_norm,
+		"overflow_visible_count_norm": overflow_visible_count_norm,
+		"overflow_mean_distance_norm": overflow_mean_distance_norm,
+		"overflow_min_distance_norm": overflow_min_distance_norm,
+		"target_priority_norm": target_priority_norm,
+		"target_switch_recent": target_switch_recent,
+		"second_sound_bearing_norm": second_sound_bearing_norm,
+		"second_sound_loudness": second_sound_loudness,
+		"sound_direction_error_norm": sound_direction_error_norm,
+		"distinct_sound_source_count_norm": distinct_sound_source_count_norm,
+		"explored_fraction": explored_fraction,
+		"current_area_known": current_area_known,
+		"time_since_area_visited_norm": time_since_area_visited_norm,
+		"remembered_cover_distance_norm": remembered_cover_distance_norm,
+		"remembered_cover_bearing_norm": remembered_cover_bearing_norm,
+		"remembered_danger_distance_norm": remembered_danger_distance_norm,
+		"remembered_danger_bearing_norm": remembered_danger_bearing_norm,
+		"contact_uncertainty_norm": contact_uncertainty_norm,
 	}
 
 

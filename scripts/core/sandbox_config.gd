@@ -199,6 +199,9 @@ const EXPLORATION_MIN_CONFIDENCE: float = 0.05
 ## runs on a fixed cadence driven by the simulation clock (deterministic),
 ## not every tick.
 const EXPLORATION_UPDATE_INTERVAL: float = 0.2
+## Age (seconds) used to normalize "how long since I was last here". Beyond
+## this the field saturates: the agent only knows it has been a long time.
+const EXPLORATION_MAX_RECALL_AGE: float = 60.0
 ## Cap on remembered route waypoints per episode.
 const EXPLORATION_MAX_ROUTE: int = 512
 ## Map Analyzer mode: coverage fraction at which the map counts as explored
@@ -265,6 +268,30 @@ const SOUND_RANGE_ERROR_GAIN: float = 0.5
 const SOUND_DISTINCT_SOURCE_ANGLE_DEG: float = 35.0
 ## Seconds between ambient emissions on a map that declares ambience.
 const SOUND_AMBIENCE_INTERVAL: float = 3.5
+
+# ---------------------------------------------------------------------------
+# Target selection (TargetSelector)
+#
+# Weights on the factors that decide which contact fills the primary
+# observation slot. They describe what information is WORTH, not a play
+# style: the policy is free to shoot at something else entirely.
+# ---------------------------------------------------------------------------
+const TARGET_WEIGHT_VISIBLE: float = 100.0
+const TARGET_WEIGHT_DAMAGE_SOURCE: float = 40.0
+const TARGET_WEIGHT_CONFIDENCE: float = 20.0
+const TARGET_WEIGHT_PROXIMITY: float = 10.0
+## A contact that currently has line of sight to the agent.
+const TARGET_WEIGHT_THREAT: float = 15.0
+## Scales with missing health: a nearly dead contact is cheap to finish.
+const TARGET_WEIGHT_WOUNDED: float = 8.0
+## Hysteresis: a small bonus for keeping the current target, so two equal
+## threats do not make the primary slot oscillate every tick.
+const TARGET_WEIGHT_CONTINUITY: float = 6.0
+## Subtracted when the navigation graph says the contact cannot be reached.
+const TARGET_PENALTY_UNREACHABLE: float = 25.0
+## Seconds after a target switch during which the switch is still reported
+## as "recent" in the observation.
+const TARGET_SWITCH_RECENT_WINDOW: float = 1.5
 
 # ---------------------------------------------------------------------------
 # Enemy memory

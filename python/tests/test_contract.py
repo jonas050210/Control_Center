@@ -33,7 +33,7 @@ class ObservationContractTests(unittest.TestCase):
 
     def test_observation_field_count_matches_godot_contract(self):
         # Mirrors Observation.FIELD_COUNT in scripts/core/observation.gd.
-        self.assertEqual(OBSERVATION_FIELD_COUNT, 65)
+        self.assertEqual(OBSERVATION_FIELD_COUNT, 84)
 
     def test_observation_bounds_are_symmetric_and_normalized(self):
         self.assertEqual(OBSERVATION_LOW, -1.0)
@@ -260,5 +260,9 @@ class ObservationGroupTests(unittest.TestCase):
                 "memory",
                 "sound",
                 "world",
+                "conditions",
+                "contacts",
+                "target",
+                "exploration",
             },
         )

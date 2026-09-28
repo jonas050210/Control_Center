@@ -22,7 +22,7 @@ GAME STATE (Godot today; Roblox in the future)
         |
 Observation Adapter        <- Observation.build() in Godot
         |
-Normalized Observation Vector (65 float32 values, all in [-1, 1])
+Normalized Observation Vector (84 float32 values, all in [-1, 1])
         |
 PPO Policy (MultiDiscrete([3,3,3,3,2,2]) actions)
         |
@@ -46,7 +46,7 @@ GAME
    (booleans are emitted as `0.0`/`1.0`). Distances are divided by the
    arena's maximum diagonal distance; positions by the arena half-extent;
    velocities by the agent's move speed.
-3. **Stable dimension.** The vector is always exactly 65 floats, regardless
+3. **Stable dimension.** The vector is always exactly 84 floats, regardless
    of curriculum level or configured enemy count. Enemies beyond the 3rd
    nearest alive one still exist and affect the simulation (they can still
    attack/be attacked) but are not individually reported — the policy must
@@ -84,7 +84,7 @@ Below level 6 the gating is disabled and indices 10–32 keep their original
 ground-truth meaning byte-for-byte, so curriculum levels 1–4 reproduce the
 pre-world dynamics exactly.
 
-## Observation vector (65 floats)
+## Observation vector (84 floats)
 
 `Observation.to_array()` / `python/sandboxai/contract.py:OBSERVATION_SPEC`.
 
@@ -141,6 +141,25 @@ pre-world dynamics exactly.
 | 62 | `visible_enemy_count_norm` | Enemies currently visible | count / 8, clamped [0,1] |
 | 63 | `remembered_enemy_count_norm` | Contacts remembered but not visible | count / 8, clamped [0,1] |
 | 64 | `corpse_count_norm` | Corpses in the arena (environmental information only) | count / 8, clamped [0,1] |
+| 65 | `local_illumination` | How bright it is **where the agent stands** | [0,1]; the lighting mode itself is never exposed |
+| 66 | `overflow_contact_count_norm` | Contacts beyond the 3 individually tracked slots | count / 8, clamped [0,1] |
+| 67 | `overflow_visible_count_norm` | How many of those are visible right now | count / 8, clamped [0,1] |
+| 68 | `overflow_mean_distance_norm` | Mean distance of the overflow contacts | / max arena diagonal, [0,1] |
+| 69 | `overflow_min_distance_norm` | Distance of the nearest overflow contact | / max arena diagonal, [0,1] |
+| 70 | `target_priority_norm` | `TargetSelector` score of the primary contact | score / max score, [0,1] |
+| 71 | `target_switch_recent` | The primary slot changed within the last 1.5 s | boolean 0/1 |
+| 72 | `second_sound_bearing_norm` | Signed horizontal offset to the second loudest event | angle / 180°, [-1,1] |
+| 73 | `second_sound_loudness` | Loudness of that second event | [0,1] |
+| 74 | `sound_direction_error_norm` | How imprecisely the loudest event can be placed | degrees / 90, [0,1] |
+| 75 | `distinct_sound_source_count_norm` | Separate directions noise is coming from | count / 8, clamped [0,1] |
+| 76 | `explored_fraction` | Share of the map the agent has actually looked at | [0,1]; 0 when map tracking is off |
+| 77 | `current_area_known` | The agent has observed the cell it stands in | boolean 0/1 |
+| 78 | `time_since_area_visited_norm` | Time since it last stood here | seconds / 60 s, [0,1]; 1 if never |
+| 79 | `remembered_cover_distance_norm` | Distance to the nearest **remembered** cover | / max arena diagonal, [0,1]; 0 if none |
+| 80 | `remembered_cover_bearing_norm` | Bearing to that cover | angle / 180°, [-1,1] |
+| 81 | `remembered_danger_distance_norm` | Distance to the nearest place the agent was hurt | / max arena diagonal, [0,1]; 0 if none |
+| 82 | `remembered_danger_bearing_norm` | Bearing to that place | angle / 180°, [-1,1] |
+| 83 | `contact_uncertainty_norm` | Mean staleness of memory-only contacts | 1 − confidence, averaged, [0,1] |
 
 If no enemy is alive, the primary slot (indices 10–17) falls back to a fixed
 dead-enemy report (`enemy_alive = 0`, `enemy_health_norm = 0`) instead of
@@ -179,6 +198,28 @@ loadable: `python/sandboxai/dataset.py:action_to_multidiscrete()` pads them
 with `jump = 0`. A v1 **checkpoint**, however, has a 5-head action net and a
 33-input observation head, so it cannot be loaded into a v2 policy — that
 break is real and intentional.
+
+## What changed in contract v3 (maps, lighting, hearing, map knowledge)
+
+- Observation grew from 65 to 84 floats. **Indices 0–64 are unchanged in
+  index and meaning.** Everything new is appended (65–83).
+- The action space is **unchanged**: `MultiDiscrete([3,3,3,3,2,2])`.
+- A v2 checkpoint has a 65-input observation head and cannot be loaded into
+  a v3 policy. This is a real, intentional input-shape break; the action
+  head is unaffected, and behaviour-cloning datasets stay loadable because
+  they store actions, not observations.
+- New information sources, and what is deliberately *not* exposed:
+  - lighting: only `local_illumination` at the agent's own position. The
+    mode (`night`, `fog`, ...) is never observed.
+  - maps: nothing at all. No map id, no layout id, no geometry dump, no
+    spawn list. A map is an environment, not a label.
+  - contacts beyond the tracked slots: statistics only (how many, how far),
+    never their individual positions.
+  - map knowledge: only what `SpatialMemory` earned by looking. With
+    exploration tracking off every one of 76–82 is zero, which honestly
+    encodes "I know nothing about this place".
+- `last_sound_category_norm` now divides by 6 instead of 5, because the
+  environmental-noise category was added to `SoundBus`.
 
 ## What changed in contract v2 (world + perception milestone)
 

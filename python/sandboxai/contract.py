@@ -105,6 +105,25 @@ OBSERVATION_SPEC: tuple[ObservationField, ...] = (
     ObservationField(62, 1, "visible_enemy_count_norm", "How many enemies are currently visible", "count / 8, clamped to [0, 1]"),
     ObservationField(63, 1, "remembered_enemy_count_norm", "How many contacts are remembered but not visible", "count / 8, clamped to [0, 1]"),
     ObservationField(64, 1, "corpse_count_norm", "How many corpses exist in the arena", "count / 8, clamped to [0, 1]"),
+    ObservationField(65, 1, "local_illumination", "Perceived brightness where the agent stands", "in [0, 1]; the lighting MODE is never exposed"),
+    ObservationField(66, 1, "overflow_contact_count_norm", "Contacts beyond the individually tracked slots", "count / 8, clamped to [0, 1]"),
+    ObservationField(67, 1, "overflow_visible_count_norm", "How many of those overflow contacts are visible", "count / 8, clamped to [0, 1]"),
+    ObservationField(68, 1, "overflow_mean_distance_norm", "Mean distance of the overflow contacts", "divided by max arena diagonal distance, in [0, 1]"),
+    ObservationField(69, 1, "overflow_min_distance_norm", "Distance of the nearest overflow contact", "divided by max arena diagonal distance, in [0, 1]"),
+    ObservationField(70, 1, "target_priority_norm", "Selection score of the primary contact", "score / TargetSelector.max_score(), in [0, 1]"),
+    ObservationField(71, 1, "target_switch_recent", "The primary contact changed within TARGET_SWITCH_RECENT_WINDOW", "boolean 0/1"),
+    ObservationField(72, 1, "second_sound_bearing_norm", "Signed horizontal offset to the second loudest audible event", "angle / 180 degrees, in [-1, 1]"),
+    ObservationField(73, 1, "second_sound_loudness", "Perceived loudness of the second loudest audible event", "in [0, 1]"),
+    ObservationField(74, 1, "sound_direction_error_norm", "How imprecisely the loudest event can be placed", "degrees / 90, in [0, 1]"),
+    ObservationField(75, 1, "distinct_sound_source_count_norm", "How many separate directions noise is coming from", "count / 8, clamped to [0, 1]"),
+    ObservationField(76, 1, "explored_fraction", "Share of the map the agent has actually observed", "in [0, 1]; 0 when map tracking is off"),
+    ObservationField(77, 1, "current_area_known", "The agent has observed the cell it is standing in", "boolean 0/1"),
+    ObservationField(78, 1, "time_since_area_visited_norm", "How long since the agent last stood here", "seconds / EXPLORATION_MAX_RECALL_AGE, in [0, 1]; 1 if never"),
+    ObservationField(79, 1, "remembered_cover_distance_norm", "Distance to the nearest remembered cover", "divided by max arena diagonal distance, in [0, 1]; 0 if none remembered"),
+    ObservationField(80, 1, "remembered_cover_bearing_norm", "Signed horizontal offset to the nearest remembered cover", "angle / 180 degrees, in [-1, 1]"),
+    ObservationField(81, 1, "remembered_danger_distance_norm", "Distance to the nearest place the agent was hurt", "divided by max arena diagonal distance, in [0, 1]; 0 if none remembered"),
+    ObservationField(82, 1, "remembered_danger_bearing_norm", "Signed horizontal offset to that place", "angle / 180 degrees, in [-1, 1]"),
+    ObservationField(83, 1, "contact_uncertainty_norm", "Mean staleness of the contacts held from memory only", "1 - confidence, averaged, in [0, 1]"),
 )
 
 OBSERVATION_FIELD_COUNT: int = sum(field.width for field in OBSERVATION_SPEC)
@@ -115,6 +134,8 @@ OBSERVATION_HIGH: float = 1.0
 OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
 ## Length of the immutable v1 prefix of OBSERVATION_SPEC.
 OBSERVATION_LEGACY_FIELD_COUNT: int = 33
+## Length of the v2 prefix (everything before the conditions/exploration block).
+OBSERVATION_V2_FIELD_COUNT: int = 65
 
 
 # Semantic channels of the observation vector. An external adapter has to
@@ -179,8 +200,13 @@ OBSERVATION_GROUPS: dict[str, tuple[str, ...]] = {
         "secondary_enemy_info_age_norm",
         "tertiary_enemy_info_age_norm",
         "remembered_enemy_count_norm",
+        "contact_uncertainty_norm",
     ),
     "sound": (
+        "second_sound_bearing_norm",
+        "second_sound_loudness",
+        "sound_direction_error_norm",
+        "distinct_sound_source_count_norm",
         "last_sound_direction",
         "last_sound_distance_norm",
         "last_sound_bearing_norm",
@@ -193,6 +219,35 @@ OBSERVATION_GROUPS: dict[str, tuple[str, ...]] = {
         "nearest_obstacle_distance_norm",
         "nearest_obstacle_bearing_norm",
         "corpse_count_norm",
+    ),
+    # Environmental conditions the agent can feel, never the label that
+    # produced them.
+    "conditions": ("local_illumination",),
+    # Contacts beyond the individually tracked slots, described
+    # statistically so the observation shape is independent of the enemy
+    # count.
+    "contacts": (
+        "overflow_contact_count_norm",
+        "overflow_visible_count_norm",
+        "overflow_mean_distance_norm",
+        "overflow_min_distance_norm",
+    ),
+    # Which contact the agent is treating as its primary, and how recently
+    # that changed.
+    "target": (
+        "target_priority_norm",
+        "target_switch_recent",
+    ),
+    # Map knowledge built by looking. Zeros mean "nothing known", which is
+    # what an adapter without a spatial memory must emit.
+    "exploration": (
+        "explored_fraction",
+        "current_area_known",
+        "time_since_area_visited_norm",
+        "remembered_cover_distance_norm",
+        "remembered_cover_bearing_norm",
+        "remembered_danger_distance_norm",
+        "remembered_danger_bearing_norm",
     ),
 }
 

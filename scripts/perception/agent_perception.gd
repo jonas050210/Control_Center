@@ -28,6 +28,7 @@ const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
+const TargetSelector = preload("res://scripts/perception/target_selector.gd")
 
 const SELF_PATH: String = "res://scripts/perception/agent_perception.gd"
 
@@ -114,7 +115,9 @@ func forget(enemy_id: int) -> void:
 ##
 ## Each belief entry:
 ##   {id, visible, in_fov, los_clear, distance, bearing_deg, elevation_deg,
-##    position, health_norm, age, confidence, source, alive}
+##    position, health_norm, age, confidence, source, threatening, alive}
+## `threatening` means that contact currently has line of sight to the
+## agent, i.e. the agent is exposed to it.
 ## `position` is the live position while visible and the last known
 ## position afterwards; `age`/`confidence`/`source` tell the policy which.
 func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
@@ -144,49 +147,64 @@ func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
 	return beliefs
 
 
-## Beliefs ranked for target selection (Phase 5): visible contacts first,
-## then by confidence, then by distance. A caller may pass `damage_source`
-## (the id of whatever last hurt the agent) to bias selection toward it.
+## Beliefs ranked for target selection. Thin wrapper kept for callers that
+## only have a damage source; the real logic lives in `TargetSelector`,
+## which scores named factors and can also report why it chose what it did.
 static func rank_beliefs(beliefs: Array, damage_source: int = -1) -> Array:
-	var ranked: Array = beliefs.duplicate()
-	ranked.sort_custom(
-		func(a, b):
-			var score_a: float = _selection_score(a, damage_source)
-			var score_b: float = _selection_score(b, damage_source)
-			if absf(score_a - score_b) > 0.000001:
-				return score_a > score_b
-			return float(a["distance"]) < float(b["distance"])
-	)
-	return ranked
-
-
-## Higher is a better target. Visibility dominates, then recent damage,
-## then confidence, then proximity — which is the ordering a human player
-## uses and the one the Control Center displays as "target reason".
-static func _selection_score(belief: Dictionary, damage_source: int) -> float:
-	var score: float = 0.0
-	if bool(belief.get("visible", false)):
-		score += 100.0
-	if int(belief.get("id", -1)) == damage_source:
-		score += 40.0
-	score += float(belief.get("confidence", 0.0)) * 20.0
-	score += clampf(
-		1.0 - float(belief.get("distance", 0.0)) / SandboxConfig.ARENA_MAX_DISTANCE, 0.0, 1.0
-	) * 10.0
-	return score
+	return TargetSelector.rank(beliefs, {"damage_source": damage_source})
 
 
 ## Human-readable justification for why a belief was chosen. Debug/UI only.
 static func selection_reason(belief: Dictionary, damage_source: int) -> String:
-	if belief.is_empty():
-		return "no target"
-	if bool(belief.get("visible", false)):
-		if int(belief.get("id", -1)) == damage_source:
-			return "visible and recently damaged me"
-		return "visible, nearest threat"
-	if int(belief.get("source", EnemyMemory.Source.NONE)) == EnemyMemory.Source.SOUND:
-		return "heard only, last known position"
-	return "remembered, %.1fs since contact" % float(belief.get("age", 0.0))
+	return TargetSelector.reason(belief, {"damage_source": damage_source})
+
+
+## Aggregate description of every contact the agent currently holds.
+##
+## This is what makes the observation independent of the enemy count: the
+## first `slot_count` contacts get individual slots, and everything beyond
+## them is summarized statistically. Eight enemies therefore produce the
+## same observation shape as one, and the policy still learns that it is
+## outnumbered.
+static func summarize_contacts(beliefs: Array, slot_count: int) -> Dictionary:
+	var visible_count: int = 0
+	var remembered_count: int = 0
+	var uncertainty_total: float = 0.0
+	var overflow_count: int = 0
+	var overflow_visible: int = 0
+	var overflow_distance_total: float = 0.0
+	var overflow_min_distance: float = -1.0
+	for index in range(beliefs.size()):
+		var belief: Dictionary = beliefs[index]
+		var visible: bool = bool(belief.get("visible", false))
+		if visible:
+			visible_count += 1
+		else:
+			remembered_count += 1
+			uncertainty_total += 1.0 - clampf(float(belief.get("confidence", 0.0)), 0.0, 1.0)
+		if index < slot_count:
+			continue
+		var distance: float = float(belief.get("distance", 0.0))
+		overflow_count += 1
+		overflow_distance_total += distance
+		if visible:
+			overflow_visible += 1
+		if overflow_min_distance < 0.0 or distance < overflow_min_distance:
+			overflow_min_distance = distance
+	return {
+		"contact_count": beliefs.size(),
+		"visible_count": visible_count,
+		"remembered_count": remembered_count,
+		"memory_uncertainty": (
+			uncertainty_total / float(remembered_count) if remembered_count > 0 else 0.0
+		),
+		"overflow_count": overflow_count,
+		"overflow_visible": overflow_visible,
+		"overflow_mean_distance": (
+			overflow_distance_total / float(overflow_count) if overflow_count > 0 else 0.0
+		),
+		"overflow_min_distance": maxf(overflow_min_distance, 0.0),
+	}
 
 
 func _evaluate_enemy(
@@ -208,7 +226,10 @@ func _evaluate_enemy(
 	)
 	# Threat accounting uses pure geometry (does the enemy see me?), not the
 	# agent's own FOV, and never leaks into the observation as a position.
-	if PerceptionSystem.has_line_of_sight(world, enemy.get_eye_position(), agent.position, 1.8):
+	var threatening: bool = PerceptionSystem.has_line_of_sight(
+		world, enemy.get_eye_position(), agent.position, 1.8
+	)
+	if threatening:
 		threat_count += 1
 
 	var health_norm: float = enemy.health / maxf(enemy.max_health, 0.0001)
@@ -227,6 +248,7 @@ func _evaluate_enemy(
 			"age": 0.0,
 			"confidence": 1.0,
 			"source": EnemyMemory.Source.VISUAL,
+			"threatening": threatening,
 			"alive": true,
 		}
 
@@ -277,6 +299,7 @@ func _evaluate_enemy(
 			"age": 0.0,
 			"confidence": 1.0,
 			"source": EnemyMemory.Source.VISUAL,
+			"threatening": threatening,
 			"alive": true,
 		}
 
@@ -298,6 +321,7 @@ func _evaluate_enemy(
 		"age": float(track["age"]),
 		"confidence": float(track["confidence"]),
 		"source": int(track["source"]),
+		"threatening": threatening,
 		"alive": true,
 	}
 

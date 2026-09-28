@@ -22,7 +22,7 @@ similar-looking one.
 `python/sandboxai/contract.py` defines:
 
 - `OBSERVATION_SPEC` / `OBSERVATION_FIELD_COUNT` / `OBSERVATION_LOW` /
-  `OBSERVATION_HIGH` — the exact 65-float, `[-1, 1]`-normalized observation
+  `OBSERVATION_HIGH` — the exact 84-float, `[-1, 1]`-normalized observation
   shape and per-field semantics (mirrors
   `docs/OBSERVATION_ACTION_CONTRACT.md`).
 - `ACTION_SPEC` / `ACTION_NVEC` — the `MultiDiscrete([3,3,3,3,2,2])` action
@@ -53,7 +53,7 @@ similar-looking one.
    to Roblox's own terms, rate limits, and possibly cost depending on usage)
    — evaluating exactly which mechanism is viable is unresearched and
    unimplemented here.
-2. **Compute the same 65 fields from Roblox's game state**, using only
+2. **Compute the same 84 fields from Roblox's game state**, using only
    information a Roblox player character could access — no server-only
    internals. Concretely, per channel:
    - *self state / movement*: own `CFrame`, `Humanoid` velocity, health,

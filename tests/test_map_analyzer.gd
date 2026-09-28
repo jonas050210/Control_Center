@@ -19,7 +19,7 @@ const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 func _explorer(map_id: String, seed_value: int) -> EnvironmentCore:
 	var env := EnvironmentCore.new(0, 1)
-	env.set_curriculum_level(CurriculumConfig.Level.COVER_AND_OBSTACLES)
+	env.set_curriculum_level(CurriculumConfig.Level.OBSTACLES_COVER)
 	env.set_map(map_id)
 	env.set_exploration_mode(true)
 	env.reset(seed_value)
@@ -122,7 +122,7 @@ func test_different_seeds_explore_different_maps() -> SandboxTest:
 func test_exploration_is_off_by_default() -> SandboxTest:
 	var t := SandboxTest.new("exploration_is_off_by_default")
 	var env := EnvironmentCore.new(0, 2)
-	env.set_curriculum_level(CurriculumConfig.Level.COVER_AND_OBSTACLES)
+	env.set_curriculum_level(CurriculumConfig.Level.OBSTACLES_COVER)
 	env.reset(42)
 	t.assert_null(env.exploration, "combat episodes must not pay for the analyzer")
 	t.assert_false(env.exploration_mode)
@@ -135,11 +135,11 @@ func test_exploration_is_off_by_default() -> SandboxTest:
 func test_tracking_can_run_alongside_combat_without_paying_reward() -> SandboxTest:
 	var t := SandboxTest.new("tracking_can_run_alongside_combat_without_paying_reward")
 	var env := EnvironmentCore.new(0, 2)
-	env.set_curriculum_level(CurriculumConfig.Level.COVER_AND_OBSTACLES)
+	env.set_curriculum_level(CurriculumConfig.Level.OBSTACLES_COVER)
 	env.set_exploration_tracking(true)
 	env.reset(42)
 	t.assert_not_null(env.exploration)
-	t.assert_eq(env.enemies.size(), 2, "tracking must not remove the enemies")
+	t.assert_gte(float(env.enemies.size()), 2.0, "tracking must not remove the enemies")
 	var gain: float = 0.0
 	for _i in range(60):
 		var result: Dictionary = env.step(
