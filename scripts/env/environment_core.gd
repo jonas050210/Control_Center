@@ -100,6 +100,9 @@ var _last_observation: Observation = null
 var _has_reset: bool = false
 ## Latest belief list, kept for the Control Center and target reporting.
 var _beliefs: Array = []
+## Reused per-step scratch dictionary handed to EnemyBrain.update(), so the
+## tactical path allocates nothing per environment per tick.
+var _brain_context: Dictionary = {}
 var _target_reason: String = "no target"
 
 
@@ -487,24 +490,26 @@ func _on_enemy_died(enemy: EnemyState, sound_on: bool) -> void:
 func _update_enemies(dt: float, sound_on: bool) -> float:
 	var damage_taken: float = 0.0
 	var tactical: bool = curriculum.tactical_enemies_enabled()
-	var context: Dictionary = {}
+	# The brain context is a REUSED member dictionary rather than a fresh
+	# literal per step: with 64 parallel environments at 60 Hz this would
+	# otherwise allocate ~230k short-lived dictionaries per simulated
+	# second, all of which the GC then has to sweep.
+	var context: Dictionary = _brain_context
 	if tactical:
-		context = {
-			"world": world,
-			"sound_bus": sound_bus if sound_on else null,
-			"rng": rng,
-			"dt": dt,
-			"arena_half_extent": arena_half_extent,
-			"agent_position": agent.position,
-			"agent_eye": agent.get_eye_position(),
-			"agent_height": agent.height,
-			"agent_alive": agent.alive,
-			"allow_movement": curriculum.enemy_movement_enabled(),
-			"allow_attack": curriculum.enemy_attacks_enabled(),
-			"allow_ranged": curriculum.ranged_enemies_enabled(),
-			"allow_strafe": curriculum.strafing_enabled(),
-			"allow_jump": curriculum.vertical_enabled(),
-		}
+		context["world"] = world
+		context["sound_bus"] = sound_bus if sound_on else null
+		context["rng"] = rng
+		context["dt"] = dt
+		context["arena_half_extent"] = arena_half_extent
+		context["agent_position"] = agent.position
+		context["agent_eye"] = agent.get_eye_position()
+		context["agent_height"] = agent.height
+		context["agent_alive"] = agent.alive
+		context["allow_movement"] = curriculum.enemy_movement_enabled()
+		context["allow_attack"] = curriculum.enemy_attacks_enabled()
+		context["allow_ranged"] = curriculum.ranged_enemies_enabled()
+		context["allow_strafe"] = curriculum.strafing_enabled()
+		context["allow_jump"] = curriculum.vertical_enabled()
 
 	for enemy_value in enemies:
 		var enemy: EnemyState = enemy_value

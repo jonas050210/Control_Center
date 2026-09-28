@@ -8,6 +8,12 @@
 ##     observation (hidden from the AI)
 ##   * a yellow marker ring on the current target
 ##   * the agent's forward vector and weapon-range circle
+##   * the agent's FOV cone, clipped to the vision range
+##   * the footprint of every sight-blocking obstacle
+##   * a violet marker at every remembered last-known position, with the
+##     ring radius shrinking as confidence decays
+##   * an orange ring for every audible sound event, sized by loudness
+##   * a grey cross on every corpse
 ##
 ## Everything is drawn from data the PerceptionModel already produced; this
 ## node performs no perception logic and never feeds anything back into the
@@ -25,6 +31,12 @@ const COLOR_HIDDEN: Color = Color(1.0, 0.3, 0.3, 1.0)
 const COLOR_TARGET: Color = Color(1.0, 0.85, 0.25, 1.0)
 const COLOR_FORWARD: Color = Color(0.5, 1.0, 0.6, 1.0)
 const COLOR_RANGE: Color = Color(0.45, 0.55, 0.75, 0.75)
+const COLOR_FOV: Color = Color(0.35, 0.85, 1.0, 0.45)
+const COLOR_OBSTACLE: Color = Color(0.65, 0.65, 0.7, 0.9)
+const COLOR_MEMORY: Color = Color(0.75, 0.45, 1.0, 0.9)
+const COLOR_SOUND: Color = Color(1.0, 0.6, 0.2, 0.9)
+const COLOR_CORPSE: Color = Color(0.5, 0.5, 0.5, 0.9)
+const FOV_EDGE_STEPS: int = 12
 const EYE_HEIGHT: float = 1.6
 const RANGE_SEGMENTS: int = 48
 const DASH_SEGMENTS: int = 10
@@ -96,7 +108,97 @@ func update_from_perception(perception: Dictionary) -> void:
 		COLOR_RANGE,
 		RANGE_SEGMENTS
 	)
+	_draw_perception_state(perception.get("perception_state", {}), agent_position, eye)
 	_mesh.surface_end()
+
+
+## Draws everything sourced from the optional perception hooks. Each block
+## is skipped when the corresponding hook is unavailable, so this degrades
+## to the original overlay on an environment without perception.
+func _draw_perception_state(state: Dictionary, agent_position: Vector3, eye: Vector3) -> void:
+	if state.is_empty():
+		return
+
+	var fov: Dictionary = state.get("field_of_view", {})
+	if not fov.is_empty() and bool(fov.get("enabled", false)):
+		_fov_cone(
+			agent_position,
+			fov.get("forward", Vector3.FORWARD),
+			float(fov.get("fov_deg", 100.0)),
+			float(fov.get("range", 20.0))
+		)
+
+	for obstacle_value in (state.get("obstacles", []) as Array):
+		_obstacle_footprint(obstacle_value)
+
+	for track_value in (state.get("memory", []) as Array):
+		var track: Dictionary = track_value
+		var remembered: Vector3 = track["position"]
+		var confidence: float = clampf(float(track["confidence"]), 0.0, 1.0)
+		_circle(
+			remembered + Vector3(0.0, 0.05, 0.0),
+			0.35 + confidence * 0.9,
+			COLOR_MEMORY,
+			16
+		)
+		_dashed_line(eye, remembered + Vector3(0.0, 1.0, 0.0), COLOR_MEMORY)
+
+	for sound_value in (state.get("sounds", []) as Array):
+		var sound: Dictionary = sound_value
+		var origin: Vector3 = (
+			agent_position + (sound["direction"] as Vector3) * float(sound["distance"])
+		)
+		origin.y = agent_position.y
+		_circle(
+			origin + Vector3(0.0, 0.05, 0.0),
+			0.4 + float(sound["loudness"]) * 1.4,
+			COLOR_SOUND,
+			14
+		)
+
+	for corpse_value in (state.get("corpses", []) as Array):
+		var corpse_position: Vector3 = (corpse_value as Dictionary)["position"]
+		var centre: Vector3 = corpse_position + Vector3(0.0, 0.05, 0.0)
+		_line(centre + Vector3(-0.5, 0.0, -0.5), centre + Vector3(0.5, 0.0, 0.5), COLOR_CORPSE)
+		_line(centre + Vector3(-0.5, 0.0, 0.5), centre + Vector3(0.5, 0.0, -0.5), COLOR_CORPSE)
+
+
+## Two straight edges plus an arc, all at ankle height so the cone reads as
+## a floor plan rather than obscuring the fight.
+func _fov_cone(origin: Vector3, forward: Vector3, fov_deg: float, cone_range: float) -> void:
+	var flat := Vector3(forward.x, 0.0, forward.z)
+	if flat.is_zero_approx():
+		return
+	flat = flat.normalized()
+	var base: Vector3 = origin + Vector3(0.0, 0.08, 0.0)
+	var half: float = deg_to_rad(fov_deg * 0.5)
+	var left: Vector3 = base + flat.rotated(Vector3.UP, half) * cone_range
+	var right: Vector3 = base + flat.rotated(Vector3.UP, -half) * cone_range
+	_line(base, left, COLOR_FOV)
+	_line(base, right, COLOR_FOV)
+	var previous: Vector3 = right
+	for step in range(1, FOV_EDGE_STEPS + 1):
+		var angle: float = -half + 2.0 * half * float(step) / float(FOV_EDGE_STEPS)
+		var point: Vector3 = base + flat.rotated(Vector3.UP, angle) * cone_range
+		_line(previous, point, COLOR_FOV)
+		previous = point
+
+
+## Top-face rectangle of one obstacle box, so cover geometry is visible
+## without occluding the agents.
+func _obstacle_footprint(obstacle_value) -> void:
+	var obstacle: Dictionary = obstacle_value
+	var centre: Vector3 = obstacle["center"]
+	var extents: Vector3 = obstacle["half_extents"]
+	var top: float = centre.y + extents.y
+	var corners: Array = [
+		Vector3(centre.x - extents.x, top, centre.z - extents.z),
+		Vector3(centre.x + extents.x, top, centre.z - extents.z),
+		Vector3(centre.x + extents.x, top, centre.z + extents.z),
+		Vector3(centre.x - extents.x, top, centre.z + extents.z),
+	]
+	for index in range(corners.size()):
+		_line(corners[index], corners[(index + 1) % corners.size()], COLOR_OBSTACLE)
 
 
 func _line(from: Vector3, to: Vector3, color: Color) -> void:

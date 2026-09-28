@@ -218,6 +218,7 @@ func select_environment(index: int) -> void:
 		simulation_manager.ensure_view(resolved)
 		_apply_view_visibility()
 	_bind_controllers()
+	_apply_debug_perception()
 	_reset_episode_probe()
 	log_system("selected environment %d" % resolved)
 	selection_changed.emit(resolved, config.selected_agent_slot)
@@ -797,6 +798,23 @@ func _bind_controllers() -> void:
 		simulation_manager.set_controller(index, controller)
 
 
+## Enables perception evaluation for debug drawing on the selected
+## environment only, and only outside TRAINING mode.
+##
+## This is what lets the Control Center draw FOV cones and LOS rays even on
+## the curriculum levels that do not gate the observation. It is
+## deliberately one-way: `EnvironmentCore._build_observation()` ignores
+## `debug_perception`, so looking at perception can never change what the
+## policy sees, and headless training never sets the flag at all.
+func _apply_debug_perception() -> void:
+	if simulation_manager == null:
+		return
+	var enable: bool = presentation_enabled and not is_training_mode()
+	for index in range(simulation_manager.environments.size()):
+		var env = simulation_manager.environments[index]
+		env.debug_perception = enable and index == config.selected_environment
+
+
 func _apply_mode_to_runtime() -> void:
 	var training: bool = is_training_mode()
 	event_log.enabled = telemetry_enabled()
@@ -804,6 +822,7 @@ func _apply_mode_to_runtime() -> void:
 		# Leaving HUMAN mode always disarms input and releases the mouse.
 		set_human_input_enabled(false)
 	_bind_controllers()
+	_apply_debug_perception()
 	_apply_view_visibility()
 	if presentation_enabled and not training:
 		simulation_manager.ensure_view(config.selected_environment)
