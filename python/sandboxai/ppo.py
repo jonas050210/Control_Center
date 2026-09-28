@@ -67,6 +67,33 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
 
     env = GodotVecEnv(**_env_kwargs(config))
     telemetry = JsonlTelemetry(logs / "training.jsonl")
+    # Integrated research pipeline (curriculum plans at episode boundaries,
+    # skill metrics, replays, per-condition tracking, checkpoint battery).
+    # "fixed" mode keeps the historical single-level behavior exactly: no
+    # hooks are installed and PPO drives the env as it always has.
+    pipeline = None
+    if config.curriculum_mode == "auto":
+        from .pipeline import TrainingPipeline, write_manifest
+
+        pipeline = TrainingPipeline(config, run_dir, telemetry, device=device)
+        # Attach BEFORE any rollout starts: hook changes mid-training would
+        # be a race (rollout collection runs in this thread, so sequencing
+        # here is strict happens-before every step).
+        pipeline.attach(env)
+        if checkpoint_path is not None:
+            # Resume continues the curriculum exactly where the saved
+            # checkpoint left it: same stage, same staged plans, same
+            # per-environment seed ordinals.
+            if pipeline.load_state(checkpoints / "curriculum_state.json"):
+                pipeline.reattach_after_load()
+                telemetry.write(
+                    {
+                        "event": "curriculum_resumed",
+                        "level": pipeline.driver.level,
+                        "episodes_completed": pipeline.driver.episodes_completed,
+                    }
+                )
+        write_manifest(run_dir, pipeline.manifest())
     best_score = float("-inf")
     best_path = checkpoints / "best_eval.zip"
     eval_patience_counter = 0
@@ -96,6 +123,10 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             )
 
         def _on_step(self) -> bool:
+            if pipeline is not None:
+                # One attribute write per vector step: the pipeline stamps
+                # episode rows / curriculum transitions with real PPO time.
+                pipeline.timesteps = self.num_timesteps
             infos = self.locals.get("infos", [])
             for info in infos:
                 if not isinstance(info, dict):
@@ -174,6 +205,46 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             )
             reward = float(summary.get("mean_episode_reward", 0.0))
             summary["timesteps"] = self.num_timesteps
+            if pipeline is not None:
+                # Checkpoint-time battery: frozen conditions, generalization
+                # split from what the run ACTUALLY trained on, optional
+                # league, training metrics aggregation. Results go into the
+                # same step_NNNNNNNNN directory as the normal evaluation so
+                # one directory answers "how was the policy at step N".
+                from .checkpoint_eval import run_checkpoint_evaluation
+
+                pipeline.timesteps = self.num_timesteps
+                pipeline.note_checkpoint(
+                    best_path if best_path.exists() else checkpoints / "latest.zip"
+                )
+                pipeline.save_state()
+                checkpoint_report = run_checkpoint_evaluation(
+                    self.model,
+                    step=self.num_timesteps,
+                    config=config,
+                    pipeline=pipeline,
+                    output_dir=evaluations / f"step_{self.num_timesteps:09d}",
+                    device=device,
+                    normal_summary=dict(summary),
+                )
+                summary["curriculum"] = pipeline.driver.curriculum_snapshot()
+                for section in ("condition_evaluation", "generalization", "league"):
+                    body = checkpoint_report.get(section)
+                    if body is None:
+                        continue
+                    # Terse mirror in latest.json; the full row-level
+                    # evidence lives in step_NNNNNNNNN/report.json.
+                    summary[section] = {
+                        key: value for key, value in body.items() if not key.endswith("_detail")
+                    }
+                telemetry.write(
+                    {
+                        "event": "checkpoint_evaluation",
+                        "timesteps": self.num_timesteps,
+                        "curriculum_level": pipeline.driver.level,
+                        "report": str(evaluations / f"step_{self.num_timesteps:09d}" / "report.json"),
+                    }
+                )
             (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
             if reward > best_score:
                 best_score = reward
@@ -252,8 +323,20 @@ def train_ppo(config: TrainingConfig, resume_checkpoint: str | Path | None = Non
             "timesteps": config.total_training_steps,
             "warm_start": warm_start,
         }
+        if pipeline is not None:
+            from .pipeline import write_manifest
+
+            pipeline.timesteps = model.num_timesteps
+            pipeline.save_state()
+            # The manifest reflects the final curriculum state so a resume
+            # (or an outside analysis) starts from the true end state.
+            write_manifest(run_dir, pipeline.manifest())
+            result["curriculum"] = pipeline.driver.curriculum_snapshot()
+            result["manifest"] = str(run_dir / "run_manifest.json")
         (run_dir / "run_summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result
     finally:
+        if pipeline is not None:
+            pipeline.close()
         telemetry.close()
         env.close()

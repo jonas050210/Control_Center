@@ -36,6 +36,50 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--experiment-id", default=None)
     parser.add_argument("--bc-checkpoint", default=None)
+    # --- Integrated research pipeline (defaults live in TrainingConfig) ---
+    parser.add_argument(
+        "--curriculum-mode",
+        choices=["auto", "fixed"],
+        default=None,
+        help="auto = curriculum-driven episode plans (integrated pipeline); fixed = one level, historical behavior",
+    )
+    parser.add_argument("--curriculum-start-level", type=int, default=None)
+    parser.add_argument(
+        "--adaptive-curriculum",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="off = curriculum plans every episode deterministically but never promotes/demotes",
+    )
+    parser.add_argument(
+        "--skill-metrics",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="per-tick research metrics during training (measurement only, never rewards)",
+    )
+    parser.add_argument(
+        "--replay-mode",
+        choices=["off", "interesting", "every_n", "all", "evaluation"],
+        default=None,
+    )
+    parser.add_argument("--replay-every-n", type=int, default=None)
+    parser.add_argument("--replay-detail", choices=["light", "detailed"], default=None)
+    parser.add_argument("--replay-max-per-run", type=int, default=None)
+    parser.add_argument(
+        "--checkpoint-condition-eval", action=argparse.BooleanOptionalAction, default=None
+    )
+    parser.add_argument(
+        "--checkpoint-generalization-eval", action=argparse.BooleanOptionalAction, default=None
+    )
+    parser.add_argument("--condition-eval-episodes", type=int, default=None)
+    parser.add_argument("--generalization-episodes-per-cell", type=int, default=None)
+    parser.add_argument(
+        "--checkpoint-league-eval",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="play frozen checkpoint snapshots in the self-play league at each evaluation",
+    )
+    parser.add_argument("--league-matches-per-checkpoint", type=int, default=None)
+    parser.add_argument("--league-max-opponents", type=int, default=None)
 
 
 def _resolve_project_path(project_path: str | None) -> Path:

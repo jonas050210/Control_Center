@@ -22,6 +22,8 @@ FAKE_BRIDGE_SOURCE = r'''
 import json, os, sys
 
 OBS_DIM = __OBS_DIM__
+SELF_PLAY = "--self-play" in sys.argv
+SLOT_SEED_STRIDE = 1000003
 
 def out(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
@@ -36,6 +38,8 @@ if flood:
 silent_after_spaces = os.environ.get("FAKE_BRIDGE_SILENT", "") == "1"
 
 step_count = 0
+staged = []
+match_steps = 0
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -43,18 +47,78 @@ for line in sys.stdin:
     request = json.loads(line)
     command = request.get("cmd")
     if command == "spaces":
-        out({
+        payload = {
             "ok": True,
-            "action_space": {"type": "multi_discrete", "nvec": [3, 3, 3, 3, 2], "dimension": 5},
+            "action_space": {"type": "multi_discrete", "nvec": [3, 3, 3, 3, 2, 2], "dimension": 6},
             "observation_space": {"type": "structured_float_vector", "size": OBS_DIM,
                                    "shape": [OBS_DIM], "low": -1.0, "high": 1.0},
-        })
+        }
+        if SELF_PLAY:
+            payload["policy_slots"] = 2
+        out(payload)
         continue
     if silent_after_spaces:
+        continue
+    if command == "ping":
+        out({"ok": True, "pong": True})
+        continue
+    if command == "close":
+        out({"ok": True, "close": True})
+        break
+    if SELF_PLAY:
+        # --self-play channel: pair-shaped wire, explicit seeds, no auto-reset.
+        if command == "reset":
+            seed = int(request.get("seed", 0))
+            match_steps = 0
+            out({"ok": True,
+                 "observations": [[[0.0] * OBS_DIM, [0.1] * OBS_DIM]],
+                 "env_seeds": [[seed, seed + SLOT_SEED_STRIDE]]})
+        elif command == "step":
+            match_steps += 1
+            done = match_steps >= 3
+            done_reason = "timeout" if done else ""
+            info_a = {"metrics": {"win": False, "damage_dealt": 4.0, "episode_length": match_steps},
+                      "done_reason": done_reason}
+            info_b = {"metrics": {"win": done, "damage_dealt": 12.0, "episode_length": match_steps},
+                      "done_reason": done_reason}
+            out({"ok": True,
+                 "observations": [[[0.2] * OBS_DIM, [0.3] * OBS_DIM]],
+                 "rewards": [[0.0, 1.0]],
+                 "dones": [done],
+                 "infos": [[info_a, info_b]]})
+        elif command == "health_check":
+            out({"ok": True, "health": [{"self_play": True}]})
+        else:
+            out({"ok": False, "error": "self-play bridge does not support command: " + str(command)})
         continue
     if command == "reset":
         step_count = 0
         out({"ok": True, "observations": [[0.0] * OBS_DIM], "infos": [{"seed": request.get("seed")}]})
+    elif command == "set_episode_plans":
+        plans = request.get("plans", [])
+        indices = []
+        broken = None
+        for payload in plans:
+            missing = [k for k in ("index", "seed", "map_id", "scenario", "lighting",
+                                    "enemy_count", "curriculum_level") if k not in payload]
+            if missing:
+                broken = "plan missing fields: " + ",".join(missing)
+                break
+            indices.append(int(payload["index"]))
+        if broken is not None:
+            out({"error": broken})   # atomic failure: nothing staged
+        else:
+            staged = plans
+            out({"ok": True, "staged": indices})
+    elif command == "episode_conditions":
+        conditions = []
+        for payload in staged:
+            condition = {k: payload[k] for k in ("seed", "map_id", "scenario", "lighting",
+                                                  "enemy_count", "curriculum_level")}
+            condition["environment_index"] = int(payload["index"])
+            condition["resolved"] = True
+            conditions.append(condition)
+        out({"ok": True, "conditions": conditions})
     elif command == "step":
         step_count += 1
         done = step_count >= 3
@@ -65,11 +129,6 @@ for line in sys.stdin:
             step_count = 0
         out({"ok": True, "observations": [[0.25] * OBS_DIM], "rewards": [1.0],
              "dones": [done], "infos": [info]})
-    elif command == "ping":
-        out({"ok": True, "pong": True})
-    elif command == "close":
-        out({"ok": True, "close": True})
-        break
     else:
         out({"ok": False, "error": "unknown command"})
 '''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
@@ -84,7 +143,8 @@ class FakeBridgeTestCase(unittest.TestCase):
         bridge_py = tmp / "fake_bridge.py"
         bridge_py.write_text(FAKE_BRIDGE_SOURCE, encoding="utf-8")
         wrapper = tmp / "fake_godot"
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}'\n", encoding="utf-8")
+        # Forward "$@" so launch flags (e.g. --self-play 1) reach the fake.
+        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.executable = str(wrapper)
 
@@ -156,6 +216,130 @@ class FakeBridgeTestCase(unittest.TestCase):
             self.assertEqual(env.reset_infos[0].get("seed"), -1)
         finally:
             env.close()
+
+
+@unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
+class EpisodePlanCommandTest(FakeBridgeTestCase):
+    """Wire-level contract for the curriculum plan commands the pipeline
+    issues at episode boundaries (command phase of rl_server.gd)."""
+
+    def test_set_episode_plans_and_condition_readback(self):
+        from sandboxai.godot_env import GodotBatchClient
+
+        client = GodotBatchClient(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            environment_count=2,
+            seed=5,
+        )
+        try:
+            plans = [
+                {
+                    "index": 0,
+                    "seed": 4242,
+                    "map_id": "open_field",
+                    "scenario": "cover_fight",
+                    "lighting": "normal",
+                    "enemy_count": 1,
+                    "curriculum_level": 5,
+                },
+                {
+                    "index": 1,
+                    "seed": 777,
+                    "map_id": "pillar_hall",
+                    "scenario": "",
+                    "lighting": "fog",
+                    "enemy_count": 3,
+                    "curriculum_level": 7,
+                },
+            ]
+            staged = client.set_episode_plans(plans)
+            self.assertTrue(staged.get("ok"))
+            self.assertEqual(staged.get("staged"), [0, 1])
+            conditions = client.episode_conditions()
+            by_index = {int(c["environment_index"]): c for c in conditions}
+            self.assertEqual(by_index[0]["map_id"], "open_field")
+            self.assertEqual(by_index[0]["curriculum_level"], 5)
+            self.assertEqual(by_index[1]["lighting"], "fog")
+            self.assertEqual(by_index[1]["enemy_count"], 3)
+        finally:
+            client.close()
+
+    def test_invalid_plan_batch_fails_atomically(self):
+        from sandboxai.godot_env import GodotBatchClient
+
+        client = GodotBatchClient(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            environment_count=2,
+            seed=5,
+        )
+        try:
+            with self.assertRaises(Exception) as ctx:
+                client.set_episode_plans(
+                    [{"index": 0, "seed": 1, "map_id": "open_field"}]  # missing fields
+                )
+            self.assertIn("plan missing fields", str(ctx.exception))
+            # Nothing staged: the readback must still be empty.
+            self.assertEqual(client.episode_conditions(), [])
+        finally:
+            client.close()
+
+
+@unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
+class SelfPlayBridgeTest(FakeBridgeTestCase):
+    """The --self-play channel: deterministic two-slot matches (league)."""
+
+    def make_self_play_client(self):
+        from sandboxai.self_play import SelfPlayBatchClient
+
+        return SelfPlayBatchClient(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            environment_count=1,
+            seed=42,
+        )
+
+    def test_self_play_channel_shapes_and_deterministic_match(self):
+        from sandboxai.self_play import play_self_play_match
+
+        with self.make_self_play_client() as client:
+            self.assertEqual(client.transport.spaces.get("policy_slots"), 2)
+            predictor = lambda obs: [0, 0, 0, 0, 0, 0]
+            first = play_self_play_match(client, predictor, predictor, seed=1234)
+            second = play_self_play_match(client, predictor, predictor, seed=1234)
+        self.assertEqual(first, second, "self-play matches must be bit-for-bit deterministic")
+        # The scripted fake makes slot B win on the timeout boundary.
+        self.assertEqual(first["score_a"], 0.0)
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["done_reason"], "timeout")
+        self.assertEqual(first["metrics_a"]["episode_length"], 3)
+        self.assertEqual(first["seed"], 1234)
+
+    def test_self_play_rejects_training_only_commands(self):
+        client = self.make_self_play_client()
+        try:
+            with self.assertRaises(Exception) as ctx:
+                client.transport.request({"cmd": "set_episode_plans", "plans": []})
+            self.assertIn("self-play bridge does not support", str(ctx.exception))
+        finally:
+            client.close()
+
+    def test_match_reports_malformed_bridge_clearly(self):
+        from sandboxai.self_play import play_self_play_match
+
+        class _Broken:
+            def reset(self, seed):
+                return []  # not a pair list
+
+        # The public reader must raise a named, actionable error.
+        class _Predictor:
+            def __call__(self, obs):
+                return [0] * 6
+
+        with self.assertRaises(RuntimeError) as ctx:
+            play_self_play_match(_Broken(), _Predictor(), _Predictor(), seed=1)
+        self.assertIn("malformed observations", str(ctx.exception))
 
 
 if __name__ == "__main__":

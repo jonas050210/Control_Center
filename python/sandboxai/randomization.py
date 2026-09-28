@@ -65,6 +65,14 @@ SPAWN_RULES: tuple[str, ...] = (
     "random",
 )
 
+## Stride of the per-environment episode stream (see
+## ``stream_for_environment``). A fixed large prime rather than the
+## environment count, so changing the environment count never re-maps which
+## stream index a given environment has already played. Named here so the
+## training pipeline's per-environment driver derives exactly the same
+## indices this module's batch API does.
+STREAM_STRIDE: int = 1_000_003
+
 
 class RandomizationError(RuntimeError):
     """The training distribution is configured in a way that leaks."""
@@ -241,6 +249,17 @@ class TrainingDistribution:
     def episode_plans(self, count: int, start: int = 0) -> list[EpisodePlan]:
         return [self.episode_plan(start + offset) for offset in range(count)]
 
+    def stream_index(self, environment_index: int, ordinal: int) -> int:
+        """Global stream index of environment ``k``'s ``ordinal``-th episode.
+
+        Named so the training pipeline (which draws plans one at a time as
+        episodes start) and ``stream_for_environment`` (which materializes a
+        batch) never drift apart.
+        """
+        if environment_index < 0 or ordinal < 0:
+            raise ValueError("environment_index and ordinal must be >= 0")
+        return environment_index + ordinal * STREAM_STRIDE
+
     def stream_for_environment(self, environment_index: int, count: int) -> list[EpisodePlan]:
         """Per-environment episode stream for parallel training.
 
@@ -256,7 +275,7 @@ class TrainingDistribution:
         """
         if environment_index < 0:
             raise ValueError("environment_index must be >= 0")
-        return [self.episode_plan(environment_index + offset * 1000003) for offset in range(count)]
+        return [self.episode_plan(self.stream_index(environment_index, offset)) for offset in range(count)]
 
     def coverage(self, count: int) -> dict[str, Any]:
         """How much of the distribution ``count`` episodes actually touch."""

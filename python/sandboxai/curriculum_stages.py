@@ -25,17 +25,70 @@ mid-episode is how a curriculum corrupts its own statistics.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from typing import Any, Sequence
 
 from .auto_curriculum import AutoCurriculum, CurriculumSchedule
-from .conditions import LIGHTING_IDS, MAP_IDS
+from .conditions import LIGHTING_IDS, MAP_IDS, Condition
 from .randomization import EpisodePlan, TrainingDistribution
 
 ## Promotion metrics a stage may be gated on. "win_rate" is the default;
 ## exploration stages are gated on coverage instead, because a Map
 ## Analyzer episode has no opponent to beat.
 PROMOTION_METRICS: tuple[str, ...] = ("win_rate", "coverage", "survival_rate")
+
+## Engine-semantics mirrors, needed to predict what an episode plan
+## actually runs as. Both mirror CurriculumConfig in
+## scripts/core/curriculum_config.gd and are drift-checked by tests:
+##
+## ``WORLD_MIN_LEVEL``
+##     Level from which the engine keeps world geometry (Level 5,
+##     OBSTACLES_COVER). Below it, map/scenario/lighting ids are recorded
+##     in the sampled plan for provenance but are NOT applied: levels 1-4
+##     must stay bit-for-bit the legacy obstacle-free behavior, and
+##     handing them a map would silently switch the reset path.
+## ``MULTI_ENEMY_MIN``
+##     CurriculumConfig.MULTIPLE_ENEMIES_MIN_COUNT: once at level 4-10 the
+##     engine never creates fewer than this many enemies.
+WORLD_MIN_LEVEL: int = 5
+MULTI_ENEMY_MIN: int = 3
+MULTI_ENEMY_MAX_LEVEL: int = 10
+
+
+def applied_condition(condition: Condition) -> Condition:
+    """The condition the engine actually runs for a sampled one.
+
+    The training distribution samples *requested* conditions; the engine
+    then applies its own level semantics on top. Reporting (per-condition
+    metrics, replay headers, generalization splits) must describe what
+    ran, not what was sampled — otherwise a level 3 episode would be
+    filed under a map it never loaded, and a 1-enemy request at level 5
+    would be filed as 1 enemy while 3 spawned.
+
+    Rules mirrored from CurriculumConfig / EnvironmentCore:
+
+    * levels {WORLD_MIN_LEVEL}..10 apply map/lighting/scenario ids as
+      given; below that those ids are dropped (legacy reset path);
+    * at levels 4..{MULTI_ENEMY_MAX_LEVEL} the enemy count is raised to
+      at least {MULTI_ENEMY_MIN} (``effective_enemy_count``);
+    * seed and level always apply verbatim.
+    """
+    level = condition.level
+    enemy_count = condition.enemy_count
+    if 4 <= level <= MULTI_ENEMY_MAX_LEVEL:
+        enemy_count = max(MULTI_ENEMY_MIN, enemy_count)
+    if level < WORLD_MIN_LEVEL:
+        return Condition(
+            map_id="",
+            lighting="",
+            scenario="",
+            enemy_count=enemy_count,
+            level=level,
+            seed=condition.seed,
+        )
+    if enemy_count != condition.enemy_count:
+        return replace(condition, enemy_count=enemy_count)
+    return condition
 
 
 @dataclass(frozen=True)
@@ -225,6 +278,45 @@ def stage_for(level: int) -> CurriculumStage:
         raise RuntimeError("no curriculum stages declared")
     clamped = max(min(int(level), max(STAGES_BY_LEVEL)), min(STAGES_BY_LEVEL))
     return STAGES_BY_LEVEL[clamped]
+
+
+## Highest level standard (single-policy) training runs. Level 11 is the
+## self-play stage: its "episodes" are two-policy league matches, not
+## distribution-sampled episodes, so it can never be part of the standard
+## training stream or the seen-condition evaluation union.
+TRAINABLE_MAX_LEVEL: int = 10
+
+
+def evaluation_levels() -> list[int]:
+    """Every curriculum level the runs' evaluation distribution spans."""
+    return sorted({stage.level for stage in STAGES if stage.level <= TRAINABLE_MAX_LEVEL})
+
+
+def evaluation_distribution(
+    master_seed: int = 1234, layout_variants: int = 8
+) -> TrainingDistribution:
+    """The frozen per-run 'seen' evaluation distribution: union of the ladder.
+
+    Drawn with an evaluation-only master seed (``config.seed +
+    EVAL_MASTER_SEED_SALT`` in pipeline.py), so the episodes are provably
+    never training episodes, and the plan LIST is identical at every
+    checkpoint: results are comparable across checkpoints. Difficulty is
+    not a single point -- the condition key (L{level}-bucketed rows) keeps
+    each level's slice visible instead of collapsing it into one scalar.
+    """
+    maps = sorted({map_id for stage in STAGES for map_id in stage.maps}) or [MAP_IDS[0]]
+    lightings = sorted({lighting for stage in STAGES for lighting in stage.lightings})
+    scenarios = sorted({scenario for stage in STAGES for scenario in stage.scenarios})
+    enemy_counts = sorted({count for stage in STAGES for count in stage.enemy_counts}) or [1]
+    return TrainingDistribution(
+        maps=maps,
+        lightings=lightings,
+        scenarios=scenarios,
+        enemy_counts=enemy_counts,
+        levels=evaluation_levels(),
+        master_seed=master_seed,
+        layout_variants=layout_variants,
+    )
 
 
 def distribution_for(

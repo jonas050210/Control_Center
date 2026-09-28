@@ -231,6 +231,37 @@ func set_lighting_mode(mode_id: String) -> bool:
 	return true
 
 
+## Validates an episode plan (set_episode_plan wire format: seed, map_id,
+## scenario, lighting, enemy_count, curriculum_level). Returns "" when the
+## plan can be applied, otherwise a human-readable reason. Validating at
+## staging time means a misconfigured training distribution fails loudly
+## before a single step runs instead of silently training on defaults.
+func validate_episode_plan(plan: Dictionary) -> String:
+	return EnvironmentReset.validate_episode_plan(plan, curriculum.level)
+
+
+## Sets the configured enemy count for subsequent resets. The curriculum
+## minimum (MULTIPLE_ENEMIES at level 4+) still applies through
+## effective_enemy_count(), so the resolved count can be higher than the
+## requested one; callers that need the truth read get_episode_condition().
+func set_enemy_count(count: int) -> void:
+	curriculum.configured_enemy_count = maxi(1, count)
+	var target_count: int = curriculum.effective_enemy_count()
+	if enemies.size() != target_count:
+		enemy_count = target_count
+		_rebuild_enemies(enemy_count)
+	for enemy in enemies:
+		_apply_enemy_difficulty(enemy)
+
+
+## The episode configuration the engine actually resolved, in the
+## EpisodePlan.replay_header_fields() field names. This is the ground truth
+## of what ran: the RESOLVED enemy count (after curriculum minimums) and
+## the RESOLVED lighting (explicit override, else map, else normal).
+func get_episode_condition() -> Dictionary:
+	return EnvironmentReset.episode_condition(self)
+
+
 ## Turns the spatial memory on/off without changing the objective. Useful to
 ## give a combat policy map knowledge, or to draw the Map Analyzer view
 ## while a normal fight is running.

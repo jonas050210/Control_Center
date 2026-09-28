@@ -65,6 +65,8 @@ GROUP_KEYS: tuple[str, ...] = (
     "curriculum_level",
     "seed",
     "episode_id",
+    "environment_index",
+    "map_bucket",
 )
 
 ## An exposure longer than this while a contact is visible counts as "bad

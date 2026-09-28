@@ -76,6 +76,43 @@ class TrainingConfig:
     min_eval_reward: float | None = None
     reward_breakdown_logging: bool = True
 
+    # --- Integrated research pipeline (python/sandboxai/pipeline.py) ------
+    # "auto" drives every environment from CurriculumDirector episode plans
+    # (the integrated pipeline); "fixed" keeps the historical behavior: one
+    # curriculum level, one arena, configured once at process start.
+    curriculum_mode: str = "auto"
+    # Level the auto curriculum starts at. "fixed" mode keeps using
+    # `curriculum_level` above, untouched.
+    curriculum_start_level: int = 1
+    # Off = the director still plans every episode of the start stage
+    # deterministically, but measured results never promote/demote.
+    adaptive_curriculum: bool = True
+    # Per-tick research/skill metrics (metrics.py) during training. These
+    # are diagnostics only; they never touch the reward stream.
+    skill_metrics: bool = True
+    # Replay recording: "off" | "interesting" (losses, timeouts and
+    # curriculum-boundary episodes) | "every_n" | "all" | "evaluation".
+    replay_mode: str = "interesting"
+    replay_every_n: int = 50
+    replay_detail: str = "light"
+    # Hard cap on replays written per run, so "interesting" during a bad
+    # early phase cannot fill a disk. 0 = unlimited.
+    replay_max_per_run: int = 64
+    # Checkpoint-time evaluation beyond the normal frozen evaluation.
+    checkpoint_condition_eval: bool = True
+    checkpoint_generalization_eval: bool = True
+    # Bounds the per-checkpoint cost: evaluation blocks training while it
+    # runs, so keep the samples honest but small.
+    condition_eval_episodes: int = 24
+    generalization_episodes_per_cell: int = 1
+    # Self-play league matches at checkpoint boundaries (off by default:
+    # it loads frozen checkpoints and spawns an extra bridge process).
+    checkpoint_league_eval: bool = False
+    league_matches_per_checkpoint: int = 4
+    league_max_opponents: int = 8
+    # Per-episode JSONL metrics log (the research record of the run).
+    episode_log: bool = True
+
     def validate(self) -> "TrainingConfig":
         if self.environment_count < 1:
             raise ValueError("environment_count must be >= 1")
@@ -119,6 +156,30 @@ class TrainingConfig:
             raise ValueError("evaluation_environment_count must be >= 1")
         if self.early_stopping_patience < 0:
             raise ValueError("early_stopping_patience must be non-negative")
+        # Integrated pipeline fields.
+        if self.curriculum_mode not in ("auto", "fixed"):
+            raise ValueError("curriculum_mode must be 'auto' or 'fixed'")
+        # The director never promotes past level 10 during PPO training:
+        # level 11 is the two-agent self-play hook, which is an
+        # evaluation-time environment, not a single-agent PPO one.
+        if self.curriculum_start_level not in range(1, 11):
+            raise ValueError("curriculum_start_level must be between 1 and 10")
+        if self.replay_mode not in ("off", "interesting", "every_n", "all", "evaluation"):
+            raise ValueError("replay_mode must be one of off/interesting/every_n/all/evaluation")
+        if self.replay_every_n < 1:
+            raise ValueError("replay_every_n must be >= 1")
+        if self.replay_detail not in ("light", "detailed"):
+            raise ValueError("replay_detail must be 'light' or 'detailed'")
+        if self.replay_max_per_run < 0:
+            raise ValueError("replay_max_per_run must be >= 0 (0 = unlimited)")
+        if self.condition_eval_episodes < 1:
+            raise ValueError("condition_eval_episodes must be >= 1")
+        if self.generalization_episodes_per_cell < 1:
+            raise ValueError("generalization_episodes_per_cell must be >= 1")
+        if self.league_matches_per_checkpoint < 0:
+            raise ValueError("league_matches_per_checkpoint must be >= 0")
+        if self.league_max_opponents < 1:
+            raise ValueError("league_max_opponents must be >= 1")
         return self
 
     @property
