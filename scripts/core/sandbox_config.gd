@@ -319,6 +319,16 @@ const ENEMY_COVER_SEARCH_RADIUS: float = 4.0
 const ENEMY_PREFERRED_RANGE: float = 7.0
 ## Health fraction below which an engaging enemy breaks for cover.
 const ENEMY_RETREAT_HEALTH_FRACTION: float = 0.35
+## Below this fraction the enemy stops trying to trade at all and breaks
+## away from the believed threat, even without cover to run to.
+const ENEMY_CRITICAL_HEALTH_FRACTION: float = 0.15
+## How far a retreating enemy tries to get from the believed threat.
+const ENEMY_RETREAT_DISTANCE: float = 7.0
+## Continuous seconds an engaging enemy tolerates standing in the open
+## before repositioning to cover.
+const ENEMY_MAX_EXPOSURE_TIME: float = 3.5
+## Speed multiplier while walking toward a noise it has never seen.
+const ENEMY_INVESTIGATE_SPEED_SCALE: float = 0.7
 ## Seconds an enemy stays behind cover before peeking again.
 const ENEMY_COVER_DWELL: float = 1.2
 ## Seconds an enemy spends searching a lost target's last known position

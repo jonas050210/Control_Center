@@ -29,6 +29,12 @@ enum AIState {
 	TAKE_COVER = 6,
 	PEEK = 7,
 	SEARCH = 8,
+	## Moving toward a noise the enemy heard but has never seen. Kept
+	## distinct from SEARCH, which walks to a position it actually saw.
+	INVESTIGATE = 9,
+	## Critically hurt with no cover available: breaking away from the
+	## believed threat instead of trading.
+	RETREAT = 10,
 }
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
@@ -100,6 +106,10 @@ var time_since_visual: float = 0.0
 var state_time: float = 0.0
 ## Seconds spent searching for a lost target.
 var search_time: float = 0.0
+## Continuous seconds spent standing in a mutually visible position while
+## engaging. Line of sight is symmetric, so an enemy that can see the agent
+## can also work out that it is itself standing in the open.
+var exposure_time: float = 0.0
 ## Whether this enemy has an active, reaction-confirmed target.
 var target_confirmed: bool = false
 ## Destination the tactical layer is currently moving toward.
@@ -148,6 +158,7 @@ func reset(spawn_position: Vector3 = SandboxConfig.ENEMY_SPAWN_POSITION) -> void
 	time_since_visual = 0.0
 	state_time = 0.0
 	search_time = 0.0
+	exposure_time = 0.0
 	target_confirmed = false
 	has_tactical_destination = false
 	tactical_destination = Vector3.ZERO
@@ -408,5 +419,9 @@ static func ai_state_name(state: int) -> String:
 			return "peek"
 		AIState.SEARCH:
 			return "search"
+		AIState.INVESTIGATE:
+			return "investigate"
+		AIState.RETREAT:
+			return "retreat"
 		_:
 			return "unknown"
