@@ -180,6 +180,38 @@ const LIGHTING_MIN_TRANSMITTANCE: float = 0.25
 const LIGHTING_DEFAULT_MODE_ID: String = "normal"
 
 # ---------------------------------------------------------------------------
+# Exploration / spatial memory (SpatialMemory, MapAnalyzer)
+#
+# The agent's map knowledge is a coarse grid it fills in by looking at
+# things. Cell size is deliberately large: this is a memory of places, not
+# a occupancy map, and it has to stay cheap enough to update inside the
+# simulation loop.
+# ---------------------------------------------------------------------------
+const EXPLORATION_CELL_SIZE: float = 2.0
+## Half-life (seconds) of per-cell confidence. Far longer than
+## MEMORY_HALF_LIFE: terrain does not walk away, but the agent still cannot
+## know whether a room it saw two minutes ago is still empty.
+const EXPLORATION_HALF_LIFE: float = 45.0
+## Confidence floor. A cell the agent has seen never returns to "unknown";
+## it becomes "known but unreliable", which is a different thing.
+const EXPLORATION_MIN_CONFIDENCE: float = 0.05
+## Seconds between visibility sweeps. The sweep is the expensive part, so it
+## runs on a fixed cadence driven by the simulation clock (deterministic),
+## not every tick.
+const EXPLORATION_UPDATE_INTERVAL: float = 0.2
+## Cap on remembered route waypoints per episode.
+const EXPLORATION_MAX_ROUTE: int = 512
+## Map Analyzer mode: coverage fraction at which the map counts as explored
+## and the episode ends successfully.
+const EXPLORATION_TARGET_COVERAGE: float = 0.85
+## Reward per newly observed cell in Map Analyzer mode. Scaled by the grid
+## size at runtime so a big map is not worth more total reward than a small
+## one.
+const REWARD_EXPLORATION_COVERAGE: float = 5.0
+## Reward for reaching EXPLORATION_TARGET_COVERAGE.
+const REWARD_EXPLORATION_COMPLETE: float = 10.0
+
+# ---------------------------------------------------------------------------
 # Sound
 #
 # Sound is modelled as discrete, decaying events with a base audible radius

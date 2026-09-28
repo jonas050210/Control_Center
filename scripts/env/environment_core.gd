@@ -38,8 +38,10 @@ const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const EnvironmentIntrospection = preload("res://scripts/env/environment_introspection.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
 const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
+const MapAnalyzer = preload("res://scripts/exploration/map_analyzer.gd")
 const MapLibrary = preload("res://scripts/world/map_library.gd")
 const NavigationGraph = preload("res://scripts/world/navigation_graph.gd")
 const Observation = preload("res://scripts/core/observation.gd")
@@ -102,6 +104,19 @@ var lighting_mode_id: String = ""
 ## Environmental visibility for this episode. Never null.
 var lighting: LightingProfile = LightingProfile.create()
 
+## Persistent, perception-built knowledge of the map (Map Analyzer). Null
+## unless `exploration_tracking` is on, so combat training pays nothing for
+## it. It is fed ONLY from what the agent perceives.
+var exploration: MapAnalyzer = null
+## Maintain the spatial memory alongside normal play.
+var exploration_tracking: bool = false
+## Dedicated Map Analyzer episode: the objective is coverage, not combat.
+## Implies `exploration_tracking`, spawns no enemies unless the caller asks
+## for them, and ends when the map is explored.
+var exploration_mode: bool = false
+## In exploration mode, whether the map is empty of enemies.
+var exploration_solo: bool = true
+
 ## Explicit scenario override. Empty means "use the curriculum's layout".
 var scenario_id: String = ""
 ## The resolved scenario spec for the current episode ({} when none).
@@ -127,6 +142,10 @@ var _beliefs: Array = []
 ## tactical path allocates nothing per environment per tick.
 var _brain_context: Dictionary = {}
 var _target_reason: String = "no target"
+## Reused scratch dictionary for the Map Analyzer update (no per-tick alloc).
+var _exploration_context: Dictionary = {}
+## Whether the exploration-complete bonus has already been paid this episode.
+var _exploration_paid: bool = false
 
 
 func _init(p_env_id: int = 0, p_enemy_count: int = SandboxConfig.ENEMY_COUNT_DEFAULT) -> void:
@@ -203,6 +222,25 @@ func set_lighting_mode(mode_id: String) -> bool:
 	return true
 
 
+## Turns the spatial memory on/off without changing the objective. Useful to
+## give a combat policy map knowledge, or to draw the Map Analyzer view
+## while a normal fight is running.
+func set_exploration_tracking(enabled: bool) -> void:
+	exploration_tracking = enabled
+	if not enabled and not exploration_mode:
+		exploration = null
+
+
+## Switches the whole episode into Map Analyzer mode. Takes effect on the
+## next reset(). `solo` removes the enemies so exploration is measured on
+## its own; pass false to explore a populated map.
+func set_exploration_mode(enabled: bool, solo: bool = true) -> void:
+	exploration_mode = enabled
+	exploration_solo = solo
+	if enabled:
+		exploration_tracking = true
+
+
 ## Applies every curriculum-derived per-enemy parameter to one enemy. Used
 ## both at reset() and by set_curriculum_level() so a mid-episode level
 ## change takes effect consistently on the existing enemy list (previously
@@ -234,6 +272,8 @@ func reset(seed_value: int = -1) -> Observation:
 	episode_seed = seed_value
 
 	var target_count: int = curriculum.effective_enemy_count()
+	if exploration_mode and exploration_solo:
+		target_count = 0
 	if enemies.size() != target_count:
 		enemy_count = target_count
 		_rebuild_enemies(enemy_count)
@@ -244,7 +284,9 @@ func reset(seed_value: int = -1) -> Observation:
 	lighting = LightingProfile.create()
 	perception.reset()
 	perception.configure(
-		curriculum.perception_enabled(), curriculum.sound_enabled(), curriculum.memory_enabled()
+		curriculum.perception_enabled() or exploration_mode,
+		curriculum.sound_enabled(),
+		curriculum.memory_enabled()
 	)
 	last_damage_source = -1
 	_beliefs = []
@@ -261,11 +303,25 @@ func reset(seed_value: int = -1) -> Observation:
 		_apply_lighting(maxi(0, episode_seed))
 		_reset_legacy()
 	perception.set_lighting(lighting)
+	_reset_exploration()
 
 	episode.start_new_episode()
 	_has_reset = true
 	_last_observation = _build_observation()
 	return _last_observation
+
+
+## (Re)builds the Map Analyzer for the episode. Always starts empty: map
+## knowledge is earned per episode and never carried in from outside.
+func _reset_exploration() -> void:
+	if not exploration_tracking and not exploration_mode:
+		exploration = null
+		return
+	if exploration == null:
+		exploration = MapAnalyzer.create(arena_half_extent)
+	else:
+		exploration.configure(arena_half_extent, SandboxConfig.EXPLORATION_CELL_SIZE)
+	_exploration_paid = false
 
 
 ## Original obstacle-free reset. Untouched so curriculum levels 1-4 keep
@@ -427,7 +483,7 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 
 	if sound_on:
 		sound_bus.tick(dt)
-	if curriculum.perception_enabled() or debug_perception:
+	if curriculum.perception_enabled() or debug_perception or exploration != null:
 		_beliefs = AgentPerception.rank_beliefs(
 			perception.update(agent, enemies, world, sound_bus if sound_on else null, dt),
 			last_damage_source
@@ -435,6 +491,10 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		_target_reason = AgentPerception.selection_reason(
 			_beliefs[0] if _beliefs.size() > 0 else {}, last_damage_source
 		)
+
+	var exploration_summary: Dictionary = {}
+	if exploration != null:
+		exploration_summary = _update_exploration(dt, damage_taken)
 
 	var died: bool = alive_before and not agent.alive
 	if died:
@@ -452,6 +512,16 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"positioning_delta": positioning_delta,
 		"alive": agent.alive,
 	}
+	# Exploration only pays in the dedicated Map Analyzer mode. With
+	# tracking enabled during a normal fight the map knowledge is still
+	# built, but it must not distort the combat reward.
+	if exploration_mode and exploration != null:
+		events["exploration_gain"] = exploration.exploration_reward()
+		events["exploration_complete"] = (
+			bool(exploration_summary.get("completed", false)) and not _exploration_paid
+		)
+		if bool(events["exploration_complete"]):
+			_exploration_paid = true
 	var reward: float = RewardSystem.compute(events)
 	episode.record_step(reward)
 	episode.record_reward_breakdown(events)
@@ -461,7 +531,14 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	if SandboxConfig.END_EPISODE_ON_AGENT_DEATH and not agent.alive:
 		done = true
 		reason = "agent_died"
-	elif SandboxConfig.END_EPISODE_ON_ALL_ENEMIES_DEAD and _all_enemies_dead():
+	elif exploration_mode and exploration != null and exploration.completed:
+		done = true
+		reason = "map_explored"
+	elif (
+		SandboxConfig.END_EPISODE_ON_ALL_ENEMIES_DEAD
+		and enemies.size() > 0
+		and _all_enemies_dead()
+	):
 		done = true
 		reason = "all_enemies_eliminated"
 	elif episode.is_timeout(max_steps):
@@ -634,6 +711,27 @@ func _update_enemies(dt: float, sound_on: bool) -> float:
 
 
 ## Turns a CharacterMotor/EnemyBrain motion event dictionary into sounds.
+## Feeds one simulation step into the Map Analyzer.
+##
+## Everything handed over is something the agent itself perceived: its own
+## pose, the lighting it stands in, the sounds it heard, and the fact that
+## it took damage HERE. No enemy ground truth crosses this boundary; the
+## shooter's real position is deliberately not passed, because the agent
+## does not know it.
+func _update_exploration(dt: float, damage_taken: float) -> Dictionary:
+	_exploration_context["position"] = agent.position
+	_exploration_context["forward"] = agent.get_forward_horizontal()
+	_exploration_context["eye_height"] = SandboxConfig.AGENT_EYE_HEIGHT
+	_exploration_context["world"] = world
+	_exploration_context["lighting"] = lighting
+	_exploration_context["fov_deg"] = perception.fov_deg
+	_exploration_context["vision_range"] = perception.vision_range
+	_exploration_context["local_illumination"] = perception.local_illumination
+	_exploration_context["sounds"] = perception.heard
+	_exploration_context["damage_taken_from"] = agent.position if damage_taken > 0.0 else null
+	return exploration.update(dt, _exploration_context)
+
+
 func _emit_motion_sounds(motion: Dictionary, position: Vector3, source_id: int) -> void:
 	if bool(motion.get("footstep", false)):
 		sound_bus.emit_sound(SoundBus.Category.FOOTSTEP, position, source_id)
@@ -686,33 +784,7 @@ func get_metrics() -> Dictionary:
 
 
 func health_check() -> Dictionary:
-	var healthy: bool = true
-	var issues: Array = []
-
-	if is_nan(agent.position.x) or is_nan(agent.position.y) or is_nan(agent.position.z):
-		healthy = false
-		issues.append("agent position has NaN")
-	if is_nan(agent.health) or agent.health < 0.0 or agent.health > agent.max_health:
-		healthy = false
-		issues.append("agent health invalid: %f" % agent.health)
-
-	for i in range(enemies.size()):
-		var enemy: EnemyState = enemies[i]
-		if is_nan(enemy.position.x) or is_nan(enemy.position.z):
-			healthy = false
-			issues.append("enemy %d position has NaN" % i)
-		if is_nan(enemy.health) or enemy.health < 0.0:
-			healthy = false
-			issues.append("enemy %d health invalid: %f" % [i, enemy.health])
-
-	return {
-		"healthy": healthy,
-		"env_id": env_id,
-		"agent_alive": agent.alive,
-		"alive_enemies": get_alive_enemy_count(),
-		"total_enemies": enemies.size(),
-		"issues": issues,
-	}
+	return EnvironmentIntrospection.health_check(self)
 
 
 # ---------------------------------------------------------------------------
@@ -726,14 +798,14 @@ func health_check() -> Dictionary:
 
 ## Agent FOV cone parameters for the overlay.
 func get_agent_field_of_view() -> Dictionary:
-	return {
-		"origin": agent.get_eye_position(),
-		"forward": agent.get_forward_horizontal(),
-		"fov_deg": perception.fov_deg,
-		"range": perception.vision_range,
-		"enabled": curriculum.perception_enabled(),
-		"forward_clearance": perception.forward_clearance,
-	}
+	return EnvironmentIntrospection.field_of_view(self)
+
+
+## Map Analyzer state for the Control Center EXPLORATION view. Read-only,
+## and privileged only in the sense that the UI sees the agent's beliefs all
+## at once; every cell in it was earned by the agent looking at it.
+func get_exploration_state() -> Dictionary:
+	return EnvironmentIntrospection.exploration_state(self)
 
 
 ## Raw line-of-sight query against the current geometry.
@@ -745,27 +817,23 @@ func has_line_of_sight(from_position: Vector3, to_position: Vector3) -> bool:
 
 ## Currently audible events from the AGENT's point of view.
 func get_sound_events() -> Array:
-	if not curriculum.sound_enabled() and not debug_perception:
-		return []
-	return sound_bus.sample(
-		agent.position,
-		agent.get_forward_horizontal(),
-		world,
-		AGENT_SOUND_SOURCE,
-		SandboxConfig.SOUND_DETECTION_DELAY
-	)
+	return EnvironmentIntrospection.sound_events(self)
 
 
 ## The agent's memory tracks plus the live belief list and the reason the
 ## current target was chosen.
 func get_target_memory() -> Dictionary:
-	return {
-		"tracks": perception.memory.to_dict(),
-		"beliefs": _beliefs,
-		"target_reason": _target_reason,
-		"memory_enabled": curriculum.memory_enabled(),
-		"half_life": SandboxConfig.MEMORY_HALF_LIFE,
-	}
+	return EnvironmentIntrospection.target_memory(self)
+
+
+## The ranked belief list the policy acted on this step.
+func get_beliefs() -> Array:
+	return _beliefs
+
+
+## Human-readable reason the current target was chosen (debug only).
+func get_target_reason() -> String:
+	return _target_reason
 
 
 ## Builds (once per episode) and returns the navigation graph for the
@@ -801,17 +869,7 @@ func get_navigation_graph_info() -> Dictionary:
 ## Environmental conditions for the Control Center. Includes the map's
 ## human-facing metadata, which the POLICY never receives.
 func get_environment_conditions() -> Dictionary:
-	var conditions: Dictionary = {
-		"lighting": lighting.to_dict(),
-		"local_illumination": perception.local_illumination,
-		"map_id": map_id,
-		"arena_half_extent": arena_half_extent,
-	}
-	if map_instance.is_empty():
-		conditions["map"] = {"id": "", "label": "(scenario-generated)", "known": false}
-	else:
-		conditions["map"] = map_instance["metadata"]
-	return conditions
+	return EnvironmentIntrospection.environment_conditions(self)
 
 
 ## Static geometry description for the overlay: one Dictionary per box.
@@ -830,42 +888,12 @@ func get_world_description() -> Dictionary:
 
 ## Layout/scenario metadata plus per-enemy tactical state.
 func get_navigation_state() -> Dictionary:
-	var enemy_states: Array = []
-	for enemy_value in enemies:
-		var enemy: EnemyState = enemy_value
-		enemy_states.append(
-			{
-				"id": enemy.enemy_id,
-				"state": EnemyState.ai_state_name(enemy.ai_state),
-				"reason": enemy.tactical_reason,
-				"destination": enemy.tactical_destination,
-				"has_destination": enemy.has_tactical_destination,
-				"target_confirmed": enemy.target_confirmed,
-				"time_since_visual": enemy.time_since_visual,
-				"reaction": enemy.reaction.to_dict(),
-				"navigation": enemy.navigation.to_dict(),
-			}
-		)
-	return {
-		"layout_id": world.layout_id if world != null else "none",
-		"layout_seed": world.layout_seed if world != null else -1,
-		"graph": get_navigation_graph_info(),
-		"scenario": scenario.get("id", ""),
-		"scenario_label": scenario.get("label", ""),
-		"spawn_rule": scenario.get("spawn_rule", ""),
-		"episode_seed": episode_seed,
-		"enemies": enemy_states,
-	}
+	return EnvironmentIntrospection.navigation_state(self)
 
 
 ## Corpses, as pure environmental information. Never targetable.
 func get_dead_bodies() -> Array:
-	var bodies: Array = []
-	for enemy_value in enemies:
-		var enemy: EnemyState = enemy_value
-		if enemy.corpse:
-			bodies.append(enemy.to_corpse_dict())
-	return bodies
+	return EnvironmentIntrospection.dead_bodies(self)
 
 
 # ---------------------------------------------------------------------------
