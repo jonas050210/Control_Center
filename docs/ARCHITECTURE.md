@@ -41,13 +41,14 @@ per line:
 
 ## Action contract
 
-The canonical Godot `Action` has four ternary fields and one binary trigger:
+The canonical Godot `Action` has four ternary fields and two binary triggers:
 
 - `move_axis`, `strafe_axis`, `look_yaw_axis`, `look_pitch_axis`: `-1, 0, 1`
 - `shoot`: boolean
+- `jump`: boolean (added with curriculum level 9, vertical combat)
 - `look_delta`: optional continuous mouse delta, retained for human logs
 
-The ML space is `MultiDiscrete([3, 3, 3, 3, 2])`. Each ternary field is
+The ML space is `MultiDiscrete([3, 3, 3, 3, 2, 2])`. Each ternary field is
 shifted by one (`-1 -> 0`, `0 -> 1`, `1 -> 2`). `Action.from_discrete()`
 continues to support Agent 1's ten single-choice actions for compatibility.
 Human, stub AI, external PPO and demonstrations all pass through `Action`.
@@ -158,13 +159,27 @@ start is reported.
 ## Curriculum and self-play
 
 `CurriculumConfig` changes existing `EnemyState` behavior instead of making
-parallel hardcoded environments:
+parallel hardcoded environments. Eleven levels
+(`CurriculumConfig.Level`), each teaching one new capability:
 
 1. stationary target, fixed spawn directly ahead, no movement/attacks
 2. one moving enemy, varied spawn distance/angle
 3. moving + attacking enemy, spawn variety, strafing while engaging
 4. 3+ enemies, spawn variety, strafing, faster/more aggressive
-5. agent-vs-agent hook
+5. obstacles and cover (`EnemyBrain` takes over)
+6. FOV + line-of-sight gating (the observation stops being ground truth)
+7. sound
+8. memory of lost targets
+9. vertical combat
+10. mixed randomized layouts/scenarios
+11. agent-vs-agent self-play hook
+
+The Python mirror is `python/sandboxai/curriculum_stages.py`
+(`CurriculumDirector`): a stage table, an `AutoCurriculum` gate and a
+deterministic episode distribution per stage. Promotion is
+performance-gated over a rolling window with a per-stage minimum episode
+count and a cooldown, so no single episode can promote and levels move one
+step at a time.
 
 See [`docs/CURRICULUM_AND_COMBAT.md`](CURRICULUM_AND_COMBAT.md) for the full
 per-level table, the multi-enemy spawn-variety algorithm, and the
@@ -174,6 +189,36 @@ deterministic strafing/movement-pattern design.
 mirrored observations, per-agent rewards and per-agent metrics. Python's
 `SelfPlayCoordinator` can load a frozen opponent checkpoint. This is a
 foundation for population/self-play training, not a population algorithm.
+
+## Replay, metrics, generalization and benchmarks
+
+[`docs/REPLAY_AND_METRICS.md`](REPLAY_AND_METRICS.md) documents the
+subsystems layered on top of the simulator:
+
+- **Deterministic replay** (format v1, JSON Lines), implemented twice and
+  byte-compatible: `python/sandboxai/replay.py` and
+  `scripts/replay/*.gd`. Light recordings store actions/rewards only,
+  because an episode is reproducible from seed + conditions + actions.
+- **Research metrics** in eight diagnostic categories
+  (`python/sandboxai/metrics.py`, `scripts/metrics/skill_metrics.gd`).
+  Never rewards, and ground truth is returned in a separate dictionary.
+- **Conditions / randomization / generalization**
+  (`conditions.py`, `randomization.py`, `generalization.py`): deterministic
+  per-episode plans derived with blake2b rather than shared RNG state, and
+  per-condition reporting that surfaces the win-rate spread.
+- **Multi-policy and league** (`policies.py`, `league.py`): independent
+  weights are asserted, not assumed; `assert_independent_weights` fails if
+  two "different" brains share a parameter tensor or a checkpoint path.
+- **Team play foundation**, disabled by default (`teamplay.py`,
+  `scripts/team/team_config.gd`).
+- **External adapter boundary** (`external_adapter.py`) — see
+  [`docs/ROBLOX_ADAPTER.md`](ROBLOX_ADAPTER.md).
+- **Map Analyzer 2.0** (`scripts/exploration/exploration_report.gd`):
+  perception-only heatmaps, regions, routes, sightlines and metrics, with
+  unknown cells reported as unknown.
+- **Benchmark suites** (`benchmark_suites.py`): four comparable workloads
+  at 1/4/8/16/32/64 environments. Raises rather than estimating when Godot
+  is absent.
 
 ## Control Center
 
@@ -199,6 +244,10 @@ SimulationManager -> EnvironmentCore * N     unchanged simulation
   and observation-derived data in separate branches.
 - Nothing is constructed when `DisplayServer.get_name() == "headless"`, so
   training keeps its exact previous cost.
+- Tabs: Perception, Observation, Results, **Metrics**, **Replay**,
+  Settings. The Metrics tab separates AI-available metrics from a
+  red-labelled ground-truth block; the Replay tab scrubs a recorded
+  episode and never steps the live simulation.
 
 ## Debug GUI, benchmarking and the future Roblox boundary
 

@@ -3,7 +3,7 @@
 No real Godot binary is required: a tiny Python subprocess speaks the same
 JSON-lines protocol as scripts/rl/rl_server.gd (see test_godot_env.py for the
 same pattern). This validates that the Python PPO/Gymnasium wiring stays
-correct for the NEW 33-field multi-enemy observation contract — the
+correct for the current multi-enemy observation contract — the
 dimension is read entirely from the bridge's "spaces" response, never
 hardcoded on the Python side, so this test only needs to change OBS_DIM here
 for the assertion to hold across future observation-contract changes.

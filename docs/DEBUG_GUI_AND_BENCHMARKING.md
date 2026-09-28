@@ -116,7 +116,7 @@ numbers:
   - Godot's own per-step simulation cost (analytic, no physics — cheap) is
     likely not the limiter at low environment counts.
   - JSON parsing/serialization cost per step scales with N and with
-    observation width (33 floats × N enemies' worth of extra fields is
+    observation width (84 floats per environment per step is
     still small, but not zero).
   - Both the Godot process and the Python process are single-threaded for
     this bridge traffic (only stderr draining runs on a helper thread), so

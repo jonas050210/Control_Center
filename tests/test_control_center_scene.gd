@@ -102,6 +102,8 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 	t.assert_not_null(ui.perception_panel, "what-does-the-AI-see panel")
 	t.assert_not_null(ui.observation_panel, "observation inspector panel")
 	t.assert_not_null(ui.results_panel, "results/metrics panel")
+	t.assert_not_null(ui.metrics_panel, "research metrics panel")
+	t.assert_not_null(ui.replay_panel, "replay panel")
 	t.assert_not_null(ui.settings_panel, "settings panel")
 	t.assert_not_null(ui.controls_panel, "simulation controls")
 	t.assert_not_null(ui.log_panel, "event log panel")
@@ -113,7 +115,7 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 	# the simulation result.
 	instance.session.advance(5)
 	var before: int = instance.session.get_selected_environment().episode.step_count
-	for tab in range(4):
+	for tab in range(ui._tabs.get_tab_count()):
 		ui._tabs.current_tab = tab
 		ui.refresh_now()
 	t.assert_eq(

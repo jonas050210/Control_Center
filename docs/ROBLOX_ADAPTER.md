@@ -43,6 +43,44 @@ similar-looking one.
   Aligning them, or writing a thin per-environment `GameAdapter` wrapper
   around `GodotGymEnv`, is future work, not done in this milestone.
 
+## The adapter boundary module (new)
+
+`python/sandboxai/external_adapter.py` makes the boundary above executable
+without implementing any integration. It contains:
+
+- `EXTERNAL_CONTRACT_VERSION`, `EPISODE_STATES`
+  (`idle`/`running`/`terminated`/`truncated`/`unavailable`) and
+  `TimingContract` (`fixed`/`polled`/`event` modes, tick rate, maximum
+  latency, an explicit `deterministic` flag that defaults to **false** for
+  an external game).
+- `AdapterCapabilities` — one boolean per `OBSERVATION_GROUPS` channel plus
+  the declared `data_sources`. `ALLOWED_DATA_SOURCES` are
+  `own_character_state`, `own_weapon_state`, `rendered_visibility`,
+  `audible_events`, `own_memory`, `public_match_state`.
+  `FORBIDDEN_DATA_SOURCES` are `server_authoritative_state`,
+  `other_player_private_state`, `hidden_entity_positions`,
+  `process_memory`, `network_packet_inspection` and `client_modification`;
+  declaring one raises.
+- `validate_observation` / `validate_action` — shape, range and NaN checks,
+  plus the central rule: **a channel the adapter cannot supply must be the
+  all-zero neutral encoding.** A non-zero value in an undeclared channel is
+  an error, which is what stops a "sound" field from quietly carrying
+  server-side positions.
+- `MockExternalEnvironment` — a `GameAdapter`/`ExternalEnvironment`
+  implementation with no network, no game and no external dependency. It
+  exists so the contract tests are real tests.
+- `AdapterContractChecker` — runs an adapter through reset/step/termination
+  and returns a list of problems; `python/tests/test_external_adapter.py`
+  asserts the mock returns zero, and that deliberately leaky or
+  self-contradicting adapters do not.
+
+Inspect the contract from the CLI with `sandboxai adapter-contract
+--check-mock`.
+
+Nothing in that module talks to Roblox, and the tests assert that no module
+in the package contains client-modification or memory-reading technique
+names.
+
 ## What a real implementation would need to do (not attempted here)
 
 1. **Connect to a live Roblox session.** Roblox does not expose a documented,

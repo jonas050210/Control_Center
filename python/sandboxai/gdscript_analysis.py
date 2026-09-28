@@ -130,7 +130,12 @@ def project_root(start: Path | None = None) -> Path:
     raise RuntimeError("could not locate project.godot above %s" % here)
 
 
-def iter_gd_files(root: Path) -> list[Path]:
+def iter_gd_files(root: Path | str) -> list[Path]:
+    # Accept a str as well as a Path: `analyze("/path")` used to raise
+    # `TypeError: unsupported operand type(s) for /: 'str' and 'str'`
+    # because the root was never coerced. The public entry points are
+    # documented as taking a path, and a string is a path.
+    root = Path(root)
     files: list[Path] = []
     for folder in ("scripts", "tests"):
         base = root / folder
@@ -309,7 +314,8 @@ def parse_script(path: Path, root: Path) -> ScriptInfo:
 class ProjectIndex:
     """All project scripts, indexed by res:// path and by ``class_name``."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path | str) -> None:
+        root = Path(root)
         self.root = root
         self.by_res: dict[str, ScriptInfo] = {}
         self.by_class: dict[str, ScriptInfo] = {}
@@ -465,9 +471,9 @@ def _extract_call_args(source: str, start: int) -> tuple[str, bool]:
     return "".join(out), False
 
 
-def parse_all(root: Path | None = None) -> list[Finding]:
+def parse_all(root: Path | str | None = None) -> list[Finding]:
     """Runs the gdtoolkit grammar over every project script."""
-    root = root or project_root()
+    root = Path(root) if root else project_root()
     findings: list[Finding] = []
     try:
         from gdtoolkit.parser import parser as gd_parser  # type: ignore
@@ -495,7 +501,7 @@ def parse_all(root: Path | None = None) -> list[Finding]:
     return findings
 
 
-def lint_all(root: Path | None = None) -> list[Finding]:
+def lint_all(root: Path | str | None = None) -> list[Finding]:
     """Runs gdtoolkit's ``gdlint`` style/complexity rules over the project.
 
     Separate from :func:`analyze` on purpose: ``analyze`` answers "is this
@@ -506,7 +512,7 @@ def lint_all(root: Path | None = None) -> list[Finding]:
     Returns a ``parser-unavailable`` finding (never an exception) when
     gdtoolkit is not installed, matching :func:`parse_all`.
     """
-    root = root or project_root()
+    root = Path(root) if root else project_root()
     try:
         from gdtoolkit.linter import lint_code  # type: ignore
         from gdtoolkit.linter import DEFAULT_CONFIG  # type: ignore
@@ -535,9 +541,9 @@ def lint_all(root: Path | None = None) -> list[Finding]:
     return findings
 
 
-def analyze(root: Path | None = None) -> list[Finding]:
+def analyze(root: Path | str | None = None) -> list[Finding]:
     """Full static analysis: syntax + resources + symbols + call arity."""
-    root = root or project_root()
+    root = Path(root) if root else project_root()
     index = ProjectIndex(root)
     findings = parse_all(root)
     findings.extend(check_resource_paths(index))

@@ -22,12 +22,14 @@ const ControlCenterConfig = preload("res://scripts/control_center/control_center
 const ControlCenterControlsPanel = preload("res://scripts/control_center/ui/controls_panel.gd")
 const ControlCenterHud = preload("res://scripts/control_center/ui/hud.gd")
 const ControlCenterLogPanel = preload("res://scripts/control_center/ui/log_panel.gd")
+const ControlCenterMetricsPanel = preload("res://scripts/control_center/ui/metrics_panel.gd")
 const ControlCenterObservationPanel = preload(
 	"res://scripts/control_center/ui/observation_panel.gd"
 )
 const ControlCenterPerceptionPanel = preload(
 	"res://scripts/control_center/ui/perception_panel.gd"
 )
+const ControlCenterReplayPanel = preload("res://scripts/control_center/ui/replay_panel.gd")
 const ControlCenterResultsPanel = preload("res://scripts/control_center/ui/results_panel.gd")
 const ControlCenterSettingsPanel = preload("res://scripts/control_center/ui/settings_panel.gd")
 const ControlCenterStatusBar = preload("res://scripts/control_center/ui/status_bar.gd")
@@ -44,6 +46,8 @@ var agent_panel: ControlCenterAgentPanel
 var perception_panel: ControlCenterPerceptionPanel
 var observation_panel: ControlCenterObservationPanel
 var results_panel: ControlCenterResultsPanel
+var metrics_panel: ControlCenterMetricsPanel
+var replay_panel: ControlCenterReplayPanel
 var settings_panel: ControlCenterSettingsPanel
 var controls_panel: ControlCenterControlsPanel
 var log_panel: ControlCenterLogPanel
@@ -151,6 +155,14 @@ func _build_tabs(parent: Control) -> void:
 	results_panel.setup(session)
 	_tabs.add_child(_wrap_scroll(results_panel, "Results"))
 
+	metrics_panel = ControlCenterMetricsPanel.new()
+	metrics_panel.setup(session)
+	_tabs.add_child(_wrap_scroll(metrics_panel, "Metrics"))
+
+	replay_panel = ControlCenterReplayPanel.new()
+	replay_panel.setup(session)
+	_tabs.add_child(_wrap_scroll(replay_panel, "Replay"))
+
 	settings_panel = ControlCenterSettingsPanel.new()
 	settings_panel.setup(session)
 	settings_panel.settings_rebuilt.connect(_on_settings_rebuilt)
@@ -211,13 +223,20 @@ func _refresh_active_tab(snapshot: Dictionary) -> void:
 			observation_panel.refresh(snapshot)
 		2:
 			results_panel.refresh(snapshot)
+		3:
+			metrics_panel.refresh(snapshot)
+		4:
+			# Replay playback advances on wall-clock time, independently of
+			# whether the live simulation is running or paused.
+			replay_panel.advance(1.0 / REFRESH_HZ)
+			replay_panel.refresh(snapshot)
 		_:
 			settings_panel.refresh(snapshot)
 
 
 ## Only the sections some visible panel will actually read are built.
 ## The left agent panel needs perception (mini-map + enemy list); the
-## 33-row observation table is only built for the Observation tab.
+## full observation table is only built for the Observation tab.
 func _snapshot_options() -> Dictionary:
 	var needs_perception: bool = _left_container.visible
 	var needs_observation: bool = false
