@@ -13,7 +13,11 @@ verification that is possible *without* an engine:
    is a ``const Alias = preload(...)`` or a project ``class_name``, the
    member must actually be declared by that script (following ``extends``
    to project-local base classes).
-4. **Contract mirroring** — helpers used by ``python/tests/test_contract.py``
+4. **Undefined local calls** — every bare ``_helper()`` call must be
+   declared by the calling script or one of its project-local base classes
+   (Godot rejects undeclared bare calls at compile time and invalidates the
+   whole script).
+5. **Contract mirroring** — helpers used by ``python/tests/test_contract.py``
    to compare the Godot observation/action contract against
    ``python/sandboxai/contract.py``.
 
@@ -92,6 +96,27 @@ UNIVERSAL_MEMBERS = frozenset(
         "set_physics_process", "set_process_unhandled_input", "set_process_input", "propagate_call",
         "get_property_list", "get_method_list", "has_signal", "get_signal_list", "reference",
         "unreference", "get_reference_count", "set_meta", "get_meta", "has_meta",
+    }
+)
+
+## Underscore methods the ENGINE may declare on a base class (virtual
+## callbacks such as ``_ready``). Their absence from a user script is normal,
+## so they can never be reported as undefined; engine-facing API is public by
+## convention, which is what makes every other bare ``_name()`` call a
+## project-private helper that must be declared somewhere in the chain.
+ENGINE_VIRTUAL_METHODS = frozenset(
+    {
+        # Object
+        "_init", "_notification", "_to_string", "_get", "_set", "_get_property_list",
+        "_validate_property", "_property_can_revert", "_property_get_revert", "_script_exited",
+        # Node / SceneTree main loop
+        "_ready", "_enter_tree", "_exit_tree", "_process", "_physics_process", "_input",
+        "_unhandled_input", "_unhandled_key_input", "_initialize", "_finalize",
+        # CanvasItem / Control
+        "_draw", "_gui_input", "_has_point", "_clips_input", "_make_custom_tooltip",
+        "_get_minimum_size", "_theme_changed",
+        # BaseButton / Range virtual signal handlers
+        "_pressed", "_toggled",
     }
 )
 
@@ -565,6 +590,103 @@ def check_static_calls(index: ProjectIndex) -> list[Finding]:
     return findings
 
 
+## Bare call of a private-by-convention helper: `_name(` not preceded by a
+## word character or a dot (so `obj._name(` / `Alias._name(` / `super._name(`
+## are member calls on another object, not this check's business).
+_LOCAL_CALL_RE = re.compile(r"(?<![\w.])(_[A-Za-z_]\w*)\s*\(")
+
+
+def _declared_by_project_chain(index: ProjectIndex, info: ScriptInfo) -> set[str]:
+    """Members declared by ``info`` itself plus every PROJECT-LOCAL base
+    class in its ``extends`` chain.
+
+    Unlike :meth:`ProjectIndex.all_members` this never returns "undecidable"
+    when an ancestor extends an engine class: an engine base contributes
+    nothing except the allow-listed virtuals anyway, so the decidable set is
+    simply the script's own declarations plus its project ancestors.
+    """
+    members = set(info.members)
+    seen = {info.res_path}
+    current = info
+    while True:
+        base = current.extends
+        if not base or base in ("RefCounted", "Object"):
+            break
+        if base in BUILTIN_TYPES or "." in base:
+            break
+        base_info = index.by_class.get(base) or index.by_res.get(base)
+        if base_info is None:
+            base_res = current.preloads.get(base)
+            base_info = index.by_res.get(base_res) if base_res else None
+        if base_info is None or base_info.res_path in seen:
+            break
+        seen.add(base_info.res_path)
+        members |= base_info.members
+        current = base_info
+    return members
+
+
+def check_local_method_calls(index: ProjectIndex) -> list[Finding]:
+    """Flags bare calls to ``_private()`` helpers that neither the script nor
+    its project-local base classes declare.
+
+    Godot resolves bare calls at COMPILE time against the script and its base
+    classes; an undeclared ``_helper()`` is a parse error ("Function
+    ``_helper()`` not found in base self") that invalidates the whole script.
+    An invalid script still loads as a (non-instantiable) resource, so
+    ``preload`` chains survive and the failure only surfaces at runtime:
+    ``Helper.new()`` aborts with "Nonexistent function 'new' in base
+    'GDScript'". That exact shape once broke ``system_monitor.gd`` (two
+    helpers referenced but never defined), made
+    ``ControlCenterSession._init`` abort on ``ControlCenterSystemMonitor.new()``,
+    and cascaded through ~37 Control Center tests while the Python suite
+    stayed green — which is why this deserves a static check of its own.
+
+    Scope is deliberately narrow so a finding is always real:
+
+    * only underscore-prefixed names (engine API is public by convention, so
+      a bare ``_name()`` is a project helper or an engine virtual);
+    * engine virtuals (``_ready`` etc., see :data:`ENGINE_VIRTUAL_METHODS`)
+      are allow-listed — the engine declares them, not the script;
+    * names declared by the script OR any project-local base class are fine
+      (:func:`_declared_by_project_chain` follows the chain; ``var``/``const``
+      declarations count too, because a Callable may be stored in one);
+    * ``obj._name()`` / ``Alias._name()`` / ``super._name()`` (preceded by a
+      dot) are member calls on another object — covered elsewhere or not at
+      all — and are skipped here.
+
+    When the inheritance chain leaves the project (``extends Node`` etc.) the
+    engine base cannot be indexed, but it cannot declare project-private
+    helpers either, so anything not allow-listed above is a genuine finding.
+    """
+    findings: list[Finding] = []
+    for info in index.by_res.values():
+        members = _declared_by_project_chain(index, info)
+        for line_number, raw in enumerate(info.lines, start=1):
+            cleaned = _strip_strings_and_comments(raw)
+            if not cleaned.strip():
+                continue
+            for match in _LOCAL_CALL_RE.finditer(cleaned):
+                name = match.group(1)
+                if name in ENGINE_VIRTUAL_METHODS:
+                    continue
+                if members is not None and name in members:
+                    continue
+                findings.append(
+                    Finding(
+                        info.res_path,
+                        line_number,
+                        "unknown-local-call",
+                        (
+                            f"{name}() is called but declared neither here nor in a "
+                            "project base class (a Godot compile error that "
+                            "invalidates this whole script)"
+                        ),
+                    )
+                )
+    return findings
+
+
 def parse_all(root: Path | str | None = None) -> list[Finding]:
     """Runs the gdtoolkit grammar over every project script."""
     root = Path(root) if root else project_root()
@@ -636,7 +758,8 @@ def lint_all(root: Path | str | None = None) -> list[Finding]:
 
 
 def analyze(root: Path | str | None = None) -> list[Finding]:
-    """Full static analysis: syntax + resources + symbols + call arity + static calls."""
+    """Full static analysis: syntax + resources + symbols + call arity +
+    static calls + undefined local-method calls."""
     root = Path(root) if root else project_root()
     index = ProjectIndex(root)
     findings = parse_all(root)
@@ -644,6 +767,7 @@ def analyze(root: Path | str | None = None) -> list[Finding]:
     findings.extend(check_symbols(index))
     findings.extend(check_call_arity(index))
     findings.extend(check_static_calls(index))
+    findings.extend(check_local_method_calls(index))
     return findings
 
 

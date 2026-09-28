@@ -9,11 +9,14 @@ extends PanelContainer
 
 signal details_requested(agent_id: int)
 
+const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 const TrainingRunController = preload("res://scripts/control_center/training_run_controller.gd")
 
-## Hard cap on log lines kept in the RichTextLabel.
-const MAX_LOG_LINES: int = 300
+## Hard cap on log lines kept in the RichTextLabel. Sourced from the shared
+## live-log capacity so it can never exceed what the controller's event
+## ring actually retains.
+const MAX_LOG_LINES: int = ControlCenterConfig.LIVE_LOG_LINES
 
 var session
 var agent_id: int = -1
