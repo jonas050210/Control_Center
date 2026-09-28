@@ -5,8 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  headless-tests:
+  headless-tests-windows:
     name: Godot 4.7.2 headless tests (Windows)
     runs-on: windows-latest
     steps:
@@ -16,17 +19,34 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest `
-            -Uri "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64_console.exe.zip" `
+            -Uri "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip" `
             -OutFile godot.zip
           Expand-Archive -Path godot.zip -DestinationPath godot
+          Get-ChildItem -Path godot -Recurse -Filter *.exe | ForEach-Object { Write-Host "found: $($_.FullName)" }
 
       - name: Run headless Godot suite
         shell: pwsh
         run: |
-          $godot = (Get-ChildItem -Path godot -Recurse -Filter Godot_v4.7.2-stable_win64_console.exe).FullName
+          $godot = (Get-ChildItem -Path godot -Recurse -Filter "*_console.exe").FullName | Select-Object -First 1
+          if (-not $godot) {
+            $godot = (Get-ChildItem -Path godot -Recurse -Filter "Godot_v4.7.2-stable_win64.exe").FullName | Select-Object -First 1
+          }
           Write-Host "Using Godot: $godot"
-          & $godot --headless --path . --script res://tests/run_tests.gd
+          & $godot --headless --path . --script res://tests/run_tests.gd 2>&1 | Tee-Object -FilePath godot_output.txt
           exit $LASTEXITCODE
+
+      - name: Publish results as commit comment
+        if: always()
+        shell: pwsh
+        run: |
+          $raw = if (Test-Path godot_output.txt) { Get-Content godot_output.txt -Raw } else { "(no output captured)" }
+          if ($raw.Length -gt 55000) { $raw = $raw.Substring($raw.Length - 55000) }
+          $payload = @{ body = "### Windows Godot suite output (tail)`n``````text`n$raw`n``````" } | ConvertTo-Json
+          Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/comments" `
+            -Method Post `
+            -Headers @{ Authorization = "token ${{ github.token }}"; Accept = "application/vnd.github+json" } `
+            -Body $payload -ContentType "application/json"
 
   headless-tests-linux:
     name: Godot 4.7.2 headless tests (Linux)
@@ -44,7 +64,28 @@ jobs:
       - name: Run headless Godot suite
         shell: bash
         run: |
-          ./godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/run_tests.gd
+          set -o pipefail
+          ./godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/run_tests.gd 2>&1 | tee godot_output.txt
+
+      - name: Publish results as commit comment
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          raw = open("godot_output.txt", encoding="utf-8", errors="replace").read() if os.path.exists("godot_output.txt") else "(no output captured)"
+          if len(raw) > 55000:
+              raw = raw[-55000:]
+          body = "### Linux Godot suite output (tail)\n```\n" + raw + "\n```"
+          payload = json.dumps({"body": body})
+          open("payload.json", "w").write(payload)
+          EOF
+          curl -s -X POST \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            --data @payload.json \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments"
 
   python-tests:
     name: Python suite
@@ -59,10 +100,32 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # CPU-only torch keeps the install small; the CUDA wheel adds
+          # gigabytes the test suite never needs.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r requirements.txt pytest gdlint
+          pip install --force-reinstall --index-url https://download.pytorch.org/whl/cpu torch
 
       - name: Run pytest
-        run: pytest python/tests -q
+        run: pytest python/tests -q 2>&1 | tee pytest_output.txt
 
       - name: Run gdlint
         run: gdlint scripts tests
+
+      - name: Publish results as commit comment
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          raw = open("pytest_output.txt", encoding="utf-8", errors="replace").read() if os.path.exists("pytest_output.txt") else "(pytest never ran)"
+          if len(raw) > 55000:
+              raw = raw[-55000:]
+          body = "### Python suite output (tail)\n```\n" + raw + "\n```"
+          open("payload.json", "w").write(json.dumps({"body": body}))
+          EOF
+          curl -s -X POST \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/json" \
+            --data @payload.json \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/comments"
