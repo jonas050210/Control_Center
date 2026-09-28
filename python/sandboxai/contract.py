@@ -276,6 +276,41 @@ ACTION_SPEC: tuple[ActionField, ...] = (
 ACTION_NVEC: tuple[int, ...] = tuple(field.cardinality for field in ACTION_SPEC)
 
 
+## Name -> (start index, width). Built once from OBSERVATION_SPEC so that
+## nothing downstream has to hardcode an integer offset into the vector.
+## Hardcoded indices are how an "append-only" contract silently breaks:
+## every consumer must look a field up by NAME.
+OBSERVATION_INDEX: dict[str, tuple[int, int]] = {
+    field.name: (field.index, field.width) for field in OBSERVATION_SPEC
+}
+
+
+def observation_index(name: str) -> int:
+    """Start index of an observation field, by name."""
+    try:
+        return OBSERVATION_INDEX[name][0]
+    except KeyError as exc:  # pragma: no cover - defensive
+        raise KeyError(f"unknown observation field: {name!r}") from exc
+
+
+def observation_value(observation: Sequence[float], name: str) -> float:
+    """Reads one scalar observation field by name.
+
+    Raises for a multi-value field (use ``observation_slice``) rather than
+    silently returning only its first component.
+    """
+    index, width = OBSERVATION_INDEX[name]
+    if width != 1:
+        raise ValueError(f"{name!r} has width {width}; use observation_slice()")
+    return float(observation[index])
+
+
+def observation_slice(observation: Sequence[float], name: str) -> list[float]:
+    """Reads a (possibly multi-value) observation field by name."""
+    index, width = OBSERVATION_INDEX[name]
+    return [float(value) for value in observation[index : index + width]]
+
+
 def validate_observation_spec() -> None:
     """Raises AssertionError if OBSERVATION_SPEC is internally inconsistent."""
     expected_index = 0

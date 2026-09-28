@@ -197,6 +197,38 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--output-dir", default="training/benchmarks/latest")
     benchmark.add_argument("--max-seconds-per-config", type=float, default=20.0)
 
+    benchmark_suites = sub.add_parser(
+        "benchmark-suites",
+        help="run the four comparable benchmark suites at 1/4/8/16/32/64 environments",
+    )
+    benchmark_suites.add_argument("--godot-executable", default="godot")
+    benchmark_suites.add_argument("--project-path", default="")
+    benchmark_suites.add_argument("--output-dir", default="training/benchmarks/suites")
+    benchmark_suites.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="print the plan without measuring anything (no Godot required)",
+    )
+
+    replay = sub.add_parser("replay", help="inspect or validate a recorded episode replay")
+    replay.add_argument("--path", required=True)
+    replay.add_argument(
+        "--allow-contract-mismatch",
+        action="store_true",
+        help="load a replay recorded against an older observation/action contract",
+    )
+    replay.add_argument("--timeline", action="store_true", help="print the event timeline")
+
+    curriculum = sub.add_parser(
+        "curriculum", help="print the integrated curriculum ladder (levels 1-11)"
+    )
+    curriculum.add_argument("--json", action="store_true")
+
+    adapter = sub.add_parser(
+        "adapter-contract", help="print the external-game adapter contract (Roblox boundary)"
+    )
+    adapter.add_argument("--check-mock", action="store_true", help="run the mock adapter contract check")
+
     smoke = sub.add_parser("smoke-test", help="run end-to-end sanity verification of the Python & ML stack")
     smoke.add_argument("--device", default="cpu", choices=["cpu", "cuda", "auto"])
 
@@ -214,8 +246,9 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     results["config_valid"] = True
 
     # 2. Dataset creation and validation. Observations use the real
-    # 33-field contract dimension so the smoke test exercises (and produces
-    # checkpoints compatible with) the actual observation space.
+    # 84-field contract dimension (OBSERVATION_FIELD_COUNT) so the smoke
+    # test exercises (and produces checkpoints compatible with) the actual
+    # observation space.
     from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
     from .dataset import DemonstrationDataset, DemonstrationRecorder
     recorder = DemonstrationRecorder({"source": "smoke_test"})
@@ -406,6 +439,45 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, indent=2, default=str))
         print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))
+        return 0
+    if args.command == "benchmark-suites":
+        from .benchmark_suites import describe_plan, format_report, run_suites
+        if args.plan_only:
+            print(json.dumps(describe_plan(), indent=2, default=str))
+            return 0
+        project = _resolve_project_path(args.project_path)
+        report = run_suites(project, args.godot_executable, output_dir=args.output_dir)
+        print(format_report(report))
+        return 0
+    if args.command == "replay":
+        from .replay import load_replay, validate_replay
+        episode = load_replay(args.path, strict_contract=not args.allow_contract_mismatch)
+        problems = validate_replay(episode, strict_contract=not args.allow_contract_mismatch)
+        print(json.dumps(episode.summary(), indent=2, default=str))
+        if args.timeline:
+            print(json.dumps(episode.timeline(), indent=2, default=str))
+        if problems:
+            print(json.dumps({"problems": problems}, indent=2), file=sys.stderr)
+            return 1
+        return 0
+    if args.command == "curriculum":
+        from .curriculum_stages import describe_progression, format_progression
+        if args.json:
+            print(json.dumps(describe_progression(), indent=2, default=str))
+        else:
+            print(format_progression(), end="")
+        return 0
+    if args.command == "adapter-contract":
+        from .external_adapter import (
+            AdapterContractChecker,
+            MockExternalEnvironment,
+            contract_summary,
+        )
+        print(json.dumps(contract_summary(), indent=2, default=str))
+        if args.check_mock:
+            problems = AdapterContractChecker(MockExternalEnvironment()).run()
+            print(json.dumps({"mock_adapter_problems": problems}, indent=2))
+            return 1 if problems else 0
         return 0
     raise RuntimeError(f"unhandled command {args.command}")
 

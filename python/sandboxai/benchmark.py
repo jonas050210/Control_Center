@@ -17,6 +17,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+from .contract import ACTION_NVEC
 from .godot_env import GodotBatchClient
 from .telemetry import resource_snapshot
 
@@ -53,8 +54,11 @@ def benchmark_simulation(
         )
         try:
             client.reset(seed)
-            # MultiDiscrete idle action: all neutral axes, no shooting.
-            actions = [[1, 1, 1, 1, 0] for _ in range(environment_count)]
+            # MultiDiscrete idle action: all neutral axes, no shooting, no
+            # jump. Built from ACTION_NVEC rather than a literal so the
+            # benchmark cannot drift away from the action contract.
+            idle_action = [nvec // 2 if nvec == 3 else 0 for nvec in ACTION_NVEC]
+            actions = [list(idle_action) for _ in range(environment_count)]
             started = time.perf_counter()
             deadline = started + max_seconds_per_config
             episode_count = 0
