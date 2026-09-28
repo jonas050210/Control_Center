@@ -9,6 +9,7 @@ const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
+const SelfPlayAdapter = preload("res://scripts/rl/self_play_adapter.gd")
 const SelfPlayEnvironmentCore = preload("res://scripts/self_play/self_play_environment.gd")
 
 
@@ -19,6 +20,17 @@ func test_self_play_reset_has_two_observations() -> SandboxTest:
 	t.assert_eq(observations.size(), 2)
 	t.assert_eq(observations[0].to_array().size(), Observation.FIELD_COUNT)
 	t.assert_eq(observations[1].to_array().size(), Observation.FIELD_COUNT)
+	return t
+
+
+func test_self_play_adapter_reset_serializes_both_contract_vectors() -> SandboxTest:
+	var t := SandboxTest.new("self_play_adapter_reset_serializes_both_contract_vectors")
+	var adapter := SelfPlayAdapter.new(1, 10)
+	var batch: Array = adapter.reset(777)
+	t.assert_eq(batch.size(), 1)
+	t.assert_eq(batch[0].size(), 2)
+	t.assert_eq(batch[0][0].size(), Observation.FIELD_COUNT)
+	t.assert_eq(batch[0][1].size(), Observation.FIELD_COUNT)
 	return t
 
 

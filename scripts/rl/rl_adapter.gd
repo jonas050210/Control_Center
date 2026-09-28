@@ -214,10 +214,21 @@ static func _resolve_array_action(action_value: Array) -> Action:
 
 
 static func _observation_to_array(observation) -> Array:
+	# Observation.build() constructs the value through load(SELF_PATH) so the
+	# headless runtime does not depend on Godot's global class cache.  In that
+	# mode an otherwise valid Observation can fail the nominal `is Observation`
+	# check because the script was loaded through a different resource path.
+	# The old fallback silently serialized that value as [], which made the
+	# self-play reset lose both observations across the JSON bridge.
+	var values: Array = []
 	if observation is Observation:
-		return Array(observation.to_array())
-	if observation is PackedFloat32Array:
-		return Array(observation)
-	if observation is Array:
-		return observation
-	return []
+		values = Array(observation.to_array())
+	elif observation is Object and observation.has_method("to_array"):
+		values = Array(observation.call("to_array"))
+	elif observation is PackedFloat32Array:
+		values = Array(observation)
+	elif observation is Array:
+		values = observation
+	if values.size() != Observation.FIELD_COUNT:
+		return []
+	return values
