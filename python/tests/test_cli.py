@@ -86,8 +86,35 @@ class CliTests(unittest.TestCase):
 
     def test_help_lists_workflow_commands(self):
         result = subprocess.run([sys.executable, "-m", "sandboxai", "--help"], capture_output=True, text=True, check=True, env=_subprocess_env())
-        for command in ("train", "evaluate", "record", "control-center", "bc-train", "resume", "benchmark", "inspect-dataset", "smoke-test"):
+        for command in (
+            "train",
+            "evaluate",
+            "record",
+            "control-center",
+            "bc-train",
+            "resume",
+            "benchmark",
+            "inspect-dataset",
+            "smoke-test",
+            "validate-runtime",
+            "compare-experiments",
+            "summarize-experiment",
+        ):
             self.assertIn(command, result.stdout)
+
+    def test_validate_runtime_cli_dispatched(self):
+        exit_code = main(["validate-runtime", "--godot-executable", "missing_godot", "--json"])
+        self.assertEqual(exit_code, 0)
+
+    def test_compare_experiments_cli_dispatched(self):
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_p = Path(tmp_dir) / "base.json"
+            cand_p = Path(tmp_dir) / "cand.json"
+            base_p.write_text(json.dumps({"metrics": {"win_rate": {"mean": 0.8, "std": 0.05, "count": 3}}}), encoding="utf-8")
+            cand_p.write_text(json.dumps({"metrics": {"win_rate": {"mean": 0.85, "std": 0.04, "count": 3}}}), encoding="utf-8")
+            exit_code = main(["compare-experiments", "--baseline", str(base_p), "--candidate", str(cand_p), "--json"])
+            self.assertEqual(exit_code, 0)
 
     def test_install_is_dependency_only_and_does_not_launch_godot(self):
         result = subprocess.run([sys.executable, "-m", "sandboxai", "install"], capture_output=True, text=True, check=True, env=_subprocess_env())

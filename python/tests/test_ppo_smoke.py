@@ -50,7 +50,7 @@ for line in sys.stdin:
     if command == "spaces":
         out({{
             "ok": True,
-            "action_space": {{"type": "multi_discrete", "nvec": [3, 3, 3, 3, 2], "dimension": 5}},
+            "action_space": {{"type": "multi_discrete", "nvec": [3, 3, 3, 3, 2, 2], "dimension": 6}},
             "observation_space": {{"type": "structured_float_vector", "size": OBS_DIM,
                                    "shape": [OBS_DIM], "low": -1.0, "high": 1.0}},
         }})

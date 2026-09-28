@@ -1,6 +1,13 @@
 import unittest
+from unittest.mock import MagicMock
 
-from sandboxai.self_play import PolicySlot, SelfPlayCoordinator
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
+from sandboxai.self_play import (
+    PolicySlot,
+    SelfPlayBatchClient,
+    SelfPlayCoordinator,
+    play_self_play_match,
+)
 
 
 class SelfPlayTests(unittest.TestCase):
@@ -20,6 +27,50 @@ class SelfPlayTests(unittest.TestCase):
         self.assertEqual(summary["agent_a"]["matches"], 1)
         self.assertEqual(summary["agent_a"]["win_rate"], 1.0)
         self.assertEqual(summary["agent_b"]["win_rate"], 0.0)
+
+    def test_play_self_play_match_end_to_end_flow(self):
+        # Mock client simulating a 3-step match with agent A winning
+        client = MagicMock(spec=SelfPlayBatchClient)
+        obs_a = [0.1] * OBSERVATION_FIELD_COUNT
+        obs_b = [-0.1] * OBSERVATION_FIELD_COUNT
+        client.reset.return_value = [[obs_a, obs_b]]
+
+        step_results = [
+            ([[obs_a, obs_b]], [[0.1, -0.1]], [False], [[{"metrics": {"win": False}}, {"metrics": {"win": False}}]]),
+            ([[obs_a, obs_b]], [[0.5, -0.5]], [False], [[{"metrics": {"win": False}}, {"metrics": {"win": False}}]]),
+            ([[obs_a, obs_b]], [[10.0, -5.0]], [True], [[{"done_reason": "agent_a_win", "metrics": {"win": True, "kills": 1}}, {"done_reason": "agent_a_win", "metrics": {"win": False, "kills": 0}}]]),
+        ]
+        client.step.side_effect = step_results
+
+        predict_a = MagicMock(return_value=[1, 1, 1, 1, 1, 0])
+        predict_b = MagicMock(return_value=[1, 1, 1, 1, 0, 0])
+
+        result = play_self_play_match(client, predict_a, predict_b, seed=42, max_steps=100)
+
+        self.assertEqual(result["score_a"], 1.0)
+        self.assertEqual(result["steps"], 3)
+        self.assertFalse(result["truncated"])
+        self.assertEqual(result["done_reason"], "agent_a_win")
+        self.assertTrue(result["metrics_a"]["win"])
+        self.assertFalse(result["metrics_b"]["win"])
+        self.assertEqual(predict_a.call_count, 3)
+        self.assertEqual(predict_b.call_count, 3)
+
+    def test_play_self_play_match_timeout_draw(self):
+        client = MagicMock(spec=SelfPlayBatchClient)
+        obs_a = [0.0] * OBSERVATION_FIELD_COUNT
+        obs_b = [0.0] * OBSERVATION_FIELD_COUNT
+        client.reset.return_value = [[obs_a, obs_b]]
+        client.step.return_value = ([[obs_a, obs_b]], [[0.0, 0.0]], [False], [[{}, {}]])
+
+        predict_a = lambda obs: [1, 1, 1, 1, 0, 0]
+        predict_b = lambda obs: [1, 1, 1, 1, 0, 0]
+
+        result = play_self_play_match(client, predict_a, predict_b, seed=99, max_steps=5)
+        self.assertEqual(result["score_a"], 0.5)
+        self.assertEqual(result["steps"], 5)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["done_reason"], "timeout")
 
 
 if __name__ == "__main__":

@@ -120,7 +120,9 @@ func forget(enemy_id: int) -> void:
 ## agent, i.e. the agent is exposed to it.
 ## `position` is the live position while visible and the last known
 ## position afterwards; `age`/`confidence`/`source` tell the policy which.
-func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
+func update(
+	agent, enemies: Array, world, sound_bus, dt: float, ignore_source_id: int = -1
+) -> Array:
 	if memory_enabled:
 		memory.tick(dt)
 	else:
@@ -143,7 +145,7 @@ func update(agent, enemies: Array, world, sound_bus, dt: float) -> Array:
 			beliefs.append(belief)
 
 	in_cover = threat_count == 0
-	_sample_sound(agent, world, sound_bus)
+	_sample_sound(agent, world, sound_bus, ignore_source_id)
 	return beliefs
 
 
@@ -328,7 +330,7 @@ func _evaluate_enemy(
 	}
 
 
-func _sample_sound(agent, world, sound_bus) -> void:
+func _sample_sound(agent, world, sound_bus, ignore_source_id: int = -1) -> void:
 	heard.clear()
 	sound_summary = SoundBus.summarize(heard)
 	if not sound_enabled or sound_bus == null:
@@ -337,7 +339,7 @@ func _sample_sound(agent, world, sound_bus) -> void:
 		agent.position,
 		agent.get_forward_horizontal(),
 		world,
-		-1,
+		ignore_source_id,
 		SandboxConfig.SOUND_DETECTION_DELAY
 	)
 	sound_summary = SoundBus.summarize(heard)

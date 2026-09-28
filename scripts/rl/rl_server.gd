@@ -114,6 +114,24 @@ func _handle_self_play_request(request) -> Dictionary:
 			response["ok"] = true
 		"health_check":
 			response = {"ok": true, "health": self_play_adapter.health_check()}
+		"set_map":
+			var map_id: String = str(request.get("map_id", ""))
+			var ok: bool = self_play_adapter.set_map(map_id)
+			response = {"ok": ok, "map_id": map_id}
+		"set_layout":
+			var layout_id: String = str(request.get("layout_id", ""))
+			var ok: bool = self_play_adapter.set_layout(layout_id)
+			response = {"ok": ok, "layout_id": layout_id}
+		"set_lighting":
+			var lighting: String = str(request.get("lighting", ""))
+			var ok: bool = self_play_adapter.set_lighting_mode(lighting)
+			response = {"ok": ok, "lighting": lighting}
+		"set_curriculum":
+			var level: int = int(request.get("level", CurriculumConfig.Level.AGENT_VS_AGENT))
+			self_play_adapter.set_curriculum_level(level)
+			response = {"ok": true, "curriculum_level": level}
+		"episode_conditions":
+			response = {"ok": true, "conditions": self_play_adapter.get_episode_conditions()}
 		"close":
 			response = {"ok": true, "close": true}
 		_:
