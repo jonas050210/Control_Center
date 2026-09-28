@@ -1,0 +1,68 @@
+name: Godot tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  headless-tests:
+    name: Godot 4.7.2 headless tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 Windows build
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64_console.exe.zip" `
+            -OutFile godot.zip
+          Expand-Archive -Path godot.zip -DestinationPath godot
+
+      - name: Run headless Godot suite
+        shell: pwsh
+        run: |
+          $godot = (Get-ChildItem -Path godot -Recurse -Filter Godot_v4.7.2-stable_win64_console.exe).FullName
+          Write-Host "Using Godot: $godot"
+          & $godot --headless --path . --script res://tests/run_tests.gd
+          exit $LASTEXITCODE
+
+  headless-tests-linux:
+    name: Godot 4.7.2 headless tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 Linux build
+        shell: bash
+        run: |
+          curl -sL -o godot.zip "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
+          unzip -o -q godot.zip -d godot
+          chmod +x godot/Godot_v4.7.2-stable_linux.x86_64
+
+      - name: Run headless Godot suite
+        shell: bash
+        run: |
+          ./godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/run_tests.gd
+
+  python-tests:
+    name: Python suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest gdlint
+
+      - name: Run pytest
+        run: pytest python/tests -q
+
+      - name: Run gdlint
+        run: gdlint scripts tests

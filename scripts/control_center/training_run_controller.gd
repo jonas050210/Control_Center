@@ -22,7 +22,10 @@ enum State {
 }
 
 const POLL_INTERVAL_SECONDS: float = 0.2
-const MAX_RECENT_EVENTS: int = 200
+## The event ring buffer keeps exactly the dashboard's live-log capacity so
+## the headless monitor can always fill its log to the bound (see
+## ControlCenterConfig.LIVE_LOG_LINES).
+const MAX_RECENT_EVENTS: int = ControlCenterConfig.LIVE_LOG_LINES
 
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 

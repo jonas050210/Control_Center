@@ -84,7 +84,10 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 		var state_id: int = int(snapshot.get("state_id", TrainingRunController.State.IDLE))
 		if state_id != TrainingRunController.State.IDLE:
 			launched.append(agent_id)
-	if focused_agent_id >= 0 and not launched.has(focused_agent_id):
+	# Focus survives the window between "launch issued" and "backend
+	# published a non-idle status" — a freshly launched agent may still read
+	# Idle here. Only an agent that no longer exists loses focus.
+	if focused_agent_id >= 0 and not manager.has_agent(focused_agent_id):
 		focused_agent_id = -1
 	_sync_selector(launched)
 	_sync_panels(launched)

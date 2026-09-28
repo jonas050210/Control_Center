@@ -186,6 +186,15 @@ func _probe_nvidia_smi() -> Dictionary:
 	return parse_nvidia_smi(str(output[0]))
 
 
+## Windows has no /proc/stat: CPU utilization there can only be measured
+## by asking the OS through a command (wmic / PowerShell CIM). Linux reads
+## /proc/stat directly on the main thread, so no command is scheduled;
+## platforms with neither source keep utilization null ("N/A") instead of
+## guessing.
+func _needs_cpu_command() -> bool:
+	return OS.get_name() == "Windows"
+
+
 func _probe_windows_cpu() -> Dictionary:
 	# wmic is present on most Windows installs; newer builds removed it, so
 	# a CIM query through PowerShell is the fallback. Both return the same
@@ -325,6 +334,16 @@ static func parse_nvidia_smi(text: String) -> Dictionary:
 	gpu["vram_total_mb"] = _parse_optional_number(parts[parts.size() - 2])
 	gpu["temperature_c"] = _parse_optional_number(parts[parts.size() - 1])
 	return gpu
+
+
+## One numeric CSV field from nvidia-smi. "[N/A]", blank or non-numeric
+## text becomes null — a field the driver did not publish is never coerced
+## into a fabricated number.
+static func _parse_optional_number(text: String):
+	var value: String = text.strip_edges()
+	if not value.is_valid_float():
+		return null
+	return value.to_float()
 
 
 ## Parses `wmic cpu get loadpercentage /value` ("LoadPercentage=12", one

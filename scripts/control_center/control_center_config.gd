@@ -99,6 +99,14 @@ const DEFAULT_TILE_ORDER: Array = [
 	"simulation", "agent", "training", "inspector", "controls", "logs"
 ]
 
+## Live-log capacity: how many of the most recent backend events are kept
+## in memory. One number on purpose — the trainer controller's event ring
+## and the headless monitor's rendered log must agree, or the visible log
+## silently caps below its own bound (the ring dropped entries the log had
+## room for). Older events remain available in the JSONL file on disk,
+## which stays the complete authoritative record.
+const LIVE_LOG_LINES: int = 300
+
 ## Settings that cannot be applied to running environments and therefore
 ## need an explicit rebuild/reset. The UI marks them and only applies them
 ## when "Apply & reset" is pressed.
