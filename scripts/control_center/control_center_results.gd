@@ -6,11 +6,11 @@
 ## the actions, so the two populations are directly comparable.
 ##
 ## Metrics that the simulation genuinely produces (reward, kills, deaths,
-## damage, shots, accuracy, survival, win/loss) come straight from
+## damage, shot quality, accuracy, survival, win/loss) come straight from
 ## `EpisodeState.to_metrics()`. Derived observation-layer metrics
-## (reaction time, useless/missed shots, target switches) are measured by
-## ControlCenterSession for the SELECTED environment only and are reported
-## as -1 / 0 when they were not measured, never invented.
+## (reaction time and target switches) are measured by ControlCenterSession
+## for the SELECTED environment only and are reported as -1 / 0 when they
+## were not measured, never invented.
 class_name ControlCenterResults
 extends RefCounted
 
@@ -27,10 +27,13 @@ const AVERAGED_KEYS: Array = [
 	"damage_received",
 	"shots_fired",
 	"shots_hit",
+	"trigger_pulls",
+	"near_miss_shots",
+	"useless_shots",
+	"cooldown_shots",
 	"accuracy",
 	"survival_time",
 	"episode_length",
-	"useless_shots",
 	"missed_shots",
 	"target_switches",
 	"distance_travelled",
@@ -64,6 +67,13 @@ func record(values: Dictionary) -> Dictionary:
 		"damage_received": float(values.get("damage_received", 0.0)),
 		"shots_fired": int(values.get("shots_fired", 0)),
 		"shots_hit": int(values.get("shots_hit", 0)),
+		"trigger_pulls": int(values.get("trigger_pulls", 0)),
+		"near_miss_shots": int(values.get("near_miss_shots", 0)),
+		"useless_shots": int(values.get("useless_shots", 0)),
+		"cooldown_shots": int(values.get("cooldown_shots", 0)),
+		"last_shot_result": str(values.get("last_shot_result", "none")),
+		"weapon_profile": str(values.get("weapon_profile", "rifle")),
+		"weapon_category": str(values.get("weapon_category", "primary")),
 		"accuracy": float(values.get("accuracy", 0.0)),
 		"survival_time": float(values.get("survival_time", 0.0)),
 		"win": bool(values.get("win", false)),
@@ -72,8 +82,7 @@ func record(values: Dictionary) -> Dictionary:
 		# -1.0 means "not measured" (only the selected environment is
 		# instrumented for reaction time).
 		"reaction_time": float(values.get("reaction_time", -1.0)),
-		"useless_shots": int(values.get("useless_shots", 0)),
-		"missed_shots": int(values.get("missed_shots", 0)),
+		"missed_shots": int(values.get("missed_shots", values.get("near_miss_shots", 0))),
 		"target_switches": int(values.get("target_switches", 0)),
 		"distance_travelled": float(values.get("distance_travelled", 0.0)),
 		"reward_breakdown": values.get("reward_breakdown", {}),

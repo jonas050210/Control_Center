@@ -144,10 +144,14 @@ func add_event(kind: String, label: String = "", data: Dictionary = {}) -> bool:
 ## scalars already live on the tick record and are not duplicated.
 func record_step_events(step_events: Dictionary) -> int:
 	var emitted: int = 0
-	if bool(step_events.get("shot_fired", false)):
+	var shot_result: String = str(step_events.get("shot_result", "none"))
+	if bool(step_events.get("shot_fired", false)) or shot_result != "none":
 		var shot_data: Dictionary = {
+			"result": shot_result,
+			"fired": bool(step_events.get("shot_fired", false)),
 			"hit": bool(step_events.get("hit", false)),
 			"damage": float(step_events.get("damage_dealt", 0.0)),
+			"near_miss": bool(step_events.get("missed_shot", false)),
 			"useless": bool(step_events.get("useless_shot", false)),
 		}
 		if add_event("combat", "shot", shot_data):

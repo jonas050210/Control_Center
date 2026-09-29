@@ -440,14 +440,18 @@ class ReplayRecorder:
         are not duplicated here.
         """
         emitted: list[ReplayEvent] = []
-        if events.get("shot_fired"):
+        shot_result = str(events.get("shot_result", "none"))
+        if events.get("shot_fired") or shot_result != "none":
             emitted.append(
                 self.event(
                     "combat",
                     "shot",
                     {
+                        "result": shot_result,
+                        "fired": bool(events.get("shot_fired", False)),
                         "hit": bool(events.get("hit", False)),
                         "damage": float(events.get("damage_dealt", 0.0)),
+                        "near_miss": bool(events.get("missed_shot", False)),
                         "useless": bool(events.get("useless_shot", False)),
                     },
                 )

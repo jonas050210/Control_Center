@@ -29,6 +29,8 @@ const LAYOUT_IDS: Array = [
 	"multi_room",
 	"ambush",
 	"sound_maze",
+	"combat_complex",
+	"crossfire_complex",
 	"randomized",
 ]
 
@@ -76,6 +78,10 @@ static func build(
 			_build_ambush(world, rng)
 		"sound_maze":
 			_build_sound_maze(world, rng)
+		"combat_complex":
+			_build_combat_complex(world, rng)
+		"crossfire_complex":
+			_build_crossfire_complex(world, rng)
 		"randomized":
 			_build_randomized(world, rng)
 		_:
@@ -266,6 +272,208 @@ static func _build_vertical(world: ArenaWorld, rng: RandomNumberGenerator) -> vo
 	)
 
 
+
+## A full RL-combat sandbox: four distinct areas connected by doorways,
+## an open center, a long lane, side rooms and enough cover to create both
+## short peeks and long sightlines. Authored spawn points are deliberately
+## numerous and symmetric-ish; the scenario sampler chooses from them with
+## the episode seed, reducing map memorization while keeping determinism.
+static func _build_combat_complex(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
+	var height: float = HIGH_COVER_HEIGHT
+	var span: float = world.half_extent
+	var door_half: float = rng.randf_range(1.1, 1.6)
+	var center_shift_x: float = rng.randf_range(-0.8, 0.8)
+	var center_shift_z: float = rng.randf_range(-0.8, 0.8)
+
+	# North/south divider walls with seeded doorways. These create rooms but
+	# leave the center as an open contested courtyard.
+	_add_split_wall(world, center_shift_z + 3.0, -span, span, -4.4, door_half, height, false)
+	_add_split_wall(world, center_shift_z - 3.2, -span, span, 4.2, door_half, height, false)
+	# A vertical divider is offset and heavily gapped so it creates varied
+	# sightlines without disconnecting the floor.
+	_add_split_wall(
+		world, center_shift_x - 3.4, -span, span, 0.0, door_half * 1.35, height, true
+	)
+	_add_split_wall(
+		world, center_shift_x + 4.2, -span, span, -1.8, door_half, height, true
+	)
+
+	# East long lane / corridor: long-range shots through the lane, but the
+	# side opening and low crates make it contestable rather than a tunnel.
+	var lane_x: float = span * 0.68
+	world.add_box(
+		Vector3(lane_x - 1.6, height * 0.5, 0.0),
+		Vector3(WALL_HALF_THICKNESS, height * 0.5, span * 0.72),
+		Obstacle.Kind.WALL
+	)
+	_add_split_wall(
+		world, lane_x + 1.6, -span * 0.75, span * 0.75,
+		rng.randf_range(-2.0, 2.0), 1.4, height, true
+	)
+	for z_value in [-5.2, 0.0, 5.2]:
+		world.add_box(
+			Vector3(
+				lane_x,
+				LOW_COVER_HEIGHT * 0.5,
+				z_value + rng.randf_range(-0.4, 0.4)
+			),
+			Vector3(0.75, LOW_COVER_HEIGHT * 0.5, 0.75),
+			Obstacle.Kind.LOW_COVER
+		)
+
+	# West broken cover maze: short sightlines and blind corner checks.
+	for i in range(4):
+		var z: float = -span * 0.55 + float(i) * span * 0.35
+		var x: float = -span * 0.58 + rng.randf_range(-0.4, 0.4)
+		world.add_box(
+			Vector3(x, height * 0.5, z),
+			Vector3(rng.randf_range(1.4, 2.4), height * 0.5, WALL_HALF_THICKNESS),
+			Obstacle.Kind.WALL
+		)
+		world.add_box(
+			Vector3(
+				x + rng.randf_range(1.0, 2.2),
+				LOW_COVER_HEIGHT * 0.5,
+				z + rng.randf_range(0.8, 1.6)
+			),
+			Vector3(0.7, LOW_COVER_HEIGHT * 0.5, 0.7),
+			Obstacle.Kind.LOW_COVER
+		)
+
+	# Central courtyard cover: open movement remains possible, but standing in
+	# the middle is punishable from several angles.
+	var central_cover: Array = [
+		Vector3(-1.4, LOW_COVER_HEIGHT * 0.5, 0.2),
+		Vector3(1.5, LOW_COVER_HEIGHT * 0.5, -0.4),
+		Vector3(0.0, HIGH_COVER_HEIGHT * 0.5, 2.0),
+	]
+	for cover_value in central_cover:
+		var cover: Vector3 = cover_value
+		var cover_height: float = LOW_COVER_HEIGHT if cover.y < 0.8 else HIGH_COVER_HEIGHT
+		var kind: int = Obstacle.Kind.HIGH_COVER
+		if cover_height == LOW_COVER_HEIGHT:
+			kind = Obstacle.Kind.LOW_COVER
+		world.add_box(
+			cover + Vector3(
+				rng.randf_range(-0.35, 0.35), 0.0, rng.randf_range(-0.35, 0.35)
+			),
+			Vector3(0.9, cover_height * 0.5, 0.7),
+			kind
+		)
+
+	_add_combat_complex_spawns(world, span)
+
+
+## A second high-variety combat layout: a central crossfire plaza, two safe
+## back rooms and staggered lane blockers. It shares the same tactical ideas
+## as combat_complex but different geometry, so curriculum/evaluation can
+## ask for "complex cover fight" without one memorized floor plan.
+static func _build_crossfire_complex(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
+	var height: float = HIGH_COVER_HEIGHT
+	var span: float = world.half_extent
+	var door_half: float = rng.randf_range(1.0, 1.5)
+
+	# Two room shells in opposite corners, each with a doorway facing the
+	# center. Walls are axis-aligned but their seeded offsets vary sightlines.
+	var room_offset: float = span * 0.48
+	_add_split_wall(
+		world, -room_offset, -span, -1.0, -room_offset, door_half, height, true
+	)
+	_add_split_wall(
+		world, -room_offset, 1.0, span, room_offset, door_half, height, false
+	)
+	_add_split_wall(
+		world, room_offset, 1.0, span, room_offset, door_half, height, true
+	)
+	_add_split_wall(
+		world, room_offset, -span, -1.0, -room_offset, door_half, height, false
+	)
+
+	# Staggered high walls force pathing decisions and make flank routes
+	# meaningful; the low cover in between creates peek fights.
+	for i in range(5):
+		var z: float = -span * 0.6 + float(i) * span * 0.3
+		var sign_value: float = 1.0 if i % 2 == 0 else -1.0
+		world.add_box(
+			Vector3(sign_value * rng.randf_range(1.6, 3.0), height * 0.5, z),
+			Vector3(1.7, height * 0.5, WALL_HALF_THICKNESS),
+			Obstacle.Kind.WALL
+		)
+		world.add_box(
+			Vector3(
+				-sign_value * rng.randf_range(1.0, 2.5),
+				LOW_COVER_HEIGHT * 0.5,
+				z + rng.randf_range(-0.6, 0.6)
+			),
+			Vector3(0.85, LOW_COVER_HEIGHT * 0.5, 0.85),
+			Obstacle.Kind.LOW_COVER
+		)
+
+	# Long north/south sightline with a break in the middle.
+	world.add_box(
+		Vector3(0.0, height * 0.5, -span * 0.82),
+		Vector3(span * 0.55, height * 0.5, WALL_HALF_THICKNESS),
+		Obstacle.Kind.WALL
+	)
+	world.add_box(
+		Vector3(0.0, height * 0.5, span * 0.82),
+		Vector3(span * 0.55, height * 0.5, WALL_HALF_THICKNESS),
+		Obstacle.Kind.WALL
+	)
+
+	# A few standable boxes turn jump/height into a tactical option at higher
+	# curriculum levels without requiring a separate vertical map.
+	for side in [-1.0, 1.0]:
+		var top: float = rng.randf_range(0.9, 1.15)
+		world.add_box(
+			Vector3(
+				side * span * 0.25,
+				top * 0.5,
+				rng.randf_range(-span * 0.25, span * 0.25)
+			),
+			Vector3(1.25, top * 0.5, 1.25),
+			Obstacle.Kind.PLATFORM
+		)
+
+	_add_combat_complex_spawns(world, span)
+
+
+static func _add_combat_complex_spawns(world: ArenaWorld, span: float) -> void:
+	var agent_points: Array = [
+		Vector3(-span * 0.70, 0.0, span * 0.70),
+		Vector3(span * 0.68, 0.0, span * 0.64),
+		Vector3(-span * 0.72, 0.0, -span * 0.68),
+		Vector3(span * 0.66, 0.0, -span * 0.70),
+		Vector3(0.0, 0.0, span * 0.78),
+		Vector3(0.0, 0.0, -span * 0.78),
+	]
+	for index in range(agent_points.size()):
+		var point: Vector3 = agent_points[index]
+		world.add_spawn_point("agent", point, _yaw_towards(point, Vector3.ZERO), "agent_%d" % index)
+
+	var enemy_points: Array = [
+		Vector3(-span * 0.72, 0.0, 0.0),
+		Vector3(span * 0.72, 0.0, 0.0),
+		Vector3(-span * 0.35, 0.0, -span * 0.35),
+		Vector3(span * 0.35, 0.0, span * 0.35),
+		Vector3(-span * 0.20, 0.0, span * 0.58),
+		Vector3(span * 0.20, 0.0, -span * 0.58),
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(span * 0.62, 0.0, -span * 0.62),
+		Vector3(-span * 0.62, 0.0, span * 0.62),
+	]
+	for index in range(enemy_points.size()):
+		var point: Vector3 = enemy_points[index]
+		world.add_spawn_point("enemy", point, _yaw_towards(point, Vector3.ZERO), "enemy_%d" % index)
+
+
+static func _yaw_towards(from_position: Vector3, target: Vector3) -> float:
+	var delta := Vector3(target.x - from_position.x, 0.0, target.z - from_position.z)
+	if delta.is_zero_approx():
+		return 0.0
+	return rad_to_deg(atan2(delta.x, -delta.z))
+
+
 ## Picks one of the concrete layouts at random and then perturbs it with a
 ## couple of extra crates. Still fully deterministic for a given seed.
 static func _build_randomized(world: ArenaWorld, rng: RandomNumberGenerator) -> void:
@@ -280,6 +488,8 @@ static func _build_randomized(world: ArenaWorld, rng: RandomNumberGenerator) -> 
 		"multi_room",
 		"ambush",
 		"sound_maze",
+		"combat_complex",
+		"crossfire_complex",
 	]
 	var pick: String = str(candidates[rng.randi_range(0, candidates.size() - 1)])
 	match pick:
@@ -303,6 +513,10 @@ static func _build_randomized(world: ArenaWorld, rng: RandomNumberGenerator) -> 
 			_build_ambush(world, rng)
 		"sound_maze":
 			_build_sound_maze(world, rng)
+		"combat_complex":
+			_build_combat_complex(world, rng)
+		"crossfire_complex":
+			_build_crossfire_complex(world, rng)
 	var extras: int = rng.randi_range(1, 3)
 	for _index in range(extras):
 		var height: float = rng.randf_range(0.8, 1.8)

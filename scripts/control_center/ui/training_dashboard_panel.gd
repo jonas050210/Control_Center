@@ -117,6 +117,9 @@ func _metric_description(status: Dictionary) -> String:
 	_append_metric(rows, status, "mean_deaths", "deaths", 3)
 	_append_metric(rows, status, "mean_shots_fired", "shots", 2)
 	_append_metric(rows, status, "mean_shots_hit", "hits", 2)
+	_append_metric(rows, status, "mean_near_miss_shots", "near misses", 2)
+	_append_metric(rows, status, "mean_useless_shots", "useless shots", 2)
+	_append_metric(rows, status, "mean_cooldown_shots", "cooldown pulls", 2)
 	_append_metric(rows, status, "mean_accuracy", "accuracy", 3, 100.0, "%")
 	_append_metric(rows, status, "mean_damage_dealt", "damage dealt", 2)
 	_append_metric(rows, status, "mean_damage_received", "damage received", 2)
@@ -133,17 +136,26 @@ func _metric_description(status: Dictionary) -> String:
 
 
 func _resource_description(status: Dictionary) -> String:
+	var device_name: String = str(
+		status.get("gpu_name", status.get("cuda_device", status.get("device", "n/a")))
+	)
 	var lines: Array = [
-		"device             %s" % str(status.get("cuda_device", status.get("device", "n/a"))),
+		"device             %s" % device_name,
 		"environments       %s" % str(status.get("environment_count", "n/a")),
 		"steps/sec          %s" % _optional_number(status, "steps_per_second", 1),
 		"CPU utilization    %s" % _optional_suffix(status, "cpu_percent", 1, "%"),
 		"process memory     %s" % _optional_suffix(status, "process_rss_mb", 1, " MB"),
-		"VRAM allocated     %s" % _optional_suffix(status, "cuda_allocated_mb", 1, " MB"),
-		"VRAM reserved      %s" % _optional_suffix(status, "cuda_reserved_mb", 1, " MB"),
-		# torch exposes allocator memory but not device utilization; do not
-		# fabricate a percentage.
-		"GPU utilization    n/a",
+		"GPU utilization    %s" % _optional_suffix(status, "gpu_utilization_percent", 0, "%"),
+		(
+			"GPU VRAM           %s / %s"
+			% [
+				_optional_suffix(status, "gpu_vram_used_mb", 0, " MB"),
+				_optional_suffix(status, "gpu_vram_total_mb", 0, " MB"),
+			]
+		),
+		"GPU temperature    %s" % _optional_suffix(status, "gpu_temperature_c", 0, " °C"),
+		"CUDA allocated     %s" % _optional_suffix(status, "cuda_allocated_mb", 1, " MB"),
+		"CUDA reserved      %s" % _optional_suffix(status, "cuda_reserved_mb", 1, " MB"),
 	]
 	return "\n".join(lines)
 

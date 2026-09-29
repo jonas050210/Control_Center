@@ -1,3 +1,4 @@
+# gdlint:ignore=max-public-methods
 ## ArenaWorld
 ##
 ## The world/arena representation every scenario generates into: a square
@@ -54,6 +55,11 @@ const MAX_MOVE_SUBSTEPS: int = 64
 var half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
 var wall_height: float = SandboxConfig.ARENA_WALL_HEIGHT
 var obstacles: Array = []  # Array[Obstacle]
+## Authored tactical spawn/interest points. These are simulation setup
+## metadata only: they help scenarios choose varied starts inside complex
+## maps, but are never exposed through Observation. Entries are dictionaries
+## {"role": String, "position": Vector3, "yaw_deg": float, "tag": String}.
+var spawn_points: Array = []
 ## Identifier of the layout generator that produced this world, e.g.
 ## "open_arena" or "corner". Telemetry/debug only.
 var layout_id: String = "open_arena"
@@ -74,6 +80,54 @@ static func create(
 
 func clear() -> void:
 	obstacles.clear()
+	spawn_points.clear()
+
+
+func add_spawn_point(
+	role: String, p_position: Vector3, yaw_deg: float = 0.0, tag: String = ""
+) -> void:
+	spawn_points.append(
+		{"role": role, "position": p_position, "yaw_deg": yaw_deg, "tag": tag}
+	)
+
+
+func spawn_points_for(role: String) -> Array:
+	var points: Array = []
+	for point_value in spawn_points:
+		var point: Dictionary = point_value
+		if str(point.get("role", "")) == role:
+			points.append(point.duplicate())
+	return points
+
+
+## Samples one authored spawn point for `role`, falling back to rejection
+## sampling when the layout did not declare usable points. The random offset
+## into the authored list gives deterministic variation across episode seeds
+## without exposing a map id to the policy.
+func sample_spawn_point(
+	role: String,
+	rng: RandomNumberGenerator,
+	radius: float,
+	height: float,
+	avoid_position: Variant = null,
+	min_distance: float = 0.0,
+	attempts: int = 24
+) -> Vector3:
+	var points: Array = spawn_points_for(role)
+	if not points.is_empty():
+		var start: int = rng.randi_range(0, points.size() - 1)
+		var avoid: Vector3 = Vector3.INF
+		if avoid_position is Vector3:
+			avoid = avoid_position
+		for offset in range(points.size()):
+			var point: Dictionary = points[(start + offset) % points.size()]
+			var candidate: Vector3 = point.get("position", Vector3.ZERO)
+			candidate.y = ground_height(candidate, radius, candidate.y)
+			if avoid != Vector3.INF and candidate.distance_to(avoid) < min_distance:
+				continue
+			if is_position_free(candidate, radius, height):
+				return candidate
+	return sample_free_position(rng, radius, height, attempts)
 
 
 func add_obstacle(obstacle: Obstacle) -> Obstacle:
@@ -420,6 +474,17 @@ func to_dict() -> Dictionary:
 	var boxes: Array = []
 	for obstacle_value in obstacles:
 		boxes.append((obstacle_value as Obstacle).to_dict())
+	var spawns: Array = []
+	for point_value in spawn_points:
+		var point: Dictionary = point_value
+		spawns.append(
+			{
+				"role": str(point.get("role", "")),
+				"position": point.get("position", Vector3.ZERO),
+				"yaw_deg": float(point.get("yaw_deg", 0.0)),
+				"tag": str(point.get("tag", "")),
+			}
+		)
 	return {
 		"layout_id": layout_id,
 		"layout_seed": layout_seed,
@@ -427,4 +492,6 @@ func to_dict() -> Dictionary:
 		"wall_height": wall_height,
 		"obstacle_count": obstacles.size(),
 		"obstacles": boxes,
+		"spawn_point_count": spawns.size(),
+		"spawn_points": spawns,
 	}

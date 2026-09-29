@@ -712,6 +712,14 @@ func _record_episode(env_index: int, result: Dictionary) -> void:
 		"damage_received": float(metrics.get("damage_received", 0.0)),
 		"shots_fired": int(metrics.get("shots_fired", 0)),
 		"shots_hit": int(metrics.get("shots_hit", 0)),
+		"trigger_pulls": int(metrics.get("trigger_pulls", 0)),
+		"near_miss_shots": int(metrics.get("near_miss_shots", 0)),
+		"missed_shots": int(metrics.get("near_miss_shots", metrics.get("missed_shots", 0))),
+		"useless_shots": int(metrics.get("useless_shots", 0)),
+		"cooldown_shots": int(metrics.get("cooldown_shots", 0)),
+		"last_shot_result": str(metrics.get("last_shot_result", "none")),
+		"weapon_profile": str(metrics.get("weapon_profile", "rifle")),
+		"weapon_category": str(metrics.get("weapon_category", "primary")),
 		"accuracy": float(metrics.get("accuracy", 0.0)),
 		"survival_time": float(metrics.get("survival_time", 0.0)),
 		"win": bool(metrics.get("win", false)),
@@ -722,8 +730,6 @@ func _record_episode(env_index: int, result: Dictionary) -> void:
 	}
 	if is_selected:
 		record["reaction_time"] = _probe.measured_reaction_time()
-		record["useless_shots"] = _probe.count("useless_shots")
-		record["missed_shots"] = _probe.count("missed_shots")
 		record["target_switches"] = _probe.count("target_switches")
 	else:
 		record["reaction_time"] = -1.0
@@ -894,6 +900,7 @@ func get_status() -> Dictionary:
 		"training_mode_name": ControlCenterConfig.training_mode_name(config.training_mode),
 		"agent_count": agent_manager.agent_count() if agent_manager != null else 0,
 		"active_agents": agent_manager.active_count() if agent_manager != null else 0,
+		"system": system_monitor.snapshot() if system_monitor != null else {},
 	}
 
 

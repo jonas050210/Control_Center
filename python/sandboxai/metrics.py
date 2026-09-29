@@ -186,6 +186,9 @@ class EpisodeMetrics:
         self.damage_received: float = 0.0
         self.kills: int = 0
         self.deaths: int = 0
+        self.near_miss_shots: int = 0
+        self.useless_shots: int = 0
+        self.cooldown_shots: int = 0
         self.unnecessary_shots: int = 0
 
         # survival
@@ -359,7 +362,13 @@ class EpisodeMetrics:
             self.kills += 1
         if events.get("died"):
             self.deaths += 1
+        shot_result = str(events.get("shot_result", ""))
+        if events.get("missed_shot") or shot_result == "near_miss":
+            self.near_miss_shots += 1
+        if shot_result == "cooldown":
+            self.cooldown_shots += 1
         if events.get("useless_shot"):
+            self.useless_shots += 1
             self.unnecessary_shots += 1
 
     def _record_survival(
@@ -488,6 +497,9 @@ class EpisodeMetrics:
             ),
             "kills": self.kills,
             "deaths": self.deaths,
+            "near_miss_shots": self.near_miss_shots,
+            "useless_shots": self.useless_shots,
+            "cooldown_shots": self.cooldown_shots,
             "unnecessary_shots": self.unnecessary_shots,
             "target_selection_changes": self.target_switches,
         }

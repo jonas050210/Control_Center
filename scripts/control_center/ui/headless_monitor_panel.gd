@@ -165,6 +165,16 @@ static func build_status_rows(snapshot: Dictionary) -> Array:
 		"hits           " + ControlCenterTheme.optional_metric(snapshot, "mean_shots_hit", 2)
 	)
 	rows.append(
+		"near/useless   %s / %s"
+		% [
+			ControlCenterTheme.optional_metric(snapshot, "mean_near_miss_shots", 2),
+			ControlCenterTheme.optional_metric(snapshot, "mean_useless_shots", 2),
+		]
+	)
+	rows.append(
+		"cooldown pulls " + ControlCenterTheme.optional_metric(snapshot, "mean_cooldown_shots", 2)
+	)
+	rows.append(
 		"accuracy       "
 		+ ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%")
 	)

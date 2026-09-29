@@ -254,6 +254,7 @@ func _apply_episode_plan(env: EnvironmentCore, plan: Dictionary) -> void:
 	env.set_map(str(plan.get("map_id", "")))
 	env.set_lighting_mode(str(plan.get("lighting", "")))
 	env.set_scenario(str(plan.get("scenario", "")))
+	env.set_weapon_profile(str(plan.get("weapon_profile", "")))
 	env.reset(int(plan.get("seed", -1)))
 
 

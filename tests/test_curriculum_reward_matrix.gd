@@ -43,7 +43,11 @@ func test_level2_repeated_shooting_cannot_outscore_aligned_shooting() -> Sandbox
 		aligned_total += float(aligned_result.reward)
 		if aligned_result.done:
 			break
-	t.assert_lt(spam.episode.penalty_missed_shot, 0.0)
+	t.assert_lt(
+		spam.episode.penalty_missed_shot + spam.episode.penalty_useless_shot,
+		0.0,
+		"repeated shooting must be penalized as misses or useless spam"
+	)
 	t.assert_eq(spam.episode.kills, 0)
 	t.assert_gt(spam.episode.shots_fired, 0)
 	t.assert_gt(aligned.episode.shots_fired, 0)

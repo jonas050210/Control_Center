@@ -97,6 +97,7 @@ func refresh(snapshot: Dictionary) -> void:
 				"reward %.2f   kills %d   deaths %d\n"
 				+ "damage %.0f dealt / %.0f taken\n"
 				+ "shots %d, hits %d, accuracy %.0f%%\n"
+				+ "near %d   useless %d   cooldown %d\n"
 				+ "step %d   time %.2fs   enemies %d/%d"
 			)
 			% [
@@ -108,6 +109,9 @@ func refresh(snapshot: Dictionary) -> void:
 				int(episode["shots_fired"]),
 				int(episode["shots_hit"]),
 				float(episode["accuracy"]) * 100.0,
+				int(episode.get("near_miss_shots", 0)),
+				int(episode.get("useless_shots", 0)),
+				int(episode.get("cooldown_shots", 0)),
 				int(episode["step"]),
 				float(episode["time_seconds"]),
 				int(episode["alive_enemies"]),
@@ -153,7 +157,10 @@ func _format_aggregate(label: String, summary: Dictionary) -> String:
 		return "%-6s no episodes" % label
 	var reaction: float = float(summary.get("reaction_time", -1.0))
 	return (
-		"%-6s n=%d  reward %.2f  kills %.2f  acc %.0f%%  win %.0f%%  survive %.1fs  reaction %s"
+		(
+			"%-6s n=%d  reward %.2f  kills %.2f  acc %.0f%%  win %.0f%%  "
+			+ "useless %.2f  reaction %s"
+		)
 		% [
 			label,
 			episodes,
@@ -161,7 +168,7 @@ func _format_aggregate(label: String, summary: Dictionary) -> String:
 			float(summary.get("kills", 0.0)),
 			float(summary.get("accuracy", 0.0)) * 100.0,
 			float(summary.get("win_rate", 0.0)) * 100.0,
-			float(summary.get("survival_time", 0.0)),
+			float(summary.get("useless_shots", 0.0)),
 			"n/a" if reaction < 0.0 else "%.2fs" % reaction,
 		]
 	)
@@ -208,11 +215,12 @@ func _on_episode_selected(index: int) -> void:
 	var reaction: float = float(entry.get("reaction_time", -1.0))
 	_detail_label.text = (
 		(
-			"episode #%d (%s, env %d, seed %d, level %d)\n"
+			"episode #%d (%s, env %d, seed %d, level %d, %s)\n"
 			+ "reward %.2f   length %d   survival %.2fs   %s\n"
 			+ "kills %d   deaths %d   damage %.0f/%.0f\n"
 			+ "shots %d   hits %d   accuracy %.0f%%\n"
-			+ "useless shots %d   missed shots %d   target switches %d   reaction %s"
+			+ "near %d   useless %d   cooldown %d   last %s\n"
+			+ "target switches %d   reaction %s"
 		)
 		% [
 			int(entry["index"]),
@@ -220,6 +228,7 @@ func _on_episode_selected(index: int) -> void:
 			int(entry["env_index"]),
 			int(entry["seed"]),
 			int(entry["curriculum_level"]),
+			str(entry.get("weapon_profile", "rifle")),
 			float(entry["reward"]),
 			int(entry["episode_length"]),
 			float(entry["survival_time"]),
@@ -231,8 +240,10 @@ func _on_episode_selected(index: int) -> void:
 			int(entry["shots_fired"]),
 			int(entry["shots_hit"]),
 			float(entry["accuracy"]) * 100.0,
+			int(entry.get("near_miss_shots", entry.get("missed_shots", 0))),
 			int(entry["useless_shots"]),
-			int(entry["missed_shots"]),
+			int(entry.get("cooldown_shots", 0)),
+			str(entry.get("last_shot_result", "none")),
 			int(entry["target_switches"]),
 			"n/a" if reaction < 0.0 else "%.2fs" % reaction,
 		]

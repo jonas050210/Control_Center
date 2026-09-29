@@ -259,40 +259,36 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var chest_b: Vector3 = _chest_position(agent_b)
 	var eye_b: Vector3 = agent_b.get_eye_position()
 	var chest_a: Vector3 = _chest_position(agent_a)
+	var target_hittable_a: bool = _agent_target_hittable(agent_a, agent_b, eye_a, chest_b)
+	var target_hittable_b: bool = _agent_target_hittable(agent_b, agent_a, eye_b, chest_a)
+	var attempted_shot_a: bool = action_a.shoot and agent_a.alive
+	var attempted_shot_b: bool = action_b.shoot and agent_b.alive
 
-	if action_a.shoot and agent_a.alive and agent_a.weapon.try_fire():
+	if attempted_shot_a and agent_a.weapon.try_fire():
 		shot_a = true
 		if sound_on:
 			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_a.position, 0)
-		var hits_sphere_a: bool = agent_a.weapon.ray_hits_sphere(
-			eye_a, agent_a.get_forward_vector(), chest_b
-		)
-		var occluded_a: bool = world != null and world.segment_blocked(eye_a, chest_b)
-		if hits_sphere_a and not occluded_a:
-			damage_a = agent_b.take_damage(agent_a.weapon.damage)
-			hit_a = damage_a > 0.0
-			kill_a = hit_a and not agent_b.alive
-			if hit_a and sound_on:
-				sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_b.position, 1)
-			if kill_a and sound_on:
-				sound_bus.emit_sound(SoundBus.Category.DEATH, agent_b.position, 1)
+		var resolved_a: Dictionary = _resolve_agent_weapon_hit(agent_a, agent_b, eye_a, chest_b)
+		damage_a = float(resolved_a["damage"])
+		hit_a = damage_a > 0.0
+		kill_a = hit_a and not agent_b.alive
+		if hit_a and sound_on:
+			sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_b.position, 1)
+		if kill_a and sound_on:
+			sound_bus.emit_sound(SoundBus.Category.DEATH, agent_b.position, 1)
 
-	if action_b.shoot and agent_b.alive and agent_b.weapon.try_fire():
+	if attempted_shot_b and agent_b.alive and agent_b.weapon.try_fire():
 		shot_b = true
 		if sound_on:
 			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_b.position, 1)
-		var hits_sphere_b: bool = agent_b.weapon.ray_hits_sphere(
-			eye_b, agent_b.get_forward_vector(), chest_a
-		)
-		var occluded_b: bool = world != null and world.segment_blocked(eye_b, chest_a)
-		if hits_sphere_b and not occluded_b:
-			damage_b = agent_a.take_damage(agent_b.weapon.damage)
-			hit_b = damage_b > 0.0
-			kill_b = hit_b and not agent_a.alive
-			if hit_b and sound_on:
-				sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_a.position, 0)
-			if kill_b and sound_on:
-				sound_bus.emit_sound(SoundBus.Category.DEATH, agent_a.position, 0)
+		var resolved_b: Dictionary = _resolve_agent_weapon_hit(agent_b, agent_a, eye_b, chest_a)
+		damage_b = float(resolved_b["damage"])
+		hit_b = damage_b > 0.0
+		kill_b = hit_b and not agent_a.alive
+		if hit_b and sound_on:
+			sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_a.position, 0)
+		if kill_b and sound_on:
+			sound_bus.emit_sound(SoundBus.Category.DEATH, agent_a.position, 0)
 
 	if shot_a:
 		episode_a.record_shot(hit_a)
@@ -305,14 +301,28 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		episode_b.record_damage_dealt(damage_b)
 		episode_a.record_damage_taken(damage_b)
 
+	var near_miss_a: bool = (
+		shot_a and not hit_a and target_hittable_a and _shot_is_near_agent(agent_a, agent_b)
+	)
+	var near_miss_b: bool = (
+		shot_b and not hit_b and target_hittable_b and _shot_is_near_agent(agent_b, agent_a)
+	)
+	var effective_attempted_b: bool = attempted_shot_b and agent_b.alive
+	var shot_result_a: String = _shot_result(hit_a, near_miss_a, attempted_shot_a, shot_a)
+	var shot_result_b: String = _shot_result(hit_b, near_miss_b, effective_attempted_b, shot_b)
 	var events_a := {
 		"hit": hit_a,
 		"kill": kill_a,
 		"damage_taken": damage_b,
 		"damage_dealt": damage_a,
 		"died": not agent_a.alive,
+		"useless_shot": attempted_shot_a and not hit_a and not near_miss_a,
+		"missed_shot": near_miss_a,
 		"shot_fired": shot_a,
-		"missed_shot": shot_a and not hit_a,
+		"shot_result": shot_result_a,
+		"target_hittable": target_hittable_a,
+		"valid_target": agent_a.alive and agent_b.alive,
+		"meaningful_action": _action_is_meaningful(action_a, shot_a, target_hittable_a),
 		"alive": agent_a.alive,
 	}
 	var events_b := {
@@ -321,8 +331,13 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"damage_taken": damage_a,
 		"damage_dealt": damage_b,
 		"died": not agent_b.alive,
+		"useless_shot": effective_attempted_b and not hit_b and not near_miss_b,
+		"missed_shot": near_miss_b,
 		"shot_fired": shot_b,
-		"missed_shot": shot_b and not hit_b,
+		"shot_result": shot_result_b,
+		"target_hittable": target_hittable_b,
+		"valid_target": agent_a.alive and agent_b.alive,
+		"meaningful_action": _action_is_meaningful(action_b, shot_b, target_hittable_b),
 		"alive": agent_b.alive,
 	}
 
@@ -491,3 +506,91 @@ func health_check() -> Dictionary:
 ## self-play and single-agent accuracy/win metrics stay comparable.
 static func _chest_position(agent) -> Vector3:
 	return agent.position + Vector3(0.0, SandboxConfig.ENEMY_CHEST_HEIGHT, 0.0)
+
+
+func _resolve_agent_weapon_hit(
+	shooter: AgentState, target: AgentState, eye: Vector3, chest: Vector3
+) -> Dictionary:
+	var total_damage: float = 0.0
+	var directions: Array = shooter.weapon.projectile_directions(shooter.get_forward_vector())
+	for direction_value in directions:
+		if not target.alive:
+			break
+		var direction: Vector3 = direction_value
+		var hit_distance: float = shooter.weapon.ray_hit_distance(eye, direction, chest)
+		if hit_distance < 0.0:
+			continue
+		if _weapon_ray_blocked_before(shooter, eye, direction, hit_distance):
+			continue
+		total_damage += target.take_damage(shooter.weapon.projectile_damage())
+	return {"damage": total_damage}
+
+
+func _weapon_ray_blocked_before(
+	shooter: AgentState, eye: Vector3, forward: Vector3, distance: float
+) -> bool:
+	if world == null or distance <= 0.0:
+		return false
+	var wall_distance: float = world.ray_hit_distance(
+		eye, forward, minf(distance, shooter.weapon.range_m)
+	)
+	return wall_distance >= 0.0 and wall_distance + 0.001 < distance
+
+
+func _agent_target_hittable(
+	shooter: AgentState, target: AgentState, eye: Vector3, chest: Vector3
+) -> bool:
+	if not shooter.alive or not target.alive:
+		return false
+	if eye.distance_to(chest) > shooter.weapon.range_m + shooter.weapon.hit_radius:
+		return false
+	if world != null and world.segment_blocked(eye, chest):
+		return false
+	return true
+
+
+func _shot_is_near_agent(shooter: AgentState, target: AgentState) -> bool:
+	if not shooter.alive or not target.alive:
+		return false
+	var eye: Vector3 = shooter.get_eye_position()
+	var chest: Vector3 = _chest_position(target)
+	var to_target: Vector3 = chest - eye
+	var distance: float = to_target.length()
+	if distance <= 0.0001 or distance > shooter.weapon.range_m + shooter.weapon.hit_radius:
+		return false
+	var forward: Vector3 = shooter.get_forward_vector()
+	if forward.is_zero_approx():
+		return false
+	var direction: Vector3 = forward.normalized()
+	var target_direction: Vector3 = to_target / distance
+	var angle_deg: float = rad_to_deg(acos(clampf(direction.dot(target_direction), -1.0, 1.0)))
+	if angle_deg > SandboxConfig.WEAPON_NEAR_MISS_CONE_DEG:
+		return false
+	if world != null and world.segment_blocked(eye, chest):
+		return false
+	return true
+
+
+static func _shot_result(hit: bool, near_miss: bool, attempted: bool, shot_fired: bool) -> String:
+	if hit:
+		return "hit"
+	if near_miss:
+		return "near_miss"
+	if not attempted:
+		return "none"
+	if not shot_fired:
+		return "cooldown"
+	return "useless_spam"
+
+
+static func _action_is_meaningful(
+	action: Action, shot_fired: bool, target_hittable: bool
+) -> bool:
+	if shot_fired:
+	if action.move_axis != 0 or action.strafe_axis != 0 or action.jump:
+		return true
+	if not target_hittable:
+		return false
+	if action.look_yaw_axis != 0 or action.look_pitch_axis != 0:
+		return true
+	return not action.look_delta.is_zero_approx()

@@ -384,28 +384,44 @@ const DEFAULT_RANDOM_SEED: int = 1234
 # ---------------------------------------------------------------------------
 const REWARD_HIT: float = 1.0
 const REWARD_KILL: float = 10.0
-const REWARD_SURVIVE_TICK: float = 0.01
+## Direct damage shaping keeps the optimizer focused on combat progress
+## instead of passive survival. A 25 HP body shot is worth +0.5 before the
+## discrete hit bonus, while a kill is still dominated by REWARD_KILL.
+const REWARD_DAMAGE_DEALT_PER_HP: float = 0.02
+## Kept for backwards-compatible reward breakdowns, but intentionally zero
+## in combat. Survival is measured as a metric, not paid as a reward, so an
+## agent cannot score by hiding until timeout.
+const REWARD_SURVIVE_TICK: float = 0.0
 const REWARD_POSITIONING_SCALE: float = 0.05  # per meter closed toward the enemy, clamped
 const REWARD_POSITIONING_MAX: float = 0.05
-## Small shaping for turning the crosshair toward a live target.
+## Small shaping for turning the true weapon ray toward a hittable target.
+## It is gated by target_hittable, so aiming at an enemy through a wall or
+## oscillating on a remembered/non-shootable contact cannot farm reward.
 const REWARD_AIMING_SCALE: float = 0.10
 const REWARD_AIMING_MAX: float = 0.02
-## Applied only when a live target exists and the agent neither moves toward,
-## aims toward, nor fires. This makes timeout farming unprofitable without
-## forcing constant shooting.
+## Applied while a live target exists and the agent neither moves toward,
+## aims toward a hittable target, nor fires. This makes timeout farming
+## unprofitable without forcing constant shooting.
 const PENALTY_PASSIVITY: float = -0.012
+## Small per-tick pressure whenever a live combat target exists. This breaks
+## movement/reward cycles whose positive and negative shaping would otherwise
+## net near zero over a long timeout.
+const PENALTY_COMBAT_TIME: float = -0.002
 const PENALTY_DAMAGE_TAKEN_PER_HP: float = -0.05
 const PENALTY_DEATH: float = -10.0
-## Trigger pulls that could not possibly connect: the weapon is still on
-## cooldown (nothing fires) or no alive target exists (a shot fired at
-## nothing). Kept 10x harsher than a genuine miss so trigger discipline is
-## learned before aim.
+## Trigger pulls that could not plausibly connect: weapon cooldown, no alive
+## target, target out of range/behind cover, or the aim ray nowhere near any
+## live target. Kept much harsher than a genuine near-miss so trigger
+## discipline is learned before spray-and-pray.
 const PENALTY_USELESS_SHOT: float = -0.1
-## A shot actually fired at a live target that failed to connect. Deliberately
-## cheap: while aim is still being learned, misses must not erase the value of
-## the +1/+10 hit and kill rewards, otherwise the trigger becomes net-negative
-## and PPO converges to never shooting at all.
+## A shot actually fired near a live, clear, in-range target that failed to
+## connect. Deliberately cheap: while fine aim is still being learned,
+## near-misses must not erase the value of +hit/+damage/+kill rewards.
 const PENALTY_MISSED_SHOT: float = -0.01
+## Angular tolerance used to decide whether a fired shot was a genuine
+## near-miss at a live target or just spam. This does NOT affect hit testing;
+## hits still use the exact hitscan ray/sphere calculation.
+const WEAPON_NEAR_MISS_CONE_DEG: float = 7.0
 
 # ---------------------------------------------------------------------------
 # Observation mode currently active (see ObservationMode enum above).

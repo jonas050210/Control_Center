@@ -28,6 +28,7 @@ func test_closest_enemy_hit_first() -> SandboxTest:
 	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))
 
 	t.assert_true(result.info.events.hit, "shot should connect")
+	t.assert_eq(result.info.events.shot_result, "hit")
 	t.assert_almost_eq(
 		env.enemies[1].health,
 		env.enemies[1].max_health - env.agent.weapon.damage,
@@ -57,33 +58,56 @@ func test_reward_breakdown_tracking() -> SandboxTest:
 
 	var breakdown: Dictionary = env.episode.get_reward_breakdown()
 	t.assert_gt(breakdown.reward_hits, 0.0, "reward_hits should be recorded in breakdown")
-	t.assert_gt(breakdown.reward_survive, 0.0, "reward_survive should be recorded in breakdown")
+	t.assert_gt(breakdown.reward_damage, 0.0, "damage shaping should be recorded in breakdown")
+	t.assert_eq(breakdown.reward_survive, 0.0, "combat must not pay passive survival")
 	return t
 
 
-## Regression: a real miss at a live target is a genuine aiming attempt
-## (missed_shot, cheap), NOT an impossible "useless" pull. The two outcomes
-## must be distinguishable or shooting is punished as if it were spam and
-## PPO learns to never pull the trigger.
-func test_genuine_miss_is_missed_shot_not_useless() -> SandboxTest:
-	var t := SandboxTest.new("genuine_miss_is_missed_shot_not_useless")
+## Regression: a near miss at a live, clear target is a genuine aiming
+## attempt (missed_shot, cheap), NOT impossible spam. A shot nowhere near a
+## target is useless_shot and receives the harsher penalty.
+func test_near_miss_is_missed_shot_not_useless() -> SandboxTest:
+	var t := SandboxTest.new("near_miss_is_missed_shot_not_useless")
 	var env := EnvironmentCore.new(0, 1)
 	env.set_curriculum_level(3)
 	env.reset(10)
-	# Agent aligned with nothing: enemy straight ahead, agent rotated away.
+	# Enemy straight ahead at 10m. A 6 degree yaw is inside the near-miss cone
+	# but outside the 0.8m hit radius, so this is exactly a plausible miss.
 	env.agent.position = Vector3(0.0, 0.0, 5.0)
-	env.agent.yaw_deg = 90.0
+	env.agent.yaw_deg = 6.0
 	env.agent.pitch_deg = 0.0
 	env.enemies[0].position = Vector3(0.0, 0.0, -5.0)
 	env.agent.weapon.cooldown_remaining = 0.0
 	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))
 	t.assert_false(result.info.events.hit, "shot should not connect")
 	t.assert_true(result.info.events.shot_fired, "weapon was ready and must have fired")
-	t.assert_true(result.info.events.missed_shot, "real miss must count as missed_shot")
-	t.assert_false(result.info.events.useless_shot, "real miss must NOT count as useless_shot")
+	t.assert_true(result.info.events.missed_shot, "near miss must count as missed_shot")
+	t.assert_false(result.info.events.useless_shot, "near miss must NOT count as useless_shot")
+	t.assert_eq(result.info.events.shot_result, "near_miss")
+	t.assert_eq(env.episode.near_miss_shots, 1)
 	var breakdown: Dictionary = env.episode.get_reward_breakdown()
 	t.assert_almost_eq(breakdown.penalty_missed_shot, -0.01, 0.002)
 	t.assert_almost_eq(breakdown.penalty_useless_shot, 0.0, 0.0001)
+	return t
+
+
+func test_random_spray_is_useless_not_missed() -> SandboxTest:
+	var t := SandboxTest.new("random_spray_is_useless_not_missed")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(3)
+	env.reset(10)
+	env.agent.position = Vector3(0.0, 0.0, 5.0)
+	env.agent.yaw_deg = 90.0
+	env.agent.pitch_deg = 0.0
+	env.enemies[0].position = Vector3(0.0, 0.0, -5.0)
+	env.agent.weapon.cooldown_remaining = 0.0
+	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))
+	t.assert_false(result.info.events.hit)
+	t.assert_true(result.info.events.shot_fired)
+	t.assert_true(result.info.events.useless_shot, "spraying far away from target is useless")
+	t.assert_false(result.info.events.missed_shot)
+	t.assert_eq(result.info.events.shot_result, "useless_spam")
+	t.assert_eq(env.episode.useless_shots, 1)
 	return t
 
 
@@ -101,6 +125,8 @@ func test_cooldown_pull_is_useless_shot_and_does_not_fire() -> SandboxTest:
 	t.assert_false(result.info.events.shot_fired, "second pull cannot fire during cooldown")
 	t.assert_true(result.info.events.useless_shot, "cooldown pull is an impossible shot")
 	t.assert_false(result.info.events.missed_shot, "nothing fired, so it cannot be a miss")
+	t.assert_eq(result.info.events.shot_result, "cooldown")
+	t.assert_eq(env.episode.cooldown_shots, 1)
 	var breakdown: Dictionary = env.episode.get_reward_breakdown()
 	t.assert_almost_eq(breakdown.penalty_useless_shot, -0.1, 0.001)
 	t.assert_eq(env.episode.shots_fired, 1, "only the first pull actually fired")
@@ -119,6 +145,7 @@ func test_shoot_with_no_alive_target_is_useless_not_missed() -> SandboxTest:
 	t.assert_true(result.info.events.shot_fired)
 	t.assert_true(result.info.events.useless_shot, "firing at nothing is an impossible shot")
 	t.assert_false(result.info.events.missed_shot, "no live target means no genuine miss")
+	t.assert_eq(result.info.events.shot_result, "useless_no_target")
 	return t
 
 
