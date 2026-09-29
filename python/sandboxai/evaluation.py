@@ -40,6 +40,8 @@ def evaluate_model(
     episodes: int = 20,
     seed: int = 9001,
     output_dir: str | Path | None = None,
+    env: Any = None,
+    profiler: Any = None,
 ) -> dict[str, Any]:
     """Runs `episodes` weight-frozen episodes and summarises them.
 
@@ -48,22 +50,47 @@ def evaluate_model(
     previously always constructed a single-environment ``GodotGymEnv``, so
     ``sandboxai evaluate --env-count N`` parsed the flag and then ignored
     it; a 200-episode evaluation took N times longer than it needed to.
+
+    ``env`` (optional) reuses an already-running evaluation environment
+    across calls instead of spawning a fresh Godot bridge process per
+    call. This is exact, not approximate: every episode is (re)started
+    through an explicit ``reset(seed)`` over the bridge, and the engine
+    derives the whole world deterministically from that seed
+    (``EnvironmentCore.reset`` re-seeds the RNG and rebuilds every
+    subsystem), so a reused process produces bit-identical episodes to a
+    fresh one. The caller owns the env lifecycle when it passes one: it is
+    NOT closed here.
+
+    ``profiler`` (optional) adds ``eval.normal.*`` buckets to the training
+    profile: total wall time, per-step policy prediction and environment
+    stepping, plus episode/step counters.
     """
     if episodes < 1:
         raise ValueError("episodes must be positive")
     environment_count = int(env_kwargs.get("environment_count", 1) or 1)
     started = time.perf_counter()
     if environment_count > 1:
-        rows = _evaluate_vectorized(model, env_kwargs, episodes, seed, environment_count)
+        rows = _evaluate_vectorized(model, env_kwargs, episodes, seed, environment_count, env, profiler)
     else:
-        rows = _evaluate_serial(model, env_kwargs, episodes, seed)
+        rows = _evaluate_serial(model, env_kwargs, episodes, seed, env, profiler)
+    elapsed = time.perf_counter() - started
+    if profiler is not None:
+        profiler.record("eval.normal.total", elapsed)
+        profiler.add("eval.normal.episodes", len(rows))
     return _summarize(rows, started, output_dir, environment_count)
 
 
 def _evaluate_serial(
-    model: Any, env_kwargs: dict[str, Any], episodes: int, seed: int
+    model: Any,
+    env_kwargs: dict[str, Any],
+    episodes: int,
+    seed: int,
+    env: Any = None,
+    profiler: Any = None,
 ) -> list[dict[str, Any]]:
-    env = GodotGymEnv(**env_kwargs)
+    owned = env is None
+    if owned:
+        env = GodotGymEnv(**env_kwargs)
     rows: list[dict[str, Any]] = []
     try:
         for episode_index in range(episodes):
@@ -73,11 +100,18 @@ def _evaluate_serial(
             steps = 0
             last_info: dict[str, Any] = {}
             while not done:
+                predict_started = time.perf_counter() if profiler is not None else 0.0
                 prediction = model.predict(observation, deterministic=True)
                 action = prediction[0] if isinstance(prediction, tuple) else prediction
                 if hasattr(action, "cpu"):
                     action = action.cpu().numpy()
+                if profiler is not None:
+                    profiler.record("eval.normal.predict", time.perf_counter() - predict_started)
+                    step_started = time.perf_counter()
                 observation, reward, terminated, truncated, info = env.step(action)
+                if profiler is not None:
+                    profiler.record("eval.normal.env_step", time.perf_counter() - step_started)
+                    profiler.add("eval.normal.env_steps", 1)
                 total_reward += float(reward)
                 steps += 1
                 last_info = info
@@ -89,7 +123,8 @@ def _evaluate_serial(
             metrics["seed"] = seed + episode_index
             rows.append(metrics)
     finally:
-        env.close()
+        if owned:
+            env.close()
     return rows
 
 
@@ -99,6 +134,8 @@ def _evaluate_vectorized(
     episodes: int,
     seed: int,
     environment_count: int,
+    env: Any = None,
+    profiler: Any = None,
 ) -> list[dict[str, Any]]:
     """Collects `episodes` finished episodes from N parallel environments.
 
@@ -109,21 +146,42 @@ def _evaluate_vectorized(
     """
     from .godot_env import GodotVecEnv
 
-    kwargs = dict(env_kwargs)
-    kwargs["environment_count"] = environment_count
-    kwargs.setdefault("seed", seed)
-    env = GodotVecEnv(**kwargs)
+    owned = env is None
+    if owned:
+        kwargs = dict(env_kwargs)
+        kwargs["environment_count"] = environment_count
+        kwargs.setdefault("seed", seed)
+        env = GodotVecEnv(**kwargs)
     rows: list[dict[str, Any]] = []
     steps_per_env = [0] * environment_count
     rewards_per_env = [0.0] * environment_count
     try:
+        if not owned:
+            # Put a reused process into exactly the RNG state a freshly
+            # built bridge would be in. A fresh transport is constructed
+            # with env_kwargs["seed"] and its build() resets environment i
+            # with (transport_seed + i); the loop below then continues
+            # that stream with a seedless reset. Re-seeding to the same
+            # transport base first makes reuse bit-identical to a fresh
+            # process (for a fresh process the build already performed
+            # this exact reset, so issuing it again would merely replay
+            # the same draws).
+            transport_seed = int(env_kwargs.get("seed", seed))
+            env.client.reset(transport_seed)
         observations = env.reset()
         while len(rows) < episodes:
+            predict_started = time.perf_counter() if profiler is not None else 0.0
             prediction = model.predict(observations, deterministic=True)
             actions = prediction[0] if isinstance(prediction, tuple) else prediction
             if hasattr(actions, "cpu"):
                 actions = actions.cpu().numpy()
+            if profiler is not None:
+                profiler.record("eval.normal.predict", time.perf_counter() - predict_started)
+                step_started = time.perf_counter()
             observations, step_rewards, dones, infos = env.step(actions)
+            if profiler is not None:
+                profiler.record("eval.normal.env_step", time.perf_counter() - step_started)
+                profiler.add("eval.normal.env_steps", environment_count)
             for index in range(environment_count):
                 steps_per_env[index] += 1
                 rewards_per_env[index] += float(step_rewards[index])
@@ -141,7 +199,8 @@ def _evaluate_vectorized(
                 steps_per_env[index] = 0
                 rewards_per_env[index] = 0.0
     finally:
-        env.close()
+        if owned:
+            env.close()
     return rows
 
 

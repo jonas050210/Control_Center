@@ -35,6 +35,21 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--checkpoint-frequency", type=int)
     parser.add_argument("--evaluation-frequency", type=int)
     parser.add_argument("--evaluation-episodes", type=int)
+    parser.add_argument("--eval-env-count", type=int, dest="evaluation_environment_count")
+    parser.add_argument(
+        "--checkpoint-eval-env-count",
+        type=int,
+        dest="checkpoint_eval_environment_count",
+        help="bridge environments for the checkpoint battery (planned episodes are "
+        "result-invariant under parallelism, so this is a pure speed knob)",
+    )
+    parser.add_argument(
+        "--inference-device",
+        choices=["auto", "cpu", "cuda"],
+        help="device for rollout/evaluation inference while PPO updates stay on --device "
+        "(cpu removes the per-step host<->device round trip that makes CUDA slower "
+        "than CPU for this tiny policy)",
+    )
     parser.add_argument("--seed", type=int)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--curriculum-level", type=int)

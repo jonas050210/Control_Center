@@ -416,6 +416,7 @@ class PlanExecutorTest(unittest.TestCase):
         executor.client = _FakeBatchClient(environment_count)
         executor.environment_count = environment_count
         executor.skill_metrics_enabled = True
+        executor.profiler = None
         return executor
 
     def _model(self):

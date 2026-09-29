@@ -31,6 +31,20 @@ import json, random, sys
 OBS_DIM = {obs_dim}
 random.seed(0)
 
+
+def env_count_from_argv(default=2):
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--env-count" and i + 1 < len(argv):
+            try:
+                return max(1, int(argv[i + 1]))
+            except ValueError:
+                return default
+    return default
+
+
+ENV_COUNT = env_count_from_argv()
+
 def out(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
@@ -55,10 +69,9 @@ for line in sys.stdin:
                                    "shape": [OBS_DIM], "low": -1.0, "high": 1.0}},
         }})
     elif command == "reset":
-        n = len(request.get("indices", [])) if "indices" in request else 2
-        step_counts = {{i: 0 for i in range(n)}}
-        out({{"ok": True, "observations": [make_obs() for _ in range(n)],
-             "infos": [{{}} for _ in range(n)]}})
+        step_counts = {{i: 0 for i in range(ENV_COUNT)}}
+        out({{"ok": True, "observations": [make_obs() for _ in range(ENV_COUNT)],
+             "infos": [{{}} for _ in range(ENV_COUNT)]}})
     elif command == "reset_indices":
         indices = request.get("indices", [])
         for i in indices:
@@ -115,7 +128,7 @@ class PPOSmokeTest(unittest.TestCase):
         bridge_py = tmp / "fake_bridge.py"
         bridge_py.write_text(FAKE_BRIDGE_SOURCE, encoding="utf-8")
         wrapper = tmp / "fake_godot"
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}'\n", encoding="utf-8")
+        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.executable = str(wrapper)
 
@@ -216,7 +229,7 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         bridge_py = tmp / "fake_bridge.py"
         bridge_py.write_text(FAKE_BRIDGE_SOURCE, encoding="utf-8")
         wrapper = tmp / "fake_godot"
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}'\n", encoding="utf-8")
+        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.executable = str(wrapper)
 

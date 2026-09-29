@@ -595,6 +595,9 @@ def build_manifest(config: Any, run_dir: Path, device: str, driver: CurriculumDr
         "evaluation": {
             "episodes": config.evaluation_episodes,
             "frequency": config.evaluation_frequency,
+            "environment_count": config.evaluation_environment_count,
+            "checkpoint_eval_environment_count": config.checkpoint_eval_environment_count,
+            "inference_device": config.inference_device,
             "condition_eval": config.checkpoint_condition_eval,
             "generalization_eval": config.checkpoint_generalization_eval,
             "league_eval": config.checkpoint_league_eval,

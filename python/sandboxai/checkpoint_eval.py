@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+import time
 from typing import Any, Callable, Sequence
 
 from .conditions import MAP_IDS, Condition, ConditionTracker, generalization_report
@@ -91,11 +92,18 @@ class PlanExecutor:
     ``j % N``, in ascending ``j`` per environment, with the plan's own
     seed. Scheduling therefore cannot change results; only the wall time
     changes with N. Model predictions are deterministic=True throughout.
+
+    Because every plan fully reconfigures its environment (level, enemy
+    count, map, lighting, scenario, weapon profile, then ``reset(seed)``),
+    episodes are pure functions of the plan: reusing one executor across
+    checkpoint boundaries — or running the same plans on a different
+    environment count — yields bit-identical episodes.
     """
 
-    def __init__(self, env_kwargs: dict[str, Any], skill_metrics: bool = True) -> None:
+    def __init__(self, env_kwargs: dict[str, Any], skill_metrics: bool = True, profiler: Any = None) -> None:
         from .godot_env import GodotBatchClient
 
+        self.profiler = profiler
         self.client = GodotBatchClient(**env_kwargs)
         self.environment_count = self.client.environment_count
         self.skill_metrics_enabled = bool(skill_metrics)
@@ -152,9 +160,16 @@ class PlanExecutor:
 
         while any(plan is not None for plan in in_flight):
             batch = np.asarray(observations, dtype=np.float32)
+            predict_started = time.monotonic() if self.profiler is not None else 0.0
             prediction = model.predict(batch, deterministic=True)
             actions = prediction[0] if isinstance(prediction, tuple) else prediction
+            if self.profiler is not None:
+                self.profiler.record("predict", time.monotonic() - predict_started)
+                step_started = time.monotonic()
             observations, rewards, dones, infos = self.client.step(actions)
+            if self.profiler is not None:
+                self.profiler.record("env_step", time.monotonic() - step_started)
+                self.profiler.add("env_steps", self.environment_count)
             restage: list[dict[str, Any]] = []
             reset_targets: list[int] = []
             for env_index in range(count):
@@ -635,23 +650,43 @@ def run_checkpoint_evaluation(
     normal_summary: dict[str, Any] | None = None,
     executor_factory: Callable[..., Any] | None = None,
     client_factory: Callable[..., Any] | None = None,
+    executor: Any = None,
+    profiler: Any = None,
 ) -> dict[str, Any]:
     """The full per-checkpoint evaluation battery. Returns the report.
 
     Cost is bounded by configuration (condition/generalization episode
     counts, league matches); the caller writes the report next to the
     checkpoint's other artifacts.
+
+    ``executor`` (optional) reuses an existing :class:`PlanExecutor`
+    (bridge process) across checkpoint boundaries instead of spawning a
+    fresh one per call; plans fully reconfigure every environment they
+    touch, so results are bit-identical to a fresh executor. The caller
+    owns its lifecycle when it passes one (it is NOT closed here).
+
+    ``profiler`` (optional) records ``eval.battery.*`` buckets for the
+    training profile: per-section wall time, prediction and environment
+    stepping, plus episode counters.
     """
+    started = time.monotonic() if profiler is not None else 0.0
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
     policy_path = destination / "policy.zip"
     model.save(str(policy_path))
 
     eval_seed = config.seed + EVAL_MASTER_SEED_SALT
+    # The battery runs planned episodes whose scheduling is
+    # result-invariant (see PlanExecutor), so it may use more bridge
+    # environments than the strictly-serial normal evaluation: this
+    # amortises per-step prediction and transport overhead across the
+    # batch without changing a single episode. evaluation_environment_count
+    # stays the knob for the normal evaluation's exact serial semantics.
+    battery_env_count = int(getattr(config, "checkpoint_eval_environment_count", 1) or 1)
     env_kwargs = {
         "project_path": str(config.project),
         "godot_executable": config.godot_executable,
-        "environment_count": max(1, config.evaluation_environment_count),
+        "environment_count": battery_env_count,
         "enemy_count": config.enemy_count,
         "seed": eval_seed,
         "curriculum_level": config.curriculum_level,
@@ -669,11 +704,14 @@ def run_checkpoint_evaluation(
 
     executor_factory = executor_factory or PlanExecutor
     need_executor = config.checkpoint_condition_eval or config.checkpoint_generalization_eval
-    executor = (
-        executor_factory(env_kwargs, skill_metrics=True) if need_executor else None
-    )
+    owned_executor = executor is None and need_executor
+    if executor is None and need_executor:
+        # Profiling views are injected by the caller's executor_factory (see
+        # the training callback), keeping this factory signature unchanged.
+        executor = executor_factory(env_kwargs, skill_metrics=True)
     try:
         if config.checkpoint_condition_eval and executor is not None:
+            section_started = time.monotonic() if profiler is not None else 0.0
             plans = _condition_eval_plans(config, config.condition_eval_episodes)
             for plan in plans:
                 if record_eval_replays:
@@ -685,6 +723,9 @@ def run_checkpoint_evaluation(
                 checkpoint=str(policy_path),
                 replay_dir=destination / "replays" if record_eval_replays else None,
             )
+            if profiler is not None:
+                profiler.record("eval.battery.condition", time.monotonic() - section_started)
+                profiler.add("eval.battery.episodes", len(rows))
             tracker = ConditionTracker(window=len(plans) + 1)
             for row in rows:
                 condition = Condition(**row["condition"])
@@ -700,6 +741,7 @@ def run_checkpoint_evaluation(
             report["condition_evaluation"] = cond_report
 
         if config.checkpoint_generalization_eval and executor is not None:
+            section_started = time.monotonic() if profiler is not None else 0.0
             suite, note, trained_level = _generalization_plans(config, pipeline, record_gen_replays)
             if suite is None:
                 report["generalization"] = {
@@ -733,6 +775,9 @@ def run_checkpoint_evaluation(
                     checkpoint=str(policy_path),
                     replay_dir=destination / "replays" if record_gen_replays else None,
                 )
+                if profiler is not None:
+                    profiler.record("eval.battery.generalization", time.monotonic() - section_started)
+                    profiler.add("eval.battery.episodes", len(rows))
                 plan_episodes = suite.plan()
                 for position, row in enumerate(rows):
                     extra = {}
@@ -755,10 +800,11 @@ def run_checkpoint_evaluation(
         elif config.checkpoint_generalization_eval:
             report["generalization"] = {"skipped": True, "reason": "executor unavailable"}
     finally:
-        if executor is not None:
+        if owned_executor:
             executor.close()
 
     if config.checkpoint_league_eval and config.league_matches_per_checkpoint > 0:
+        section_started = time.monotonic() if profiler is not None else 0.0
         runner = LeagueRunner(pipeline.run_dir if pipeline else destination, seed=config.seed, device=device)
         league_env_kwargs = dict(env_kwargs)
         report["league"] = runner.evaluate_checkpoint(
@@ -770,6 +816,8 @@ def run_checkpoint_evaluation(
             max_opponents=config.league_max_opponents,
             client_factory=client_factory,
         )
+        if profiler is not None:
+            profiler.record("eval.battery.league", time.monotonic() - section_started)
     else:
         report["league"] = {"enabled": False}
 
@@ -781,4 +829,6 @@ def run_checkpoint_evaluation(
     (destination / "report.json").write_text(
         json.dumps(report, indent=2, default=str) + "\n", encoding="utf-8"
     )
+    if profiler is not None:
+        profiler.record("eval.battery.total", time.monotonic() - started)
     return report

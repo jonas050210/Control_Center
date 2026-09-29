@@ -10,7 +10,7 @@ from .config import TrainingConfig
 from .evaluation import evaluate_model
 from .godot_env import GodotVecEnv
 from .telemetry import JsonlTelemetry, ResourceMonitor
-from .training_profile import TrainingProfiler
+from .training_profile import PrefixedProfiler, TrainingProfiler
 
 if TYPE_CHECKING:
     from .run_control import RunControl
@@ -44,6 +44,80 @@ def _env_kwargs(
     if profiler is not None:
         values["profiler"] = profiler
     return values
+
+
+class InferenceDeviceScheduler:
+    """Phase-device placement for PPO when inference and updates diverge.
+
+    For this workload (an 84 -> 128 -> 128 MLP, batches of 1-8) a CUDA
+    forward pass is slower than CPU: each step pays a host->device copy,
+    ~20 kernel launches and a blocking device->host readback, which
+    dominates the actual matmuls. Moving only the *inference* phases
+    (rollout collection + frozen evaluation) to CPU keeps the PPO update
+    on the configured device while removing those round trips.
+
+    Mechanics: ``model.device`` drives both ``collect_rollouts``' tensor
+    placement and ``model.predict``, so switching it (plus the policy
+    module) at rollout boundaries relocates exactly the inference phases;
+    ``train()`` always runs with the policy back on the training device.
+    Parameter values are bit-preserved by the round trip (a plain copy);
+    only freshly *computed* rollout quantities differ, in the same way any
+    device choice already does.
+    """
+
+    def __init__(self, model: Any, training_device: str, inference_device: str) -> None:
+        self.model = model
+        self.training_device = str(training_device)
+        self.inference_device = str(inference_device)
+        self._in_rollout = False
+
+    @property
+    def active(self) -> bool:
+        return self.inference_device != self.training_device
+
+    def enter_rollout(self) -> None:
+        if not self.active or self._in_rollout:
+            return
+        import torch  # type: ignore
+
+        self.model.policy.to(torch.device(self.inference_device))
+        self.model.device = torch.device(self.inference_device)
+        self._in_rollout = True
+
+    def exit_rollout(self) -> None:
+        if not self._in_rollout:
+            return
+        import torch  # type: ignore
+
+        self.model.policy.to(torch.device(self.training_device))
+        self.model.device = torch.device(self.training_device)
+        self._in_rollout = False
+
+    def training_device_context(self):
+        """Context manager: run a block with the policy on the training
+        device, restoring the rollout placement afterwards.
+
+        Used around mid-rollout checkpoint saves so the saved model's
+        device metadata (SB3 stores ``model.device`` in the zip) keeps
+        naming the training device, not the transient inference device.
+        """
+
+        class _Restore:
+            def __init__(self, scheduler):
+                self.scheduler = scheduler
+                self.was_in_rollout = False
+
+            def __enter__(self):
+                self.was_in_rollout = self.scheduler._in_rollout
+                self.scheduler.exit_rollout()
+                return self
+
+            def __exit__(self, *_args):
+                if self.was_in_rollout:
+                    self.scheduler.enter_rollout()
+                return False
+
+        return _Restore(self)
 
 
 def train_ppo(
@@ -272,9 +346,111 @@ def train_ppo(
             # run. Anchoring to the current step makes the schedule
             # relative to wherever training actually starts.
             self.next_evaluation = config.evaluation_frequency
+            # Persistent evaluation bridge processes. Each boundary used
+            # to spawn a fresh Godot process for the normal evaluation AND
+            # one for the checkpoint battery (three with the league
+            # enabled) - engine + project startup paid per boundary, and
+            # two of the three FPS cliffs in the profiled runs were
+            # exactly these boundaries. Reuse is exact: every evaluation
+            # episode is re-seeded over the bridge (reset(seed) / staged
+            # plans), and the engine derives the world deterministically
+            # from that seed, so a reused process produces bit-identical
+            # episodes. Created lazily at the first boundary; closed by
+            # train_ppo's finally block.
+            self.eval_env: Any = None
+            self.eval_env_kwargs: dict[str, Any] | None = None
+            self.battery_env_kwargs: dict[str, Any] | None = None
+            self.battery_executor: Any = None
+            self.normal_profiler: Any = None
+            self.battery_profiler: Any = None
+
+        def _ensure_eval_env(self) -> Any:
+            if self.eval_env is not None:
+                return self.eval_env
+            assert self.eval_env_kwargs is not None, "evaluation env kwargs missing (training start not fired?)"
+            from .godot_env import GodotGymEnv, GodotVecEnv
+
+            started = time.perf_counter() if profiler is not None else 0.0
+            eval_kwargs = dict(self.eval_env_kwargs)
+            if int(eval_kwargs.get("environment_count", 1) or 1) > 1:
+                env: Any = GodotVecEnv(**eval_kwargs)
+            else:
+                eval_kwargs["environment_count"] = 1
+                env = GodotGymEnv(**eval_kwargs)
+            if profiler is not None:
+                profiler.record("eval.env_startup", time.perf_counter() - started)
+                profiler.add("eval.bridge_spawns", 1)
+            self.eval_env = env
+            return env
+
+        def _ensure_battery_executor(self) -> Any:
+            if self.battery_executor is not None:
+                return self.battery_executor
+            assert self.battery_env_kwargs is not None, "battery env kwargs missing (training start not fired?)"
+            from .checkpoint_eval import PlanExecutor
+
+            started = time.perf_counter() if profiler is not None else 0.0
+            self.battery_executor = PlanExecutor(
+                self.battery_env_kwargs, skill_metrics=True, profiler=self.battery_profiler
+            )
+            if profiler is not None:
+                profiler.record("eval.env_startup", time.perf_counter() - started)
+                profiler.add("eval.bridge_spawns", 1)
+            return self.battery_executor
+
+        def close(self) -> None:
+            # Called from train_ppo's finally block: bridge processes are
+            # precious (seconds of engine startup each), so they live for
+            # the whole run and die exactly once.
+            for resource in (self.eval_env, self.battery_executor):
+                if resource is not None:
+                    try:
+                        resource.close()
+                    except Exception:  # pragma: no cover - shutdown best effort
+                        pass
+            self.eval_env = None
+            self.battery_executor = None
 
         def _on_training_start(self) -> None:
             self.next_evaluation = self.num_timesteps + config.evaluation_frequency
+            # Profiling views keep the evaluation bridges' transport
+            # timings out of the training bridge's buckets (see
+            # training_profile.PrefixedProfiler).
+            if profiler is not None:
+                normal_view: Any = PrefixedProfiler(profiler, "eval.normal.")
+                battery_view: Any = PrefixedProfiler(profiler, "eval.battery.")
+            else:
+                normal_view = None
+                battery_view = None
+            self.normal_profiler = normal_view
+            self.battery_profiler = battery_view
+            eval_kwargs = _env_kwargs(config)
+            eval_kwargs["environment_count"] = max(1, config.evaluation_environment_count)
+            if normal_view is not None:
+                eval_kwargs["profiler"] = normal_view
+            self.eval_env_kwargs = eval_kwargs
+            # The battery's planned episodes are result-invariant under
+            # parallelism (PlanExecutor contract), so its bridge runs
+            # `checkpoint_eval_environment_count` environments to amortise
+            # per-step inference and transport across the batch. The
+            # transport seed matches run_checkpoint_evaluation's own
+            # construction exactly (the staged plans carry the seeds that
+            # matter); compact infos are safe here because the battery
+            # reads only terminal metrics and per-step events, both of
+            # which compact mode keeps.
+            from .pipeline import EVAL_MASTER_SEED_SALT
+
+            self.battery_env_kwargs = {
+                "project_path": str(config.project),
+                "godot_executable": config.godot_executable,
+                "environment_count": int(config.checkpoint_eval_environment_count),
+                "enemy_count": config.enemy_count,
+                "seed": config.seed + EVAL_MASTER_SEED_SALT,
+                "curriculum_level": config.curriculum_level,
+                "compact_infos": True,
+            }
+            if battery_view is not None:
+                self.battery_env_kwargs["profiler"] = battery_view
 
         def _on_step(self) -> bool:
             nonlocal best_score, eval_patience_counter, stop_training
@@ -283,14 +459,19 @@ def train_ppo(
             if self.num_timesteps < self.next_evaluation:
                 return True
             evaluation_started = time.perf_counter() if profiler is not None else 0.0
-            eval_kwargs = _env_kwargs(config)
-            eval_kwargs["environment_count"] = max(1, config.evaluation_environment_count)
+            # Normal evaluation (reused bridge process).
+            env = self._ensure_eval_env()
             summary = evaluate_model(
                 self.model,
-                eval_kwargs,
+                self.eval_env_kwargs,
                 episodes=config.evaluation_episodes,
                 seed=config.seed + self.num_timesteps,
                 output_dir=evaluations / f"step_{self.num_timesteps:09d}",
+                env=env,
+                # Raw profiler: evaluate_model records fully-qualified
+                # eval.normal.* buckets; the prefixed view above is only
+                # for the bridge transport's bridge.* names.
+                profiler=profiler,
             )
             reward = float(summary.get("mean_episode_reward", 0.0))
             summary["timesteps"] = self.num_timesteps
@@ -315,6 +496,8 @@ def train_ppo(
                     output_dir=evaluations / f"step_{self.num_timesteps:09d}",
                     device=device,
                     normal_summary=dict(summary),
+                    executor=self._ensure_battery_executor(),
+                    profiler=profiler,
                 )
                 summary["curriculum"] = pipeline.driver.curriculum_snapshot()
                 for section in ("condition_evaluation", "generalization", "league"):
@@ -336,10 +519,15 @@ def train_ppo(
                 if run_control is not None:
                     run_control.event("system", "checkpoint evaluation completed", checkpoint_event)
             (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+            best_started = time.perf_counter() if profiler is not None else 0.0
             if reward > best_score:
                 best_score = reward
                 eval_patience_counter = 0
-                self.model.save(best_path)
+                if inference_scheduler is not None:
+                    with inference_scheduler.training_device_context():
+                        self.model.save(best_path)
+                else:
+                    self.model.save(best_path)
                 (evaluations / "best.json").write_text(
                     json.dumps({"mean_reward": reward, "timesteps": self.num_timesteps, "checkpoint": str(best_path)}, indent=2) + "\n",
                     encoding="utf-8",
@@ -350,6 +538,8 @@ def train_ppo(
                     stop_training = True
             if config.min_eval_reward is not None and reward >= config.min_eval_reward:
                 stop_training = True
+            if profiler is not None:
+                profiler.record("eval.best_checkpoint_save", time.perf_counter() - best_started)
             # Advance past the current step rather than by a fixed stride:
             # with N parallel environments `num_timesteps` jumps by N per
             # rollout and can overshoot the threshold by more than one
@@ -367,7 +557,13 @@ def train_ppo(
         def _on_step(self) -> bool:
             should_save = self.n_calls % self.save_freq == 0
             started = time.perf_counter() if profiler is not None and should_save else 0.0
-            keep_going = super()._on_step()
+            # Mid-rollout saves record model.device in the zip metadata;
+            # keep that at the training device under the split-device mode.
+            if inference_scheduler is not None:
+                with inference_scheduler.training_device_context():
+                    keep_going = super()._on_step()
+            else:
+                keep_going = super()._on_step()
             if profiler is not None and should_save:
                 profiler.record("callback.checkpoint_save", time.perf_counter() - started)
             return keep_going
@@ -410,6 +606,37 @@ def train_ppo(
         def _on_step(self) -> bool:
             return True
 
+    class InferenceDeviceCallback(BaseCallback):
+        """Switches policy placement at rollout boundaries.
+
+        See :class:`InferenceDeviceScheduler`. Inactive (a no-op callback)
+        unless ``config.inference_device`` resolves differently from the
+        training device. Placement is switched at ``_on_rollout_start``
+        (before the first forward of the rollout) and restored at
+        ``_on_rollout_end`` (which SB3 fires before ``train()``), so
+        rollout collection, the mid-rollout evaluation callback and any
+        terminal-value bootstraps all run on the inference device while
+        the PPO update always runs on the training device.
+        """
+
+        def __init__(self, scheduler: InferenceDeviceScheduler) -> None:
+            super().__init__()
+            self.scheduler = scheduler
+
+        def _on_rollout_start(self) -> None:
+            self.scheduler.enter_rollout()
+
+        def _on_rollout_end(self) -> None:
+            self.scheduler.exit_rollout()
+
+        def _on_training_end(self) -> None:
+            # A stop during rollout collection must not leave the policy
+            # stranded on the inference device for the final saves.
+            self.scheduler.exit_rollout()
+
+        def _on_step(self) -> bool:
+            return True
+
     checkpoint_callback = TimedCheckpointCallback(
         save_freq=max(1, config.checkpoint_frequency // config.environment_count),
         save_path=str(checkpoints),
@@ -418,9 +645,15 @@ def train_ppo(
         save_vecnormalize=False,
     )
     metrics_callback = MetricsCallback()
-    callback_items = [checkpoint_callback, metrics_callback, EvaluationCallback()]
+    evaluation_callback = EvaluationCallback()
+    callback_items: list[Any] = [checkpoint_callback, metrics_callback, evaluation_callback]
     if profiler is not None:
         callback_items.insert(0, ProfilingCallback())
+    inference_scheduler: InferenceDeviceScheduler | None = None
+    if config.inference_device != "auto":
+        inference_scheduler = InferenceDeviceScheduler(model=None, training_device=device, inference_device=config.resolved_inference_device())
+        callback_items.insert(0, InferenceDeviceCallback(inference_scheduler))
+    callbacks = CallbackList(callback_items)
     callbacks = CallbackList(callback_items)
     try:
         if checkpoint_path:
@@ -461,6 +694,13 @@ def train_ppo(
                     * ((rollout_samples + int(model.batch_size) - 1) // int(model.batch_size))
                 ),
             )
+        if inference_scheduler is not None:
+            inference_scheduler.model = model
+            if profiler is not None:
+                profiler.set_metadata(
+                    inference_device=inference_scheduler.inference_device,
+                    training_device=inference_scheduler.training_device,
+                )
         model.learn(
             total_timesteps=config.total_training_steps,
             callback=callbacks,
@@ -508,6 +748,11 @@ def train_ppo(
         (run_dir / "run_summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         return result
     finally:
+        if inference_scheduler is not None:
+            # Defensive: never leave the policy on the inference device
+            # after an exception (final saves would record it).
+            inference_scheduler.exit_rollout()
+        evaluation_callback.close()
         if pipeline is not None:
             pipeline.close()
         resource_monitor.close()
