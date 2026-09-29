@@ -13,12 +13,11 @@ It NEVER invents latency numbers, throughput, or validation passes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-import json
 from pathlib import Path
 import platform
 import shutil
 import time
-from typing import Any, Sequence
+from typing import Any
 
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -327,7 +326,9 @@ class RuntimeValidator:
                 rewards = step_res.get("rewards", [])
                 dones = step_res.get("dones", [])
                 infos = step_res.get("infos", [])
-                if len(obs) != env_count or len(rewards) != env_count or len(dones) != env_count:
+                if any(
+                    len(values) != env_count for values in (obs, rewards, dones, infos)
+                ):
                     raise ValueError("Step response length mismatch")
 
             elapsed = max(time.perf_counter() - t0, 1e-6)
@@ -426,6 +427,11 @@ class RuntimeValidator:
                 # on stderr only, so attach the tail to the report; without it
                 # the check can only show the downstream shape mismatch.
                 if sp_transport is not None:
+                    # stderr is pumped on a background thread. Close joins
+                    # that pump before reading the tail; reading immediately
+                    # after the malformed response raced the pump and made
+                    # this diagnostic intermittently disappear.
+                    sp_transport.close()
                     stderr_tail = sp_transport.stderr_tail().strip()
                     if stderr_tail:
                         error_text = f"{error_text} | Godot stderr tail: {stderr_tail}"

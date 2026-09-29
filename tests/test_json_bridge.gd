@@ -44,7 +44,7 @@ func test_adapter_spaces_and_reset() -> SandboxTest:
 
 
 ## Regression: the exact MultiDiscrete format SB3 emits ([0..2, 0..2, 0..2,
-## 0..2, 0..1], shoot at index 4) must reach the weapon intact. If the shoot
+## 0..2, 0..1, 0..1], shoot at index 4) must reach the weapon intact. If the shoot
 ## bit were dropped or misread anywhere in the bridge/adapters, this test
 ## reports zero shots fired even though index 4 is set.
 func test_adapter_multidiscrete_shoot_reaches_simulation() -> SandboxTest:
@@ -63,13 +63,13 @@ func test_adapter_multidiscrete_shoot_reaches_simulation() -> SandboxTest:
 	env.enemies[0].position = Vector3(0.0, 0.0, 0.0)
 	env.agent.weapon.cooldown_remaining = 0.0
 
-	var result: Dictionary = adapter.step([[1, 1, 1, 1, 1]])
+	var result: Dictionary = adapter.step([[1, 1, 1, 1, 1, 0]])
 	t.assert_eq(result.infos[0].metrics.shots_fired, 1, "shoot bit at index 4 must fire the weapon")
 	t.assert_eq(result.infos[0].metrics.shots_hit, 1, "an aligned shot must hit")
 	t.assert_almost_eq(env.enemies[0].health, env.enemies[0].max_health - 25.0, 0.001)
 	t.assert_gt(float(result.rewards[0]), 0.9, "a hit must be net positive for the step")
 
-	var result_idle: Dictionary = adapter.step([[1, 1, 1, 1, 0]])
+	var result_idle: Dictionary = adapter.step([[1, 1, 1, 1, 0, 0]])
 	t.assert_eq(
 		result_idle.infos[0].metrics.shots_fired, 1,
 		"shoot=0 must not fire; the episode total must stay at one shot"

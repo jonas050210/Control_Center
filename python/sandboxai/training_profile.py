@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any
 
@@ -89,19 +90,58 @@ class TrainingProfiler:
             }
         )
 
+    @staticmethod
+    def _without_worker_prefix(name: str) -> str:
+        """Normalizes sharded names without losing eval/train prefixes.
+
+        A training shard records ``worker0.bridge.step.*`` while an
+        evaluation shard records ``eval.normal.worker0.bridge.step.*``.
+        Removing only the ``workerN`` path component lets aggregate phase
+        totals work for both layouts and keeps the detailed per-worker rows.
+        """
+        return ".".join(
+            component
+            for component in name.split(".")
+            if re.fullmatch(r"worker\d+", component) is None
+        )
+
     def report(self) -> dict[str, Any]:
         elapsed = max(time.perf_counter() - self.started, 0.0)
         timings = {name: value.to_dict() for name, value in sorted(self.timings.items())}
+
+        def aggregate_phase(name: str) -> float:
+            # A facade-level measurement is authoritative when present.
+            if name in timings:
+                return float(timings[name].get("total_seconds", 0.0))
+            matching = [
+                float(value.get("total_seconds", 0.0))
+                for timing_name, value in timings.items()
+                if self._without_worker_prefix(timing_name) == name
+            ]
+            # Worker request/wait windows overlap after ShardedBatchClient
+            # dispatches every request. Their sum is worker-time and can be
+            # N times wall time; max is the correct critical-path estimate.
+            # Encode/decode happen in the facade's serial send/receive loops,
+            # so those CPU phase totals are additive.
+            if "bridge." in name and (
+                name.endswith(".wait_response") or name.endswith(".step.total")
+            ):
+                return max(matching, default=0.0)
+            return sum(matching)
+
         phase_totals = {
-            name: timings.get(name, {}).get("total_seconds", 0.0)
+            name: aggregate_phase(name)
             for name in (
                 "ppo.rollout_collection",
                 "ppo.policy_update",
+                "ppo.optimizer_update",
                 "callback.evaluation",
                 "callback.checkpoint_save",
                 "callback.resource_snapshot",
                 "pipeline.step_hook",
                 "env.step_total",
+                "env.numpy_conversion",
+                "bridge.step.total",
                 "bridge.step.wait_response",
                 "bridge.step.json_encode",
                 "bridge.step.json_decode",
@@ -140,7 +180,8 @@ class TrainingProfiler:
             "iterations": list(self.iterations),
             "godot_server": dict(self.server),
             "notes": [
-                "Nested phases intentionally overlap (for example env.step_total includes bridge timings).",
+                "Nested phases intentionally overlap (for example env.step_total includes bridge timings, and ppo.policy_update includes ppo.optimizer_update).",
+                "Phase totals aggregate workerN-prefixed timings across shards; encode/decode CPU time is summed, while overlapping bridge request/wait windows use the maximum worker critical path.",
                 "bridge.*.wait_response includes pipe transit plus Godot parsing, simulation and response encoding.",
                 "godot_server separates those server-side phases when the running Godot bridge supports profiling.",
                 "eval.* buckets belong to the evaluation bridges only; they never fold into the training bridge.* buckets.",

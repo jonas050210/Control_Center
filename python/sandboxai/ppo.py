@@ -138,13 +138,18 @@ def train_ppo(
     config.validate()
     PPO, BaseCallback, CallbackList, CheckpointCallback = _require_sb3()
     device = config.resolved_device()
+    env_workers = config.resolved_env_workers()
+    rollout_length = config.resolved_rollout_length()
+    torch_threads = config.resolved_torch_threads()
     checkpoint_path = Path(resume_checkpoint).expanduser().resolve() if resume_checkpoint else None
     if checkpoint_path is not None and not checkpoint_path.is_file():
         raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint_path}")
-    if config.torch_threads > 0:
-        import torch  # type: ignore
+    # Never inherit an unbounded host-wide Torch pool for this small MLP.
+    # The resolved value is persisted below, so resource scheduling is as
+    # reproducible as the model/optimizer configuration.
+    import torch  # type: ignore
 
-        torch.set_num_threads(config.torch_threads)
+    torch.set_num_threads(torch_threads)
     # Resume artifacts stay inside the original run directory. A checkpoint
     # inside <run>/checkpoints/ maps to <run>; a checkpoint stored directly
     # in the run root (e.g. final.zip) maps to the run root itself, never to
@@ -165,17 +170,37 @@ def train_ppo(
     config.save(run_dir / "config.json")
 
     profiler = TrainingProfiler() if config.profile_training else None
+    algorithm_class = PPO
     if profiler is not None:
+        class ProfiledPPO(PPO):
+            """PPO with an exact timer around SB3's optimizer update."""
+
+            def train(self) -> None:
+                started = time.perf_counter()
+                try:
+                    super().train()
+                finally:
+                    profiler.record("ppo.optimizer_update", time.perf_counter() - started)
+
+        algorithm_class = ProfiledPPO
+        schedule = config.rollout_schedule()
         profiler.set_metadata(
             device=device,
             environment_count=config.environment_count,
             enemy_count=config.enemy_count,
-            rollout_length=config.rollout_length,
-            rollout_batch_size=config.rollout_length * config.environment_count,
+            rollout_length=rollout_length,
+            rollout_length_requested=config.rollout_length,
+            rollout_auto_sized=config.rollout_length == 0,
+            rollout_batch_size=rollout_length * config.environment_count,
             minibatch_size=config.batch_size,
+            ppo_epochs=config.ppo_epochs,
+            requested_timesteps=config.total_training_steps,
+            scheduled_timesteps=schedule["scheduled_timesteps"],
+            expected_updates=schedule["expected_updates"],
+            expected_timestep_overshoot=schedule["overshoot_timesteps"],
+            torch_threads=torch_threads,
             compact_training_infos=config.compact_training_infos,
         )
-    env_workers = config.resolved_env_workers()
     env = GodotVecEnv(**_env_kwargs(config, profiler=profiler, worker_count=env_workers))
     if profiler is not None:
         profiler.set_metadata(
@@ -251,6 +276,10 @@ def train_ppo(
             self.episode_metrics_buffer: list[dict[str, Any]] = []
             self.start_timesteps = 0
             self.target_timesteps = config.total_training_steps
+            self.action_decisions = 0
+            self.shoot_requests = 0
+            self.interval_action_decisions = 0
+            self.interval_shoot_requests = 0
 
         def _on_training_start(self) -> None:
             self.start_timesteps = self.num_timesteps
@@ -264,6 +293,10 @@ def train_ppo(
                 "device": device,
                 "run_start_timesteps": self.start_timesteps,
                 "total_training_steps": self.target_timesteps,
+                "requested_training_steps": config.total_training_steps,
+                "rollout_schedule": config.rollout_schedule(),
+                "ppo_epochs": config.ppo_epochs,
+                "torch_threads": torch_threads,
                 "net_arch": list(config.net_arch),
                 "learning_rate": config.learning_rate,
             }
@@ -281,6 +314,21 @@ def train_ppo(
                 # One attribute write per vector step: the pipeline stamps
                 # episode rows / curriculum transitions with real PPO time.
                 pipeline.timesteps = self.num_timesteps
+            # Count the policy output before it crosses JSON/bridge/weapon
+            # handling. This is the missing diagnostic for a zero-shot run:
+            # stochastic PPO exploration can now be distinguished from a
+            # deterministic eval argmax and from an engine-side drop.
+            actions = self.locals.get("actions", [])
+            if hasattr(actions, "tolist"):
+                actions = actions.tolist()
+            for action in actions:
+                values = action.tolist() if hasattr(action, "tolist") else list(action)
+                if len(values) > 4:
+                    self.action_decisions += 1
+                    self.interval_action_decisions += 1
+                    if int(values[4]) == 1:
+                        self.shoot_requests += 1
+                        self.interval_shoot_requests += 1
             infos = self.locals.get("infos", [])
             for info in infos:
                 if not isinstance(info, dict):
@@ -314,6 +362,13 @@ def train_ppo(
                     "environment_count": config.environment_count,
                     "device": device,
                     "current_checkpoint": str(checkpoints),
+                    "policy_action_decisions": self.interval_action_decisions,
+                    "policy_shoot_requests": self.interval_shoot_requests,
+                    "policy_shoot_request_rate": (
+                        self.interval_shoot_requests / self.interval_action_decisions
+                        if self.interval_action_decisions
+                        else 0.0
+                    ),
                     **resources,
                 }
                 if self.episode_metrics_buffer:
@@ -357,6 +412,8 @@ def train_ppo(
                 telemetry.write(payload)
                 if run_control is not None:
                     run_control.update(**payload)
+                self.interval_action_decisions = 0
+                self.interval_shoot_requests = 0
                 self.last_telemetry_step = self.num_timesteps
             return not stop_training
 
@@ -365,8 +422,16 @@ def train_ppo(
                 "event": "training_end",
                 "timesteps": self.num_timesteps,
                 "episodes": self.episode_count,
+                "policy_action_decisions": self.action_decisions,
+                "policy_shoot_requests": self.shoot_requests,
+                "policy_shoot_request_rate": (
+                    self.shoot_requests / self.action_decisions if self.action_decisions else 0.0
+                ),
             }
             telemetry.write(values)
+            if profiler is not None:
+                profiler.add("policy.action_decisions", self.action_decisions)
+                profiler.add("policy.shoot_requests", self.shoot_requests)
             if run_control is not None:
                 # CLI publishes Finished only after final checkpoints are
                 # safely written. Until then this is still stopping work.
@@ -758,16 +823,17 @@ def train_ppo(
     callbacks = CallbackList(callback_items)
     try:
         if checkpoint_path:
-            model = PPO.load(str(checkpoint_path), env=env, device=device)
+            model = algorithm_class.load(str(checkpoint_path), env=env, device=device)
             model.set_env(env)
             warm_start = {"transferred": False, "source": "resume checkpoint"}
         else:
-            model = PPO(
+            model = algorithm_class(
                 "MlpPolicy",
                 env,
                 learning_rate=config.learning_rate,
-                n_steps=config.rollout_length,
+                n_steps=rollout_length,
                 batch_size=config.batch_size,
+                n_epochs=config.ppo_epochs,
                 gamma=config.gamma,
                 gae_lambda=config.gae_lambda,
                 ent_coef=config.entropy_coefficient,
@@ -786,9 +852,18 @@ def train_ppo(
             (run_dir / "warm_start.json").write_text(json.dumps(warm_start, indent=2) + "\n", encoding="utf-8")
         if profiler is not None:
             rollout_samples = int(model.n_steps) * int(model.n_envs)
+            actual_updates = (
+                config.total_training_steps + rollout_samples - 1
+            ) // rollout_samples
             profiler.set_metadata(
                 ppo_epochs=int(model.n_epochs),
+                rollout_length=int(model.n_steps),
                 rollout_batch_size=rollout_samples,
+                expected_updates=actual_updates,
+                scheduled_timesteps=actual_updates * rollout_samples,
+                expected_timestep_overshoot=(
+                    actual_updates * rollout_samples - config.total_training_steps
+                ),
                 minibatch_size=int(model.batch_size),
                 minibatches_per_update=(
                     int(model.n_epochs)

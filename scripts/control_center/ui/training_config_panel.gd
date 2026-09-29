@@ -145,7 +145,7 @@ func setup(p_session) -> void:
 	add_child(advanced)
 	_learning_rate = _add_spin(advanced, "learning rate", 0.000001, 1.0, 0.0001, 0.0003)
 	_learning_rate.value_changed.connect(_on_learning_rate_changed)
-	_rollout = _add_spin(advanced, "rollout length", 1, 1_000_000, 1, 2048)
+	_rollout = _add_spin(advanced, "rollout length (0 = auto)", 0, 1_000_000, 1, 0)
 	_rollout.value_changed.connect(_on_rollout_changed)
 	_ppo_controls.append(_rollout)
 	_batch = _add_spin(advanced, "batch size", 1, 1_000_000, 1, 256)

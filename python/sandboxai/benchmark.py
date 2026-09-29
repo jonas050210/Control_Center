@@ -41,6 +41,20 @@ DEFAULT_ENVIRONMENT_COUNTS: tuple[int, ...] = (1, 2, 4, 8, 16, 24, 32, 48, 64)
 DEFAULT_WORKER_COUNTS: tuple[int, ...] = (1,)
 
 
+def percentile(values: list[float], quantile: float) -> float:
+    """Deterministic linearly interpolated percentile (seconds)."""
+    if not values:
+        return 0.0
+    if not 0.0 <= quantile <= 1.0:
+        raise ValueError("quantile must be in [0, 1]")
+    ordered = sorted(float(value) for value in values)
+    position = (len(ordered) - 1) * quantile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
 def benchmark_simulation(
     project_path: str | Path,
     godot_executable: str = "godot",
@@ -52,6 +66,7 @@ def benchmark_simulation(
     output_dir: str | Path | None = None,
     max_seconds_per_config: float = 20.0,
     worker_counts: list[int] | tuple[int, ...] = DEFAULT_WORKER_COUNTS,
+    compact_infos: bool = True,
 ) -> list[dict[str, Any]]:
     if steps < 1 or not environment_counts:
         raise ValueError("benchmark needs positive steps and at least one environment count")
@@ -74,6 +89,10 @@ def benchmark_simulation(
                 seed=seed,
                 curriculum_level=curriculum_level,
                 worker_count=worker_count,
+                # PPO uses compact non-terminal infos. Benchmark that real
+                # wire path by default; full diagnostics remain available as
+                # an explicit serialization-stress comparison.
+                compact_infos=compact_infos,
             )
             try:
                 client.reset(seed)
@@ -86,8 +105,11 @@ def benchmark_simulation(
                 deadline = started + max_seconds_per_config
                 episode_count = 0
                 completed_steps = 0
+                step_latencies: list[float] = []
                 for _ in range(steps):
+                    step_started = time.perf_counter()
                     _observations, _rewards, dones, _infos = client.step(actions)
+                    step_latencies.append(time.perf_counter() - step_started)
                     episode_count += int(dones.sum())
                     completed_steps += 1
                     if time.perf_counter() >= deadline:
@@ -101,9 +123,12 @@ def benchmark_simulation(
                     "total_steps": environment_count * completed_steps,
                     "elapsed_seconds": elapsed,
                     "steps_per_second": environment_count * completed_steps / elapsed,
+                    "vector_step_latency_p50_ms": percentile(step_latencies, 0.50) * 1000.0,
+                    "vector_step_latency_p95_ms": percentile(step_latencies, 0.95) * 1000.0,
                     "episodes": episode_count,
                     "episodes_per_second": episode_count / elapsed,
                     "time_boxed": completed_steps < steps,
+                    "info_mode": "compact_training" if compact_infos else "full_diagnostics",
                     "resources": resource_snapshot(),
                 }
                 results.append(row)
@@ -122,9 +147,12 @@ def benchmark_simulation(
                 "total_steps",
                 "elapsed_seconds",
                 "steps_per_second",
+                "vector_step_latency_p50_ms",
+                "vector_step_latency_p95_ms",
                 "episodes",
                 "episodes_per_second",
                 "time_boxed",
+                "info_mode",
             ]
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()

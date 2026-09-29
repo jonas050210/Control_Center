@@ -229,6 +229,7 @@ def build_manifest(
                 "learning_rate",
                 "rollout_length",
                 "batch_size",
+                "ppo_epochs",
                 "gamma",
                 "gae_lambda",
                 "entropy_coefficient",
@@ -238,11 +239,13 @@ def build_manifest(
                 "enemy_count",
             )
         },
+        "rollout_schedule": config.rollout_schedule(),
         "parallelism": {
             "environment_count": config.environment_count,
             "env_workers": config.env_workers,
             "resolved_env_workers": config.resolved_env_workers(),
             "torch_threads": config.torch_threads,
+            "resolved_torch_threads": config.resolved_torch_threads(),
         },
         "net_arch": list(config.net_arch),
         "config_file": "config.json",

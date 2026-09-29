@@ -1,7 +1,19 @@
 """Unit tests for the pure (Godot-free) parts of the benchmark module."""
 import unittest
 
-from sandboxai.benchmark import DEFAULT_ENVIRONMENT_COUNTS, summarize_scaling
+from sandboxai.benchmark import DEFAULT_ENVIRONMENT_COUNTS, percentile, summarize_scaling
+
+
+class PercentileTests(unittest.TestCase):
+    def test_empty_and_interpolated_percentiles(self):
+        self.assertEqual(percentile([], 0.95), 0.0)
+        self.assertEqual(percentile([4.0, 1.0, 3.0, 2.0], 0.0), 1.0)
+        self.assertEqual(percentile([4.0, 1.0, 3.0, 2.0], 1.0), 4.0)
+        self.assertAlmostEqual(percentile([1.0, 2.0, 3.0, 4.0], 0.5), 2.5)
+
+    def test_invalid_quantile_is_rejected(self):
+        with self.assertRaises(ValueError):
+            percentile([1.0], 1.1)
 
 
 class SummarizeScalingTests(unittest.TestCase):

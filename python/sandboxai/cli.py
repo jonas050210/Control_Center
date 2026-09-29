@@ -50,8 +50,14 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--enemy-count", type=int)
     parser.add_argument("--learning-rate", type=float)
-    parser.add_argument("--rollout-length", type=int)
+    parser.add_argument(
+        "--rollout-length",
+        type=int,
+        help="per-environment PPO horizon; 0 (default) keeps the aggregate rollout near 16k as env-count changes",
+    )
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--ppo-epochs", type=int)
+    parser.add_argument("--torch-threads", type=int, help="PyTorch CPU threads; 0 = bounded auto")
     parser.add_argument("--gamma", type=float)
     parser.add_argument("--gae-lambda", type=float)
     parser.add_argument("--entropy-coefficient", type=float)
@@ -458,6 +464,11 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--project-path", default="")
     benchmark.add_argument("--output-dir", default="training/benchmarks/latest")
     benchmark.add_argument("--max-seconds-per-config", type=float, default=20.0)
+    benchmark.add_argument(
+        "--full-infos",
+        action="store_true",
+        help="benchmark diagnostic-heavy wire responses instead of PPO's compact training path",
+    )
 
     benchmark_suites = sub.add_parser(
         "benchmark-suites",
@@ -563,7 +574,13 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     failures: list[str] = []
 
     # 1. Config test
-    config = TrainingConfig(environment_count=2, rollout_length=64, batch_size=32, total_training_steps=128, device=device).validate()
+    TrainingConfig(
+        environment_count=2,
+        rollout_length=64,
+        batch_size=32,
+        total_training_steps=128,
+        device=device,
+    ).validate()
     results["config_valid"] = True
 
     # 2. Dataset creation and validation. Observations use the real
@@ -815,6 +832,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output_dir,
             args.max_seconds_per_config,
             worker_counts=workers or (1,),
+            compact_infos=not args.full_infos,
         )
         print(json.dumps(result, indent=2, default=str))
         print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))

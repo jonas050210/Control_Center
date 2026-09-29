@@ -9,6 +9,13 @@ import threading
 import time
 from typing import Any, Callable
 
+from .action_audit import (
+    EpisodeActionAudit,
+    _raw_component_probabilities,
+    component_probabilities,
+    shoot_probability_at,
+    summarize_action_pipeline,
+)
 from .godot_env import GodotGymEnv
 
 
@@ -20,6 +27,10 @@ METRIC_KEYS = (
     "damage_received",
     "survival_time",
     "accuracy",
+    # Trigger pulls count shoot=1 requests that reached the engine, including
+    # cooldown/reload-blocked pulls. Comparing them with the policy-side
+    # counters below localizes a zero-shot result before changing rewards.
+    "trigger_pulls",
     "shots_fired",
     "shots_hit",
     "win",
@@ -59,6 +70,10 @@ class SynchronizedModel:
     def save(self, *args: Any, **kwargs: Any) -> Any:
         with self._lock:
             return self._model.save(*args, **kwargs)
+
+    def component_probabilities(self, observations: Any) -> list[Any] | None:
+        with self._lock:
+            return _raw_component_probabilities(self._model, observations)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._model, name)
@@ -169,12 +184,21 @@ def _evaluate_serial(
             total_reward = 0.0
             steps = 0
             last_info: dict[str, Any] = {}
+            action_audit = EpisodeActionAudit()
             while not done:
                 predict_started = time.perf_counter() if profiler is not None else 0.0
                 prediction = model.predict(observation, deterministic=True)
                 action = prediction[0] if isinstance(prediction, tuple) else prediction
                 if hasattr(action, "cpu"):
                     action = action.cpu().numpy()
+                # Sparse probability inspection is a second deterministic
+                # forward pass. Sampling every 64 steps keeps its cost tiny,
+                # and no RNG state changes because get_distribution does not
+                # call sample(). Exact selected actions are counted each tick.
+                probabilities = (
+                    component_probabilities(model, observation) if steps % 64 == 0 else None
+                )
+                action_audit.record(action, shoot_probability_at(probabilities))
                 if profiler is not None:
                     profiler.record("eval.normal.predict", time.perf_counter() - predict_started)
                     step_started = time.perf_counter()
@@ -191,6 +215,7 @@ def _evaluate_serial(
             metrics.setdefault("episode_length", steps)
             metrics["episode_index"] = episode_index
             metrics["seed"] = seed + episode_index
+            metrics.update(action_audit.summary())
             rows.append(metrics)
     finally:
         if owned:
@@ -285,6 +310,13 @@ def _summarize(
     summary["win_rate"] = summary.get("mean_win", 0.0)
     summary["loss_rate"] = summary.get("mean_loss", 0.0)
     summary["timeout_rate"] = summary.get("mean_truncated", 0.0)
+
+    action_pipeline = summarize_action_pipeline(rows)
+    summary["action_pipeline"] = action_pipeline
+    summary["policy_shoot_request_rate"] = action_pipeline["policy_shoot_request_rate"]
+    summary["mean_policy_shoot_probability"] = action_pipeline.get(
+        "mean_stochastic_shoot_probability"
+    )
     summary["episodes_detail"] = rows
     if output_dir is not None:
         write_evaluation_artifacts(summary, output_dir)
@@ -329,6 +361,11 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"mean damage dealt/received: {summary.get('mean_damage_dealt', 0.0):.3f} / {summary.get('mean_damage_received', 0.0):.3f}",
         f"mean survival time: {summary.get('mean_survival_time', 0.0):.3f}s",
         f"mean accuracy: {summary.get('mean_accuracy', 0.0):.2%}",
-        f"mean shots fired/hit: {summary.get('mean_shots_fired', 0.0):.3f} / {summary.get('mean_shots_hit', 0.0):.3f}",
+        f"mean trigger pulls / shots fired / hits: {summary.get('mean_trigger_pulls', 0.0):.3f} / {summary.get('mean_shots_fired', 0.0):.3f} / {summary.get('mean_shots_hit', 0.0):.3f}",
+        f"policy shoot request rate: {summary.get('policy_shoot_request_rate', 0.0):.2%}",
+        f"shoot path localization: {summary.get('action_pipeline', {}).get('localization', 'unavailable')}",
     ]
+    mean_probability = summary.get("mean_policy_shoot_probability")
+    if mean_probability is not None:
+        lines.append(f"mean stochastic P(shoot=1): {float(mean_probability):.2%}")
     return "\n".join(lines) + "\n"

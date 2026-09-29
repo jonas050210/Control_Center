@@ -284,17 +284,20 @@ The protocol the schema encodes:
 | --- | ---: |
 | Environments | 8, in `env_workers` Godot processes (default 1; `--env-workers N|auto` shards them) |
 | Total timesteps | 1,000,000 |
-| Rollout length | 2,048 per environment (16,384 transitions/update at 8 envs) |
+| Rollout length | auto (`0`): targets ≈16,384 transitions/update, capped at 2,048/environment; explicit positive values are exact |
 | Batch size | 256 |
 | Learning rate | `3e-4` |
 | Discount / GAE | `0.99` / `0.95` |
 | Entropy coefficient | `0.01` |
 | PPO clip | `0.2` |
 | Network | separate policy/value `[128,128]` Tanh MLPs |
-| PPO epochs | Not set by this repo; inherits the installed SB3 default (currently 10) |
+| PPO epochs | 10 (explicitly configured and persisted) |
+| PyTorch CPU threads | bounded auto (`0`): CPUs left after bridge workers, capped at 4; explicit positive values are exact |
 | Periodic save/evaluation | every 100k / 50k timesteps |
 | Normal evaluation | 20 deterministic episodes, up to 8 env slots |
 | Curriculum | auto, adaptive, starts level 1 |
+
+**CURRENT rollout/resource schedule.** `rollout_length=0` scales the per-environment horizon down as environment count rises, preserving approximately the historical 8 × 2,048 = 16,384-transition aggregate rollout (and preferring a nearby minibatch-divisible horizon when that changes it by at most 10%). This prevents environment-count scaling from silently reducing a 500k/48-env run to six collect→update cycles; `config.json`, startup telemetry, and the training profile record requested/resolved horizon, expected update count, scheduled full-rollout timesteps, and overshoot. A positive `rollout_length` always preserves the requested legacy geometry. `torch_threads=0` similarly resolves to a bounded host-aware pool after reserving CPUs for Godot workers; a positive value is exact.
 
 **CURRENT device path.** `device=auto` uses CUDA when PyTorch exposes it, otherwise CPU. `inference_device` may explicitly place rollout/evaluation forwards on CPU while PPO updates remain on CUDA; this avoids tiny per-step host/device transfers when they dominate. Changing inference device changes the RNG/device trajectory and is reproducible as a different experiment, not bit-identical to the old one.
 
@@ -313,6 +316,7 @@ The protocol the schema encodes:
 ### Evaluation
 
 - **CURRENT:** evaluation freezes weights and uses deterministic policy actions plus explicit episode seeds.
+- **CURRENT:** every evaluation counts policy-side action outputs before IPC and reports `policy_shoot_requests`/rate; sparse, RNG-neutral actor-head inspection reports stochastic `P(shoot=1)`. Reports compare those with engine `trigger_pulls` and `shots_fired` to localize a zero-shot result to policy argmax, bridge delivery, or weapon discharge without changing reward/combat behavior.
 - **CURRENT:** serial and vector evaluation run the same seed list; vector execution batches plans and restores result order.
 - **CURRENT:** normal and checkpoint-battery bridges persist across boundaries. In auto mode the two independent Godot processes simulate concurrently; access to the shared model is locked and both jobs join before selection/early stopping.
 - **CURRENT:** checkpoint batteries can run a 24-episode condition sample, held-out generalization cells (one episode/cell default), diagnostic skill summaries, optional replays, and optional league matches.
@@ -355,8 +359,8 @@ The protocol the schema encodes:
 
 - **CURRENT telemetry:** asynchronous JSONL writes, episode metrics, resource snapshots, TensorBoard, run summaries, and experiment comparison/summarization.
 - **CURRENT diagnostics:** aim, reaction, awareness, positioning, movement, combat, survival, and exploration skill groups. They are measurements, never reward terms.
-- **CURRENT profiling:** Python rollout/update/callback/model/bridge timings plus opt-in Godot parse/simulation/encode/write aggregates and request/response byte counters.
-- **CURRENT benchmark:** environment-count sweeps and five comparable suites—early curriculum, advanced curriculum, perception combat, map analyzer, weapon handling—at `1/4/8/16/32/64` environments. It reports measured throughput/resources only.
+- **CURRENT profiling:** Python rollout/update/callback/model/bridge timings (including the exact SB3 optimizer call) plus opt-in Godot parse/simulation/encode/write aggregates and request/response byte counters. Top-level phase totals aggregate sharded `workerN` buckets: serial encode/decode CPU phases are summed and overlapping request/wait windows use the slowest-worker critical path.
+- **CURRENT benchmark:** environment-count sweeps and five comparable suites—early curriculum, advanced curriculum, perception combat, map analyzer, weapon handling—at `1/4/8/16/32/64` environments. It reports measured throughput, p50/p95 vector-step latency, and resources only. The default wire mode matches PPO's compact non-terminal infos; `benchmark --full-infos` explicitly measures diagnostic serialization instead.
 - **CURRENT Control Center:** watch/training-throughput/human modes, exact pause/step/speed controls, one lazily rendered environment, perception and observation inspectors, result/metric/replay tabs, and a background system monitor. It does not train or run a neural checkpoint inside Godot.
 - **CURRENT run inspection:** `python/sandboxai/run_inspection.py` + `sandboxai inspect-runs` are a strictly read-only backend over the run directory layout (state with the evidence it came from, progress, checkpoint/evaluation inventory, log sizes, manifest provenance, `problems` vs `warnings`). Documents are versioned (`sandboxai.run_report/v1`, `sandboxai.run_index/v1`); the Control Center consumes them instead of re-implementing the layout in GDScript.
 - **CURRENT replay:** light deterministic replays for routine capture; detailed observations for debugging contract or nondeterminism. `interesting` mode is default and capped at 64/run.

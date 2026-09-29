@@ -327,6 +327,27 @@ func test_try_attack_accepts_empty_events_and_stub_rng() -> SandboxTest:
 	return t
 
 
+## Bug: EnvironmentCore claimed navigation was lazy, but tactical setup
+## called `_ensure_navigation()` unconditionally on the first step. Every
+## level-5+ environment therefore paid an A* grid bake even when direct
+## steering worked for the whole episode.
+func test_tactical_navigation_bakes_only_after_an_enemy_is_stuck() -> SandboxTest:
+	var t := SandboxTest.new("tactical_navigation_is_actually_lazy")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(CurriculumConfig.Level.OBSTACLES_COVER)
+	env.reset(123)
+	t.assert_eq(env.navigation, null)
+
+	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
+	t.assert_eq(env.navigation, null, "an ordinary direct-steering tick must not bake a graph")
+
+	var enemy: EnemyState = env.enemies[0]
+	enemy.navigation.stuck_time = SandboxConfig.NAV_STUCK_TIME
+	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
+	t.assert_true(env.navigation != null, "stuck evidence must trigger the one shared graph bake")
+	return t
+
+
 ## Bug: `agent_panel.gd` declared a private helper called `_set`, which is
 ## the engine's `Object::_set(StringName, Variant) -> bool` virtual. Godot
 ## 4.7 validates virtual signatures at compile time and rejected the whole

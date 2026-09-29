@@ -30,6 +30,12 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Sequence
 
+from .action_audit import (
+    EpisodeActionAudit,
+    component_probabilities,
+    shoot_probability_at,
+    summarize_action_pipeline,
+)
 from .conditions import MAP_IDS, Condition, ConditionTracker, generalization_report
 from .curriculum_stages import (
     TRAINABLE_MAX_LEVEL,
@@ -175,6 +181,7 @@ class PlanExecutor:
         in_flight: list[tuple[int, PlannedEpisode] | None] = [None] * count
         pending: list[tuple[int, PlannedEpisode] | None] = [None] * count
         recorders: list[ReplayRecorder | None] = [None] * count
+        action_audits = [EpisodeActionAudit() for _ in range(count)]
         rewards_per_env = [0.0] * count
         steps_per_env = [0] * count
         rows: list[tuple[int, dict[str, Any]]] = []
@@ -192,7 +199,9 @@ class PlanExecutor:
         observations, _infos = self.client.reset(None)
         for env_index, item in enumerate(in_flight):
             if item is not None:
-                self._begin(env_index, item[1], sink, recorders, policy_id, checkpoint)
+                self._begin(
+                    env_index, item[1], sink, recorders, action_audits, policy_id, checkpoint
+                )
 
         # Fill the bridge's one-plan pending slot immediately. When the
         # current episode ends, Godot consumes this plan in the auto-reset it
@@ -210,6 +219,19 @@ class PlanExecutor:
             actions = prediction[0] if isinstance(prediction, tuple) else prediction
             if hasattr(actions, "cpu"):
                 actions = actions.cpu().numpy()
+            audit_probability = any(
+                item is not None and steps_per_env[env_index] % 64 == 0
+                for env_index, item in enumerate(in_flight)
+            )
+            probabilities = component_probabilities(model, batch) if audit_probability else None
+            for env_index, item in enumerate(in_flight):
+                if item is not None:
+                    shoot_probability = (
+                        shoot_probability_at(probabilities, env_index)
+                        if steps_per_env[env_index] % 64 == 0
+                        else None
+                    )
+                    action_audits[env_index].record(actions[env_index], shoot_probability)
             if self.profiler is not None:
                 self.profiler.record("predict", time.monotonic() - predict_started)
                 step_started = time.monotonic()
@@ -240,7 +262,15 @@ class PlanExecutor:
                     (
                         position,
                         self._harvest(
-                            env_index, plan, metrics, sink, recorders, policy_id, checkpoint, replay_dir
+                            env_index,
+                            plan,
+                            metrics,
+                            sink,
+                            recorders,
+                            action_audits,
+                            policy_id,
+                            checkpoint,
+                            replay_dir,
                         ),
                     )
                 )
@@ -254,7 +284,13 @@ class PlanExecutor:
                 in_flight[env_index] = next_item
                 if next_item is not None:
                     self._begin(
-                        env_index, next_item[1], sink, recorders, policy_id, checkpoint
+                        env_index,
+                        next_item[1],
+                        sink,
+                        recorders,
+                        action_audits,
+                        policy_id,
+                        checkpoint,
                     )
                     restage_indices.append(env_index)
             if restage_indices:
@@ -289,9 +325,11 @@ class PlanExecutor:
         plan: PlannedEpisode,
         sink: SkillMetricsSink | None,
         recorders: list[ReplayRecorder | None],
+        action_audits: list[EpisodeActionAudit],
         policy_id: str,
         checkpoint: str,
     ) -> None:
+        action_audits[env_index].reset()
         if sink is not None:
             plan_stub = EpisodePlan(
                 index=0,
@@ -328,6 +366,7 @@ class PlanExecutor:
         metrics: dict[str, Any],
         sink: SkillMetricsSink | None,
         recorders: list[ReplayRecorder | None],
+        action_audits: list[EpisodeActionAudit],
         policy_id: str,
         checkpoint: str,
         replay_dir: str | Path | None,
@@ -352,6 +391,7 @@ class PlanExecutor:
         row.setdefault("win", False)
         row.setdefault("episode_reward", 0.0)
         row.setdefault("episode_length", 0)
+        row.update(action_audits[env_index].summary())
         summary = sink.finish(env_index, result={"win": bool(row.get("win", False))}) if sink else None
         if summary is not None:
             row["skill"] = summary.get("categories", {})
@@ -858,6 +898,7 @@ def run_checkpoint_evaluation(
                 int(row.get("episode_length", 0)),
             )
         cond_report = generalization_report(tracker, top_n=5)
+        cond_report["action_pipeline"] = summarize_action_pipeline(condition_rows)
         cond_report["episodes_detail"] = condition_rows
         cond_report["distribution"] = "union_of_curriculum_ladder_eval_seeds"
         report["condition_evaluation"] = cond_report
@@ -891,6 +932,7 @@ def run_checkpoint_evaluation(
             generalization = suite.report()
             generalization["suite_level"] = suite.level
             generalization["trained_level"] = trained_level
+            generalization["action_pipeline"] = summarize_action_pipeline(generalization_rows)
             generalization["episodes_detail"] = generalization_rows
             report["generalization"] = generalization
             suite.export(destination)
