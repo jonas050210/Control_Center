@@ -8,7 +8,10 @@ import queue
 import subprocess
 import threading
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .training_profile import TrainingProfiler
 
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -38,6 +41,7 @@ class GodotProcessTransport:
         curriculum_level: int = 3,
         request_timeout: float = 30.0,
         self_play: bool = False,
+        profiler: "TrainingProfiler | None" = None,
     ) -> None:
         project = Path(normalize_host_path(project_path)).expanduser().resolve()
         if not project.exists():
@@ -45,6 +49,7 @@ class GodotProcessTransport:
         executable = find_godot_executable(godot_executable)
         self.executable = executable
         self.request_timeout = request_timeout
+        self.profiler = profiler
         # WSL driving the Windows Godot build: the project path must reach the
         # engine in Windows form (C:\...) and the spawn must survive a refused
         # direct .exe launch (cmd.exe fallback). Everywhere else this adapter
@@ -72,6 +77,10 @@ class GodotProcessTransport:
             # Two-agent match batch (league evaluation); see
             # scripts/rl/self_play_adapter.gd for the wire shapes.
             command += ["--self-play", "1"]
+        if profiler is not None:
+            # Godot's aggregate server timings split the Python-side
+            # wait_response bucket into parse/simulation/encode/write phases.
+            command += ["--profile", "1"]
         self.process = interop.popen(
             command,
             stdin=subprocess.PIPE,
@@ -124,14 +133,26 @@ class GodotProcessTransport:
         if self._closed or self.process.poll() is not None:
             raise RuntimeError("Godot bridge process is not running")
         assert self.process.stdin is not None
+        profiler = self.profiler
+        command = str(payload.get("cmd", "unknown"))
+        total_started = time.perf_counter() if profiler is not None else 0.0
+        encode_started = time.perf_counter() if profiler is not None else 0.0
+        encoded = json.dumps(payload, separators=(",", ":")) + "\n"
+        if profiler is not None:
+            profiler.record(f"bridge.{command}.json_encode", time.perf_counter() - encode_started)
+            profiler.add(f"bridge.{command}.request_bytes", len(encoded.encode("utf-8")))
         try:
-            self.process.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            write_started = time.perf_counter() if profiler is not None else 0.0
+            self.process.stdin.write(encoded)
             self.process.stdin.flush()
+            if profiler is not None:
+                profiler.record(f"bridge.{command}.write_flush", time.perf_counter() - write_started)
         except (BrokenPipeError, OSError) as exc:
             raise RuntimeError(f"Godot bridge pipe is broken. {self.stderr_tail()}") from exc
         # Godot can emit startup informational lines. Only protocol JSON is
         # accepted; a malformed protocol response is a hard error.
         deadline = time.monotonic() + self.request_timeout
+        wait_started = time.perf_counter() if profiler is not None else 0.0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -145,10 +166,17 @@ class GodotProcessTransport:
                 continue
             if line is None:
                 raise RuntimeError(f"Godot bridge exited without a response. {self.stderr_tail()}")
+            decode_started = time.perf_counter() if profiler is not None else 0.0
             try:
                 response = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if profiler is not None:
+                now = time.perf_counter()
+                profiler.record(f"bridge.{command}.wait_response", decode_started - wait_started)
+                profiler.record(f"bridge.{command}.json_decode", now - decode_started)
+                profiler.record(f"bridge.{command}.total", now - total_started)
+                profiler.add(f"bridge.{command}.response_bytes", len(line.encode("utf-8")))
             if not response.get("ok", False):
                 raise RuntimeError(response.get("error", "Godot bridge returned an error"))
             return response
@@ -189,8 +217,15 @@ class GodotProcessTransport:
 
 
 class GodotBatchClient:
-    def __init__(self, **kwargs: Any) -> None:
-        self.transport = GodotProcessTransport(**kwargs)
+    def __init__(
+        self,
+        compact_infos: bool = False,
+        profiler: "TrainingProfiler | None" = None,
+        **kwargs: Any,
+    ) -> None:
+        self.profiler = profiler
+        self.compact_infos = bool(compact_infos)
+        self.transport = GodotProcessTransport(profiler=profiler, **kwargs)
         if np is None:
             self.close()
             raise RuntimeError("numpy is required by the Python environment adapter")
@@ -224,13 +259,25 @@ class GodotBatchClient:
         return response.get("results", [])
 
     def step(self, actions):
+        profiler = self.profiler
+        started = time.perf_counter() if profiler is not None else 0.0
         if hasattr(actions, "tolist"):
             actions = actions.tolist()
-        response = self.transport.request({"cmd": "step", "actions": actions})
+        response = self.transport.request(
+            {
+                "cmd": "step",
+                "actions": actions,
+                "compact_infos": self.compact_infos,
+            }
+        )
+        convert_started = time.perf_counter() if profiler is not None else 0.0
         observations = np.asarray(response["observations"], dtype=np.float32)
         rewards = np.asarray(response["rewards"], dtype=np.float32)
         dones = np.asarray(response["dones"], dtype=np.bool_)
         infos = response.get("infos", [{} for _ in range(self.environment_count)])
+        if profiler is not None:
+            profiler.record("env.numpy_conversion", time.perf_counter() - convert_started)
+            profiler.record("env.step_total", time.perf_counter() - started)
         return observations, rewards, dones, infos
 
     def health_check(self):
@@ -266,6 +313,18 @@ class GodotBatchClient:
 
     def ping(self):
         return self.transport.request({"cmd": "ping"})
+
+    def profile_snapshot(self) -> dict[str, Any]:
+        """Returns optional aggregate timings from a profiling Godot server."""
+        if self.profiler is None:
+            return {"available": False, "reason": "profiling disabled"}
+        try:
+            return self.transport.request({"cmd": "profile_snapshot"}).get("profile", {})
+        except RuntimeError as exc:
+            # Older/fake bridges need not implement diagnostics. Training and
+            # its Python-side profile remain valid when this optional command
+            # is unavailable.
+            return {"available": False, "reason": str(exc)}
 
     def close(self) -> None:
         self.transport.close()
@@ -348,6 +407,7 @@ if VecEnv is not None:
             if np is None or spaces is None:
                 raise RuntimeError("numpy and gymnasium are required for PPO")
             self.client = GodotBatchClient(**kwargs)
+            self.profiler = self.client.profiler
             self.environment_count = self.client.environment_count
             observation_space = spaces.Box(
                 low=-1.0,
@@ -373,7 +433,10 @@ if VecEnv is not None:
             observations, self.reset_infos = self.client.reset(seed)
             self._reset_seeds()
             if self.reset_hook is not None:
+                hook_started = time.perf_counter() if self.profiler is not None else 0.0
                 self.reset_hook(observations)
+                if self.profiler is not None:
+                    self.profiler.record("pipeline.reset_hook", time.perf_counter() - hook_started)
             return observations
 
         def step_async(self, actions):
@@ -389,7 +452,10 @@ if VecEnv is not None:
                     reason = str(info.get("done_reason", info.get("metrics", {}).get("done_reason", "")))
                     info["TimeLimit.truncated"] = (reason == "timeout")
             if self.step_hook is not None:
+                hook_started = time.perf_counter() if self.profiler is not None else 0.0
                 self.step_hook(self.actions, observations, rewards, dones, infos)
+                if self.profiler is not None:
+                    self.profiler.record("pipeline.step_hook", time.perf_counter() - hook_started)
             return observations, rewards, dones, infos
 
         def close(self):

@@ -94,39 +94,85 @@ process RSS, CUDA allocated/reserved memory if PyTorch+CUDA are available).
 with the best measured throughput and flags where returns start
 diminishing relative to environment-count growth.
 
-### Where the bottleneck actually is
+### Profiling the complete PPO path
 
-This project could not run the benchmark against a real Godot binary or the
-target RTX 4060 Ti 8GB GPU inside this development sandbox (no Godot
-executable or NVIDIA GPU is available here — see the Limitations section of
-the final report). The architecture itself, however, makes the likely
-bottleneck predictable and worth stating honestly instead of guessing at
-numbers:
+Use the opt-in profiler for a representative training run:
 
-- **Not VRAM/GPU compute.** The policy is a tiny 2-layer MLP (default
-  `net_arch=(128,128)`) over an 84-float vector. This needs a few hundred KB
-  of parameters; an RTX 4060 Ti 8GB is enormous overkill for this network,
-  and training is very unlikely to be GPU-compute-bound. GPU time is mostly
-  idle waiting for environment steps.
-- **Likely bottleneck: the single-process JSON-lines bridge and Python's
-  GIL.** All N environments run inside *one* Godot process, and Python talks
-  to it over one stdin/stdout pipe, one request/response round-trip per PPO
-  rollout step (batched: all N actions go in one `step` request, all N
-  observations come back in one response). This means:
-  - Godot's own per-step simulation cost (analytic, no physics — cheap) is
-    likely not the limiter at low environment counts.
-  - JSON parsing/serialization cost per step scales with N and with
-    observation width (84 floats per environment per step is
-    still small, but not zero).
-  - Both the Godot process and the Python process are single-threaded for
-    this bridge traffic (only stderr draining runs on a helper thread), so
-    very large N eventually bottlenecks on serialization + IPC rather than
-    on actual simulation math.
-- **CPU** (single-core-bound serialization/IPC, and Godot's own script
-  execution) is the most likely practical ceiling, well before RAM or VRAM.
-- **RAM** should stay modest — analytic state per environment is a handful
-  of small objects, not full physics/render scenes (`create_visuals=false`
-  headless mode never allocates render nodes).
+```bash
+sandboxai train --env-count 4 --enemy-count 1 --seed 42 \
+  --steps 106496 --device cpu --profile-training
+```
+
+The run writes `logs/training_profile.json`. It measures:
+
+- rollout collection versus the blocking PPO update after each rollout;
+- environment step time, NumPy conversion and integrated-pipeline hook time;
+- Python JSON encode, pipe write/flush, response wait and JSON decode time,
+  plus byte totals per bridge command;
+- Godot request parse, command handling (including `command_step`), response
+  encode and stdout write time when the bridge supports the profiling command;
+- synchronous evaluation, checkpoint saves and resource-snapshot lookup;
+- one row per PPO iteration, which makes periodic throughput cliffs visible.
+
+Profiling is aggregate rather than a per-step trace, and is disabled by
+default. Timings are nested: for example, `env.step_total` includes all
+`bridge.step.*` buckets, while `bridge.step.wait_response` includes Godot and
+pipe transit. The Godot-side section is what separates simulation from that
+wait bucket.
+
+### What causes the reported FPS drops
+
+The displayed SB3 FPS is a cumulative training rate, not a pure environment
+step rate. With 4 environments and the default rollout length 2048, each PPO
+iteration collects 8192 actual timesteps and then stops stepping Godot while
+PPO performs its default 10 epochs: `10 * 8192 / 256 = 320` minibatch updates.
+The first SB3 FPS row has not yet paid an update; later rows have. A large
+stepwise fall after each rollout is therefore expected even with an infinitely
+fast environment.
+
+The compact `(84 -> 128 -> 128)` MLP produces many very small matrix and
+distribution operations. On CUDA, launch, host/device transfer and framework
+synchronization overhead dominate these tiny kernels; low utilization and
+~0.75 GB allocated VRAM are evidence of under-filled hardware, not a request
+for a larger GPU. CPU being about twice as fast for the reported workload is
+consistent with that shape.
+
+Other intentional stop-the-world work is easy to distinguish in the profile:
+
+- evaluation is synchronous at every `evaluation_frequency`; auto-curriculum
+  mode also runs the configured checkpoint condition/generalization battery;
+- checkpoint serialization is synchronous;
+- an auto-curriculum episode boundary stages the next plans through one extra
+  bridge request, while episode logging/replay selection runs in the trainer
+  thread;
+- a Control Center-managed run polls its cooperative command file from the
+  per-vector-step callback.
+
+### Removed avoidable overhead
+
+Two hot-path costs were unnecessary and are now avoided without changing
+observations, actions, rewards, episode boundaries, RNG use or PPO data:
+
+1. Training telemetry used to launch `nvidia-smi` synchronously every 100
+   vector steps (every 400 actual timesteps with 4 environments). A 106,496
+   timestep run therefore launched it about 266 times. It now runs in a
+   bounded background `ResourceMonitor`; the callback only copies the latest
+   sample. A slow/missing probe can no longer pause rollout collection.
+2. Every non-terminal step used to construct and serialize a full cumulative
+   episode-metrics dictionary (including reward breakdown) and a per-step
+   reward-components dictionary. PPO, skill metrics and replay recording use
+   the event dictionary on those steps and consume cumulative metrics only at
+   episode end. `compact_training_infos` (on by default, independently
+   disableable in config/CLI) retains events and exact terminal metrics while
+   omitting only those redundant non-terminal dictionaries. The public
+   `GodotBatchClient` default remains full-info mode.
+
+A schema-representative 4-environment JSON sample was 13,576 bytes in full
+mode and 8,592 bytes in compact mode (36.7% smaller); Python `json.loads` on
+this sandbox fell from 103.2 us to 73.7 us per response (28.6%). These are
+serialization microbenchmarks, not claimed Godot/Windows end-to-end FPS.
+Run the profile above on the target Windows/WSL machine for authoritative
+before/after wall time.
 
 ### Practical guidance
 

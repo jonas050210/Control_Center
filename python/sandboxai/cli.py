@@ -44,6 +44,18 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--experiment-id", default=None)
     parser.add_argument("--bc-checkpoint", default=None)
+    parser.add_argument(
+        "--profile-training",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="write logs/training_profile.json with PPO/bridge/callback wall-time breakdowns",
+    )
+    parser.add_argument(
+        "--compact-training-infos",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="omit redundant non-terminal metrics/reward components from bridge step responses",
+    )
     # --- Integrated research pipeline (defaults live in TrainingConfig) ---
     parser.add_argument(
         "--curriculum-mode",

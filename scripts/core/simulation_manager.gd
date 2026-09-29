@@ -278,7 +278,11 @@ func all_environments_planned() -> bool:
 ## Steps every environment. When auto-reset is enabled, the returned result
 ## retains the terminal observation under terminal_observation and returns the
 ## fresh reset observation in observation, matching Gym vector semantics.
-func step_all(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Array:
+func step_all(
+	actions: Array,
+	dt: float = SandboxConfig.SIMULATION_DT,
+	compact_info: bool = false
+) -> Array:
 	var results: Array = []
 	for i in range(environments.size()):
 		var env: EnvironmentCore = environments[i]
@@ -295,7 +299,7 @@ func step_all(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Array:
 			if recorder != null and recorder.has_method("record_transition")
 			else PackedFloat32Array()
 		)
-		var result: Dictionary = env.step(action, dt)
+		var result: Dictionary = env.step(action, dt, compact_info)
 		_last_step_rewards[i] = float(result.get("reward", 0.0))
 		_last_step_dones[i] = bool(result.get("done", false))
 		_last_actions[i] = action

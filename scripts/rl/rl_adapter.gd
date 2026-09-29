@@ -65,12 +65,14 @@ func reset_indices(indices: Array, seed_base: int = -1) -> Array:
 	return observations
 
 
-func step(actions: Array) -> Dictionary:
+func step(actions: Array, compact_info: bool = false) -> Dictionary:
 	var resolved: Array = []
 	for action_value in actions:
 		resolved.append(_resolve_action(action_value))
 
-	var results: Array = simulation_manager.step_all(resolved)
+	var results: Array = simulation_manager.step_all(
+		resolved, SandboxConfig.SIMULATION_DT, compact_info
+	)
 	var observations: Array = []
 	var rewards: Array = []
 	var dones: Array = []

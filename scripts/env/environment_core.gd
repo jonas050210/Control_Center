@@ -434,7 +434,11 @@ func _world_enabled() -> bool:
 	)
 
 
-func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary:
+func step(
+	action: Action,
+	dt: float = SandboxConfig.SIMULATION_DT,
+	compact_info: bool = false
+) -> Dictionary:
 	if not _has_reset:
 		reset(SandboxConfig.DEFAULT_RANDOM_SEED)
 
@@ -560,16 +564,23 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		episode.mark_done(reason)
 
 	_last_observation = _build_observation()
-	return _make_step_result(
-		reward,
-		{
-			"events": events,
-			"reward_components": reward_components,
-			"done_reason": episode.done_reason,
-			"TimeLimit.truncated": episode.done_reason == "timeout",
-			"metrics": get_metrics()
-		}
-	)
+	var info: Dictionary = {
+		"events": events,
+		"done_reason": episode.done_reason,
+		"TimeLimit.truncated": episode.done_reason == "timeout",
+	}
+	if not compact_info:
+		# Full diagnostics remain the default for direct Godot callers and the
+		# public bridge. PPO does not consume either dictionary on ordinary
+		# non-terminal steps, so its compact wire mode avoids constructing and
+		# serializing them thousands of times per rollout.
+		info["reward_components"] = reward_components
+		info["metrics"] = get_metrics()
+	elif done:
+		# Episode summaries are consumed by evaluation, curriculum, telemetry
+		# and replay selection and therefore remain exact in compact mode.
+		info["metrics"] = get_metrics()
+	return _make_step_result(reward, info)
 
 
 # ---------------------------------------------------------------------------

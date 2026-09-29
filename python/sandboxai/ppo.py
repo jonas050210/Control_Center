@@ -9,7 +9,8 @@ from typing import Any, TYPE_CHECKING
 from .config import TrainingConfig
 from .evaluation import evaluate_model
 from .godot_env import GodotVecEnv
-from .telemetry import JsonlTelemetry, resource_snapshot
+from .telemetry import JsonlTelemetry, ResourceMonitor
+from .training_profile import TrainingProfiler
 
 if TYPE_CHECKING:
     from .run_control import RunControl
@@ -27,15 +28,22 @@ def _require_sb3():
     return PPO, BaseCallback, CallbackList, CheckpointCallback
 
 
-def _env_kwargs(config: TrainingConfig) -> dict[str, Any]:
-    return {
+def _env_kwargs(
+    config: TrainingConfig,
+    profiler: TrainingProfiler | None = None,
+) -> dict[str, Any]:
+    values: dict[str, Any] = {
         "project_path": config.project,
         "godot_executable": config.godot_executable,
         "environment_count": config.environment_count,
         "enemy_count": config.enemy_count,
         "seed": config.seed,
         "curriculum_level": config.curriculum_level,
+        "compact_infos": config.compact_training_infos,
     }
+    if profiler is not None:
+        values["profiler"] = profiler
+    return values
 
 
 def train_ppo(
@@ -72,7 +80,24 @@ def train_ppo(
     evaluations.mkdir(parents=True, exist_ok=True)
     config.save(run_dir / "config.json")
 
-    env = GodotVecEnv(**_env_kwargs(config))
+    profiler = TrainingProfiler() if config.profile_training else None
+    if profiler is not None:
+        profiler.set_metadata(
+            device=device,
+            environment_count=config.environment_count,
+            enemy_count=config.enemy_count,
+            rollout_length=config.rollout_length,
+            rollout_batch_size=config.rollout_length * config.environment_count,
+            minibatch_size=config.batch_size,
+            compact_training_infos=config.compact_training_infos,
+        )
+    env = GodotVecEnv(**_env_kwargs(config, profiler=profiler))
+    if profiler is not None:
+        profiler.set_metadata(
+            observation_floats=env.client.observation_dim,
+            action_components=len(env.action_space.nvec),
+        )
+    resource_monitor = ResourceMonitor()
     telemetry = JsonlTelemetry(logs / "training.jsonl")
     # Integrated research pipeline (curriculum plans at episode boundaries,
     # skill metrics, replays, per-condition tracking, checkpoint battery).
@@ -159,6 +184,12 @@ def train_ppo(
                 completed_steps = max(0, self.num_timesteps - self.start_timesteps)
                 steps_per_second = completed_steps / elapsed
                 remaining_steps = max(0, self.target_timesteps - self.num_timesteps)
+                resource_started = time.perf_counter() if profiler is not None else 0.0
+                resources = resource_monitor.snapshot()
+                if profiler is not None:
+                    profiler.record(
+                        "callback.resource_snapshot", time.perf_counter() - resource_started
+                    )
                 payload: dict[str, Any] = {
                     "event": "progress",
                     "timesteps": self.num_timesteps,
@@ -173,7 +204,7 @@ def train_ppo(
                     "environment_count": config.environment_count,
                     "device": device,
                     "current_checkpoint": str(checkpoints),
-                    **resource_snapshot(),
+                    **resources,
                 }
                 if self.episode_metrics_buffer:
                     buf = self.episode_metrics_buffer
@@ -251,6 +282,7 @@ def train_ppo(
                 return False
             if self.num_timesteps < self.next_evaluation:
                 return True
+            evaluation_started = time.perf_counter() if profiler is not None else 0.0
             eval_kwargs = _env_kwargs(config)
             eval_kwargs["environment_count"] = max(1, config.evaluation_environment_count)
             summary = evaluate_model(
@@ -325,9 +357,60 @@ def train_ppo(
             # evaluations.
             while self.next_evaluation <= self.num_timesteps:
                 self.next_evaluation += config.evaluation_frequency
+            if profiler is not None:
+                profiler.record(
+                    "callback.evaluation", time.perf_counter() - evaluation_started
+                )
             return not stop_training
 
-    checkpoint_callback = CheckpointCallback(
+    class TimedCheckpointCallback(CheckpointCallback):
+        def _on_step(self) -> bool:
+            should_save = self.n_calls % self.save_freq == 0
+            started = time.perf_counter() if profiler is not None and should_save else 0.0
+            keep_going = super()._on_step()
+            if profiler is not None and should_save:
+                profiler.record("callback.checkpoint_save", time.perf_counter() - started)
+            return keep_going
+
+    class ProfilingCallback(BaseCallback):
+        def __init__(self) -> None:
+            super().__init__()
+            self.rollout_started = 0.0
+            self.update_started = 0.0
+            self.pending_rollout: tuple[float, int] | None = None
+            self.iteration = 0
+
+        def _finish_update(self) -> None:
+            if profiler is None or self.pending_rollout is None:
+                return
+            update_seconds = max(0.0, time.perf_counter() - self.update_started)
+            rollout_seconds, timesteps = self.pending_rollout
+            profiler.record("ppo.policy_update", update_seconds)
+            self.iteration += 1
+            profiler.add_iteration(
+                self.iteration, rollout_seconds, update_seconds, timesteps
+            )
+            self.pending_rollout = None
+
+        def _on_rollout_start(self) -> None:
+            self._finish_update()
+            self.rollout_started = time.perf_counter()
+
+        def _on_rollout_end(self) -> None:
+            if profiler is None:
+                return
+            rollout_seconds = max(0.0, time.perf_counter() - self.rollout_started)
+            profiler.record("ppo.rollout_collection", rollout_seconds)
+            self.pending_rollout = (rollout_seconds, self.num_timesteps)
+            self.update_started = time.perf_counter()
+
+        def _on_training_end(self) -> None:
+            self._finish_update()
+
+        def _on_step(self) -> bool:
+            return True
+
+    checkpoint_callback = TimedCheckpointCallback(
         save_freq=max(1, config.checkpoint_frequency // config.environment_count),
         save_path=str(checkpoints),
         name_prefix="ppo",
@@ -335,7 +418,10 @@ def train_ppo(
         save_vecnormalize=False,
     )
     metrics_callback = MetricsCallback()
-    callbacks = CallbackList([checkpoint_callback, metrics_callback, EvaluationCallback()])
+    callback_items = [checkpoint_callback, metrics_callback, EvaluationCallback()]
+    if profiler is not None:
+        callback_items.insert(0, ProfilingCallback())
+    callbacks = CallbackList(callback_items)
     try:
         if checkpoint_path:
             model = PPO.load(str(checkpoint_path), env=env, device=device)
@@ -364,6 +450,17 @@ def train_ppo(
                 warm_start = load_bc_into_sb3_policy(model.policy, config.bc_checkpoint, device=device)
                 warm_start["source"] = config.bc_checkpoint
             (run_dir / "warm_start.json").write_text(json.dumps(warm_start, indent=2) + "\n", encoding="utf-8")
+        if profiler is not None:
+            rollout_samples = int(model.n_steps) * int(model.n_envs)
+            profiler.set_metadata(
+                ppo_epochs=int(model.n_epochs),
+                rollout_batch_size=rollout_samples,
+                minibatch_size=int(model.batch_size),
+                minibatches_per_update=(
+                    int(model.n_epochs)
+                    * ((rollout_samples + int(model.batch_size) - 1) // int(model.batch_size))
+                ),
+            )
         model.learn(
             total_timesteps=config.total_training_steps,
             callback=callbacks,
@@ -371,8 +468,21 @@ def train_ppo(
             progress_bar=False,
         )
         latest = checkpoints / "latest.zip"
+        final_save_started = time.perf_counter() if profiler is not None else 0.0
         model.save(latest)
         model.save(run_dir / "final.zip")
+        if profiler is not None:
+            profiler.record("checkpoint.final_saves", time.perf_counter() - final_save_started)
+            profiler.server = env.client.profile_snapshot()
+            profiler.set_metadata(
+                actual_timesteps=model.num_timesteps,
+                training_steps_completed=max(
+                    0, model.num_timesteps - metrics_callback.start_timesteps
+                ),
+            )
+            profile_path = profiler.write(logs / "training_profile.json")
+        else:
+            profile_path = None
         result = {
             "run_dir": str(run_dir),
             "latest_checkpoint": str(latest),
@@ -383,6 +493,7 @@ def train_ppo(
             "training_steps_completed": max(0, model.num_timesteps - metrics_callback.start_timesteps),
             "stopped": bool(run_control is not None and run_control.stop_requested),
             "warm_start": warm_start,
+            "training_profile": str(profile_path) if profile_path is not None else None,
         }
         if pipeline is not None:
             from .pipeline import write_manifest
@@ -399,5 +510,6 @@ def train_ppo(
     finally:
         if pipeline is not None:
             pipeline.close()
+        resource_monitor.close()
         telemetry.close()
         env.close()

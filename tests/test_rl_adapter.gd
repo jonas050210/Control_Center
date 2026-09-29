@@ -54,6 +54,40 @@ func test_step_accepts_discrete_int_actions() -> SandboxTest:
 	return t
 
 
+func test_compact_info_omits_only_redundant_nonterminal_diagnostics() -> SandboxTest:
+	var t := SandboxTest.new("rl_adapter_compact_info_preserves_semantics")
+	var adapter := _make_adapter(1)
+	var full_adapter := _make_adapter(1)
+	var env: EnvironmentCore = adapter.simulation_manager.environments[0]
+	var full_env: EnvironmentCore = full_adapter.simulation_manager.environments[0]
+	env.max_steps = 2
+	full_env.max_steps = 2
+	var action: Array = [[1, 1, 1, 1, 0, 0]]
+	var first: Dictionary = adapter.step(action, true)
+	var full_first: Dictionary = full_adapter.step(action)
+	t.assert_eq(
+		first.observations,
+		full_first.observations,
+		"compact mode must not change observations"
+	)
+	t.assert_eq(first.rewards, full_first.rewards, "compact mode must not change rewards")
+	t.assert_eq(first.dones, full_first.dones, "compact mode must not change done flags")
+	t.assert_false(first.dones[0])
+	t.assert_true(first.infos[0].has("events"))
+	t.assert_false(first.infos[0].has("metrics"))
+	t.assert_false(first.infos[0].has("reward_components"))
+	t.assert_true(full_first.infos[0].has("metrics"))
+	t.assert_true(full_first.infos[0].has("reward_components"))
+	var terminal: Dictionary = adapter.step([[1, 1, 1, 1, 0, 0]], true)
+	t.assert_true(terminal.dones[0])
+	t.assert_true(terminal.infos[0].has("metrics"))
+	t.assert_true(terminal.infos[0].has("terminal_observation"))
+	t.assert_false(terminal.infos[0].has("reward_components"))
+	adapter.simulation_manager.free()
+	full_adapter.simulation_manager.free()
+	return t
+
+
 func test_done_flag_is_preserved_after_vector_auto_reset() -> SandboxTest:
 	var t := SandboxTest.new("rl_adapter_done_flag_preserved_after_auto_reset")
 	var adapter := _make_adapter(1)

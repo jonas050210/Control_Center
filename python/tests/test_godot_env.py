@@ -93,6 +93,9 @@ for line in sys.stdin:
     if command == "ping":
         out({"ok": True, "pong": True})
         continue
+    if command == "profile_snapshot":
+        out({"ok": True, "profile": {"available": True, "timings": {"command_step": {"count": step_count}}}})
+        continue
     if command == "close":
         out({"ok": True, "close": True})
         break
@@ -163,7 +166,11 @@ for line in sys.stdin:
     elif command == "step":
         step_count += 1
         done = step_count >= 3
-        info = {"done_reason": "timeout" if done else "", "metrics": {}}
+        info = {"done_reason": "timeout" if done else "", "events": {}}
+        if done or not request.get("compact_infos", False):
+            info["metrics"] = {"episode_length": step_count}
+        if not request.get("compact_infos", False):
+            info["reward_components"] = {"reward_hit": 0.0}
         if done:
             info["terminal_observation"] = [0.5] * OBS_DIM
             info["TimeLimit.truncated"] = True
@@ -246,6 +253,52 @@ class FakeBridgeTestCase(unittest.TestCase):
             self.assertAlmostEqual(float(observation[0]), 0.5)
         finally:
             env.close()
+
+    def test_compact_infos_keep_events_and_terminal_metrics_only(self):
+        from sandboxai.godot_env import GodotBatchClient
+
+        client = GodotBatchClient(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            environment_count=1,
+            compact_infos=True,
+        )
+        try:
+            client.reset(42)
+            _obs, _rewards, dones, infos = client.step([[1, 1, 1, 1, 0, 0]])
+            self.assertFalse(bool(dones[0]))
+            self.assertIn("events", infos[0])
+            self.assertNotIn("metrics", infos[0])
+            self.assertNotIn("reward_components", infos[0])
+            client.step([[1, 1, 1, 1, 0, 0]])
+            _obs, _rewards, dones, infos = client.step([[1, 1, 1, 1, 0, 0]])
+            self.assertTrue(bool(dones[0]))
+            self.assertIn("metrics", infos[0])
+            self.assertNotIn("reward_components", infos[0])
+        finally:
+            client.close()
+
+    def test_opt_in_profiler_records_transport_phase_and_byte_totals(self):
+        from sandboxai.godot_env import GodotBatchClient
+        from sandboxai.training_profile import TrainingProfiler
+
+        profiler = TrainingProfiler()
+        client = GodotBatchClient(
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            environment_count=1,
+            profiler=profiler,
+        )
+        try:
+            client.reset(42)
+            client.step([[1, 1, 1, 1, 0, 0]])
+            profiler.server = client.profile_snapshot()
+        finally:
+            client.close()
+        report = profiler.report()
+        self.assertEqual(report["timings"]["bridge.step.total"]["count"], 1)
+        self.assertGreater(report["counters"]["bridge.step.response_bytes"], 0)
+        self.assertTrue(report["godot_server"].get("available"))
 
     @unittest.skipUnless(HAS_SB3, SB3_REASON)
     def test_vec_env_consumes_sb3_seeds_on_reset(self):
