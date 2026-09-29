@@ -28,7 +28,9 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"hit_radius": SandboxConfig.WEAPON_HIT_RADIUS,
 		"projectile_count": 1,
 		"spread_deg": 0.0,
-		"description": "Baseline single-ray rifle used by the original training contract.",
+		"falloff_start_m": 12.0,
+		"minimum_damage_scale": 0.72,
+		"description": "Baseline single-ray rifle: controllable mid-range damage with mild falloff.",
 	},
 	"shotgun": {
 		"label": "Breach shotgun",
@@ -39,7 +41,9 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"hit_radius": 0.55,
 		"projectile_count": 8,
 		"spread_deg": 5.0,
-		"description": "Close-range pellet pattern with one-shot potential if most pellets land.",
+		"falloff_start_m": 4.0,
+		"minimum_damage_scale": 0.22,
+		"description": "Close-range 8-pellet pattern; one-shot potential requires a centered close hit.",
 	},
 	"pistol": {
 		"label": "Sidearm",
@@ -50,7 +54,9 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"hit_radius": 0.65,
 		"projectile_count": 1,
 		"spread_deg": 0.0,
-		"description": "Lower damage, quick-ready backup weapon for finishing drills.",
+		"falloff_start_m": 7.0,
+		"minimum_damage_scale": 0.55,
+		"description": "Lower damage precision backup for deliberate finishing drills.",
 	},
 	"smg": {
 		"label": "SMG",
@@ -61,7 +67,9 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"hit_radius": 0.62,
 		"projectile_count": 1,
 		"spread_deg": 0.0,
-		"description": "Fast close-range profile that rewards sustained tracking.",
+		"falloff_start_m": 5.5,
+		"minimum_damage_scale": 0.45,
+		"description": "Fast close-range profile with sharp falloff that rewards sustained tracking.",
 	},
 }
 
@@ -74,6 +82,8 @@ var cooldown_time: float = SandboxConfig.WEAPON_FIRE_COOLDOWN
 var hit_radius: float = SandboxConfig.WEAPON_HIT_RADIUS
 var projectile_count: int = 1
 var spread_deg: float = 0.0
+var falloff_start_m: float = SandboxConfig.WEAPON_RANGE
+var minimum_damage_scale: float = 1.0
 var cooldown_remaining: float = 0.0
 
 
@@ -120,6 +130,8 @@ func configure_profile(p_profile_id: String) -> bool:
 	hit_radius = maxf(0.01, float(spec.get("hit_radius", SandboxConfig.WEAPON_HIT_RADIUS)))
 	projectile_count = maxi(1, int(spec.get("projectile_count", 1)))
 	spread_deg = maxf(0.0, float(spec.get("spread_deg", 0.0)))
+	falloff_start_m = clampf(float(spec.get("falloff_start_m", range_m)), 0.0, range_m)
+	minimum_damage_scale = clampf(float(spec.get("minimum_damage_scale", 1.0)), 0.0, 1.0)
 	return true
 
 
@@ -147,6 +159,40 @@ func try_fire() -> bool:
 
 func projectile_damage() -> float:
 	return damage / float(maxi(1, projectile_count))
+
+
+## Piecewise-linear deterministic damage falloff. Full damage is retained
+## through the role's intended range, then approaches a non-zero floor at
+## maximum range. Keeping this separate from hit detection makes boundary
+## behavior directly unit-testable and avoids range-dependent RNG.
+func damage_scale_at_distance(distance_m: float) -> float:
+	if distance_m <= falloff_start_m or range_m <= falloff_start_m:
+		return 1.0
+	if distance_m >= range_m:
+		return minimum_damage_scale
+	var alpha: float = (distance_m - falloff_start_m) / (range_m - falloff_start_m)
+	return lerpf(1.0, minimum_damage_scale, clampf(alpha, 0.0, 1.0))
+
+
+func projectile_damage_at_distance(distance_m: float) -> float:
+	return projectile_damage() * damage_scale_at_distance(distance_m)
+
+
+## Ideal center-mass TTK for diagnostics. The first shot occurs at t=0,
+## therefore N lethal shots take (N-1) fire intervals.
+func ideal_ttk_seconds(
+	target_health: float, distance_m: float, pellets_landed: int = -1
+) -> float:
+	var landed: int = (
+		projectile_count
+		if pellets_landed < 0
+		else clampi(pellets_landed, 0, projectile_count)
+	)
+	var volley_damage: float = projectile_damage_at_distance(distance_m) * float(landed)
+	if volley_damage <= 0.0:
+		return INF
+	var volleys: int = ceili(maxf(0.0, target_health) / volley_damage)
+	return float(maxi(0, volleys - 1)) * cooldown_time
 
 
 ## Deterministic ray directions for the current trigger pull. Single-projectile
@@ -219,6 +265,10 @@ func to_dict() -> Dictionary:
 		"projectile_count": projectile_count,
 		"projectile_damage": projectile_damage(),
 		"spread_deg": spread_deg,
+		"falloff_start_m": falloff_start_m,
+		"minimum_damage_scale": minimum_damage_scale,
+		"ideal_ttk_5m": ideal_ttk_seconds(100.0, 5.0),
+		"ideal_ttk_max_range": ideal_ttk_seconds(100.0, range_m),
 		"cooldown_remaining": cooldown_remaining,
 		"ready": is_ready(),
 	}

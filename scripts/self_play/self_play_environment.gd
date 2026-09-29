@@ -522,7 +522,7 @@ func _resolve_agent_weapon_hit(
 			continue
 		if _weapon_ray_blocked_before(shooter, eye, direction, hit_distance):
 			continue
-		total_damage += target.take_damage(shooter.weapon.projectile_damage())
+		total_damage += target.take_damage(shooter.weapon.projectile_damage_at_distance(hit_distance))
 	return {"damage": total_damage}
 
 

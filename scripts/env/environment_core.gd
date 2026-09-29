@@ -593,6 +593,8 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 		"shot_fired": false,
 		"shot_result": "none",
 		"damage_dealt": 0.0,
+		"projectiles_fired": 0,
+		"projectiles_hit": 0,
 	}
 	if not action.shoot or not agent.alive:
 		return result
@@ -625,6 +627,7 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 
 	var impact_sources: Dictionary = {}
 	var projectile_dirs: Array = agent.weapon.projectile_directions(forward)
+	result["projectiles_fired"] = projectile_dirs.size()
 	for projectile_dir_value in projectile_dirs:
 		var projectile_dir: Vector3 = projectile_dir_value
 		var best_hit_enemy: EnemyState = null
@@ -644,10 +647,13 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 			best_hit_enemy = enemy
 		if best_hit_enemy == null:
 			continue
-		var applied: float = best_hit_enemy.take_damage(agent.weapon.projectile_damage())
+		var applied: float = best_hit_enemy.take_damage(
+			agent.weapon.projectile_damage_at_distance(best_hit_distance)
+		)
 		if applied <= 0.0:
 			continue
 		result["hit"] = true
+		result["projectiles_hit"] = int(result["projectiles_hit"]) + 1
 		result["shot_result"] = "hit"
 		result["damage_dealt"] = float(result["damage_dealt"]) + applied
 		episode.record_damage_dealt(applied)

@@ -185,6 +185,18 @@ const SCENARIOS: Array = [
 		"flags": {"obstacles": true, "perception": true, "sound": true, "memory": true},
 	},
 	{
+		"id": "smg_tracking_drill",
+		"label": "SMG tracking drill",
+		"description": "Close moving-target drill: high cadence, sharp falloff and sustained tracking.",
+		"layout": "pillars",
+		"enemy_count": 3,
+		"spawn": SPAWN_RING,
+		"level": CurriculumConfig.Level.MULTIPLE_ENEMIES,
+		"weapon_profile": "smg",
+		"training_pool": false,
+		"flags": {"obstacles": true, "perception": true, "sound": true, "memory": true},
+	},
+	{
 		"id": "randomized_arena",
 		"label": "Randomized arena",
 		"description": "Layout, enemy count and spawn rule are all drawn from the seed.",
