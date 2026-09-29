@@ -411,6 +411,36 @@ def build_parser() -> argparse.ArgumentParser:
         "observation range violations and boundary problems",
     )
 
+    inspect_runs = sub.add_parser(
+        "inspect-runs",
+        help="read-only inspection of training runs on disk (state, progress, "
+        "checkpoints, evaluations, provenance)",
+    )
+    inspect_runs.add_argument(
+        "--root",
+        default="training",
+        help="training output root, its runs/ directory, or a single run directory "
+        "(default: training)",
+    )
+    inspect_runs.add_argument(
+        "--run",
+        default=None,
+        help="inspect exactly one run directory and print its full report",
+    )
+    inspect_runs.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="show only the newest N runs (0 = all)",
+    )
+    inspect_runs.add_argument(
+        "--events",
+        type=int,
+        default=0,
+        help="include the last N telemetry/control events per run",
+    )
+    inspect_runs.add_argument("--json", action="store_true", help="emit the raw JSON report")
+
     benchmark = sub.add_parser("benchmark", help="measure headless Godot throughput")
     benchmark.add_argument("--env-counts", default="1,2,4,8,16,24,32,48,64")
     benchmark.add_argument(
@@ -630,6 +660,24 @@ def main(argv: list[str] | None = None) -> int:
         report = dataset.statistics() if args.statistics else dataset.summary()
         print(json.dumps(report, indent=2, default=str))
         return 0
+    if args.command == "inspect-runs":
+        from .run_inspection import (
+            format_run_index,
+            format_run_report,
+            inspect_run,
+            inspect_runs as inspect_runs_index,
+        )
+
+        if args.run:
+            report = inspect_run(args.run, event_limit=max(0, args.events))
+            print(json.dumps(report, indent=2, default=str) if args.json else format_run_report(report))
+            return 0 if report.get("exists") else 1
+        index = inspect_runs_index(
+            args.root, limit=max(0, args.limit), event_limit=max(0, args.events)
+        )
+        print(json.dumps(index, indent=2, default=str) if args.json else format_run_index(index))
+        return 0
+
     if args.command == "record":
         try:
             command = build_record_command(

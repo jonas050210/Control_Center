@@ -102,6 +102,43 @@ Center node.
 
 ---
 
+## Read-only run inspection backend
+
+`python/sandboxai/run_inspection.py` is the backend interface for
+"what runs exist and what did they produce?". It is deliberately
+**read-only**: nothing in it opens a file for writing, so inspecting a
+run that is currently training cannot disturb it.
+
+```bash
+sandboxai inspect-runs --root training              # table of every run
+sandboxai inspect-runs --run training/runs/<id>     # one run in full
+sandboxai inspect-runs --root training --json       # stable JSON contract
+sandboxai inspect-runs --root training --events 10  # + recent event tail
+```
+
+| Function | Returns |
+| --- | --- |
+| `discover_run_directories(root)` | run directories under an output root, its `runs/`, or a single run dir |
+| `inspect_run(dir, event_limit=0)` | one `sandboxai.run_report/v1` document |
+| `inspect_runs(root, limit, event_limit)` | a `sandboxai.run_index/v1` document |
+| `tail_jsonl(path, limit)` | last N parsable JSONL objects (bounded to the trailing 1 MiB) |
+| `format_run_index` / `format_run_report` | dense text rendering |
+
+A report carries the run state **and the evidence it came from**
+(`run_summary.json`, `status.json`, or "no run_summary.json" →
+`incomplete`), progress, the checkpoint and evaluation inventory, log
+sizes, manifest provenance (code commit + dirty flag, host, Godot build,
+selection rule) and two explicitly separated lists: `problems` (files
+that could not be parsed) and `warnings` (a dirty code tree, a contract
+mismatch, no checkpoints, no `best_eval.zip`, an unfinished run). A
+half-written or corrupt run directory still produces a usable report;
+nothing is guessed and nothing is silently defaulted to zero.
+
+The HISTORY page consumes exactly this - GDScript does not re-implement
+the run layout.
+
+---
+
 ## Managed training workspace
 
 The **Training** inspector tab configures and launches the repository's real
