@@ -270,16 +270,23 @@ Via the debug GUI (see `docs/DEBUG_GUI_AND_BENCHMARKING.md`): the
 
 ## Limitations (honest, not implemented)
 
-- **No verticality/elevation.** The arena remains a flat plane; agent and
-  enemy `position.y` is always clamped to 0. Adding real elevation/jump
-  arcs/ramps would require moving from the current analytic
-  position-integration model toward an actual physics step, which is a much
-  larger architectural change than this milestone's scope. This is real,
-  useful future work, not something silently faked here.
-- **No navmesh/obstacle avoidance.** Enemies move in straight lines (plus
-  the strafe blend) toward the agent; the arena has no interior obstacles to
-  navigate around.
-- **The GDScript half of this milestone was never executed.** The Godot
+> **Stale-claim correction.** The first two bullets below described the
+> milestone this document was written for. Both have since been implemented:
+> curriculum level 9 (`VERTICAL_COMBAT`, `CurriculumConfig.vertical_enabled()`)
+> adds jumping, standable boxes and elevation-dependent sight through
+> `CharacterMotor`/`ArenaWorld`, and `scripts/world/navigation_graph.gd` +
+> `navigation_agent.gd` provide a deterministic grid/A* path around interior
+> obstacles. Read those sources, not this paragraph, for current behaviour.
+
+- ~~**No verticality/elevation.**~~ Implemented: `ArenaWorld` carries
+  standable geometry and the agent has a jump action; elevation changes what
+  is visible. The simulation is still analytic (no engine physics), which is
+  the deliberate determinism boundary.
+- ~~**No navmesh/obstacle avoidance.**~~ Implemented as a custom
+  deterministic navigation graph rather than Godot's NavigationServer, so
+  paths are reproducible from a seed.
+- **The GDScript half of this milestone was never executed *at the time it
+  was written*.** (CI has run the Godot suite on Windows and Linux since.) The Godot
   engine could not be obtained in the environment the handling layer was
   written in, so `tests/run_tests.gd` — including the new
   `tests/test_weapon_handling*.gd` — has not been run. It was validated by

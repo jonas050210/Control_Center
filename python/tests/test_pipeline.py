@@ -35,6 +35,7 @@ from sandboxai.pipeline import (
     contract_fingerprint,
     write_manifest,
 )
+from sandboxai.manifest import MANIFEST_FORMAT
 from sandboxai.randomization import STREAM_STRIDE, EpisodePlan
 from sandboxai.curriculum_stages import distribution_for, stage_for
 
@@ -521,7 +522,7 @@ class TrainingPipelineTest(unittest.TestCase):
             config = self._config(Path(tmp))
             pipe = TrainingPipeline(config, config.run_directory(), _Telemetry(), device="cpu")
             manifest = pipe.manifest()
-            self.assertEqual(manifest.get("format"), "sandboxai.run_manifest/v1")
+            self.assertEqual(manifest.get("format"), MANIFEST_FORMAT)
             fingerprint = manifest.get("contract", {})
             self.assertEqual(fingerprint.get("observation_dim"), 84)
             self.assertEqual(fingerprint.get("action_nvec"), [3, 3, 3, 3, 2, 2])
@@ -538,7 +539,7 @@ class TrainingPipelineTest(unittest.TestCase):
             self.assertEqual(manifest.get("seed"), config.seed)
             out = write_manifest(config.run_directory(), manifest)
             roundtrip = json.loads(out.read_text(encoding="utf-8"))
-            self.assertEqual(roundtrip.get("format"), "sandboxai.run_manifest/v1")
+            self.assertEqual(roundtrip.get("format"), MANIFEST_FORMAT)
             pipe.close()
 
 

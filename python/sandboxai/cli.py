@@ -20,9 +20,34 @@ from .config import (
 from .wsl import GodotLaunchError, WindowsInterop, is_windows_shell, normalize_host_path
 
 
+def _env_workers_argument(value: str) -> int:
+    """``--env-workers N|auto`` -> the TrainingConfig integer (0 = auto)."""
+    text = str(value).strip().lower()
+    if text == "auto":
+        return 0
+    try:
+        number = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--env-workers expects a positive integer or 'auto', got {value!r}"
+        ) from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("--env-workers must be >= 1 (or 'auto')")
+    return number
+
+
 def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", help="JSON TrainingConfig file")
     parser.add_argument("--env-count", type=int, dest="environment_count")
+    parser.add_argument(
+        "--env-workers",
+        type=_env_workers_argument,
+        dest="env_workers",
+        help="Godot processes hosting the environments: 1 = single process (default), "
+        "N = shard the environments over N concurrently simulating processes, "
+        "'auto' = size the pool from the host CPU. Sharding preserves per-environment "
+        "seeds and therefore results; only wall time changes.",
+    )
     parser.add_argument("--enemy-count", type=int)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--rollout-length", type=int)
@@ -54,6 +79,26 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
         help="device for rollout/evaluation inference while PPO updates stay on --device "
         "(cpu removes the per-step host<->device round trip that makes CUDA slower "
         "than CPU for this tiny policy)",
+    )
+    parser.add_argument(
+        "--checkpoint-selection-metric",
+        default=None,
+        help="evaluation-summary key that selects best_eval.zip (default "
+        "mean_episode_reward); dotted paths reach mirrored report sections, "
+        "e.g. condition_evaluation.mean_win_rate",
+    )
+    parser.add_argument(
+        "--checkpoint-selection-goal",
+        choices=["max", "min"],
+        default=None,
+        help="whether the selection metric is maximised (default) or minimised",
+    )
+    parser.add_argument(
+        "--checkpoint-selection-min-delta",
+        type=float,
+        default=None,
+        help="minimum improvement that replaces best_eval.zip (default 0.0 = any "
+        "strict improvement)",
     )
     parser.add_argument("--seed", type=int)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"])
@@ -341,6 +386,14 @@ def build_parser() -> argparse.ArgumentParser:
     bc.add_argument("--batch-size", type=int, default=512)
     bc.add_argument("--learning-rate", type=float, default=3e-4)
     bc.add_argument("--validation-fraction", type=float, default=0.1)
+    bc.add_argument(
+        "--split-strategy",
+        choices=["auto", "episode", "transition"],
+        default="auto",
+        help="auto = split by episode when the dataset has episode structure (default, "
+        "leakage-free); episode = require it; transition = the historical shuffle, "
+        "which leaks adjacent states between train and validation",
+    )
     bc.add_argument("--seed", type=int, default=1234)
     bc.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     bc.add_argument("--output-dir", default="training/bc_runs/latest")
@@ -351,9 +404,52 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect = sub.add_parser("inspect-dataset", help="validate and summarise a demonstration JSONL")
     inspect.add_argument("--dataset", required=True)
+    inspect.add_argument(
+        "--statistics",
+        action="store_true",
+        help="full dataset report: episode structure, action histograms, duplicates, "
+        "observation range violations and boundary problems",
+    )
+
+    inspect_runs = sub.add_parser(
+        "inspect-runs",
+        help="read-only inspection of training runs on disk (state, progress, "
+        "checkpoints, evaluations, provenance)",
+    )
+    inspect_runs.add_argument(
+        "--root",
+        default="training",
+        help="training output root, its runs/ directory, or a single run directory "
+        "(default: training)",
+    )
+    inspect_runs.add_argument(
+        "--run",
+        default=None,
+        help="inspect exactly one run directory and print its full report",
+    )
+    inspect_runs.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="show only the newest N runs (0 = all)",
+    )
+    inspect_runs.add_argument(
+        "--events",
+        type=int,
+        default=0,
+        help="include the last N telemetry/control events per run",
+    )
+    inspect_runs.add_argument("--json", action="store_true", help="emit the raw JSON report")
 
     benchmark = sub.add_parser("benchmark", help="measure headless Godot throughput")
     benchmark.add_argument("--env-counts", default="1,2,4,8,16,24,32,48,64")
+    benchmark.add_argument(
+        "--worker-counts",
+        default="1",
+        help="comma-separated Godot worker-process counts to sweep per environment count "
+        "(e.g. 1,2,4,8); 1 is the single-process baseline. Worker counts above the "
+        "environment count are clamped.",
+    )
     benchmark.add_argument("--steps", type=int, default=2000)
     benchmark.add_argument("--enemy-count", type=int, default=1)
     benchmark.add_argument("--seed", type=int, default=1234)
@@ -403,6 +499,25 @@ def build_parser() -> argparse.ArgumentParser:
     weapons.add_argument(
         "--health", type=float, default=100.0, help="target health used for the TTK maths"
     )
+
+    ttk = sub.add_parser(
+        "ttk-report",
+        help="validate manually annotated TTK trials and compare them with the simulator",
+    )
+    ttk.add_argument("--trials", required=True, help="JSONL file of annotated TTK trials")
+    ttk.add_argument("--json", action="store_true")
+    ttk.add_argument(
+        "--by-condition",
+        action="store_true",
+        help="per weapon/distance-band/movement/hit-zone aggregates instead of the global summary",
+    )
+    ttk.add_argument(
+        "--compare-simulator",
+        action="store_true",
+        help="compare measured human TTK against the analytic TTK parsed from WeaponState",
+    )
+    ttk.add_argument("--distance-bucket", type=float, default=3.0)
+    ttk.add_argument("--seed", type=int, default=1234, help="bootstrap seed (reports are reproducible)")
 
     adapter = sub.add_parser(
         "adapter-contract", help="print the external-game adapter contract (Roblox boundary)"
@@ -541,8 +656,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if res.get("all_passed") else 1
     if args.command == "inspect-dataset":
         from .dataset import DemonstrationDataset
-        print(json.dumps(DemonstrationDataset.load(args.dataset).summary(), indent=2, default=str))
+        dataset = DemonstrationDataset.load(args.dataset)
+        report = dataset.statistics() if args.statistics else dataset.summary()
+        print(json.dumps(report, indent=2, default=str))
         return 0
+    if args.command == "inspect-runs":
+        from .run_inspection import (
+            format_run_index,
+            format_run_report,
+            inspect_run,
+            inspect_runs as inspect_runs_index,
+        )
+
+        if args.run:
+            report = inspect_run(args.run, event_limit=max(0, args.events))
+            print(json.dumps(report, indent=2, default=str) if args.json else format_run_report(report))
+            return 0 if report.get("exists") else 1
+        index = inspect_runs_index(
+            args.root, limit=max(0, args.limit), event_limit=max(0, args.events)
+        )
+        print(json.dumps(index, indent=2, default=str) if args.json else format_run_index(index))
+        return 0
+
     if args.command == "record":
         try:
             command = build_record_command(
@@ -587,6 +722,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             device=args.device,
             output_root=str(Path(args.output_dir).parent),
+            split_strategy=args.split_strategy,
         )
         if control is not None:
             control.start(training_type="behavior_cloning", total_epochs=config.epochs)
@@ -667,6 +803,7 @@ def main(argv: list[str] | None = None) -> int:
         from .benchmark import benchmark_simulation, summarize_scaling
         project = _resolve_project_path(args.project_path)
         counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
+        workers = [int(value) for value in str(args.worker_counts).split(",") if value.strip()]
         result = benchmark_simulation(
             project,
             args.godot_executable,
@@ -677,6 +814,7 @@ def main(argv: list[str] | None = None) -> int:
             args.curriculum_level,
             args.output_dir,
             args.max_seconds_per_config,
+            worker_counts=workers or (1,),
         )
         print(json.dumps(result, indent=2, default=str))
         print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))
@@ -707,6 +845,24 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(describe_progression(), indent=2, default=str))
         else:
             print(format_progression(), end="")
+        return 0
+    if args.command == "ttk-report":
+        from .ttk import TTKDataset, compare_with_simulator, format_summary
+
+        dataset = TTKDataset.load(args.trials)
+        payload: dict[str, Any] = {"summary": dataset.summary(seed=args.seed)}
+        if args.by_condition:
+            payload["by_condition"] = dataset.by_condition(args.distance_bucket, seed=args.seed)
+        if args.compare_simulator:
+            payload["simulator_comparison"] = compare_with_simulator(dataset, seed=args.seed)
+        if args.json:
+            print(json.dumps(payload, indent=2, default=str))
+        else:
+            print(format_summary(payload["summary"]))
+            if args.by_condition:
+                print(json.dumps(payload["by_condition"], indent=2, default=str))
+            if args.compare_simulator:
+                print(json.dumps(payload["simulator_comparison"], indent=2, default=str))
         return 0
     if args.command == "weapon-table":
         from .weapons import format_ttk_table, role_ranking, ttk_table

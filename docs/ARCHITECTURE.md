@@ -157,9 +157,14 @@ remaining lines are transition records:
 ```
 
 `python/sandboxai/dataset.py` validates and loads this format without
-PyTorch. The BC model has a two-layer tanh backbone and five categorical
-heads. Training uses a deterministic train/validation split, Adam,
-checkpointed optimizer state, CSV loss curves and JSONL accuracy metrics.
+PyTorch. The BC model has a two-layer tanh backbone and six categorical
+heads (`3,3,3,3,2,2`). Training uses a deterministic, **episode-aware**
+train/validation split (`split_strategy` = `auto`|`episode`|`transition`;
+grouping by `run_id|environment_id|episode_id` so adjacent frames of one
+episode cannot straddle the split), Adam, checkpointed optimizer state, CSV
+loss curves and JSONL accuracy metrics. Every run writes
+`dataset_report.json` with the split report, `leakage_free` flag and dataset
+fingerprint.
 
 The BC-to-PPO transfer is explicit and conservative. It copies BC hidden
 layers and concatenated categorical heads only if SB3 parameter names and
@@ -196,9 +201,14 @@ per-level table, the multi-enemy spawn-variety algorithm, and the
 deterministic strafing/movement-pattern design.
 
 `SelfPlayEnvironmentCore` has two `AgentState` slots, independent RNG seeds,
-mirrored observations, per-agent rewards and per-agent metrics. Python's
-`SelfPlayCoordinator` can load a frozen opponent checkpoint. This is a
-foundation for population/self-play training, not a population algorithm.
+mirrored observations, per-agent rewards and per-agent metrics. Fire is
+**simultaneous**: both slots' shots are resolved against the pre-tick world
+and damage is applied afterwards, so a mutual lethal exchange kills both
+agents and ends `draw` instead of favouring slot A. Python's
+`SelfPlayCoordinator` can load a frozen opponent checkpoint and samples
+opponents from a seeded generator (`uniform`, `latest`, `recency_weighted`,
+`round_robin`) rather than the global RNG. This is a foundation for
+population/self-play training, not a population algorithm.
 
 ## Replay, metrics, generalization and benchmarks
 

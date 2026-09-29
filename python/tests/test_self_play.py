@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.self_play import (
+    OPPONENT_STRATEGIES,
     PolicySlot,
     SelfPlayBatchClient,
     SelfPlayCoordinator,
@@ -71,6 +72,145 @@ class SelfPlayTests(unittest.TestCase):
         self.assertEqual(result["steps"], 5)
         self.assertTrue(result["truncated"])
         self.assertEqual(result["done_reason"], "timeout")
+
+
+class OpponentSamplingTests(unittest.TestCase):
+    """Opponent selection must be reproducible from (seed, strategy, pool).
+
+    The previous default fell back to the unseeded global ``random``
+    module, so two runs of the same configuration silently trained
+    against different opponent sequences.
+    """
+
+    POOL = [f"pool/c{index}.zip" for index in range(1, 6)]
+
+    def _coordinator(self, strategy: str = "uniform", seed: int = 7) -> SelfPlayCoordinator:
+        return SelfPlayCoordinator(
+            PolicySlot(name="learner"),
+            PolicySlot(name="frozen"),
+            opponent_pool=list(self.POOL),
+            strategy=strategy,
+            seed=seed,
+        )
+
+    def test_default_sampling_is_seeded_and_reproducible(self):
+        a = self._coordinator()
+        b = self._coordinator()
+        draws_a = [a.choose_opponent_checkpoint() for _ in range(20)]
+        draws_b = [b.choose_opponent_checkpoint() for _ in range(20)]
+        self.assertEqual(draws_a, draws_b)
+
+    def test_different_seeds_produce_different_streams(self):
+        stream_1 = [self._coordinator(seed=1).choose_opponent_checkpoint() for _ in range(30)]
+        stream_2 = [self._coordinator(seed=2).choose_opponent_checkpoint() for _ in range(30)]
+        self.assertNotEqual(stream_1, stream_2)
+
+    def test_reset_sampling_rewinds_the_stream(self):
+        coordinator = self._coordinator()
+        first = [coordinator.choose_opponent_checkpoint() for _ in range(10)]
+        coordinator.reset_sampling()
+        self.assertEqual(coordinator.opponent_history, [])
+        self.assertEqual(first, [coordinator.choose_opponent_checkpoint() for _ in range(10)])
+
+    def test_uniform_sampling_reaches_the_whole_pool(self):
+        coordinator = self._coordinator()
+        drawn = {coordinator.choose_opponent_checkpoint() for _ in range(200)}
+        self.assertEqual(drawn, set(self.POOL))
+
+    def test_latest_always_returns_the_newest_checkpoint(self):
+        coordinator = self._coordinator(strategy="latest")
+        self.assertEqual(
+            {coordinator.choose_opponent_checkpoint() for _ in range(10)}, {self.POOL[-1]}
+        )
+        coordinator.add_to_pool("pool/c6.zip")
+        self.assertEqual(coordinator.choose_opponent_checkpoint(), "pool/c6.zip")
+
+    def test_round_robin_gives_equal_exposure_without_rng(self):
+        coordinator = self._coordinator(strategy="round_robin")
+        drawn = [coordinator.choose_opponent_checkpoint() for _ in range(len(self.POOL) * 3)]
+        self.assertEqual(drawn, self.POOL * 3)
+
+    def test_recency_weighted_prefers_recent_but_keeps_pool_reachable(self):
+        coordinator = self._coordinator(strategy="recency_weighted")
+        drawn = [coordinator.choose_opponent_checkpoint() for _ in range(400)]
+        self.assertEqual(set(drawn), set(self.POOL))
+        self.assertGreater(drawn.count(self.POOL[-1]), drawn.count(self.POOL[0]))
+
+    def test_explicit_rng_overrides_the_owned_generator(self):
+        import random as random_module
+
+        coordinator = self._coordinator()
+        with_rng = [
+            coordinator.choose_opponent_checkpoint(rng=random_module.Random(11))
+            for _ in range(5)
+        ]
+        other = self._coordinator()
+        self.assertEqual(
+            with_rng,
+            [
+                other.choose_opponent_checkpoint(rng=random_module.Random(11))
+                for _ in range(5)
+            ],
+        )
+
+    def test_empty_pool_returns_the_configured_opponent(self):
+        coordinator = SelfPlayCoordinator(
+            PolicySlot(name="learner"), PolicySlot(name="frozen")
+        )
+        self.assertIsNone(coordinator.choose_opponent_checkpoint())
+        self.assertIs(coordinator.sample_opponent(), coordinator.opponent_slot)
+
+    def test_sample_opponent_can_select_without_loading_a_model(self):
+        coordinator = self._coordinator(strategy="latest")
+        slot = coordinator.sample_opponent(load=False)
+        self.assertEqual(slot.checkpoint, self.POOL[-1])
+        self.assertTrue(slot.frozen)
+
+    def test_unknown_strategy_is_rejected(self):
+        with self.assertRaises(ValueError):
+            SelfPlayCoordinator(
+                PolicySlot(name="a"), PolicySlot(name="b"), strategy="whatever"
+            )
+        with self.assertRaises(ValueError):
+            self._coordinator().choose_opponent_checkpoint(strategy="whatever")
+
+    def test_sampling_snapshot_records_the_reproducibility_inputs(self):
+        coordinator = self._coordinator(strategy="round_robin", seed=3)
+        for _ in range(3):
+            coordinator.choose_opponent_checkpoint()
+        snapshot = coordinator.sampling_snapshot()
+        self.assertEqual(snapshot["strategy"], "round_robin")
+        self.assertEqual(snapshot["seed"], 3)
+        self.assertEqual(snapshot["draws"], 3)
+        self.assertEqual(snapshot["pool_size"], len(self.POOL))
+        self.assertEqual(snapshot["recent_opponents"], self.POOL[:3])
+
+    def test_from_config_carries_the_selection_rule(self):
+        from sandboxai.config import SelfPlayConfig
+
+        config = SelfPlayConfig(
+            opponent_checkpoint="pool/c5.zip",
+            opponent_pool=list(self.POOL),
+            opponent_strategy="round_robin",
+            opponent_seed=5,
+        ).validate()
+        coordinator = SelfPlayCoordinator.from_config(config)
+        self.assertEqual(coordinator.opponent_strategy, "round_robin")
+        self.assertEqual(coordinator.opponent_seed, 5)
+        self.assertEqual(coordinator.opponent_pool, list(self.POOL))
+        self.assertTrue(coordinator.opponent_slot.frozen)
+        self.assertEqual(coordinator.choose_opponent_checkpoint(), self.POOL[0])
+
+    def test_config_rejects_unknown_strategy(self):
+        from sandboxai.config import SelfPlayConfig
+
+        with self.assertRaises(ValueError):
+            SelfPlayConfig(opponent_strategy="nope").validate()
+
+    def test_every_documented_strategy_is_usable(self):
+        for strategy in OPPONENT_STRATEGIES:
+            coordinator = self._coordinator(strategy=strategy)
+            self.assertIn(coordinator.choose_opponent_checkpoint(), self.POOL)
 
 
 if __name__ == "__main__":

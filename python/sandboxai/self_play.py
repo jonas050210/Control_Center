@@ -38,43 +38,169 @@ class PolicySlot:
         return self.model.predict(observation, deterministic=deterministic)
 
 
+#: Opponent-sampling strategies for :class:`SelfPlayCoordinator`.
+#:
+#: ``uniform``
+#:     Every pooled checkpoint equally likely. Safe default: cannot
+#:     collapse onto a single opponent and overfit to it.
+#: ``latest``
+#:     Always the most recently added checkpoint. Fast progress, classic
+#:     catastrophic forgetting against older versions.
+#: ``recency_weighted``
+#:     Linearly weighted toward recent checkpoints while keeping the whole
+#:     pool reachable. Compromise between the two above.
+#: ``round_robin``
+#:     Deterministic cycle through the pool, no RNG at all. Gives every
+#:     opponent exactly equal exposure, which is what evaluation wants.
+OPPONENT_STRATEGIES = ("uniform", "latest", "recency_weighted", "round_robin")
+
+
 class SelfPlayCoordinator:
     """Holds explicit learning and frozen slots and per-agent metrics.
 
     The actual match dynamics are implemented by Godot's
     SelfPlayEnvironmentCore; this class owns policy/checkpoint lifecycle and
     makes it difficult to accidentally update a frozen opponent.
+
+    Opponent sampling is deterministic by construction: the coordinator
+    owns a seeded ``random.Random`` and never touches the global ``random``
+    module, so a run's opponent stream is reproducible from
+    ``(seed, strategy, pool order)`` alone. Pool order is insertion order,
+    which is why ``add_to_pool`` is append-only and de-duplicating.
     """
+
+    STRATEGIES = OPPONENT_STRATEGIES
 
     def __init__(
         self,
         learning_slot: PolicySlot,
         opponent_slot: PolicySlot,
         opponent_pool: list[str] | None = None,
+        strategy: str = "uniform",
+        seed: int = 0,
     ) -> None:
         if learning_slot.name == opponent_slot.name:
             raise ValueError("self-play slots need distinct names")
+        if strategy not in OPPONENT_STRATEGIES:
+            raise ValueError(
+                "unknown opponent strategy %r; expected one of %s"
+                % (strategy, ", ".join(OPPONENT_STRATEGIES))
+            )
         self.learning_slot = learning_slot
         self.opponent_slot = opponent_slot
         self.opponent_slot.frozen = True
         self.opponent_pool: list[str] = list(opponent_pool or [])
         if opponent_slot.checkpoint and opponent_slot.checkpoint not in self.opponent_pool:
             self.opponent_pool.append(opponent_slot.checkpoint)
+        self.opponent_strategy = strategy
+        self.opponent_seed = int(seed)
+        self._rng = random.Random(self.opponent_seed)
+        self._draws = 0
+        self.opponent_history: list[str] = []
         self.metrics: dict[str, list[dict[str, Any]]] = {learning_slot.name: [], opponent_slot.name: []}
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Any,
+        learning_name: str = "learner",
+        opponent_name: str = "frozen_opponent",
+    ) -> "SelfPlayCoordinator":
+        """Builds a coordinator from a :class:`~sandboxai.config.SelfPlayConfig`.
+
+        Keeps the opponent-selection rule and its seed in the run's config
+        snapshot instead of at the call site, so the opponent stream is
+        reproducible from the saved configuration alone.
+        """
+        return cls(
+            PolicySlot(name=learning_name, seed=int(getattr(config, "seed", 1234))),
+            PolicySlot(
+                name=opponent_name,
+                checkpoint=str(getattr(config, "opponent_checkpoint", "") or ""),
+                frozen=True,
+                seed=int(getattr(config, "seed", 1234)),
+            ),
+            opponent_pool=list(getattr(config, "opponent_pool", []) or []),
+            strategy=str(getattr(config, "opponent_strategy", "uniform")),
+            seed=int(getattr(config, "opponent_seed", 0)),
+        )
 
     def add_to_pool(self, checkpoint_path: str | Path) -> None:
         path_str = str(checkpoint_path)
         if path_str not in self.opponent_pool:
             self.opponent_pool.append(path_str)
 
-    def sample_opponent(self, device: str = "cpu", rng: random.Random | None = None) -> PolicySlot:
+    def reset_sampling(self) -> None:
+        """Rewinds the opponent stream to its seeded start.
+
+        Mirrors :meth:`League.reset_sampling` so a resumed or repeated run
+        draws exactly the same opponents again.
+        """
+        self._rng = random.Random(self.opponent_seed)
+        self._draws = 0
+        self.opponent_history.clear()
+
+    def choose_opponent_checkpoint(
+        self, rng: random.Random | None = None, strategy: str | None = None
+    ) -> str | None:
+        """Picks the next opponent checkpoint without loading a model.
+
+        Split out from :meth:`sample_opponent` so the selection rule can be
+        tested (and logged into a run manifest) without stable-baselines3
+        or an actual checkpoint file.
+        """
         if not self.opponent_pool:
+            return None
+        chosen_strategy = strategy or self.opponent_strategy
+        if chosen_strategy not in OPPONENT_STRATEGIES:
+            raise ValueError(f"unknown opponent strategy: {chosen_strategy}")
+        picker = rng if rng is not None else self._rng
+        pool = self.opponent_pool
+        if chosen_strategy == "latest":
+            chosen = pool[-1]
+        elif chosen_strategy == "round_robin":
+            chosen = pool[self._draws % len(pool)]
+        elif chosen_strategy == "recency_weighted":
+            weights = [float(index + 1) for index in range(len(pool))]
+            chosen = picker.choices(pool, weights=weights, k=1)[0]
+        else:
+            chosen = picker.choice(pool)
+        self._draws += 1
+        self.opponent_history.append(chosen)
+        return chosen
+
+    def sample_opponent(
+        self,
+        device: str = "cpu",
+        rng: random.Random | None = None,
+        strategy: str | None = None,
+        load: bool = True,
+    ) -> PolicySlot:
+        """Selects (and by default loads) the next frozen opponent.
+
+        ``rng`` overrides the coordinator's own generator for callers that
+        manage seeding themselves (the league does). It is never the global
+        ``random`` module: an unseeded default would make a training run
+        irreproducible in a way that is invisible in the logs.
+        """
+        chosen = self.choose_opponent_checkpoint(rng=rng, strategy=strategy)
+        if chosen is None:
             return self.opponent_slot
-        picker = rng or random
-        chosen = picker.choice(self.opponent_pool)
         self.opponent_slot.checkpoint = chosen
-        self.opponent_slot.load(device)
+        if load:
+            self.opponent_slot.load(device)
         return self.opponent_slot
+
+    def sampling_snapshot(self, history_limit: int = 32) -> dict[str, Any]:
+        """Reproducibility record for run manifests and eval reports."""
+        return {
+            "strategy": self.opponent_strategy,
+            "seed": self.opponent_seed,
+            "draws": self._draws,
+            "pool_size": len(self.opponent_pool),
+            "pool": list(self.opponent_pool),
+            "recent_opponents": list(self.opponent_history[-history_limit:]),
+        }
 
     def load_opponent(self, device: str = "cpu") -> Any:
         return self.opponent_slot.load(device)

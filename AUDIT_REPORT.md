@@ -102,11 +102,16 @@ No public contract changed: the observation/action spaces, replay format, JSONL 
 ## 5. Remaining issues (reviewed, deliberately not changed)
 
 1. **Null-RNG hit-roll default** (`enemy_brain.gd`): a caller omitting `rng` from the brain context gets an always-hit enemy. Production and tests are consistent today; if a new caller appears, prefer making the roll fail closed or require the rng.
-2. **`SelfPlayCoordinator.sample_opponent(rng=None)`** falls back to the unseeded global `random` module. Callers who care pass an rng (the league always seeds); the default is still a determinism hazard.
+2. ~~**`SelfPlayCoordinator.sample_opponent(rng=None)`** falls back to the unseeded global `random` module.~~ **Fixed in a later pass:** the coordinator owns a seeded generator, gains explicit strategies (`uniform`/`latest`/`recency_weighted`/`round_robin`), `reset_sampling()` and `sampling_snapshot()`, and the rule lives in `SelfPlayConfig.opponent_strategy`/`opponent_seed`. It never touches the global `random` module.
 3. **Seed labelling of continuation episodes**: Control Center records and `evaluation.py` tag each finished episode with `seed + env_index`, which is strictly true only for the first episode after an explicit seeded reset (later episodes continue the RNG stream). Identifier-only; does not affect training or rewards.
 4. **Vestigial data**: `scenario["enemy_archetype"]` (always REGULAR, unread) and `_brain_context["agent_eye"]` (produced, never consumed). Harmless; removing would churn dict surfaces for no behavioural gain.
 5. **`EpisodePlan.spawn`/`layout_seed`** are reproducibility data not yet applied by the bridge (`rl_server.gd` has no `set_map`/`set_scenario`/`set_lighting_mode` commands); `environment_commands()` targets `EnvironmentCore` directly. Foundation state, documented as such — the SPAWN_RULES fix (B2) makes this data correct for when it is wired.
 6. **HumanController has no jump binding** (SPACE shoots), so human demonstrations cannot contain jumps — a feature gap in the demo-recording workflow, not a correctness bug.
+
+> **Later-pass note.** Item 2 is fixed (see above). The slot-order fire bias
+> called out elsewhere in this report is also fixed: `SelfPlayEnvironmentCore`
+> now resolves both slots' fire against the pre-tick world and applies damage
+> afterwards, so a mutual lethal exchange kills both agents and ends `draw`.
 
 ## 6. Regression assessment
 

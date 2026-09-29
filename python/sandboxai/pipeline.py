@@ -55,6 +55,7 @@ from .curriculum_stages import (
     EpisodeOutcome,
     applied_condition,
 )
+from .manifest import build_manifest, contract_fingerprint, write_manifest
 from .metrics import EpisodeMetrics, MetricsAggregator, StepSample
 from .randomization import DistributionRunTracker, EpisodePlan
 from .replay import DetailLevel, ReplayHeader, ReplayRecorder
@@ -520,122 +521,10 @@ class ReplayController:
 # ---------------------------------------------------------------------------
 # Run manifest (Phase 11)
 # ---------------------------------------------------------------------------
-
-
-def contract_fingerprint() -> dict[str, Any]:
-    """The observation/action contract identity (replay-header style).
-
-    Dimensions, not a version string: they are what actually decides
-    compatibility, and they are what replay files stamp.
-    """
-    from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
-
-    return {
-        "observation_dim": OBSERVATION_FIELD_COUNT,
-        "action_nvec": list(ACTION_NVEC),
-        "observation_fields": "v3 (additive since v1; see docs/OBSERVATION_ACTION_CONTRACT.md)",
-    }
-
-
-def build_manifest(config: Any, run_dir: Path, device: str, driver: CurriculumDriver | None) -> dict[str, Any]:
-    """Enough information to reproduce and interpret a run, and no more.
-
-    The full hyperparameter set lives in config.json (written next to
-    this); the manifest links to it instead of duplicating every field.
-    """
-    from . import __version__
-
-    versions: dict[str, Any] = {"sandboxai": __version__}
-    for package in ("torch", "stable_baselines3", "gymnasium", "numpy"):
-        try:
-            module = __import__(package)
-            versions[package] = str(getattr(module, "__version__", "unknown"))
-        except ImportError:
-            versions[package] = None
-    code_revision = ""
-    try:
-        import subprocess
-
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=Path(__file__).resolve().parents[2],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            code_revision = result.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        code_revision = ""
-
-    curriculum = {
-        "mode": config.curriculum_mode,
-        "adaptive": config.adaptive_curriculum,
-    }
-    training_distribution: dict[str, Any] = {}
-    if config.curriculum_mode == "auto":
-        curriculum["start_level"] = config.curriculum_start_level
-        if driver is not None:
-            curriculum["current"] = driver.curriculum_snapshot()
-            training_distribution = driver.director.distribution.to_dict()
-    else:
-        curriculum["fixed_level"] = config.curriculum_level
-
-    return {
-        "format": "sandboxai.run_manifest/v1",
-        "experiment_id": config.experiment_id,
-        "run_id": config.run_id,
-        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "seed": config.seed,
-        "device": device,
-        "contract": contract_fingerprint(),
-        "godot_project": str(config.project),
-        "curriculum": curriculum,
-        "training_distribution": training_distribution,
-        "evaluation": {
-            "episodes": config.evaluation_episodes,
-            "frequency": config.evaluation_frequency,
-            "environment_count": config.evaluation_environment_count,
-            "checkpoint_eval_environment_count": config.checkpoint_eval_environment_count,
-            "inference_device": config.inference_device,
-            "condition_eval": config.checkpoint_condition_eval,
-            "generalization_eval": config.checkpoint_generalization_eval,
-            "league_eval": config.checkpoint_league_eval,
-            "eval_master_seed_salt": EVAL_MASTER_SEED_SALT,
-        },
-        "enabled_systems": {
-            "skill_metrics": config.skill_metrics,
-            "episode_log": config.episode_log,
-            "replay_mode": config.replay_mode,
-            "replay_detail": config.replay_detail if config.replay_mode != "off" else "off",
-        },
-        "hyperparameters": {
-            key: getattr(config, key)
-            for key in (
-                "learning_rate",
-                "rollout_length",
-                "batch_size",
-                "gamma",
-                "gae_lambda",
-                "entropy_coefficient",
-                "clip_range",
-                "total_training_steps",
-                "environment_count",
-                "enemy_count",
-            )
-        },
-        "net_arch": list(config.net_arch),
-        "config_file": "config.json",
-        "code_revision": code_revision,
-        "package_versions": versions,
-    }
-
-
-def write_manifest(run_dir: Path, manifest: dict[str, Any]) -> Path:
-    """Writes ``run_manifest.json`` next to config.json / run_summary.json."""
-    path = run_dir / "run_manifest.json"
-    path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
-    return path
+#
+# Manifest construction lives in sandboxai/manifest.py - it is provenance,
+# not orchestration. Re-exported here because `from .pipeline import
+# build_manifest, write_manifest` is the historical import path.
 
 
 # ---------------------------------------------------------------------------

@@ -234,7 +234,13 @@ Inspect and validate a dataset without PyTorch:
 
 ```bash
 sandboxai inspect-dataset --dataset training/datasets/human_demo.jsonl
+sandboxai inspect-dataset --dataset training/datasets/human_demo.jsonl --statistics
 ```
+
+`--statistics` prints the full data-quality report: episode structure and
+group count, per-component action histograms, duplicate-transition fraction,
+observation-range violations, episode-boundary problems and the dataset
+fingerprint. It is the same report BC writes to `dataset_report.json`.
 
 ### Open the Control Center
 
@@ -257,9 +263,34 @@ sandboxai bc-train \
 ```
 
 The result contains `latest.pt`, `best.pt`, periodic epoch checkpoints,
-`metrics.jsonl`, `loss.csv` and `config.json`. The model is a small two-hidden-
-layer PyTorch MLP with one categorical head per action field. Validation
-reports component accuracy and exact six-field action accuracy.
+`metrics.jsonl`, `loss.csv`, `config.json` and `dataset_report.json`. The model
+is a small two-hidden-layer PyTorch MLP with one categorical head per action
+field. Validation reports component accuracy and exact six-field action
+accuracy.
+
+**The train/validation split is episode-aware.** Splitting demonstrations by
+transition leaks: consecutive frames of one episode are nearly identical, so a
+transition-level split reports a validation accuracy that mostly measures
+memorisation of the training episodes.
+
+```bash
+sandboxai bc-train --dataset demo.jsonl --split-strategy episode   # hard requirement
+sandboxai bc-train --dataset demo.jsonl --split-strategy auto      # default
+sandboxai bc-train --dataset demo.jsonl --split-strategy transition
+```
+
+- `auto` (default) groups by `run_id|environment_id|episode_id` when the
+  dataset has at least two groups, and otherwise falls back to the old
+  transition shuffle while recording `degraded_reason` in the split report.
+- `episode` refuses to train on a dataset without usable episode structure
+  rather than leaking quietly.
+- `transition` is the legacy behaviour and must be asked for explicitly.
+
+`dataset_report.json` records the strategy, the train/validation transition and
+group counts, `shared_groups`, a `leakage_free` flag, the seed and the dataset
+fingerprint (`blake2b:<hex>`); every checkpoint carries the split and the
+fingerprint, so a `.pt` file can always be traced to the exact corpus split
+that produced it.
 
 Resume BC training:
 
@@ -280,7 +311,7 @@ fields added for curriculum levels with more than one enemy).
 
 ```bash
 sandboxai train \
-  --env-count 8 --steps 1000000 \
+  --env-count 8 --env-workers auto --steps 1000000 \
   --rollout-length 2048 --batch-size 256 \
   --learning-rate 0.0003 --gamma 0.99 --gae-lambda 0.95 \
   --entropy-coefficient 0.01 --clip-range 0.2 \
@@ -306,6 +337,21 @@ see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
   inference on CPU while PPO updates stay on `--device`. On CUDA hardware
   this removes the per-step host<->device round trip that makes GPU training
   *slower* than CPU for the tiny (84 -> 128 -> 128) policy.
+- `--env-workers N|auto` (default 1): host the environments in N independent
+  headless Godot processes instead of one. Shard *k* owns a contiguous slice
+  of the environments and is launched with that slice's base seed, which is
+  exactly the seed each environment would have received in a single process —
+  so sharding changes wall time, never trajectories. `auto` sizes the pool
+  from the host CPU, reserving two cores for the trainer. A shard that dies
+  raises a `ShardFailure` naming the shard and closes the others cleanly.
+- `--checkpoint-selection-metric KEY`, `--checkpoint-selection-goal max|min`
+  and `--checkpoint-selection-min-delta X`: choose what "best checkpoint"
+  means. Defaults reproduce the historical rule (strictly higher
+  `mean_episode_reward`). Dotted keys reach the mirrored battery sections,
+  e.g. `--checkpoint-selection-metric condition_evaluation.mean_win_rate`.
+  The active rule is written into `evaluations/best.json` and the run
+  manifest; resuming with an incomparable rule restarts selection instead of
+  comparing two different quantities.
 - `--profile-training`: writes `logs/training_profile.json`, including a
   per-boundary evaluation breakdown (process startup, prediction,
   environment stepping, combined battery execution and role overlap).
@@ -383,10 +429,15 @@ By default `sandboxai train` runs the integrated physics-of-learning loop
   measured results never promote/demote; every decision is logged to
   `logs/curriculum.jsonl` with its evidence window. Adaptive feedback only
   ever changes *what* is trained next, never rewards.
-- **A run manifest** (`run_manifest.json`) records the experiment id,
-  seed, contract fingerprint, curriculum config + current level,
-  hyperparameters, enabled systems, evaluation configuration and code
-  version (`git rev-parse` when available).
+- **A run manifest** (`run_manifest.json`, `sandboxai.run_manifest/v2`)
+  records the experiment id, seed, contract fingerprint, curriculum
+  config + current level, hyperparameters, parallelism
+  (`environment_count`/`env_workers`/resolved workers/torch threads),
+  enabled systems, evaluation configuration, the checkpoint-selection
+  rule, the host snapshot (Python, OS, CPU count, WSL flag, CUDA device),
+  the Godot build that produced the trajectories, and code provenance -
+  commit, branch and **whether the working tree was dirty**. Every field
+  degrades to `null` rather than failing the run.
 
 Useful combinations:
 
@@ -446,12 +497,69 @@ every band", spraying costs more than bursting at range) rather than the
 literal numbers — so retuning a profile either preserves those properties
 or fails with a specific explanation.
 
+### Human time-to-kill evidence
+
+`sandboxai ttk-report` turns manually annotated human TTK trials into
+calibration evidence for the simulator. It reads a JSONL
+`sandboxai.ttk_trials` v1 file (optional leading metadata object): consented,
+ordinary-play observations with their conditions (weapon, distance, target health, movement state, hit zone,
+frame rate, build, tester/session) and the acquisition / first-trigger /
+first-damage / lethal timestamps.
+
+```bash
+sandboxai ttk-report --trials training/ttk/session_01.jsonl
+sandboxai ttk-report --trials training/ttk/session_01.jsonl --by-condition
+sandboxai ttk-report --trials training/ttk/session_01.jsonl --compare-simulator
+sandboxai ttk-report --trials training/ttk/session_01.jsonl --json
+```
+
+It reports kills and censored trials **separately**, median/interquartile
+mean with deterministic seeded bootstrap intervals, per-condition breakdowns
+(distance bucketed at 3 m) and, with `--compare-simulator`, the difference
+between human medians and the ideal/handling-aware TTK computed from
+`scripts/weapon/weapon_state.gd`.
+
+Validation is strict and refuses anything that is not ordinary observed play:
+required fields, monotonic timestamps, `kill` ⇔ a lethal timestamp,
+`shots_hit <= shots_fired`, an explicit `consent: true`, and any field whose
+name suggests a private or cheat data source (`memory_`, `process_`,
+`packet`, `server_authoritative`, `hidden_`, `injected`, `hook_`, `exploit`,
+`aimbot`) is rejected outright. TTK trials are calibration evidence, never a
+BC dataset: there is deliberately no array export.
+
+### Inspect training runs
+
+```bash
+sandboxai inspect-runs --root training               # one line per run
+sandboxai inspect-runs --run training/runs/<run_id>  # full report
+sandboxai inspect-runs --root training --json        # stable JSON contract
+```
+
+Strictly read-only — safe to point at a run that is currently training. Each
+report gives the run state *and the evidence it came from*, progress, the
+checkpoint and evaluation inventory, log sizes, manifest provenance (commit +
+dirty flag, host, Godot build, selection rule) and two separate lists:
+`problems` (files that could not be parsed) and `warnings` (dirty code tree,
+observation/action contract mismatch, no checkpoints, no `best_eval.zip`,
+unfinished run). A half-written or corrupt run directory still produces a
+usable report.
+
 ### Benchmark simulation throughput
 
 ```bash
 sandboxai benchmark --env-counts 1,2,4,8,16,24,32,48,64 \
   --steps 2000 --output-dir training/benchmarks/4060ti
+
+# how many Godot worker processes should host those environments?
+sandboxai benchmark --env-counts 4,8,12,16,20 --worker-counts 1,2,4,8 \
+  --steps 2000 --output-dir training/benchmarks/workers
 ```
+
+`--worker-counts` sweeps the `--env-workers` setting for every environment
+count and reports measured steps/s per (environments, workers) pair; worker
+counts above the environment count are clamped. `tools/bridge_scaling_probe.py`
+isolates the transport and process-parallelism scaling **with a synthetic
+workload** — it is a probe for the bridge, not a measurement of Godot.
 
 Benchmark output includes environments, total steps, steps/sec,
 episodes/sec and best-effort CPU/process/GPU memory snapshots. Each
@@ -500,7 +608,8 @@ training/
       registry.json, history.json
       policies/<experiment>@<step>.zip
   bc_runs/<run-id>/
-    config.json, latest.pt, best.pt, epoch_*.pt
+    config.json, dataset_report.json   # split/leakage report + fingerprint
+    latest.pt, best.pt, epoch_*.pt
     metrics.jsonl, loss.csv
   datasets/<name>.jsonl
   evaluations/<name>/
@@ -508,7 +617,9 @@ training/
 ```
 
 `latest.zip` is written only after a successful training call. `best_eval.zip`
-is updated only when mean evaluation reward improves. BC checkpoints contain
+is updated only when the configured checkpoint-selection rule improves
+(default: strictly higher mean evaluation reward); the rule itself is recorded
+in `evaluations/best.json`. BC checkpoints contain
 model/optimizer state, epoch, architecture, action nvec, dataset path and
 metrics so training can resume.
 

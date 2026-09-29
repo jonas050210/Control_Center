@@ -105,8 +105,16 @@ func record_step(reward: float) -> void:
 		survival_steps += 1
 
 
-func record_reward_breakdown(events: Dictionary) -> void:
-	var components: Dictionary = RewardSystem.compute_components(events)
+## Accumulates the per-component reward decomposition for this tick.
+##
+## `components` lets a caller that has ALREADY computed the decomposition
+## (every environment does, to obtain the scalar reward) hand it over
+## instead of paying for a second identical computation per agent per
+## tick. Passing an empty dictionary recomputes it from `events`, which
+## keeps the single-argument call sites working.
+func record_reward_breakdown(events: Dictionary, components: Dictionary = {}) -> void:
+	if components.is_empty():
+		components = RewardSystem.compute_components(events)
 	reward_hits += float(components.get("reward_hit", 0.0))
 	reward_kills += float(components.get("reward_kill", 0.0))
 	reward_damage += float(components.get("reward_damage", 0.0))

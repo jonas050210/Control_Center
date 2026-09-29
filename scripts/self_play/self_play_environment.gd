@@ -271,51 +271,73 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var attempted_shot_a: bool = action_a.shoot and agent_a.alive
 	var attempted_shot_b: bool = action_b.shoot and agent_b.alive
 
+	# SIMULTANEOUS FIRE RESOLUTION.
+	#
+	# Both slots pull their trigger and both shots are RESOLVED against the
+	# pre-tick world (positions, health, alive flags) before either shot's
+	# damage is applied. The previous order — resolve A fully, then B —
+	# made slot A structurally favoured: if A's shot was lethal, B's
+	# same-tick trigger was suppressed entirely, so a mutual kill always
+	# scored as an A win. That bias is fatal for a self-play league, where
+	# the same policy plays both slots and Elo is read as skill.
+	#
+	# Everything else (spread/recoil consumption, hit zones, occlusion) is
+	# unchanged; only the point at which health is mutated moved.
 	var trigger_a: Dictionary = agent_a.weapon.pull_trigger(
 		attempted_shot_a, agent_a.speed_fraction, not agent_a.on_ground
 	)
+	var trigger_b: Dictionary = agent_b.weapon.pull_trigger(
+		attempted_shot_b, agent_b.speed_fraction, not agent_b.on_ground
+	)
 	var headshot_a: bool = false
+	var headshot_b: bool = false
+	var pending_a: Dictionary = {"damage": 0.0, "headshot": false}
+	var pending_b: Dictionary = {"damage": 0.0, "headshot": false}
 	if bool(trigger_a["fired"]):
 		shot_a = true
 		if sound_on:
 			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_a.position, 0)
-		var resolved_a: Dictionary = _resolve_agent_weapon_hit(
-			agent_a, agent_b, eye_a, chest_b, trigger_a
+		pending_a = _resolve_agent_weapon_hit(agent_a, agent_b, eye_a, chest_b, trigger_a)
+		agent_a.apply_recoil(
+			float(trigger_a["recoil_pitch_deg"]), float(trigger_a["recoil_yaw_deg"])
 		)
-		damage_a = float(resolved_a["damage"])
-		headshot_a = bool(resolved_a["headshot"])
+	if bool(trigger_b["fired"]):
+		shot_b = true
+		if sound_on:
+			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_b.position, 1)
+		pending_b = _resolve_agent_weapon_hit(agent_b, agent_a, eye_b, chest_a, trigger_b)
+		agent_b.apply_recoil(
+			float(trigger_b["recoil_pitch_deg"]), float(trigger_b["recoil_yaw_deg"])
+		)
+
+	# Near-miss geometry is sampled BEFORE any damage lands, for the same
+	# symmetry reason: _shot_is_near_agent() requires both agents alive,
+	# so evaluating it after a lethal exchange would silently drop the
+	# loser's near-miss diagnostic.
+	var near_geometry_a: bool = _shot_is_near_agent(agent_a, agent_b)
+	var near_geometry_b: bool = _shot_is_near_agent(agent_b, agent_a)
+
+	# Apply both resolved volleys. take_damage() clamps to the remaining
+	# health, so a simultaneous lethal exchange kills both agents and
+	# neither slot's trigger is cancelled by the other's outcome.
+	if float(pending_a["damage"]) > 0.0:
+		damage_a = agent_b.take_damage(float(pending_a["damage"]))
+		headshot_a = bool(pending_a["headshot"])
 		hit_a = damage_a > 0.0
 		kill_a = hit_a and not agent_b.alive
 		if hit_a and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_b.position, 1)
 		if kill_a and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.DEATH, agent_b.position, 1)
-		agent_a.apply_recoil(
-			float(trigger_a["recoil_pitch_deg"]), float(trigger_a["recoil_yaw_deg"])
-		)
-
-	var trigger_b: Dictionary = agent_b.weapon.pull_trigger(
-		attempted_shot_b and agent_b.alive, agent_b.speed_fraction, not agent_b.on_ground
-	)
-	var headshot_b: bool = false
-	if bool(trigger_b["fired"]):
-		shot_b = true
-		if sound_on:
-			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_b.position, 1)
-		var resolved_b: Dictionary = _resolve_agent_weapon_hit(
-			agent_b, agent_a, eye_b, chest_a, trigger_b
-		)
-		damage_b = float(resolved_b["damage"])
-		headshot_b = bool(resolved_b["headshot"])
+	if float(pending_b["damage"]) > 0.0:
+		damage_b = agent_a.take_damage(float(pending_b["damage"]))
+		headshot_b = bool(pending_b["headshot"])
 		hit_b = damage_b > 0.0
 		kill_b = hit_b and not agent_a.alive
 		if hit_b and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_a.position, 0)
 		if kill_b and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.DEATH, agent_a.position, 0)
-		agent_b.apply_recoil(
-			float(trigger_b["recoil_pitch_deg"]), float(trigger_b["recoil_yaw_deg"])
-		)
 
 	if shot_a:
 		episode_a.record_shot(hit_a, headshot_a)
@@ -328,15 +350,13 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		episode_b.record_damage_dealt(damage_b)
 		episode_a.record_damage_taken(damage_b)
 
-	var near_miss_a: bool = (
-		shot_a and not hit_a and target_hittable_a and _shot_is_near_agent(agent_a, agent_b)
-	)
-	var near_miss_b: bool = (
-		shot_b and not hit_b and target_hittable_b and _shot_is_near_agent(agent_b, agent_a)
-	)
-	var effective_attempted_b: bool = attempted_shot_b and agent_b.alive
+	var near_miss_a: bool = shot_a and not hit_a and target_hittable_a and near_geometry_a
+	var near_miss_b: bool = shot_b and not hit_b and target_hittable_b and near_geometry_b
+	# Both attempts are judged against the PRE-tick alive state: with
+	# simultaneous resolution slot B's trigger is no longer cancelled by
+	# slot A's lethal hit, so its shot result must not be either.
 	var shot_result_a: String = _shot_result(hit_a, near_miss_a, attempted_shot_a, shot_a)
-	var shot_result_b: String = _shot_result(hit_b, near_miss_b, effective_attempted_b, shot_b)
+	var shot_result_b: String = _shot_result(hit_b, near_miss_b, attempted_shot_b, shot_b)
 	var events_a := {
 		"hit": hit_a,
 		"kill": kill_a,
@@ -358,7 +378,7 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"damage_taken": damage_a,
 		"damage_dealt": damage_b,
 		"died": not agent_b.alive,
-		"useless_shot": effective_attempted_b and not hit_b and not near_miss_b,
+		"useless_shot": attempted_shot_b and not hit_b and not near_miss_b,
 		"missed_shot": near_miss_b,
 		"shot_fired": shot_b,
 		"shot_result": shot_result_b,
@@ -368,12 +388,17 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"alive": agent_b.alive,
 	}
 
-	var reward_a: float = RewardSystem.compute(events_a)
-	var reward_b: float = RewardSystem.compute(events_b)
+	# Computed once per slot and handed to the breakdown: the scalar
+	# reward IS the sum of these components, so recomputing them would
+	# only pay twice for the same numbers.
+	var components_a: Dictionary = RewardSystem.compute_components(events_a)
+	var components_b: Dictionary = RewardSystem.compute_components(events_b)
+	var reward_a: float = RewardSystem.components_total(components_a)
+	var reward_b: float = RewardSystem.components_total(components_b)
 	episode_a.record_step(reward_a)
 	episode_b.record_step(reward_b)
-	episode_a.record_reward_breakdown(events_a)
-	episode_b.record_reward_breakdown(events_b)
+	episode_a.record_reward_breakdown(events_a, components_a)
+	episode_b.record_reward_breakdown(events_b, components_b)
 
 	if kill_a:
 		episode_a.record_kill()
@@ -535,11 +560,22 @@ static func _chest_position(agent) -> Vector3:
 	return agent.position + Vector3(0.0, SandboxConfig.ENEMY_CHEST_HEIGHT, 0.0)
 
 
+## Resolves one volley WITHOUT mutating the target.
+##
+## Returns the damage that would be applied to `target` given the target's
+## state at call time, clamped to its remaining health exactly like
+## AgentState.take_damage would clamp it (so overkill pellets are not
+## counted, matching the previous per-pellet behaviour). The caller
+## applies both slots' results afterwards, which is what makes a lethal
+## exchange symmetric instead of slot-A-favoured.
 func _resolve_agent_weapon_hit(
 	shooter: AgentState, target: AgentState, eye: Vector3, chest: Vector3, trigger: Dictionary
 ) -> Dictionary:
 	var total_damage: float = 0.0
 	var headshot: bool = false
+	if not target.alive:
+		return {"damage": 0.0, "headshot": false}
+	var remaining: float = target.health
 	var head: Vector3 = target.position + Vector3(0.0, SandboxConfig.ENEMY_HEAD_HEIGHT, 0.0)
 	var head_zones: bool = shooter.weapon.handling_enabled
 	var aim: Vector3 = shooter.weapon.apply_spread(
@@ -549,7 +585,7 @@ func _resolve_agent_weapon_hit(
 	)
 	var directions: Array = shooter.weapon.projectile_directions(aim)
 	for direction_value in directions:
-		if not target.alive:
+		if total_damage >= remaining:
 			break
 		var direction: Vector3 = direction_value
 		var zone: Dictionary = shooter.weapon.resolve_hit_zone(
@@ -562,10 +598,10 @@ func _resolve_agent_weapon_hit(
 			continue
 		if str(zone["zone"]) == WeaponState.ZONE_HEAD:
 			headshot = true
-		total_damage += target.take_damage(
+		total_damage += (
 			shooter.weapon.projectile_damage_at_distance(hit_distance) * float(zone["multiplier"])
 		)
-	return {"damage": total_damage, "headshot": headshot}
+	return {"damage": minf(total_damage, remaining), "headshot": headshot}
 
 
 ## Applies the ladder's weapon-handling capability to both slots.
