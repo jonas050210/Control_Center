@@ -109,17 +109,20 @@ class TrainingProfiler:
                 # sandboxai.checkpoint_eval). `callback.evaluation` remains
                 # the full synchronous boundary cost; these buckets split it
                 # so a profile answers where the time actually went:
-                # process startup, prediction, environment stepping, and
-                # the per-section battery cost.
+                # process startup, prediction, environment stepping,
+                # combined battery execution and cross-role overlap.
                 "eval.env_startup",
                 "eval.normal.total",
                 "eval.normal.predict",
                 "eval.normal.env_step",
                 "eval.normal.bridge.step.total",
                 "eval.battery.total",
+                "eval.battery.execution",
                 "eval.battery.predict",
                 "eval.battery.env_step",
                 "eval.battery.bridge.step.total",
+                "eval.parallel.wall",
+                "eval.parallel.overlap",
             )
         }
         phase_percent = {
@@ -142,6 +145,7 @@ class TrainingProfiler:
                 "godot_server separates those server-side phases when the running Godot bridge supports profiling.",
                 "eval.* buckets belong to the evaluation bridges only; they never fold into the training bridge.* buckets.",
                 "eval.env_startup counts bridge process spawns: with process reuse it should fire once per role per run, not once per evaluation boundary.",
+                "eval.parallel.overlap is wall time hidden by running normal and battery bridges concurrently; both jobs still join before checkpoint decisions.",
             ],
         }
 

@@ -42,6 +42,11 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingConfig(entropy_coefficient=-0.01).validate()
 
+    def test_evaluation_defaults_use_exact_batched_plans(self):
+        config = TrainingConfig()
+        self.assertEqual(config.evaluation_environment_count, 8)
+        self.assertEqual(config.checkpoint_eval_environment_count, 8)
+
     def test_invalid_evaluation_episodes_and_torch_threads_rejected(self):
         with self.assertRaises(ValueError):
             TrainingConfig(evaluation_episodes=0).validate()

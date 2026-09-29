@@ -7,7 +7,12 @@ import time
 from typing import Any, TYPE_CHECKING
 
 from .config import TrainingConfig
-from .evaluation import evaluate_model
+from .evaluation import (
+    SynchronizedModel,
+    evaluate_model,
+    run_parallel_evaluations,
+    write_evaluation_artifacts,
+)
 from .godot_env import GodotVecEnv
 from .telemetry import JsonlTelemetry, ResourceMonitor
 from .training_profile import PrefixedProfiler, TrainingProfiler
@@ -424,8 +429,18 @@ def train_ppo(
                 battery_view = None
             self.normal_profiler = normal_view
             self.battery_profiler = battery_view
+            if profiler is not None:
+                profiler.set_metadata(
+                    evaluation_execution=("parallel_roles" if pipeline is not None else "normal_only")
+                )
             eval_kwargs = _env_kwargs(config)
-            eval_kwargs["environment_count"] = max(1, config.evaluation_environment_count)
+            # More slots than requested episodes can only simulate ignored
+            # work. Cap the persistent normal bridge without changing the
+            # configured maximum or any episode in the evaluation set.
+            eval_kwargs["environment_count"] = min(
+                config.evaluation_episodes,
+                max(1, config.evaluation_environment_count),
+            )
             if normal_view is not None:
                 eval_kwargs["profiler"] = normal_view
             self.eval_env_kwargs = eval_kwargs
@@ -459,46 +474,63 @@ def train_ppo(
             if self.num_timesteps < self.next_evaluation:
                 return True
             evaluation_started = time.perf_counter() if profiler is not None else 0.0
-            # Normal evaluation (reused bridge process).
+            step_directory = evaluations / f"step_{self.num_timesteps:09d}"
+            # Both bridges are persistent. In auto-curriculum mode their
+            # independent simulations run concurrently, while
+            # SynchronizedModel serializes the tiny shared-policy calls.
+            # The callback joins both jobs before looking at reward, so best
+            # checkpoint and early-stop ordering is exactly unchanged.
             env = self._ensure_eval_env()
-            summary = evaluate_model(
-                self.model,
-                self.eval_env_kwargs,
-                episodes=config.evaluation_episodes,
-                seed=config.seed + self.num_timesteps,
-                output_dir=evaluations / f"step_{self.num_timesteps:09d}",
-                env=env,
-                # Raw profiler: evaluate_model records fully-qualified
-                # eval.normal.* buckets; the prefixed view above is only
-                # for the bridge transport's bridge.* names.
-                profiler=profiler,
-            )
-            reward = float(summary.get("mean_episode_reward", 0.0))
-            summary["timesteps"] = self.num_timesteps
             if pipeline is not None:
-                # Checkpoint-time battery: frozen conditions, generalization
-                # split from what the run ACTUALLY trained on, optional
-                # league, training metrics aggregation. Results go into the
-                # same step_NNNNNNNNN directory as the normal evaluation so
-                # one directory answers "how was the policy at step N".
-                from .checkpoint_eval import run_checkpoint_evaluation
+                from .checkpoint_eval import (
+                    run_checkpoint_evaluation,
+                    write_checkpoint_report,
+                )
 
+                battery_executor = self._ensure_battery_executor()
                 pipeline.timesteps = self.num_timesteps
                 pipeline.note_checkpoint(
                     best_path if best_path.exists() else checkpoints / "latest.zip"
                 )
                 pipeline.save_state()
-                checkpoint_report = run_checkpoint_evaluation(
-                    self.model,
-                    step=self.num_timesteps,
-                    config=config,
-                    pipeline=pipeline,
-                    output_dir=evaluations / f"step_{self.num_timesteps:09d}",
-                    device=device,
-                    normal_summary=dict(summary),
-                    executor=self._ensure_battery_executor(),
-                    profiler=profiler,
+                frozen_model = SynchronizedModel(self.model)
+                summary, checkpoint_report, parallel_timing = run_parallel_evaluations(
+                    lambda: evaluate_model(
+                        frozen_model,
+                        self.eval_env_kwargs,
+                        episodes=config.evaluation_episodes,
+                        seed=config.seed + self.num_timesteps,
+                        # Written after both workers join. The generalization
+                        # exporter owns episodes.csv in this shared directory;
+                        # normal rows use normal_episodes.csv instead.
+                        output_dir=None,
+                        env=env,
+                        profiler=profiler,
+                    ),
+                    lambda: run_checkpoint_evaluation(
+                        frozen_model,
+                        step=self.num_timesteps,
+                        config=config,
+                        pipeline=pipeline,
+                        output_dir=step_directory,
+                        device=device,
+                        normal_summary=None,
+                        executor=battery_executor,
+                        profiler=profiler,
+                        write_report=False,
+                    ),
                 )
+                summary["timesteps"] = self.num_timesteps
+                write_evaluation_artifacts(
+                    summary, step_directory, episodes_name="normal_episodes.csv"
+                )
+                checkpoint_report["normal_evaluation"] = dict(summary)
+                write_checkpoint_report(checkpoint_report, step_directory)
+                if profiler is not None:
+                    profiler.record("eval.parallel.wall", parallel_timing["wall_seconds"])
+                    profiler.record(
+                        "eval.parallel.overlap", parallel_timing["overlap_seconds"]
+                    )
                 summary["curriculum"] = pipeline.driver.curriculum_snapshot()
                 for section in ("condition_evaluation", "generalization", "league"):
                     body = checkpoint_report.get(section)
@@ -513,11 +545,26 @@ def train_ppo(
                     "event": "checkpoint_evaluation",
                     "timesteps": self.num_timesteps,
                     "curriculum_level": pipeline.driver.level,
-                    "report": str(evaluations / f"step_{self.num_timesteps:09d}" / "report.json"),
+                    "report": str(step_directory / "report.json"),
                 }
                 telemetry.write(checkpoint_event)
                 if run_control is not None:
                     run_control.event("system", "checkpoint evaluation completed", checkpoint_event)
+            else:
+                summary = evaluate_model(
+                    self.model,
+                    self.eval_env_kwargs,
+                    episodes=config.evaluation_episodes,
+                    seed=config.seed + self.num_timesteps,
+                    output_dir=step_directory,
+                    env=env,
+                    # Raw profiler: evaluate_model records fully-qualified
+                    # eval.normal.* buckets; the prefixed view above is only
+                    # for the bridge transport's bridge.* names.
+                    profiler=profiler,
+                )
+                summary["timesteps"] = self.num_timesteps
+            reward = float(summary.get("mean_episode_reward", 0.0))
             (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
             best_started = time.perf_counter() if profiler is not None else 0.0
             if reward > best_score:

@@ -352,21 +352,31 @@ class _FakeBatchClient:
         self.environment_count = environment_count
         self._counters = [0] * environment_count
         self._target = [0] * environment_count
+        self._pending: list[int | None] = [None] * environment_count
         self.staged: list[list[dict]] = []
+        self.reset_indices_calls = 0
 
     def set_episode_plans(self, plans):
         self.staged.append(list(plans))
         for payload in plans:
             index = int(payload["index"])
-            self._target[index] = int(payload["seed"]) % 5 + 2
-            self._counters[index] = 0
+            self._pending[index] = int(payload["seed"]) % 5 + 2
         return {"ok": True, "staged": [int(p["index"]) for p in plans]}
 
     def reset(self, seed=None):
+        for index in range(self.environment_count):
+            if self._pending[index] is not None:
+                self._target[index] = int(self._pending[index])
+                self._pending[index] = None
+            self._counters[index] = 0
         return [[0.0] * OBSERVATION_FIELD_COUNT for _ in range(self.environment_count)], [{} for _ in range(self.environment_count)]
 
     def reset_indices(self, indices, seed=None):
+        self.reset_indices_calls += 1
         for index in indices:
+            if self._pending[index] is not None:
+                self._target[index] = int(self._pending[index])
+                self._pending[index] = None
             self._counters[index] = 0
         return [
             {"index": index, "observation": [0.0] * OBSERVATION_FIELD_COUNT}
@@ -384,7 +394,14 @@ class _FakeBatchClient:
                 won = self._target[index] % 2 == 0
                 infos.append({"metrics": {"win": won, "episode_length": self._counters[index], "episode_reward": 1.0},
                               "done_reason": "won" if won else "agent_death", "events": {}})
-                self._target[index] = 0
+                # Real Godot consumes a staged plan in the terminal step's
+                # auto-reset and returns that plan's first observation.
+                if self._pending[index] is not None:
+                    self._target[index] = int(self._pending[index])
+                    self._pending[index] = None
+                    self._counters[index] = 0
+                else:
+                    self._target[index] = 0
             else:
                 infos.append({"events": {}})
         return (
@@ -432,9 +449,43 @@ class PlanExecutorTest(unittest.TestCase):
         rows_b = self._executor(2).run(self._model(), plans, policy_id="pol")
         self.assertEqual(len(rows_a), 10)
         # Scheduling independence: N=3 and N=2 must produce the same rows.
-        strip = lambda rows: [{k: v for k, v in row.items() if k not in ("environment_index", "episode_length", "win")} for row in rows]
+        strip = lambda rows: [
+            {k: v for k, v in row.items() if k != "environment_index"}
+            for row in rows
+        ]
         self.assertEqual(strip(rows_a), strip(rows_b))
         self.assertEqual([row["labels"]["_position"] for row in rows_a], list(range(10)))
+
+    def test_next_plans_use_terminal_auto_reset_without_explicit_reset(self):
+        executor = self._executor(3)
+        rows = executor.run(self._model(), self._plans(12), policy_id="pol")
+        self.assertEqual(len(rows), 12)
+        self.assertEqual(
+            executor.client.reset_indices_calls,
+            0,
+            "pre-staged plans must eliminate the old reset_indices round trip",
+        )
+        # Initial plans plus pending refills are staged before they are
+        # needed; no plan is dropped or replayed.
+        staged_seeds = [
+            int(payload["seed"])
+            for batch in executor.client.staged
+            for payload in batch
+        ]
+        self.assertCountEqual(staged_seeds, [plan.condition.seed for plan in self._plans(12)])
+
+    def test_result_order_does_not_depend_on_duplicate_report_positions(self):
+        plans = self._plans(8)
+        # Two report sections may each number their local rows from zero.
+        duplicated = [
+            PlannedEpisode(
+                condition=plan.condition,
+                labels={**plan.labels, "_position": index % 4},
+            )
+            for index, plan in enumerate(plans)
+        ]
+        rows = self._executor(3).run(self._model(), duplicated, policy_id="pol")
+        self.assertEqual([row["seed"] for row in rows], [plan.condition.seed for plan in plans])
 
     def test_applied_condition_is_sanity_preserved_by_executor_inputs(self):
         # Guard against a mis-wiring where raw sampled conditions (with maps

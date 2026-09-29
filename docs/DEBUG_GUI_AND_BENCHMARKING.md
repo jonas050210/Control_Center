@@ -167,8 +167,9 @@ synchronous block (see below), not the ordering.
 
 ### Removed avoidable overhead
 
-Five hot-path costs were unnecessary and are now avoided without changing
-observations, actions, rewards, episode boundaries, RNG use or PPO data:
+Seven hot-path costs were unnecessary and are now avoided without changing
+observations, actions, rewards, episode boundaries, evaluation coverage,
+checkpoint selection, early stopping, RNG use or PPO data:
 
 1. Training telemetry used to launch `nvidia-smi` synchronously every 100
    vector steps (every 400 actual timesteps with 4 environments). A 106,496
@@ -191,19 +192,32 @@ observations, actions, rewards, episode boundaries, RNG use or PPO data:
    bit-identical episodes because the engine derives the world
    deterministically from the seed. `eval.env_startup` in the profile shows
    exactly two spawns per run instead of two per boundary.
-4. The checkpoint battery ran its planned episodes on a single environment
-   (`evaluation_environment_count`, default 1). Planned episodes are
-   result-invariant under scheduling by construction (every plan carries its
-   own seed and fully reconfigures its environment), so the battery now runs
+4. Both evaluation roles now batch deterministic inference. The battery runs
    `checkpoint_eval_environment_count` (default 8, CLI
-   `--checkpoint-eval-env-count`) bridge environments: per-step policy
-   inference and bridge round trips amortise across the batch while every
-   episode stays bit-identical. The normal evaluation keeps
-   `evaluation_environment_count` with its exact serial semantics, because
-   its per-episode seeds are not plan-scheduled.
-5. The battery bridge now requests compact infos (it consumes only events
-   and terminal metrics, both retained in compact mode), halving its
-   per-step response payload like the training bridge already does.
+   `--checkpoint-eval-env-count`). Normal evaluation now explicitly stages
+   the historical episode set (`seed + episode_index`) as complete plans and
+   sorts results back into episode-index order, so it can safely use
+   `evaluation_environment_count` (now default 8) without changing seeds,
+   coverage or summary order. Serial and vector paths are regression-tested
+   row for row.
+5. The battery bridge requests compact infos (it consumes only events and
+   terminal metrics, both retained in compact mode), cutting its per-step
+   response payload like the training bridge already does.
+6. Normal and battery evaluation use separate persistent Godot processes, so
+   they now execute at the same time. Access to the shared frozen policy is
+   serialized (the short inference/save calls cannot race), while the costly
+   independent simulation steps overlap. Both jobs are joined before reward
+   comparison, `best_eval.zip`, patience updates or reward-threshold stopping;
+   those semantics and their ordering are unchanged. Profiles expose
+   `eval.parallel.wall` and the measured `eval.parallel.overlap`.
+7. A plan executor now pre-stages each slot's next plan. Godot consumes that
+   plan in the terminal step's existing auto-reset instead of first resetting
+   a throwaway world, returning to Python, staging, issuing `reset_indices`,
+   and resetting the requested world again. Condition and generalization
+   plans also share one continuous executor call, eliminating a second batch
+   reset and a separate partially-filled vector tail. The normal rows use
+   `normal_episodes.csv`; generalization retains the historical
+   `episodes.csv`, avoiding concurrent file overwrites.
 
 For CUDA runs there is additionally `--inference-device cpu`: rollout
 collection and frozen evaluation then run their policy forward passes on CPU

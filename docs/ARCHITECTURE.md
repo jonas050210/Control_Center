@@ -132,6 +132,16 @@ A checkpoint resume loads the SB3 archive with its optimizer state and calls
 successful run, while `best_eval.zip` is only replaced by a strictly better
 evaluation.
 
+At an auto-curriculum evaluation boundary, normal evaluation and the
+condition/generalization battery run on two independent persistent bridge
+processes concurrently. Both use explicit per-episode plans and batched
+`deterministic=True` inference; access to the shared frozen policy is locked.
+The callback joins both workers before checkpoint selection, patience updates
+or reward-threshold stopping, so parallel execution cannot reorder training
+control decisions. The plan executor pre-stages the next episode for Godot's
+terminal auto-reset and runs condition plus generalization as one ordered
+batch, avoiding duplicate resets and vector-tail work.
+
 ## BC and BC-to-PPO
 
 `DemonstrationRecorder` in Godot attaches to `SimulationManager` and logs the

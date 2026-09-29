@@ -166,9 +166,11 @@ class TrainingConfig:
     checkpoint_frequency: int = 100_000
     evaluation_frequency: int = 50_000
     evaluation_episodes: int = 20
-    ## Environments used by the periodic in-training evaluation. Kept at 1
-    ## by default so evaluation stays cheap and exactly reproducible.
-    evaluation_environment_count: int = 1
+    ## Environments used by periodic normal evaluation. Every episode is
+    ## explicitly plan-scheduled with its historical seed and results are
+    ## restored to seed order, so batching is exactly reproducible and does
+    ## not change coverage or checkpoint-selection semantics.
+    evaluation_environment_count: int = 8
     ## Bridge environments for the checkpoint battery (condition +
     ## generalization planned episodes). Unlike the normal evaluation, the
     ## battery's episodes are PLAN-scheduled and therefore
