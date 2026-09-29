@@ -133,6 +133,8 @@ class EpisodeMetrics:
         # aim
         self.shots: int = 0
         self.hits: int = 0
+        self.projectiles_fired: int = 0
+        self.projectiles_hit: int = 0
         self._aim_error_sum: float = 0.0
         self._aim_error_samples: int = 0
         self._shot_aim_error_sum: float = 0.0
@@ -245,6 +247,8 @@ class EpisodeMetrics:
             self._aim_error_samples += 1
         if events.get("shot_fired"):
             self.shots += 1
+            self.projectiles_fired += int(events.get("projectiles_fired", 1))
+            self.projectiles_hit += int(events.get("projectiles_hit", 1 if events.get("hit") else 0))
             self._shot_aim_error_sum += bearing
             if events.get("hit"):
                 self.hits += 1
@@ -418,6 +422,11 @@ class EpisodeMetrics:
             "shots": self.shots,
             "hits": self.hits,
             "accuracy": self.hits / self.shots if self.shots else 0.0,
+            "projectiles_fired": self.projectiles_fired,
+            "projectiles_hit": self.projectiles_hit,
+            "projectile_accuracy": (
+                self.projectiles_hit / self.projectiles_fired if self.projectiles_fired else 0.0
+            ),
             "mean_aim_error": (
                 self._aim_error_sum / self._aim_error_samples if self._aim_error_samples else 0.0
             ),

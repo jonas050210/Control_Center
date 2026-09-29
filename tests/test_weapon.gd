@@ -84,3 +84,32 @@ func test_ray_misses_target_off_to_the_side() -> SandboxTest:
 	)
 	t.assert_false(hit, "target far off the ray's line should not be hit")
 	return t
+
+
+func test_profile_damage_falloff_and_ttk_are_monotonic() -> SandboxTest:
+	var t := SandboxTest.new("weapon_profile_falloff_and_ttk")
+	for profile_id in WeaponState.profile_ids():
+		var weapon := WeaponState.new()
+		t.assert_true(weapon.configure_profile(profile_id))
+		var near_damage: float = weapon.projectile_damage_at_distance(0.0)
+		var far_damage: float = weapon.projectile_damage_at_distance(weapon.range_m)
+		t.assert_gt(near_damage, 0.0)
+		t.assert_true(far_damage <= near_damage, "falloff cannot increase damage")
+		t.assert_true(far_damage >= 0.0, "damage cannot become negative")
+		t.assert_true(
+			weapon.ideal_ttk_seconds(100.0, weapon.range_m)
+			>= weapon.ideal_ttk_seconds(100.0, 0.0),
+			"ideal TTK cannot improve with distance"
+		)
+	return t
+
+
+func test_shotgun_pattern_is_deterministic_and_has_eight_pellets() -> SandboxTest:
+	var t := SandboxTest.new("shotgun_pattern_deterministic")
+	var weapon := WeaponState.new()
+	weapon.configure_profile(WeaponState.PROFILE_SHOTGUN)
+	var first: Array = weapon.projectile_directions(Vector3.FORWARD)
+	var second: Array = weapon.projectile_directions(Vector3.FORWARD)
+	t.assert_eq(first.size(), 8)
+	t.assert_eq(first, second, "fixed pellet pattern must replay identically")
+	return t
