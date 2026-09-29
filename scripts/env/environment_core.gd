@@ -540,7 +540,7 @@ func step(
 	var reward_components: Dictionary = RewardSystem.compute_components(events)
 	var reward: float = RewardSystem.components_total(reward_components)
 	episode.record_step(reward)
-	episode.record_reward_breakdown(events)
+	episode.record_reward_breakdown(events, reward_components)
 
 	var done: bool = false
 	var reason: String = ""

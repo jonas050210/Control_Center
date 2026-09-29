@@ -388,12 +388,17 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"alive": agent_b.alive,
 	}
 
-	var reward_a: float = RewardSystem.compute(events_a)
-	var reward_b: float = RewardSystem.compute(events_b)
+	# Computed once per slot and handed to the breakdown: the scalar
+	# reward IS the sum of these components, so recomputing them would
+	# only pay twice for the same numbers.
+	var components_a: Dictionary = RewardSystem.compute_components(events_a)
+	var components_b: Dictionary = RewardSystem.compute_components(events_b)
+	var reward_a: float = RewardSystem.components_total(components_a)
+	var reward_b: float = RewardSystem.components_total(components_b)
 	episode_a.record_step(reward_a)
 	episode_b.record_step(reward_b)
-	episode_a.record_reward_breakdown(events_a)
-	episode_b.record_reward_breakdown(events_b)
+	episode_a.record_reward_breakdown(events_a, components_a)
+	episode_b.record_reward_breakdown(events_b, components_b)
 
 	if kill_a:
 		episode_a.record_kill()
