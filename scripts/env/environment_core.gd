@@ -417,6 +417,13 @@ func _apply_agent_weapon_profile() -> void:
 		"hit_radius", SandboxConfig.WEAPON_HIT_RADIUS
 	))
 	agent.weapon.hit_radius = base_radius * curriculum.target_radius_scale()
+	# Recoil/bloom/fire-mode/magazine are a curriculum capability, not a
+	# property of the profile: the same rifle behaves like the original
+	# cooldown-only weapon on levels 1-4 and like a handled weapon from
+	# level 5 up. `reset()` after the switch clears any state carried over
+	# from the previous episode's profile.
+	agent.weapon.handling_enabled = curriculum.weapon_handling_enabled()
+	agent.weapon.reset()
 
 
 func _world_enabled() -> bool:
@@ -501,8 +508,14 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"died": died,
 		"useless_shot": bool(shot["useless_shot"]),
 		"missed_shot": bool(shot["missed_shot"]),
+		"trigger_discipline": bool(shot.get("trigger_discipline", false)),
+		"headshot": bool(shot.get("headshot", false)),
 		"shot_fired": bool(shot["shot_fired"]),
 		"shot_result": str(shot.get("shot_result", "none")),
+		"projectiles_fired": int(shot.get("projectiles_fired", 0)),
+		"projectiles_hit": int(shot.get("projectiles_hit", 0)),
+		"weapon_damage": agent.weapon.damage,
+		"reloading": agent.weapon.is_reloading(),
 		"positioning_delta": positioning_delta,
 		"aiming_delta": aiming_delta,
 		"target_hittable": target_hittable,
@@ -590,21 +603,29 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 		"kill": false,
 		"useless_shot": false,
 		"missed_shot": false,
+		"trigger_discipline": false,
+		"headshot": false,
 		"shot_fired": false,
 		"shot_result": "none",
 		"damage_dealt": 0.0,
 		"projectiles_fired": 0,
 		"projectiles_hit": 0,
+		"spread_deg": 0.0,
 	}
-	if not action.shoot or not agent.alive:
+	if not agent.alive:
+		# Still consume the trigger edge so a dead-then-respawned agent does
+		# not inherit a stale "already held" state.
+		agent.weapon.trigger_held = false
 		return result
 
-	var shot_fired: bool = agent.weapon.try_fire()
-	if not shot_fired:
-		result["useless_shot"] = true
-		result["shot_result"] = "cooldown"
+	var trigger: Dictionary = agent.weapon.pull_trigger(
+		action.shoot, agent.speed_fraction, not agent.on_ground
+	)
+	if not bool(trigger["fired"]):
+		_classify_blocked_trigger(str(trigger["blocked_reason"]), result)
 		return result
 	result["shot_fired"] = true
+	result["spread_deg"] = float(trigger["spread_deg"])
 	if sound_on:
 		sound_bus.emit_sound(SoundBus.Category.SHOT, agent.position, AGENT_SOUND_SOURCE)
 
@@ -614,8 +635,10 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 	var forward: Vector3 = agent.get_forward_vector()
 
 	# First classify whether the trigger pull was aimed near a real target.
-	# Pellet profiles still use the center aim ray for this classifier: the
-	# spread can make a close hit, but it should not turn random spray into a
+	# This uses the INTENDED aim ray, never the bloom-perturbed one: a shot
+	# is judged on where the agent pointed, not on where the cone happened
+	# to throw the bullet. Pellet profiles likewise use the center ray, so
+	# spread can still land a close hit but cannot turn random spray into a
 	# cheap near-miss reward.
 	for enemy_value in enemies:
 		var enemy: EnemyState = enemy_value
@@ -625,34 +648,51 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 		if _shot_is_near_live_target(eye, forward, enemy):
 			plausible_target = true
 
+	# Bloom deviates the whole pattern; the pellet pattern is then built
+	# around the deviated axis, so a shotgun keeps its shape while moving.
+	var aim_dir: Vector3 = agent.weapon.apply_spread(
+		forward, float(trigger["spread_deg"]), int(trigger["shot_index"])
+	)
+	var head_zones: bool = curriculum.hit_zones_enabled()
 	var impact_sources: Dictionary = {}
-	var projectile_dirs: Array = agent.weapon.projectile_directions(forward)
+	var projectile_dirs: Array = agent.weapon.projectile_directions(aim_dir)
 	result["projectiles_fired"] = projectile_dirs.size()
 	for projectile_dir_value in projectile_dirs:
 		var projectile_dir: Vector3 = projectile_dir_value
 		var best_hit_enemy: EnemyState = null
 		var best_hit_distance: float = INF
+		var best_zone: String = WeaponState.ZONE_NONE
+		var best_multiplier: float = 1.0
 		for enemy_value in enemies:
 			var enemy: EnemyState = enemy_value
 			if not enemy.is_targetable():
 				continue
-			var hit_dist: float = agent.weapon.ray_hit_distance(
-				eye, projectile_dir, enemy.get_chest_position()
+			var zone_hit: Dictionary = agent.weapon.resolve_hit_zone(
+				eye,
+				projectile_dir,
+				enemy.get_chest_position(),
+				enemy.get_head_position(),
+				head_zones
 			)
+			var hit_dist: float = float(zone_hit["distance"])
 			if hit_dist < 0.0 or hit_dist >= best_hit_distance:
 				continue
 			if _weapon_ray_blocked_before(eye, projectile_dir, hit_dist):
 				continue
 			best_hit_distance = hit_dist
 			best_hit_enemy = enemy
+			best_zone = str(zone_hit["zone"])
+			best_multiplier = float(zone_hit["multiplier"])
 		if best_hit_enemy == null:
 			continue
 		var applied: float = best_hit_enemy.take_damage(
-			agent.weapon.projectile_damage_at_distance(best_hit_distance)
+			agent.weapon.projectile_damage_at_distance(best_hit_distance) * best_multiplier
 		)
 		if applied <= 0.0:
 			continue
 		result["hit"] = true
+		if best_zone == WeaponState.ZONE_HEAD:
+			result["headshot"] = true
 		result["projectiles_hit"] = int(result["projectiles_hit"]) + 1
 		result["shot_result"] = "hit"
 		result["damage_dealt"] = float(result["damage_dealt"]) + applied
@@ -676,8 +716,42 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 		result["shot_result"] = "near_miss"
 	elif bool(result["useless_shot"]):
 		result["shot_result"] = "useless_spam" if any_alive else "useless_no_target"
-	episode.record_shot(bool(result["hit"]))
+	episode.record_shot(bool(result["hit"]), bool(result["headshot"]))
+	# The kick lands AFTER the shot is resolved: recoil disturbs the NEXT
+	# shot, never the one that produced it. That ordering is what makes
+	# recoil something the policy learns to pre-compensate.
+	agent.apply_recoil(float(trigger["recoil_pitch_deg"]), float(trigger["recoil_yaw_deg"]))
 	return result
+
+
+## Turns a `WeaponState.pull_trigger()` refusal into the reward-facing shot
+## classification.
+##
+## Legacy (handling off) keeps the original contract exactly: any trigger
+## pull on a cycling weapon is a `useless_shot` worth PENALTY_USELESS_SHOT.
+##
+## With handling on, holding the trigger on an automatic weapon is CORRECT
+## play, so the cycling/reloading/empty cases move to the much cheaper
+## `trigger_discipline` term. Waste is punished organically instead: bloom
+## widens, the magazine drains and the reload leaves the agent exposed.
+func _classify_blocked_trigger(reason: String, result: Dictionary) -> void:
+	match reason:
+		"released":
+			return
+		"cycling":
+			result["shot_result"] = "cooldown"
+		"reloading":
+			result["shot_result"] = "reloading"
+		"empty":
+			result["shot_result"] = "reload_started"
+		"needs_release":
+			result["shot_result"] = "needs_release"
+		_:
+			result["shot_result"] = "cooldown"
+	if agent.weapon.handling_enabled:
+		result["trigger_discipline"] = true
+	else:
+		result["useless_shot"] = true
 
 
 ## True when the primary target is a valid aim-shaping target: alive, within
@@ -947,6 +1021,9 @@ func get_metrics() -> Dictionary:
 	metrics["weapon_projectile_count"] = agent.weapon.projectile_count
 	metrics["weapon_damage"] = agent.weapon.damage
 	metrics["weapon_range"] = agent.weapon.range_m
+	metrics["weapon_fire_mode"] = agent.weapon.fire_mode
+	metrics["weapon_handling"] = agent.weapon.handling_enabled
+	metrics["weapon_reloads"] = agent.weapon.reload_count
 	return metrics
 
 
@@ -1066,6 +1143,14 @@ func get_navigation_state() -> Dictionary:
 ## Corpses, as pure environmental information. Never targetable.
 func get_dead_bodies() -> Array:
 	return EnvironmentIntrospection.dead_bodies(self)
+
+
+## Full weapon + handling state for the Control Center weapon panel.
+## Read-only, and deliberately richer than the observation: the point of
+## the panel is to show a researcher the mechanics the policy can only
+## feel indirectly (recoil offset, bloom, ammo, reload timer).
+func get_weapon_state() -> Dictionary:
+	return EnvironmentIntrospection.weapon_state(self)
 
 
 # ---------------------------------------------------------------------------

@@ -140,6 +140,7 @@ class EpisodeMetrics:
         self._shot_aim_error_sum: float = 0.0
         self.target_switches: int = 0
         self._last_target: int = -1
+        self.headshots: int = 0
 
         # reaction
         self._first_visible_tick: int = -1
@@ -192,6 +193,9 @@ class EpisodeMetrics:
         self.useless_shots: int = 0
         self.cooldown_shots: int = 0
         self.unnecessary_shots: int = 0
+        self.trigger_discipline_events: int = 0
+        self.reload_starts: int = 0
+        self.reloading_ticks: int = 0
 
         # survival
         self.alive_time: float = 0.0
@@ -252,6 +256,8 @@ class EpisodeMetrics:
             self._shot_aim_error_sum += bearing
             if events.get("hit"):
                 self.hits += 1
+                if events.get("headshot"):
+                    self.headshots += 1
         target = int(sample.target_id)
         if target >= 0:
             if self._last_target >= 0 and target != self._last_target:
@@ -374,6 +380,19 @@ class EpisodeMetrics:
         if events.get("useless_shot"):
             self.useless_shots += 1
             self.unnecessary_shots += 1
+        # Handling diagnostics. A trigger-discipline event is a trigger
+        # pull the weapon refused (cycling, reloading, empty, or a
+        # semi-auto that was never released). It is deliberately counted
+        # apart from `useless_shots`: one is bad weapon handling, the
+        # other is shooting at nothing, and conflating them hides which
+        # of the two a policy is actually doing.
+        if events.get("trigger_discipline"):
+            self.trigger_discipline_events += 1
+            self.unnecessary_shots += 1
+        if shot_result == "reload_started" or events.get("reload_started"):
+            self.reload_starts += 1
+        if events.get("reloading"):
+            self.reloading_ticks += 1
 
     def _record_survival(
         self,
@@ -432,6 +451,8 @@ class EpisodeMetrics:
             ),
             "mean_shot_aim_error": self._shot_aim_error_sum / self.shots if self.shots else 0.0,
             "target_switches": self.target_switches,
+            "headshots": self.headshots,
+            "headshot_rate": self.headshots / self.hits if self.hits else 0.0,
         }
 
     def reaction(self) -> dict[str, Any]:
@@ -511,6 +532,14 @@ class EpisodeMetrics:
             "cooldown_shots": self.cooldown_shots,
             "unnecessary_shots": self.unnecessary_shots,
             "target_selection_changes": self.target_switches,
+            "trigger_discipline_events": self.trigger_discipline_events,
+            "trigger_discipline_rate": (
+                self.trigger_discipline_events / (self.shots + self.trigger_discipline_events)
+                if (self.shots + self.trigger_discipline_events)
+                else 0.0
+            ),
+            "reload_starts": self.reload_starts,
+            "reloading_time": self.reloading_ticks * self._dt(),
         }
 
     def survival(self) -> dict[str, Any]:

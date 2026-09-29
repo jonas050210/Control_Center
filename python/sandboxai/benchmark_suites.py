@@ -2,7 +2,7 @@
 
 ``benchmark.py`` answers one question — how does raw stepping throughput
 scale with the number of environments in a single Godot process. This
-module turns that into the four *comparable* suites the research plan
+module turns that into the five *comparable* suites the research plan
 calls for, at the environment counts 1, 4, 8, 16, 32, 64:
 
 * ``curriculum_1_4``  — analytic enemies, no world geometry, no perception
@@ -12,6 +12,9 @@ calls for, at the environment counts 1, 4, 8, 16, 32, 64:
 * ``perception_combat`` — the same, with several enemies actively fighting,
   which is the load an actual training run sees.
 * ``map_analyzer`` — exploration sweeps dominating, combat minimal.
+* ``weapon_handling`` — the first level where recoil, bloom, magazines and
+  reloads are switched on, against several enemies. Comparing it with
+  ``curriculum_5_10`` isolates the per-step cost of the handling layer.
 
 The difference between two suites at the same environment count is the
 overhead attributable to what was switched on, which is the only honest
@@ -94,6 +97,13 @@ SUITES: tuple[BenchmarkSuite, ...] = (
         curriculum_level=10,
         enemy_count=1,
         stresses=("perception", "exploration", "spatial_memory"),
+    ),
+    BenchmarkSuite(
+        name="weapon_handling",
+        description="handling layer active: recoil, bloom, magazines and reloads",
+        curriculum_level=5,
+        enemy_count=3,
+        stresses=("bridge", "physics", "perception", "combat", "weapon_handling"),
     ),
 )
 

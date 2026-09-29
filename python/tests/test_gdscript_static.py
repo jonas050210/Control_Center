@@ -7,8 +7,9 @@ part of that gap: it parses every `.gd` file and fails on the classes of
 defect that a type-checked language would catch at compile time — unknown
 `preload` targets, calls to methods that do not exist on a preloaded
 script, wrong argument counts, calls of instance members through a script
-class, unknown enum members and duplicate definitions. A second test runs
-gdtoolkit's `gdlint` style rules.
+class, calls on locals whose type is a known project script, unknown
+enum members and duplicate definitions. A second test runs gdtoolkit's
+`gdlint` style rules.
 
 It is deliberately a *static* check. It does NOT prove the simulation
 behaves correctly; only `godot --headless --path . --script
@@ -26,6 +27,7 @@ from sandboxai.gdscript_analysis import (
     analyze,
     check_local_method_calls,
     check_static_calls,
+    check_typed_local_calls,
     lint_all,
 )
 
@@ -267,6 +269,89 @@ class UndefinedLocalCallTests(unittest.TestCase):
             "(this is the Godot compile error that invalidated the script and "
             "cascaded through the Control Center suite)",
         )
+
+
+class TypedLocalCallTests(unittest.TestCase):
+    """`var x := Foo.new()` followed by `x.bar()` must be checked too.
+
+    This is the dominant call shape in the repository (every test and most
+    of the engine code builds its collaborators as typed locals), and it
+    was previously invisible to every static check: `check_symbols` only
+    looks at `Alias.member`, where the alias is a class name or a preload
+    constant, so a typo on a local survived until the engine ran it.
+    """
+
+    def _project(self, body: str) -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "project.godot").write_text("[application]\n", encoding="utf-8")
+        (root / "scripts").mkdir()
+        (root / "scripts" / "weapon.gd").write_text(
+            "class_name Weapon\n"
+            "extends RefCounted\n"
+            "\n"
+            "var ammo: int = 0\n"
+            "\n"
+            "func fire() -> bool:\n"
+            "\treturn true\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\nextends RefCounted\n\nfunc run() -> void:\n" + body,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_unknown_method_on_a_typed_local_is_flagged(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.detonate()\n")
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "unknown-member")
+        self.assertIn("w.detonate()", findings[0].message)
+
+    def test_unknown_method_in_a_declaration_right_hand_side_is_flagged(self):
+        # The commonest shape of all: the result is assigned to a new
+        # local, so the line is a declaration *and* a call site.
+        root = self._project("\tvar w := Weapon.new()\n\tvar ok: bool = w.detonate()\n")
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("w.detonate()", findings[0].message)
+
+    def test_declared_methods_and_engine_api_are_not_flagged(self):
+        root = self._project(
+            "\tvar w := Weapon.new()\n"
+            "\tw.fire()\n"
+            "\tw.get_script()\n"
+            "\tvar typed: Weapon = Weapon.new()\n"
+            "\ttyped.fire()\n"
+        )
+        self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
+
+    def test_reassigned_locals_are_dropped_rather_than_guessed(self):
+        # After `w = something_else` the declared type no longer holds, so
+        # reporting on it would be a false positive.
+        root = self._project(
+            "\tvar w := Weapon.new()\n\tw = make_other()\n\tw.detonate()\n"
+        )
+        self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
+
+    def test_scope_does_not_leak_between_functions(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.fire()\n")
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\n"
+            "extends RefCounted\n"
+            "\n"
+            "func a() -> void:\n"
+            "\tvar w := Weapon.new()\n"
+            "\tw.fire()\n"
+            "\n"
+            "func b(w) -> void:\n"
+            "\tw.anything_at_all()\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
+
+    def test_repository_has_no_typed_local_call_findings(self):
+        self.assertEqual(check_typed_local_calls(ProjectIndex(REPO_ROOT)), [])
 
 
 if __name__ == "__main__":

@@ -26,6 +26,12 @@ var trigger_pulls: int = 0
 var near_miss_shots: int = 0
 var useless_shots: int = 0
 var cooldown_shots: int = 0
+## Weapon-handling diagnostics. All measurement only: none of them is a
+## reward term, and none of them reaches the observation vector.
+var headshots: int = 0
+var trigger_discipline_events: int = 0
+var reload_starts: int = 0
+var reloading_steps: int = 0
 var last_shot_result: String = "none"
 var survival_steps: int = 0
 
@@ -44,6 +50,7 @@ var penalty_damage: float = 0.0
 var penalty_death: float = 0.0
 var penalty_useless_shot: float = 0.0
 var penalty_missed_shot: float = 0.0
+var penalty_trigger_discipline: float = 0.0
 
 ## Lifetime counters, useful for the Godot debug overlay.
 var total_kills: int = 0
@@ -67,6 +74,10 @@ func start_new_episode() -> void:
 	near_miss_shots = 0
 	useless_shots = 0
 	cooldown_shots = 0
+	headshots = 0
+	trigger_discipline_events = 0
+	reload_starts = 0
+	reloading_steps = 0
 	last_shot_result = "none"
 	survival_steps = 0
 	reward_hits = 0.0
@@ -83,6 +94,7 @@ func start_new_episode() -> void:
 	penalty_death = 0.0
 	penalty_useless_shot = 0.0
 	penalty_missed_shot = 0.0
+	penalty_trigger_discipline = 0.0
 
 
 func record_step(reward: float) -> void:
@@ -102,6 +114,7 @@ func record_reward_breakdown(events: Dictionary) -> void:
 	penalty_death += float(components.get("penalty_death", 0.0))
 	penalty_useless_shot += float(components.get("penalty_useless_shot", 0.0))
 	penalty_missed_shot += float(components.get("penalty_missed_shot", 0.0))
+	penalty_trigger_discipline += float(components.get("penalty_trigger_discipline", 0.0))
 	reward_positioning += float(components.get("reward_positioning", 0.0))
 	reward_aiming += float(components.get("reward_aiming", 0.0))
 	penalty_passivity += float(components.get("penalty_passivity", 0.0))
@@ -113,6 +126,8 @@ func record_reward_breakdown(events: Dictionary) -> void:
 
 
 func _record_shot_diagnostics(events: Dictionary) -> void:
+	if bool(events.get("reloading", false)):
+		reloading_steps += 1
 	var result: String = str(events.get("shot_result", "none"))
 	if result.is_empty() or result == "none":
 		return
@@ -122,14 +137,20 @@ func _record_shot_diagnostics(events: Dictionary) -> void:
 		near_miss_shots += 1
 	if result == "cooldown":
 		cooldown_shots += 1
+	if result == "reload_started":
+		reload_starts += 1
 	if bool(events.get("useless_shot", false)):
 		useless_shots += 1
+	if bool(events.get("trigger_discipline", false)):
+		trigger_discipline_events += 1
 
 
-func record_shot(hit: bool) -> void:
+func record_shot(hit: bool, headshot: bool = false) -> void:
 	shots_fired += 1
 	if hit:
 		shots_hit += 1
+	if headshot:
+		headshots += 1
 
 
 func record_damage_dealt(amount: float) -> void:
@@ -175,6 +196,7 @@ func get_reward_breakdown() -> Dictionary:
 		"penalty_death": penalty_death,
 		"penalty_useless_shot": penalty_useless_shot,
 		"penalty_missed_shot": penalty_missed_shot,
+		"penalty_trigger_discipline": penalty_trigger_discipline,
 		"total": cumulative_reward,
 	}
 
@@ -211,6 +233,11 @@ func to_metrics(simulation_dt: float, enemy_count: int, won: bool = false) -> Di
 		"near_miss_shots": near_miss_shots,
 		"useless_shots": useless_shots,
 		"cooldown_shots": cooldown_shots,
+		"headshots": headshots,
+		"headshot_rate": float(headshots) / float(shots_hit) if shots_hit > 0 else 0.0,
+		"trigger_discipline_events": trigger_discipline_events,
+		"reload_starts": reload_starts,
+		"reloading_time": float(reloading_steps) * simulation_dt,
 		"last_shot_result": last_shot_result,
 		"win": won,
 		"loss": done and not won and not truncated,

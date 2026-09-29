@@ -100,6 +100,22 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 		"weapon_projectile_count": env.agent.weapon.projectile_count,
 		"weapon_projectile_damage": env.agent.weapon.projectile_damage(),
 		"weapon_spread_deg": env.agent.weapon.spread_deg,
+		# Weapon handling (recoil / bloom / magazine). Diagnostic only: the
+		# policy never receives any of these, it only feels them through
+		# where its own crosshair ends up and through `weapon_ready`.
+		"weapon_handling_enabled": env.agent.weapon.handling_enabled,
+		"weapon_fire_mode": env.agent.weapon.fire_mode,
+		"weapon_ammo": env.agent.weapon.ammo_in_magazine,
+		"weapon_magazine_size": env.agent.weapon.magazine_size,
+		"weapon_reloading": env.agent.weapon.is_reloading(),
+		"weapon_reload_remaining": env.agent.weapon.reload_remaining,
+		"weapon_recoil_pitch_deg": env.agent.weapon.recoil_pitch_deg,
+		"weapon_recoil_yaw_deg": env.agent.weapon.recoil_yaw_deg,
+		"weapon_bloom_deg": env.agent.weapon.bloom_deg,
+		"weapon_current_spread_deg": env.agent.weapon.current_spread_deg(
+			env.agent.speed_fraction, not env.agent.on_ground
+		),
+		"weapon_headshot_multiplier": env.agent.weapon.headshot_multiplier,
 	}
 	snapshot["episode"] = {
 		"episode": env.episode.episode_count,

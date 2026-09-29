@@ -29,6 +29,18 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##                                 Penalized with the much cheaper
 ##                                 PENALTY_MISSED_SHOT so that fine-aim
 ##                                 exploration keeps a positive expected value.
+##   trigger_discipline: bool  -- weapon handling ON only: the trigger was
+##                                 held while the weapon physically could
+##                                 not fire (cycling, reloading, or a
+##                                 semi-auto awaiting a release). Holding
+##                                 the trigger on an automatic weapon is
+##                                 correct play, so this costs far less
+##                                 than a useless shot.
+##   weapon_damage: float      -- nominal per-trigger-pull damage of the
+##                                 weapon that fired, used to normalize the
+##                                 flat hit bonus across weapon roles.
+##   projectiles_fired/hit: int -- pellet accounting, used to prorate the
+##                                 flat hit bonus for shotgun-style volleys.
 ##   positioning_delta: float  -- meters the agent closed toward the enemy
 ##                                 this tick while not already at an
 ##                                 effective engagement range (can be
@@ -50,9 +62,45 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ##                                 Absent (0) in every combat mode.
 ##   exploration_complete: bool -- the map reached the target coverage this
 ##                                 tick (paid once per episode)
+
+
+## Weapon-normalized flat hit bonus.
+##
+## The flat bonus is paid per CONNECTING TRIGGER PULL. Left unnormalized it
+## silently makes the episode return a function of fire rate: a 14 HP SMG
+## needs 8 connecting pulls to kill and would collect 8x the flat bonus of
+## a 112 HP shotgun shell, so "which weapon did the scenario hand me"
+## would dominate cross-weapon evaluation, curriculum promotion thresholds
+## and league scores. Scaling by nominal damage relative to the reference
+## rifle makes the total flat bonus per kill roughly weapon-independent.
+##
+## `projectiles_hit / projectiles_fired` additionally prorates pellet
+## weapons, so clipping a shotgun target with one pellet is not worth a
+## full centered shell. With the reference rifle (damage 25, one
+## projectile, fully landed) the factor is exactly 1.0, which is why the
+## legacy levels are bit-for-bit unchanged.
+static func hit_reward_scale(events: Dictionary) -> float:
+	var weapon_damage: float = float(events.get("weapon_damage", 0.0))
+	if weapon_damage <= 0.0:
+		return 1.0
+	var reference: float = maxf(0.0001, SandboxConfig.REWARD_HIT_REFERENCE_DAMAGE)
+	var scale: float = clampf(
+		weapon_damage / reference, 0.0, SandboxConfig.REWARD_HIT_SCALE_MAX
+	)
+	var fired: int = int(events.get("projectiles_fired", 0))
+	var landed: int = int(events.get("projectiles_hit", 0))
+	if fired > 1:
+		scale *= clampf(float(landed) / float(fired), 0.0, 1.0)
+	return scale
+
+
 static func compute_components(events: Dictionary) -> Dictionary:
 	var components: Dictionary = {}
-	components["reward_hit"] = SandboxConfig.REWARD_HIT if events.get("hit", false) else 0.0
+	components["reward_hit"] = (
+		SandboxConfig.REWARD_HIT * hit_reward_scale(events)
+		if events.get("hit", false)
+		else 0.0
+	)
 	components["reward_kill"] = SandboxConfig.REWARD_KILL if events.get("kill", false) else 0.0
 
 	var damage_dealt: float = float(events.get("damage_dealt", 0.0))
@@ -77,6 +125,11 @@ static func compute_components(events: Dictionary) -> Dictionary:
 	components["penalty_missed_shot"] = (
 		SandboxConfig.PENALTY_MISSED_SHOT
 		if events.get("missed_shot", false)
+		else 0.0
+	)
+	components["penalty_trigger_discipline"] = (
+		SandboxConfig.PENALTY_TRIGGER_DISCIPLINE
+		if events.get("trigger_discipline", false)
 		else 0.0
 	)
 

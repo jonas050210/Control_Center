@@ -97,7 +97,35 @@ pre-world dynamics exactly.
 | 10–12 | `enemy_relative_position_norm` (x,y,z) | Primary (nearest alive) enemy position relative to agent | divided by max arena diagonal distance (~28.3 m) |
 | 13 | `enemy_distance_norm` | Distance to primary enemy | divided by max arena diagonal distance, [0,1] |
 | 14 | `enemy_health_norm` | Primary enemy health | health / max_health, [0,1] |
-| 15 | `weapon_ready` | Can the weapon fire this tick | 0/1 |
+| 15 | `weapon_ready` | Can the weapon fire this tick | 0/1; from curriculum level 5 this also reports `0` while reloading or on an empty magazine — see the note below |
+
+### `weapon_ready` and the weapon handling layer
+
+From curriculum level 5 the weapon gains recoil, bloom, fire modes,
+magazines and reloads (see `docs/CURRICULUM_AND_COMBAT.md`). **This adds no
+observation fields and no action fields** — the vector is still exactly 84
+floats and the action space is still `MultiDiscrete([3,3,3,3,2,2])`.
+
+The one semantic change is to index 15. `WeaponState.is_ready()` now also
+returns `false` while a reload is in progress or the magazine is empty, so
+`weapon_ready` means "pulling the trigger this tick would actually fire"
+rather than "the cooldown has expired". This is the policy's only channel
+for a dead trigger; leaving it at `1` during a reload would make the
+observation lie.
+
+Everything else is felt indirectly and deliberately so:
+
+- **recoil** displaces the agent's own view, so it appears in
+  `agent_forward` and in the bearing/elevation fields;
+- **bloom** is not observed at all. It is a function of the agent's own
+  recent fire, so a recurrent or frame-stacked policy can infer it, and
+  exposing it would have meant breaking the 84-float contract;
+- **ammunition count** is not observed either, for the same reason.
+
+Below level 5 the handling layer is inert and index 15 keeps its original
+meaning exactly, so checkpoints trained before the layer existed are
+unaffected.
+
 | 16 | `in_combat` | Primary enemy alive and within weapon range | 0/1 |
 | 17 | `enemy_bearing_norm` | Signed horizontal aim offset to the primary enemy | angle / 180°, in [-1,1]; 0 = dead-center, sign matches `look_yaw_axis` (+ = turn right to face it) |
 | 18 | `alive_enemy_count_norm` | How many configured enemies are alive right now | alive / total configured enemies, [0,1] |

@@ -30,6 +30,16 @@ from sandboxai.curriculum_stages import applied_condition
 from sandboxai.generalization import GeneralizationSuite
 from sandboxai.pipeline import TrainingPipeline
 
+from optional_deps import HAS_GYMNASIUM, HAS_SB3, SB3_REASON
+
+## These suites build real SB3 models on purpose (see the module
+## docstring): faking the policy would stop the tests from proving weight
+## independence and snapshot isolation. That makes stable-baselines3 a
+## genuine requirement for them, so they skip when the optional training
+## extra is absent instead of failing the whole suite on an environment
+## fact. Everything else in this file runs without it.
+REQUIRES_SB3 = unittest.skipUnless(HAS_SB3 and HAS_GYMNASIUM, SB3_REASON)
+
 
 def _models():
     import gymnasium as gym
@@ -93,6 +103,7 @@ class _FakeSelfPlayClient:
         pass
 
 
+@REQUIRES_SB3
 class LeagueRunnerTest(unittest.TestCase):
     def setUp(self):
         self._make = _models()
@@ -201,6 +212,7 @@ class _Telemetry:
         self.rows.append(dict(payload))
 
 
+@REQUIRES_SB3
 class CheckpointEvaluationTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

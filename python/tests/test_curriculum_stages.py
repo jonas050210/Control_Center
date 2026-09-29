@@ -8,6 +8,7 @@ import unittest
 from sandboxai.conditions import LIGHTING_IDS, MAP_IDS
 from sandboxai.curriculum_stages import (
     EXPLORATION_STAGE,
+    HANDLING_MIN_LEVEL,
     PROMOTION_METRICS,
     STAGES,
     STAGES_BY_LEVEL,
@@ -16,7 +17,9 @@ from sandboxai.curriculum_stages import (
     describe_progression,
     distribution_for,
     format_progression,
+    hit_zones_enabled,
     stage_for,
+    weapon_handling_enabled,
 )
 from sandboxai.randomization import EpisodePlan
 
@@ -40,6 +43,41 @@ class StageTableTests(unittest.TestCase):
             for name, value in re.findall(r"(\w+)\s*=\s*(\d+)", block.group(1))
         }
         self.assertEqual(sorted(levels), sorted(STAGES_BY_LEVEL))
+
+    def test_handling_gate_matches_the_gdscript_curriculum(self):
+        source = (REPO_ROOT / "scripts/core/curriculum_config.gd").read_text(encoding="utf-8")
+        # The engine gates handling on a named enum member; resolve that
+        # name to its number so the Python mirror cannot drift silently.
+        gate = re.search(
+            r"func weapon_handling_enabled\(\) -> bool:\s*\n\s*return level >= Level\.(\w+)",
+            source,
+        )
+        self.assertIsNotNone(gate, "weapon_handling_enabled() is not a simple level gate")
+        block = re.search(r"enum Level \{(.*?)\}", source, re.S)
+        levels = {
+            name: int(value) for name, value in re.findall(r"(\w+)\s*=\s*(\d+)", block.group(1))
+        }
+        self.assertEqual(levels[gate.group(1)], HANDLING_MIN_LEVEL)
+        self.assertIn(
+            "func hit_zones_enabled",
+            source,
+            "hit zones must stay gated alongside handling",
+        )
+
+    def test_handling_helpers_agree_with_the_gate(self):
+        for level in range(1, 12):
+            with self.subTest(level=level):
+                expected = level >= HANDLING_MIN_LEVEL
+                self.assertEqual(weapon_handling_enabled(level), expected)
+                self.assertEqual(hit_zones_enabled(level), expected)
+
+    def test_handling_is_advertised_by_the_stage_that_introduces_it(self):
+        stage = STAGES_BY_LEVEL[HANDLING_MIN_LEVEL]
+        self.assertIn("weapon_handling", stage.systems)
+        self.assertIn("hit_zones", stage.systems)
+        for level in range(1, HANDLING_MIN_LEVEL):
+            with self.subTest(level=level):
+                self.assertNotIn("weapon_handling", STAGES_BY_LEVEL[level].systems)
 
     def test_first_stage_is_movement_and_last_is_self_play(self):
         self.assertIn("movement", STAGES[0].systems)

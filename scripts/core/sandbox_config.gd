@@ -368,6 +368,52 @@ const WEAPON_FIRE_COOLDOWN: float = 0.5  # seconds between shots (2 shots/sec)
 const WEAPON_HIT_RADIUS: float = 0.8
 
 # ---------------------------------------------------------------------------
+# Weapon handling (recoil, bloom, fire modes, magazines, hit zones)
+#
+# These model the "weighty handling" half of a tactical FPS: a weapon that
+# climbs while you hold the trigger, loses precision while you move, has to
+# be reloaded, and rewards hitting the head. Every one of them is
+# DETERMINISTIC (no RNG anywhere: recoil follows a fixed pattern and bloom
+# offsets come from a low-discrepancy sequence keyed on the shot index), so
+# seeded replays stay byte-stable.
+#
+# The whole block is gated by CurriculumConfig.weapon_handling_enabled() /
+# hit_zones_enabled(). With handling off, WeaponState behaves exactly like
+# the pre-handling cooldown-only weapon, which is what keeps curriculum
+# levels 1-4 bit-for-bit reproducible.
+# ---------------------------------------------------------------------------
+## Seconds after the last shot before accumulated recoil starts recovering.
+## This is the "reset pause" a player takes between bursts.
+const RECOIL_RECOVERY_DELAY: float = 0.12
+## Hard cap on accumulated recoil offset in either axis (degrees). Without
+## it a long spray would eventually point the camera at the ceiling.
+const RECOIL_MAX_DEG: float = 12.0
+## Golden angle (radians). Used to walk the horizontal recoil pattern and
+## the bloom azimuth so consecutive shots spread evenly without RNG.
+const HANDLING_GOLDEN_ANGLE: float = 2.39996323
+## R1 low-discrepancy increment used for the bloom radius.
+const HANDLING_R1_ALPHA: float = 0.7548776662
+## How many shots a recoil pattern takes to reach its sustained (reduced)
+## climb. Early shots kick hardest, exactly like a real muzzle-rise curve.
+const RECOIL_PATTERN_LENGTH: int = 8
+## Fraction of the initial vertical kick that remains once the pattern is
+## fully developed.
+const RECOIL_SUSTAIN_SCALE: float = 0.55
+## Movement-induced inaccuracy is proportional to horizontal speed. This is
+## the fraction of `spread_move_deg` applied at full move speed.
+const SPREAD_MOVE_REFERENCE_SPEED: float = AGENT_MOVE_SPEED
+## Bloom below this many degrees counts as "settled": the shot is treated
+## as pinpoint. First-shot accuracy has to be exact or the early aiming
+## curriculum stops being learnable.
+const SPREAD_SETTLED_EPSILON: float = 0.01
+## Seconds a shot keeps the shooter slowed down ("shooting slows you down").
+const FIRE_MOVEMENT_SLOW_DURATION: float = 0.18
+## Height above the feet of the head hit-sphere centre.
+const ENEMY_HEAD_HEIGHT: float = 1.62
+## Head hit-sphere radius as a fraction of the weapon's body hit radius.
+const HEAD_HIT_RADIUS_SCALE: float = 0.42
+
+# ---------------------------------------------------------------------------
 # Episode / simulation
 # ---------------------------------------------------------------------------
 const MAX_EPISODE_STEPS: int = 1200  # timeout safeguard (e.g. 20s @ 60 steps/s)
@@ -383,6 +429,20 @@ const DEFAULT_RANDOM_SEED: int = 1234
 # trivialized by shaping rewards).
 # ---------------------------------------------------------------------------
 const REWARD_HIT: float = 1.0
+## Weapon-normalization reference for the flat per-trigger-pull hit bonus.
+##
+## Without it the flat bonus is paid once per CONNECTING TRIGGER PULL, so a
+## weapon that needs 8 shots to kill earns 8x the flat bonus of a weapon
+## that needs 1 — the return of an episode would then depend mostly on
+## which tool the scenario handed the agent, which corrupts cross-weapon
+## evaluation, curriculum promotion thresholds and league comparisons.
+## Scaling the bonus by `weapon_damage / REWARD_HIT_REFERENCE_DAMAGE`
+## makes the total flat bonus per kill roughly weapon-independent, and the
+## baseline rifle (damage 25 == the reference) is bit-for-bit unchanged.
+const REWARD_HIT_REFERENCE_DAMAGE: float = WEAPON_DAMAGE
+## Upper bound on the normalized hit bonus so a hypothetical very
+## high-damage profile cannot dominate the kill reward.
+const REWARD_HIT_SCALE_MAX: float = 6.0
 const REWARD_KILL: float = 10.0
 ## Direct damage shaping keeps the optimizer focused on combat progress
 ## instead of passive survival. A 25 HP body shot is worth +0.5 before the
@@ -422,6 +482,18 @@ const PENALTY_MISSED_SHOT: float = -0.01
 ## near-miss at a live target or just spam. This does NOT affect hit testing;
 ## hits still use the exact hitscan ray/sphere calculation.
 const WEAPON_NEAR_MISS_CONE_DEG: float = 7.0
+## Holding the trigger on a weapon that physically cannot fire yet
+## (cycling, reloading, or a semi-auto that needs the trigger released).
+##
+## With weapon handling ON this REPLACES PENALTY_USELESS_SHOT for the
+## cooldown case. Holding the trigger on an automatic weapon is correct
+## play, not an error, and charging -0.1 per tick for 29 of every 30 ticks
+## of a 0.5 s cycle made "never hold the trigger" worth more than the whole
+## combat reward — it distorted every weapon role in proportion to its
+## fire rate. Spray is instead punished organically: bloom widens, ammo
+## drains, and the reload leaves the agent exposed. This residual cost only
+## covers the genuinely wasted intent.
+const PENALTY_TRIGGER_DISCIPLINE: float = -0.002
 
 # ---------------------------------------------------------------------------
 # Observation mode currently active (see ObservationMode enum above).

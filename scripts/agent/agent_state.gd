@@ -50,6 +50,25 @@ var footstep_timer: float = 0.0
 
 var weapon: WeaponState = WeaponState.new()
 
+## Horizontal speed as a fraction of `move_speed`, sampled at the END of
+## the previous tick. Weapon bloom is a function of how fast the shooter
+## was actually moving when the trigger went down, so it has to be the
+## resolved speed (after collisions) rather than the requested direction.
+var speed_fraction: float = 0.0
+## Recoil recovery applied to the aim on the last tick, in degrees. Purely
+## diagnostic (Control Center / metrics); the aim itself already moved.
+var last_recoil_recovery: Vector2 = Vector2.ZERO
+## True on the tick a reload completed. Diagnostics only.
+var reload_finished: bool = false
+## Recoil the view has ACTUALLY absorbed, in degrees (x = yaw, y = pitch).
+##
+## The weapon accumulates the full kick it generated, but the view clamps
+## pitch at `pitch_limit_deg`. Firing while already aimed near vertical
+## therefore produces a kick the view only partly takes, and recovering the
+## weapon's full figure would subtract more than was ever added and walk
+## the aim away from where the agent left it. Recovery is clamped to this.
+var _recoil_absorbed: Vector2 = Vector2.ZERO
+
 
 func _init(
 	p_max_health: float = SandboxConfig.AGENT_MAX_HEALTH,
@@ -84,6 +103,10 @@ func reset(
 	alive = true
 	on_ground = true
 	footstep_timer = 0.0
+	speed_fraction = 0.0
+	last_recoil_recovery = Vector2.ZERO
+	reload_finished = false
+	_recoil_absorbed = Vector2.ZERO
 	weapon.reset()
 
 
@@ -130,15 +153,35 @@ func get_eye_position() -> Vector3:
 func apply_action(
 	action: Action, dt: float, arena_half_extent: float, world = null
 ) -> Dictionary:
-	weapon.tick(dt)
+	# Cooldown, reload, recoil recovery and bloom recovery. With handling
+	# disabled `tick_handling` is exactly the old `weapon.tick(dt)`.
+	var recovery: Dictionary = weapon.tick_handling(dt)
+	reload_finished = bool(recovery.get("reload_finished", false))
 	var events: Dictionary = {
 		"jumped": false, "landed": false, "footstep": false, "moving": false
 	}
 	if not alive:
 		velocity = Vector3.ZERO
+		speed_fraction = 0.0
 		return events
 
 	# --- Aim ---
+	# Recoil recovery is applied BEFORE the policy's own look input so the
+	# agent's correction always acts on the settled view of this tick. The
+	# sign convention matches the kick applied in `apply_recoil`.
+	var recovery_pitch: float = float(recovery.get("pitch_deg", 0.0))
+	var recovery_yaw: float = float(recovery.get("yaw_deg", 0.0))
+	# Never hand back more than the view took (see `_recoil_absorbed`).
+	recovery_pitch = clampf(
+		recovery_pitch, minf(0.0, _recoil_absorbed.y), maxf(0.0, _recoil_absorbed.y)
+	)
+	recovery_yaw = clampf(
+		recovery_yaw, minf(0.0, _recoil_absorbed.x), maxf(0.0, _recoil_absorbed.x)
+	)
+	_recoil_absorbed -= Vector2(recovery_yaw, recovery_pitch)
+	last_recoil_recovery = Vector2(recovery_yaw, recovery_pitch)
+	pitch_deg -= recovery_pitch
+	yaw_deg -= recovery_yaw
 	yaw_deg += action.look_yaw_axis * turn_speed_deg * dt
 	yaw_deg += action.look_delta.x
 	pitch_deg += action.look_pitch_axis * turn_speed_deg * dt
@@ -153,12 +196,15 @@ func apply_action(
 	if move_dir.length_squared() > 1.0:
 		move_dir = move_dir.normalized()
 
+	# "Shooting slows you down": a shot plants the shooter for a fraction of
+	# a second. Returns exactly 1.0 with handling disabled.
+	var effective_speed: float = move_speed * weapon.movement_speed_scale()
 	var motion: Dictionary = CharacterMotor.step(
 		world,
 		position,
 		velocity,
 		move_dir,
-		move_speed,
+		effective_speed,
 		dt,
 		radius,
 		height,
@@ -174,6 +220,7 @@ func apply_action(
 
 	# --- Footsteps ---
 	var horizontal_speed: float = Vector2(velocity.x, velocity.z).length()
+	speed_fraction = clampf(horizontal_speed / maxf(move_speed, 0.0001), 0.0, 1.0)
 	events["moving"] = horizontal_speed > 0.05
 	if on_ground and events["moving"]:
 		footstep_timer -= dt
@@ -183,6 +230,23 @@ func apply_action(
 	else:
 		footstep_timer = minf(footstep_timer, SandboxConfig.FOOTSTEP_INTERVAL * 0.5)
 	return events
+
+
+## Applies a weapon recoil kick to the agent's own view.
+##
+## Recoil deliberately moves the REAL aim (and therefore `agent_forward`
+## in the observation) rather than a cosmetic offset: that is what makes it
+## something the policy can perceive and counter with the look axes without
+## adding a single field to the 84-float contract.
+func apply_recoil(pitch_kick_deg: float, yaw_kick_deg: float) -> void:
+	if pitch_kick_deg == 0.0 and yaw_kick_deg == 0.0:
+		return
+	var previous_pitch: float = pitch_deg
+	pitch_deg = clampf(pitch_deg + pitch_kick_deg, -pitch_limit_deg, pitch_limit_deg)
+	yaw_deg = wrapf(yaw_deg + yaw_kick_deg, 0.0, 360.0)
+	# Yaw wraps instead of clamping, so it always absorbs the whole kick;
+	# pitch only absorbs what the limit allowed.
+	_recoil_absorbed += Vector2(yaw_kick_deg, pitch_deg - previous_pitch)
 
 
 func take_damage(amount: float) -> float:
@@ -207,5 +271,6 @@ func to_dict() -> Dictionary:
 		"alive": alive,
 		"on_ground": on_ground,
 		"height": height,
+		"speed_fraction": speed_fraction,
 		"weapon": weapon.to_dict(),
 	}

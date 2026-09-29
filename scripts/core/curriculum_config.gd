@@ -156,6 +156,32 @@ func ranged_enemies_enabled() -> bool:
 	return obstacles_enabled()
 
 
+## Realistic weapon handling: recoil that moves the agent's own view, a
+## cone of fire that widens with sustained fire / movement / being
+## airborne, per-profile fire modes (an automatic weapon fires while the
+## trigger is held, a semi-auto needs the trigger released), magazines and
+## reloads, and "firing slows you down".
+##
+## Switched on at the same level as world geometry because that is the
+## first level where both sides shoot and where taking cover to reload is
+## a real option. Levels 1-4 stay the pure aiming/positioning curriculum
+## with the original cooldown-only weapon, bit-for-bit.
+##
+## Unlike most of the other flags this one is NOT disabled at
+## AGENT_VS_AGENT: two learned policies duelling each other should fight
+## with the same handling model the rest of the ladder trained on.
+func weapon_handling_enabled() -> bool:
+	return level >= Level.OBSTACLES_COVER
+
+
+## Head/body hit zones with a per-profile headshot multiplier. Shares the
+## handling gate so the low levels keep their single-sphere TTK, but kept
+## as its own predicate because it is an independent capability (it is the
+## reason the pitch axis is worth controlling precisely).
+func hit_zones_enabled() -> bool:
+	return weapon_handling_enabled()
+
+
 ## The agent's observation is gated by field of view and line of sight.
 func perception_enabled() -> bool:
 	return level >= Level.FOV_LOS and level < Level.AGENT_VS_AGENT
@@ -245,6 +271,8 @@ func to_dict() -> Dictionary:
 		"obstacles": obstacles_enabled(),
 		"tactical_enemies": tactical_enemies_enabled(),
 		"ranged_enemies": ranged_enemies_enabled(),
+		"weapon_handling": weapon_handling_enabled(),
+		"hit_zones": hit_zones_enabled(),
 		"perception": perception_enabled(),
 		"sound": sound_enabled(),
 		"memory": memory_enabled(),

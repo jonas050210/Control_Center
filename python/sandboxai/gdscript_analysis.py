@@ -687,6 +687,98 @@ def check_local_method_calls(index: ProjectIndex) -> list[Finding]:
     return findings
 
 
+## `var name := Alias.new(...)` / `var name: Alias = ...` — a local whose
+## type is pinned to a project script, and is therefore checkable.
+_TYPED_LOCAL_RE = re.compile(
+    r"^\s*var\s+([a-z_]\w*)\s*(?::\s*([A-Z][A-Za-z0-9_]*)\s*=|:=\s*([A-Z][A-Za-z0-9_]*)\.new\s*\()"
+)
+## A call on one of those locals.
+_LOCAL_MEMBER_CALL_RE = re.compile(r"\b([a-z_]\w*)\.([a-z_]\w*)\s*\(")
+## Any other assignment to the local invalidates our type knowledge.
+_LOCAL_REBIND_RE = re.compile(r"^\s*([a-z_]\w*)\s*=\s*(?!=)")
+
+
+def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
+    """Flags method calls on locals whose type is a known project script.
+
+    ``check_symbols`` only sees ``Alias.member``, i.e. accesses through a
+    ``class_name`` or a ``preload`` constant. The overwhelmingly common
+    shape in this repository is different::
+
+        var env := EnvironmentCore.new(0, 1)
+        env.get_weapon_state()          # <- previously unchecked
+
+    A typo there is a runtime error that no Python test can reach, and on
+    a machine without the Godot binary nothing else catches it. Because
+    the declaration pins the local's type to an indexed script, the member
+    set is known and the call is checkable.
+
+    Scope is kept narrow so a finding is always real:
+
+    * only locals declared with an explicit project type in the same
+      function body; the scope is reset at every ``func`` declaration;
+    * the type must resolve to a project script whose full member set is
+      knowable (``all_members`` returns ``None`` as soon as the
+      inheritance chain leaves the project, e.g. ``extends Node``, and
+      those locals are skipped entirely);
+    * a local that is later reassigned is dropped, since the new value may
+      be of any type;
+    * ``UNIVERSAL_MEMBERS`` (``free``, ``call``, ``get`` ...) are engine
+      API available on everything.
+    """
+    findings: list[Finding] = []
+    for info in index.by_res.values():
+        ## local name -> member set, valid until the end of this function.
+        scope: dict[str, set[str]] = {}
+        for line_number, raw in enumerate(info.lines, start=1):
+            cleaned = _strip_strings_and_comments(raw)
+            if not cleaned.strip():
+                continue
+            if _FUNC_DECL_RE.match(cleaned):
+                scope = {}
+                continue
+
+            rebind = _LOCAL_REBIND_RE.match(cleaned)
+            if rebind:
+                scope.pop(rebind.group(1), None)
+
+            declaration = _TYPED_LOCAL_RE.match(cleaned)
+            if declaration:
+                local = declaration.group(1)
+                alias = declaration.group(2) or declaration.group(3)
+                scope.pop(local, None)
+                # Note: no `continue`. The right-hand side of a declaration
+                # is the most common place to call a method on an existing
+                # local (`var d: Dictionary = env.get_metrics()`), so the
+                # line still has to be scanned for calls below.
+                if alias not in BUILTIN_TYPES and (
+                    alias in info.preloads or alias in index.by_class
+                ):
+                    target = index.resolve(alias, info)
+                    if target is not None:
+                        members = index.all_members(target)
+                        if members is not None:
+                            scope[local] = members
+
+            if not scope:
+                continue
+            for match in _LOCAL_MEMBER_CALL_RE.finditer(cleaned):
+                local, method = match.group(1), match.group(2)
+                members = scope.get(local)
+                if members is None or method in UNIVERSAL_MEMBERS:
+                    continue
+                if method not in members:
+                    findings.append(
+                        Finding(
+                            info.res_path,
+                            line_number,
+                            "unknown-member",
+                            f"{local}.{method}() is not declared by the type of {local}",
+                        )
+                    )
+    return findings
+
+
 def parse_all(root: Path | str | None = None) -> list[Finding]:
     """Runs the gdtoolkit grammar over every project script."""
     root = Path(root) if root else project_root()
@@ -759,7 +851,7 @@ def lint_all(root: Path | str | None = None) -> list[Finding]:
 
 def analyze(root: Path | str | None = None) -> list[Finding]:
     """Full static analysis: syntax + resources + symbols + call arity +
-    static calls + undefined local-method calls."""
+    static calls + undefined local-method calls + typed-local calls."""
     root = Path(root) if root else project_root()
     index = ProjectIndex(root)
     findings = parse_all(root)
@@ -768,6 +860,7 @@ def analyze(root: Path | str | None = None) -> list[Finding]:
     findings.extend(check_call_arity(index))
     findings.extend(check_static_calls(index))
     findings.extend(check_local_method_calls(index))
+    findings.extend(check_typed_local_calls(index))
     return findings
 
 
