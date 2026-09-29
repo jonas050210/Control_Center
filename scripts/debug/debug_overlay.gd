@@ -28,6 +28,7 @@ var focused_env_index: int = 0
 var _label: Label
 var _paused: bool = false
 var _pause_button: Button
+var _crosshair_nodes: Array = []
 
 
 func setup(p_simulation_manager: SimulationManager, p_focused_env_index: int = 0) -> void:
@@ -35,6 +36,7 @@ func setup(p_simulation_manager: SimulationManager, p_focused_env_index: int = 0
 	focused_env_index = p_focused_env_index
 	_build_label()
 	_build_controls()
+	_build_crosshair()
 
 
 func _build_label() -> void:
@@ -77,6 +79,36 @@ func _build_controls() -> void:
 	panel.add_child(row3)
 	row3.add_child(_make_button("< Env", _on_focus_delta.bind(-1)))
 	row3.add_child(_make_button("Env >", _on_focus_delta.bind(1)))
+
+
+## Minimal true-aim reticle for the normal playable scene. The human's
+## weapon fires from the first-person camera centre, so these tiny red
+## rectangles mark the exact hitscan ray without adding a busy HUD.
+func _build_crosshair() -> void:
+	var definitions: Array = [
+		{"pos": Vector2(-1.5, -1.5), "size": Vector2(3.0, 3.0), "alpha": 0.95},
+		{"pos": Vector2(-10.0, -0.5), "size": Vector2(6.0, 1.0), "alpha": 0.55},
+		{"pos": Vector2(4.0, -0.5), "size": Vector2(6.0, 1.0), "alpha": 0.55},
+		{"pos": Vector2(-0.5, -10.0), "size": Vector2(1.0, 6.0), "alpha": 0.55},
+		{"pos": Vector2(-0.5, 4.0), "size": Vector2(1.0, 6.0), "alpha": 0.55},
+	]
+	for definition_value in definitions:
+		var definition: Dictionary = definition_value
+		var rect := ColorRect.new()
+		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rect.anchor_left = 0.5
+		rect.anchor_right = 0.5
+		rect.anchor_top = 0.5
+		rect.anchor_bottom = 0.5
+		var offset: Vector2 = definition["pos"]
+		var rect_size: Vector2 = definition["size"]
+		rect.offset_left = offset.x
+		rect.offset_top = offset.y
+		rect.offset_right = rect.offset_left + rect_size.x
+		rect.offset_bottom = rect.offset_top + rect_size.y
+		rect.color = Color(1.0, 0.03, 0.02, float(definition["alpha"]))
+		add_child(rect)
+		_crosshair_nodes.append(rect)
 
 
 func _make_button(text: String, callback: Callable) -> Button:

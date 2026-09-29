@@ -1,4 +1,5 @@
 # gdlint:ignore=max-public-methods
+# gdlint:disable=max-file-lines
 # The public surface is intentionally wide: it is the RL interface
 # (reset/step/get_*), plus the seven read-only introspection hooks
 # PerceptionModel probes by name for the Control Center. Splitting the
@@ -54,6 +55,7 @@ const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
 const SpatialMemory = preload("res://scripts/exploration/spatial_memory.gd")
 const TargetSelector = preload("res://scripts/perception/target_selector.gd")
+const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
 ## Sound source id reserved for the agent. Enemies use their `enemy_id`.
 const AGENT_SOUND_SOURCE: int = -1
@@ -124,6 +126,9 @@ var exploration_solo: bool = true
 var scenario_id: String = ""
 ## The resolved scenario spec for the current episode ({} when none).
 var scenario: Dictionary = {}
+## Explicit agent weapon profile override. Empty means "scenario/default".
+## The profile is episode setup metadata, never an observation label.
+var weapon_profile_id: String = ""
 
 ## When true, perception is evaluated every step even if the curriculum
 ## does not gate the observation with it. This exists purely so the Control
@@ -231,6 +236,16 @@ func set_lighting_mode(mode_id: String) -> bool:
 	return true
 
 
+func set_weapon_profile(profile_id: String) -> bool:
+	if profile_id.is_empty():
+		weapon_profile_id = ""
+		return true
+	if not WeaponState.has_profile(profile_id):
+		return false
+	weapon_profile_id = profile_id
+	return true
+
+
 ## Validates an episode plan (set_episode_plan wire format: seed, map_id,
 ## scenario, lighting, enemy_count, curriculum_level). Returns "" when the
 ## plan can be applied, otherwise a human-readable reason. Validating at
@@ -294,9 +309,12 @@ func _apply_enemy_difficulty(enemy: EnemyState) -> void:
 		SandboxConfig.ENEMY_ATTACK_COOLDOWN * curriculum.enemy_cooldown_scale()
 	)
 	enemy.reaction.apply_archetype(curriculum.enemy_archetype())
+	enemy.weapon.configure_profile(WeaponState.PROFILE_RIFLE)
 	enemy.weapon.damage = SandboxConfig.ENEMY_FIRE_DAMAGE
 	enemy.weapon.cooldown_time = SandboxConfig.ENEMY_FIRE_COOLDOWN
 	enemy.weapon.range_m = SandboxConfig.ENEMY_FIRE_RANGE
+	enemy.weapon.projectile_count = 1
+	enemy.weapon.spread_deg = 0.0
 
 
 ## Deterministically (re)starts an episode. Passing the same seed produces
@@ -381,6 +399,26 @@ func _apply_lighting(layout_seed: int) -> void:
 	EnvironmentReset.apply_lighting(self, layout_seed)
 
 
+func _resolved_weapon_profile() -> String:
+	if not weapon_profile_id.is_empty():
+		return weapon_profile_id
+	if not scenario.is_empty():
+		return str(scenario.get("weapon_profile", WeaponState.PROFILE_RIFLE))
+	return WeaponState.PROFILE_RIFLE
+
+
+func _apply_agent_weapon_profile() -> void:
+	var resolved: String = _resolved_weapon_profile()
+	if not agent.weapon.configure_profile(resolved):
+		agent.weapon.configure_profile(WeaponState.PROFILE_RIFLE)
+	# Curriculum hit-radius scaling is still honored so early aiming stages
+	# retain their larger target tolerance regardless of the selected weapon.
+	var base_radius: float = float(WeaponState.profile_definition(agent.weapon.profile_id).get(
+		"hit_radius", SandboxConfig.WEAPON_HIT_RADIUS
+	))
+	agent.weapon.hit_radius = base_radius * curriculum.target_radius_scale()
+
+
 func _world_enabled() -> bool:
 	return (
 		curriculum.obstacles_enabled()
@@ -428,10 +466,13 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	if prev_enemy != null and prev_enemy.alive and prev_distance > SandboxConfig.ENEMY_ATTACK_RANGE:
 		positioning_delta = prev_distance - agent.position.distance_to(prev_enemy.position)
 
+	var target_hittable: bool = _target_is_hittable(prev_enemy)
 	var shot: Dictionary = _resolve_agent_shot(action, sound_on)
 	var aiming_delta: float = _target_alignment(prev_enemy) - prev_alignment
 	var shot_fired: bool = bool(shot["shot_fired"])
-	var meaningful_action: bool = shot_fired or aiming_delta > 0.0 or positioning_delta > 0.0
+	var meaningful_action: bool = (
+		shot_fired or (target_hittable and aiming_delta > 0.0) or positioning_delta > 0.0
+	)
 
 	var damage_taken: float = _update_enemies(dt, sound_on)
 	if damage_taken > 0.0:
@@ -461,8 +502,10 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"useless_shot": bool(shot["useless_shot"]),
 		"missed_shot": bool(shot["missed_shot"]),
 		"shot_fired": bool(shot["shot_fired"]),
+		"shot_result": str(shot.get("shot_result", "none")),
 		"positioning_delta": positioning_delta,
 		"aiming_delta": aiming_delta,
+		"target_hittable": target_hittable,
 		"valid_target": prev_enemy != null and prev_enemy.is_targetable(),
 		"meaningful_action": meaningful_action,
 		"alive": agent.alive,
@@ -530,12 +573,17 @@ func _target_alignment(target: EnemyState) -> float:
 
 ## Resolves the agent's trigger pull.
 ##
-## Two corrections relative to the original implementation:
-##   * a DEAD agent can no longer fire (previously the shoot branch ran
-##     regardless of `agent.alive`, letting a corpse score kills on the tick
-##     it died);
-##   * when a world exists, a shot is blocked by geometry, so you cannot
-##     shoot an enemy through a wall.
+## The center-screen crosshair and this function both use
+## AgentState.get_eye_position() + AgentState.get_forward_vector(): the red
+## dot is the exact hitscan ray, not an approximate UI marker. A fired shot
+## is classified into three distinct cases:
+##   * hit: exact ray/sphere hit, with geometry tested along the same ray;
+##   * missed_shot: near-miss at a clear, in-range live target;
+##   * useless_shot: cooldown/no target/out of range/blocked/random spray.
+##
+## That distinction matters for PPO: near misses should be cheap while the
+## policy learns fine aim, but wall shots and trigger spam must be strongly
+## negative.
 func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 	var result: Dictionary = {
 		"hit": false,
@@ -543,6 +591,7 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 		"useless_shot": false,
 		"missed_shot": false,
 		"shot_fired": false,
+		"shot_result": "none",
 		"damage_dealt": 0.0,
 	}
 	if not action.shoot or not agent.alive:
@@ -551,56 +600,124 @@ func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
 	var shot_fired: bool = agent.weapon.try_fire()
 	if not shot_fired:
 		result["useless_shot"] = true
+		result["shot_result"] = "cooldown"
 		return result
 	result["shot_fired"] = true
 	if sound_on:
 		sound_bus.emit_sound(SoundBus.Category.SHOT, agent.position, AGENT_SOUND_SOURCE)
 
 	var any_alive: bool = false
+	var plausible_target: bool = false
 	var eye: Vector3 = agent.get_eye_position()
 	var forward: Vector3 = agent.get_forward_vector()
 
-	# Closest targetable enemy along the ray trajectory.
-	var best_hit_enemy: EnemyState = null
-	var best_hit_distance: float = INF
+	# First classify whether the trigger pull was aimed near a real target.
+	# Pellet profiles still use the center aim ray for this classifier: the
+	# spread can make a close hit, but it should not turn random spray into a
+	# cheap near-miss reward.
 	for enemy_value in enemies:
 		var enemy: EnemyState = enemy_value
 		if not enemy.is_targetable():
 			continue
 		any_alive = true
-		var hit_dist: float = agent.weapon.ray_hit_distance(
-			eye, forward, enemy.get_chest_position()
-		)
-		if hit_dist < 0.0 or hit_dist >= best_hit_distance:
-			continue
-		if world != null and world.segment_blocked(eye, enemy.get_chest_position()):
-			continue
-		best_hit_distance = hit_dist
-		best_hit_enemy = enemy
+		if _shot_is_near_live_target(eye, forward, enemy):
+			plausible_target = true
 
-	if best_hit_enemy != null:
-		var applied: float = best_hit_enemy.take_damage(agent.weapon.damage)
-		if applied > 0.0:
-			result["hit"] = true
-			result["damage_dealt"] = applied
-			episode.record_damage_dealt(applied)
-			if sound_on:
-				sound_bus.emit_sound(
-					SoundBus.Category.IMPACT, best_hit_enemy.position, best_hit_enemy.enemy_id
-				)
-			if not best_hit_enemy.alive:
-				result["kill"] = true
-				episode.record_kill()
-				_on_enemy_died(best_hit_enemy, sound_on)
+	var impact_sources: Dictionary = {}
+	var projectile_dirs: Array = agent.weapon.projectile_directions(forward)
+	for projectile_dir_value in projectile_dirs:
+		var projectile_dir: Vector3 = projectile_dir_value
+		var best_hit_enemy: EnemyState = null
+		var best_hit_distance: float = INF
+		for enemy_value in enemies:
+			var enemy: EnemyState = enemy_value
+			if not enemy.is_targetable():
+				continue
+			var hit_dist: float = agent.weapon.ray_hit_distance(
+				eye, projectile_dir, enemy.get_chest_position()
+			)
+			if hit_dist < 0.0 or hit_dist >= best_hit_distance:
+				continue
+			if _weapon_ray_blocked_before(eye, projectile_dir, hit_dist):
+				continue
+			best_hit_distance = hit_dist
+			best_hit_enemy = enemy
+		if best_hit_enemy == null:
+			continue
+		var applied: float = best_hit_enemy.take_damage(agent.weapon.projectile_damage())
+		if applied <= 0.0:
+			continue
+		result["hit"] = true
+		result["shot_result"] = "hit"
+		result["damage_dealt"] = float(result["damage_dealt"]) + applied
+		episode.record_damage_dealt(applied)
+		if sound_on and not impact_sources.has(best_hit_enemy.enemy_id):
+			sound_bus.emit_sound(
+				SoundBus.Category.IMPACT, best_hit_enemy.position, best_hit_enemy.enemy_id
+			)
+		impact_sources[best_hit_enemy.enemy_id] = true
+		if not best_hit_enemy.alive:
+			result["kill"] = true
+			episode.record_kill()
+			_on_enemy_died(best_hit_enemy, sound_on)
 
-	# A real miss against a live target is a genuine aiming attempt
-	# (cheap PENALTY_MISSED_SHOT); only pulls that cannot connect at
-	# all are "useless" (main PENALTY_USELESS_SHOT). This keeps the
-	# expected value of shooting positive while aim is being learned.
-	result["missed_shot"] = any_alive and not bool(result["hit"])
-	result["useless_shot"] = not any_alive
+	# A genuine miss requires a plausible target close to the true aim ray.
+	# Shooting into empty space, through a wall, out of range or nowhere near a
+	# target is useless-shot spam and receives the larger penalty.
+	result["missed_shot"] = any_alive and plausible_target and not bool(result["hit"])
+	result["useless_shot"] = (not any_alive) or (not bool(result["hit"]) and not plausible_target)
+	if bool(result["missed_shot"]):
+		result["shot_result"] = "near_miss"
+	elif bool(result["useless_shot"]):
+		result["shot_result"] = "useless_spam" if any_alive else "useless_no_target"
 	episode.record_shot(bool(result["hit"]))
 	return result
+
+
+## True when the primary target is a valid aim-shaping target: alive, within
+## weapon range and not geometrically hidden. It intentionally does NOT
+## require the crosshair to already be inside the near-miss cone — this is
+## what lets the agent receive bounded reward while turning toward a real,
+## shootable threat, but not while staring at a wall or a stale memory.
+func _target_is_hittable(target: EnemyState) -> bool:
+	if target == null or not target.is_targetable() or not agent.alive:
+		return false
+	var eye: Vector3 = agent.get_eye_position()
+	var chest: Vector3 = target.get_chest_position()
+	if eye.distance_to(chest) > agent.weapon.range_m + agent.weapon.hit_radius:
+		return false
+	if world != null and world.segment_blocked(eye, chest):
+		return false
+	return true
+
+
+## Near-miss classifier only. It never changes whether a shot hits; it only
+## decides whether an exact miss was a meaningful aiming attempt or spam.
+func _shot_is_near_live_target(eye: Vector3, forward: Vector3, enemy: EnemyState) -> bool:
+	if enemy == null or not enemy.is_targetable() or forward.is_zero_approx():
+		return false
+	var chest: Vector3 = enemy.get_chest_position()
+	var to_target: Vector3 = chest - eye
+	var distance: float = to_target.length()
+	if distance <= 0.0001 or distance > agent.weapon.range_m + agent.weapon.hit_radius:
+		return false
+	var dir: Vector3 = forward.normalized()
+	var target_dir: Vector3 = to_target / distance
+	var angle_deg: float = rad_to_deg(acos(clampf(dir.dot(target_dir), -1.0, 1.0)))
+	if angle_deg > SandboxConfig.WEAPON_NEAR_MISS_CONE_DEG:
+		return false
+	return not _weapon_ray_blocked_before(eye, dir, minf(distance, agent.weapon.range_m))
+
+
+## Whether sight-blocking geometry intersects the exact weapon ray before a
+## target distance. This is the same occlusion test used by hit resolution.
+func _weapon_ray_blocked_before(eye: Vector3, forward: Vector3, distance: float) -> bool:
+	if world == null or distance <= 0.0:
+		return false
+	var wall_distance: float = world.ray_hit_distance(
+		eye, forward, minf(distance, agent.weapon.range_m)
+	)
+	return wall_distance >= 0.0 and wall_distance + 0.001 < distance
 
 
 ## Death bookkeeping. A corpse must stop being a target, stop being
@@ -818,7 +935,13 @@ func is_done() -> bool:
 
 func get_metrics() -> Dictionary:
 	var won: bool = episode.done_reason == "all_enemies_eliminated"
-	return episode.to_metrics(SandboxConfig.SIMULATION_DT, enemies.size(), won)
+	var metrics: Dictionary = episode.to_metrics(SandboxConfig.SIMULATION_DT, enemies.size(), won)
+	metrics["weapon_profile"] = agent.weapon.profile_id
+	metrics["weapon_category"] = agent.weapon.category
+	metrics["weapon_projectile_count"] = agent.weapon.projectile_count
+	metrics["weapon_damage"] = agent.weapon.damage
+	metrics["weapon_range"] = agent.weapon.range_m
+	return metrics
 
 
 func health_check() -> Dictionary:

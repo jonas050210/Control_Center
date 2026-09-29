@@ -221,6 +221,9 @@ func refresh(snapshot: Dictionary) -> void:
 				int(status["environment_count"]),
 			]
 		)
+	var system_text: String = _compact_system_status(status.get("system", {}))
+	if not system_text.is_empty():
+		_rate_label.text += "   " + system_text
 	var pending: PackedStringArray = status["pending_settings"]
 	_pending_label.text = (
 		"" if pending.is_empty() else "pending reset: %s" % ", ".join(pending)
@@ -233,6 +236,24 @@ func refresh(snapshot: Dictionary) -> void:
 				int(status["selected_environment"]), 0, _environment_option.item_count - 1
 			)
 		_updating = false
+
+
+static func _compact_system_status(system_value) -> String:
+	if not (system_value is Dictionary):
+		return ""
+	var system: Dictionary = system_value
+	var cpu: Dictionary = system.get("cpu", {})
+	var gpu: Dictionary = system.get("gpu", {})
+	var parts: PackedStringArray = PackedStringArray()
+	if cpu.get("utilization_percent") != null:
+		parts.append("CPU %.0f%%" % float(cpu["utilization_percent"]))
+	if gpu.get("utilization_percent") != null:
+		parts.append("GPU %.0f%%" % float(gpu["utilization_percent"]))
+	elif gpu.get("vram_used_mb") != null and gpu.get("vram_total_mb") != null:
+		parts.append(
+			"VRAM %.0f/%.0fMB" % [float(gpu["vram_used_mb"]), float(gpu["vram_total_mb"])]
+		)
+	return "  ".join(parts)
 
 
 func _on_mode_pressed(mode: int) -> void:

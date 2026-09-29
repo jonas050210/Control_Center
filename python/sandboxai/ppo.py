@@ -184,6 +184,10 @@ def train_ppo(
                     payload["mean_damage_received"] = sum(float(item.get("damage_received", 0.0)) for item in buf) / len(buf)
                     payload["mean_shots_fired"] = sum(float(item.get("shots_fired", 0.0)) for item in buf) / len(buf)
                     payload["mean_shots_hit"] = sum(float(item.get("shots_hit", 0.0)) for item in buf) / len(buf)
+                    payload["mean_trigger_pulls"] = sum(float(item.get("trigger_pulls", 0.0)) for item in buf) / len(buf)
+                    payload["mean_near_miss_shots"] = sum(float(item.get("near_miss_shots", 0.0)) for item in buf) / len(buf)
+                    payload["mean_useless_shots"] = sum(float(item.get("useless_shots", 0.0)) for item in buf) / len(buf)
+                    payload["mean_cooldown_shots"] = sum(float(item.get("cooldown_shots", 0.0)) for item in buf) / len(buf)
                     payload["mean_survival_time"] = sum(float(item.get("survival_time", 0.0)) for item in buf) / len(buf)
                     payload["mean_accuracy"] = sum(float(item.get("accuracy", 0.0)) for item in buf) / len(buf)
                     payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in buf) / len(buf)
@@ -192,14 +196,19 @@ def train_ppo(
                         payload["reward_breakdown"] = {
                             "hits": sum(float(item.get("reward_breakdown", {}).get("reward_hits", 0.0)) for item in buf) / len(buf),
                             "kills": sum(float(item.get("reward_breakdown", {}).get("reward_kills", 0.0)) for item in buf) / len(buf),
+                            "damage_reward": sum(float(item.get("reward_breakdown", {}).get("reward_damage", 0.0)) for item in buf) / len(buf),
                             "survive": sum(float(item.get("reward_breakdown", {}).get("reward_survive", 0.0)) for item in buf) / len(buf),
+                            "positioning": sum(float(item.get("reward_breakdown", {}).get("reward_positioning", 0.0)) for item in buf) / len(buf),
+                            "aiming": sum(float(item.get("reward_breakdown", {}).get("reward_aiming", 0.0)) for item in buf) / len(buf),
+                            "passivity_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_passivity", 0.0)) for item in buf) / len(buf),
+                            "combat_time_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_combat_time", 0.0)) for item in buf) / len(buf),
                             "damage_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_damage", 0.0)) for item in buf) / len(buf),
                             "death_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_death", 0.0)) for item in buf) / len(buf),
                             # Shot economy: how much reward was lost to real
-                            # misses vs to trigger pulls that could not
-                            # connect. Watching these two columns is the
-                            # fastest way to tell whether shooting is being
-                            # explored and becoming profitable.
+                            # near-misses vs to trigger pulls that could not
+                            # plausibly connect. Watching these two columns
+                            # is the fastest way to tell whether shooting is
+                            # being explored and becoming profitable.
                             "missed_shot_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_missed_shot", 0.0)) for item in buf) / len(buf),
                             "useless_shot_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_useless_shot", 0.0)) for item in buf) / len(buf),
                         }

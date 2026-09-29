@@ -281,7 +281,7 @@ static func _build_real_world(env) -> Dictionary:
 				"health": enemy.health,
 				"max_health": enemy.max_health,
 				"ai_state": EnemyState.ai_state_name(enemy.ai_state),
-				"in_weapon_range": to_enemy.length() <= SandboxConfig.WEAPON_RANGE,
+				"in_weapon_range": to_enemy.length() <= agent.weapon.range_m,
 			}
 		)
 	return {
@@ -292,7 +292,8 @@ static func _build_real_world(env) -> Dictionary:
 		"agent_health": agent.health,
 		"agent_max_health": agent.max_health,
 		"agent_alive": agent.alive,
-		"weapon_range": SandboxConfig.WEAPON_RANGE,
+		"weapon_range": agent.weapon.range_m,
+		"weapon_profile": agent.weapon.profile_id,
 		"arena_half_extent": env.arena_half_extent,
 		"enemies": enemies,
 		"alive_enemy_count": env.get_alive_enemy_count(),

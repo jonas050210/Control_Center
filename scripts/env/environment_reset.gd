@@ -25,6 +25,7 @@ const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const MapLibrary = preload("res://scripts/world/map_library.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
+const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
 
 ## Validates an episode plan in the `set_episode_plans` wire format (seed,
@@ -49,6 +50,9 @@ static func validate_episode_plan(plan: Dictionary, current_level: int) -> Strin
 	var p_scenario: String = str(plan.get("scenario", ""))
 	if not p_scenario.is_empty() and not ScenarioLibrary.has_scenario(p_scenario):
 		return "unknown scenario: %s" % p_scenario
+	var p_weapon: String = str(plan.get("weapon_profile", ""))
+	if not p_weapon.is_empty() and not WeaponState.has_profile(p_weapon):
+		return "unknown weapon_profile: %s" % p_weapon
 	if int(plan.get("enemy_count", 1)) < 1:
 		return "enemy_count must be >= 1"
 	return ""
@@ -66,6 +70,7 @@ static func episode_condition(env) -> Dictionary:
 		"map_id": str((env.map_instance as Dictionary).get("map_id", env.map_id)),
 		"scenario": str((env.scenario as Dictionary).get("id", env.scenario_id)),
 		"lighting": LightingProfile.mode_id((env.lighting as LightingProfile).mode),
+		"weapon_profile": env.agent.weapon.profile_id,
 		"enemy_count": env.enemies.size(),
 		"curriculum_level": env.curriculum.level,
 	}
@@ -75,9 +80,7 @@ static func episode_condition(env) -> Dictionary:
 ## their exact spawn distributions for a given seed.
 static func reset_legacy(env) -> void:
 	env.agent.reset(SandboxConfig.AGENT_SPAWN_POSITION, SandboxConfig.AGENT_SPAWN_YAW_DEG)
-	env.agent.weapon.hit_radius = (
-		SandboxConfig.WEAPON_HIT_RADIUS * env.curriculum.target_radius_scale()
-	)
+	env._apply_agent_weapon_profile()
 
 	var spawn_variety: bool = env.curriculum.spawn_variety_enabled()
 	var strafing: bool = env.curriculum.strafing_enabled()
@@ -127,9 +130,7 @@ static func reset_with_world(env) -> void:
 	env.world = env.scenario["world"]
 
 	env.agent.reset(env.scenario["agent_spawn"], float(env.scenario["agent_yaw_deg"]))
-	env.agent.weapon.hit_radius = (
-		SandboxConfig.WEAPON_HIT_RADIUS * env.curriculum.target_radius_scale()
-	)
+	env._apply_agent_weapon_profile()
 
 	var strafing: bool = env.curriculum.strafing_enabled()
 	var spawns: Array = env.scenario["enemy_spawns"]
@@ -178,7 +179,7 @@ static func apply_lighting(env, layout_seed: int) -> void:
 ## one from the seeded RNG every episode (Phase 9/10 "mixed randomized").
 static func scenario_for_level(env) -> String:
 	if env.curriculum.randomized_scenarios_enabled():
-		var ids: PackedStringArray = ScenarioLibrary.ids()
+		var ids: PackedStringArray = ScenarioLibrary.training_ids()
 		return ids[env.rng.randi_range(0, ids.size() - 1)]
 	return str(env.LEVEL_SCENARIOS.get(env.curriculum.level, "open_arena"))
 

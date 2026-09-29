@@ -137,13 +137,19 @@ func refresh(snapshot: Dictionary) -> void:
 		)
 	else:
 		_set_row("target", "none")
+	var weapon_state: String = "ready"
+	if not bool(agent["weapon_ready"]):
+		weapon_state = "cooldown %.2fs" % float(agent["weapon_cooldown"])
 	_set_row(
 		"weapon",
-		(
-			"ready"
-			if bool(agent["weapon_ready"])
-			else "cooldown %.2fs" % float(agent["weapon_cooldown"])
-		)
+		"%s  %s  %.0fdmg %.0fm x%d"
+		% [
+			str(agent.get("weapon_label", agent.get("weapon_profile", "weapon"))),
+			weapon_state,
+			float(agent.get("weapon_damage", 0.0)),
+			float(agent.get("weapon_range", 0.0)),
+			int(agent.get("weapon_projectile_count", 1)),
+		]
 	)
 	_set_row("episode", "#%d  step %d/%d" % [
 		int(episode["episode"]), int(episode["step"]), int(episode["max_steps"])

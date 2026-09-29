@@ -248,7 +248,23 @@ class CombatSurvivalExplorationTests(unittest.TestCase):
         metrics.record(
             StepSample(
                 observation=obs(),
-                events={"damage_taken": 12.0, "useless_shot": True, "shot_fired": True},
+                events={"damage_taken": 12.0, "useless_shot": True, "shot_fired": True, "shot_result": "useless_spam"},
+                action=IDLE_ACTION,
+                dt=DT,
+            )
+        )
+        metrics.record(
+            StepSample(
+                observation=obs(),
+                events={"missed_shot": True, "shot_fired": True, "shot_result": "near_miss"},
+                action=IDLE_ACTION,
+                dt=DT,
+            )
+        )
+        metrics.record(
+            StepSample(
+                observation=obs(),
+                events={"useless_shot": True, "shot_fired": False, "shot_result": "cooldown"},
                 action=IDLE_ACTION,
                 dt=DT,
             )
@@ -257,7 +273,10 @@ class CombatSurvivalExplorationTests(unittest.TestCase):
         self.assertEqual(combat["kills"], 1)
         self.assertAlmostEqual(combat["damage_dealt"], 30.0)
         self.assertAlmostEqual(combat["damage_received"], 12.0)
-        self.assertEqual(combat["unnecessary_shots"], 1)
+        self.assertEqual(combat["near_miss_shots"], 1)
+        self.assertEqual(combat["useless_shots"], 2)
+        self.assertEqual(combat["cooldown_shots"], 1)
+        self.assertEqual(combat["unnecessary_shots"], 2)
         self.assertAlmostEqual(combat["damage_ratio"], 2.5)
 
     def test_survival_and_escapes(self):

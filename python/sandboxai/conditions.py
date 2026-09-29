@@ -50,6 +50,8 @@ MAP_IDS: tuple[str, ...] = (
     "compound",
     "ambush_alley",
     "echo_maze",
+    "combat_complex",
+    "crossfire_lab",
     "night_yard",
     "foggy_field",
     "random_ops",

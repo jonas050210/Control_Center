@@ -92,8 +92,14 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 		"alive": env.agent.alive,
 		"weapon_ready": env.agent.weapon.is_ready(),
 		"weapon_cooldown": env.agent.weapon.cooldown_remaining,
+		"weapon_profile": env.agent.weapon.profile_id,
+		"weapon_label": env.agent.weapon.profile_label,
+		"weapon_category": env.agent.weapon.category,
 		"weapon_damage": env.agent.weapon.damage,
 		"weapon_range": env.agent.weapon.range_m,
+		"weapon_projectile_count": env.agent.weapon.projectile_count,
+		"weapon_projectile_damage": env.agent.weapon.projectile_damage(),
+		"weapon_spread_deg": env.agent.weapon.spread_deg,
 	}
 	snapshot["episode"] = {
 		"episode": env.episode.episode_count,
@@ -109,6 +115,11 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 		"damage_received": env.episode.damage_taken,
 		"shots_fired": env.episode.shots_fired,
 		"shots_hit": env.episode.shots_hit,
+		"trigger_pulls": env.episode.trigger_pulls,
+		"near_miss_shots": env.episode.near_miss_shots,
+		"useless_shots": env.episode.useless_shots,
+		"cooldown_shots": env.episode.cooldown_shots,
+		"last_shot_result": env.episode.last_shot_result,
 		"accuracy": (
 			float(env.episode.shots_hit) / float(env.episode.shots_fired)
 			if env.episode.shots_fired > 0
@@ -137,7 +148,7 @@ static func _target_info(env) -> Dictionary:
 		"index": index,
 		"has_target": true,
 		"distance_m": distance,
-		"in_range": distance <= SandboxConfig.WEAPON_RANGE,
+		"in_range": distance <= env.agent.weapon.range_m,
 		"health": enemy.health,
 		"max_health": enemy.max_health,
 		"position": enemy.position,

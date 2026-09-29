@@ -12,9 +12,9 @@ extends Control
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
-const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 const CROSSHAIR_SIZE: float = 9.0
+const CROSSHAIR_DOT_RADIUS: float = 2.0
 const HIT_MARKER_SECONDS: float = 0.35
 const DAMAGE_FLASH_SECONDS: float = 0.45
 
@@ -84,15 +84,22 @@ func _draw() -> void:
 
 func _draw_crosshair(rect: Rect2, in_range: bool, weapon_ready: bool) -> void:
 	var center: Vector2 = rect.size * 0.5
-	var color: Color = ControlCenterTheme.COLOR_TEXT
+	# The red center dot is deliberately fixed at the viewport center: the
+	# simulation fires exactly from AgentState.get_eye_position() along
+	# AgentState.get_forward_vector(), and the first-person camera mirrors
+	# that same yaw/pitch. This dot is therefore the true hitscan direction.
+	var dot_color := Color(1.0, 0.05, 0.03, 0.95)
+	draw_circle(center, CROSSHAIR_DOT_RADIUS, Color(0.0, 0.0, 0.0, 0.55))
+	draw_circle(center, CROSSHAIR_DOT_RADIUS * 0.65, dot_color)
+	var color: Color = Color(1.0, 0.05, 0.03, 0.55)
 	if in_range:
-		color = ControlCenterTheme.COLOR_OK if weapon_ready else ControlCenterTheme.COLOR_WARN
-	var gap: float = 3.0
+		color = (Color(0.2, 1.0, 0.35, 0.65) if weapon_ready else Color(1.0, 0.8, 0.2, 0.65))
+	var gap: float = 5.0
 	var length: float = CROSSHAIR_SIZE
-	draw_line(center + Vector2(-length, 0.0), center + Vector2(-gap, 0.0), color, 1.5)
-	draw_line(center + Vector2(gap, 0.0), center + Vector2(length, 0.0), color, 1.5)
-	draw_line(center + Vector2(0.0, -length), center + Vector2(0.0, -gap), color, 1.5)
-	draw_line(center + Vector2(0.0, gap), center + Vector2(0.0, length), color, 1.5)
+	draw_line(center + Vector2(-length, 0.0), center + Vector2(-gap, 0.0), color, 1.0)
+	draw_line(center + Vector2(gap, 0.0), center + Vector2(length, 0.0), color, 1.0)
+	draw_line(center + Vector2(0.0, -length), center + Vector2(0.0, -gap), color, 1.0)
+	draw_line(center + Vector2(0.0, gap), center + Vector2(0.0, length), color, 1.0)
 	if _hit_timer > 0.0:
 		var fade: float = _hit_timer / HIT_MARKER_SECONDS
 		var marker := Color(1.0, 0.35, 0.35, fade)
@@ -120,9 +127,10 @@ func _draw_health(agent: Dictionary) -> void:
 
 	var ready: bool = bool(agent["weapon_ready"])
 	var cooldown: float = float(agent["weapon_cooldown"])
+	var weapon_label: String = str(agent.get("weapon_label", agent.get("weapon_profile", "weapon")))
 	_draw_text(
 		Vector2(16.0, size.y - 22.0),
-		"WEAPON %s" % ("READY" if ready else "reload %.2fs" % cooldown),
+		"%s %s" % [weapon_label.to_upper(), ("READY" if ready else "reload %.2fs" % cooldown)],
 		ControlCenterTheme.COLOR_OK if ready else ControlCenterTheme.COLOR_WARN
 	)
 
@@ -145,12 +153,21 @@ func _draw_status(agent: Dictionary, episode: Dictionary, target: Dictionary) ->
 			float(episode["accuracy"]) * 100.0,
 		]
 	)
+	lines.append(
+		"SHOT near %d useless %d cooldown %d last %s"
+		% [
+			int(episode.get("near_miss_shots", 0)),
+			int(episode.get("useless_shots", 0)),
+			int(episode.get("cooldown_shots", 0)),
+			str(episode.get("last_shot_result", "none")),
+		]
+	)
 	if bool(target.get("has_target", false)):
 		lines.append(
 			"TARGET %4.1fm %s   HP %3.0f"
 			% [
 				float(target["distance_m"]),
-				"IN RANGE" if bool(target["in_range"]) else "far (%.0fm)" % SandboxConfig.WEAPON_RANGE,
+				"IN RANGE" if bool(target["in_range"]) else "far",
 				float(target["health"]),
 			]
 		)
@@ -161,11 +178,12 @@ func _draw_status(agent: Dictionary, episode: Dictionary, target: Dictionary) ->
 
 	var origin := Vector2(size.x - 300.0, 20.0)
 	for index in range(lines.size()):
-		_draw_text(origin + Vector2(0.0, float(index) * 16.0), lines[index], _line_color(index))
+		var line: String = lines[index]
+		_draw_text(origin + Vector2(0.0, float(index) * 16.0), line, _line_color(line))
 
 
-func _line_color(index: int) -> Color:
-	if index == 4:
+func _line_color(line: String) -> Color:
+	if line.begins_with("AGENT DOWN"):
 		return ControlCenterTheme.COLOR_BAD
 	return ControlCenterTheme.COLOR_TEXT
 

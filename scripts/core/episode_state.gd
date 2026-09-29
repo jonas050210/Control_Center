@@ -22,15 +22,22 @@ var damage_dealt: float = 0.0
 var damage_taken: float = 0.0
 var shots_fired: int = 0
 var shots_hit: int = 0
+var trigger_pulls: int = 0
+var near_miss_shots: int = 0
+var useless_shots: int = 0
+var cooldown_shots: int = 0
+var last_shot_result: String = "none"
 var survival_steps: int = 0
 
 ## Reward breakdown per episode.
 var reward_hits: float = 0.0
 var reward_kills: float = 0.0
+var reward_damage: float = 0.0
 var reward_survive: float = 0.0
 var reward_positioning: float = 0.0
 var reward_aiming: float = 0.0
 var penalty_passivity: float = 0.0
+var penalty_combat_time: float = 0.0
 var reward_exploration: float = 0.0
 var reward_exploration_complete: float = 0.0
 var penalty_damage: float = 0.0
@@ -56,13 +63,20 @@ func start_new_episode() -> void:
 	damage_taken = 0.0
 	shots_fired = 0
 	shots_hit = 0
+	trigger_pulls = 0
+	near_miss_shots = 0
+	useless_shots = 0
+	cooldown_shots = 0
+	last_shot_result = "none"
 	survival_steps = 0
 	reward_hits = 0.0
 	reward_kills = 0.0
+	reward_damage = 0.0
 	reward_survive = 0.0
 	reward_positioning = 0.0
 	reward_aiming = 0.0
 	penalty_passivity = 0.0
+	penalty_combat_time = 0.0
 	reward_exploration = 0.0
 	reward_exploration_complete = 0.0
 	penalty_damage = 0.0
@@ -83,6 +97,7 @@ func record_reward_breakdown(events: Dictionary) -> void:
 	var components: Dictionary = RewardSystem.compute_components(events)
 	reward_hits += float(components.get("reward_hit", 0.0))
 	reward_kills += float(components.get("reward_kill", 0.0))
+	reward_damage += float(components.get("reward_damage", 0.0))
 	penalty_damage += float(components.get("penalty_damage", 0.0))
 	penalty_death += float(components.get("penalty_death", 0.0))
 	penalty_useless_shot += float(components.get("penalty_useless_shot", 0.0))
@@ -90,9 +105,25 @@ func record_reward_breakdown(events: Dictionary) -> void:
 	reward_positioning += float(components.get("reward_positioning", 0.0))
 	reward_aiming += float(components.get("reward_aiming", 0.0))
 	penalty_passivity += float(components.get("penalty_passivity", 0.0))
+	penalty_combat_time += float(components.get("penalty_combat_time", 0.0))
 	reward_exploration += float(components.get("reward_exploration", 0.0))
 	reward_exploration_complete += float(components.get("reward_exploration_complete", 0.0))
 	reward_survive += float(components.get("reward_survive", 0.0))
+	_record_shot_diagnostics(events)
+
+
+func _record_shot_diagnostics(events: Dictionary) -> void:
+	var result: String = str(events.get("shot_result", "none"))
+	if result.is_empty() or result == "none":
+		return
+	last_shot_result = result
+	trigger_pulls += 1
+	if result == "near_miss":
+		near_miss_shots += 1
+	if result == "cooldown":
+		cooldown_shots += 1
+	if bool(events.get("useless_shot", false)):
+		useless_shots += 1
 
 
 func record_shot(hit: bool) -> void:
@@ -132,10 +163,12 @@ func get_reward_breakdown() -> Dictionary:
 	return {
 		"reward_hits": reward_hits,
 		"reward_kills": reward_kills,
+		"reward_damage": reward_damage,
 		"reward_survive": reward_survive,
 		"reward_positioning": reward_positioning,
 		"reward_aiming": reward_aiming,
 		"penalty_passivity": penalty_passivity,
+		"penalty_combat_time": penalty_combat_time,
 		"reward_exploration": reward_exploration,
 		"reward_exploration_complete": reward_exploration_complete,
 		"penalty_damage": penalty_damage,
@@ -174,6 +207,11 @@ func to_metrics(simulation_dt: float, enemy_count: int, won: bool = false) -> Di
 		"accuracy": accuracy,
 		"shots_fired": shots_fired,
 		"shots_hit": shots_hit,
+		"trigger_pulls": trigger_pulls,
+		"near_miss_shots": near_miss_shots,
+		"useless_shots": useless_shots,
+		"cooldown_shots": cooldown_shots,
+		"last_shot_result": last_shot_result,
 		"win": won,
 		"loss": done and not won and not truncated,
 		"truncated": truncated,

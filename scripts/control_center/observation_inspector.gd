@@ -120,8 +120,12 @@ static func build_reward_rows(breakdown: Dictionary) -> Array:
 		[
 			"reward_hits",
 			"reward_kills",
+			"reward_damage",
 			"reward_survive",
 			"reward_positioning",
+			"reward_aiming",
+			"penalty_passivity",
+			"penalty_combat_time",
 			"penalty_damage",
 			"penalty_death",
 			"penalty_useless_shot",

@@ -1,18 +1,79 @@
 ## WeaponState
 ##
-## Minimal deterministic hitscan weapon: fixed/configurable damage, range,
-## and fire cooldown. No recoil, no ammo/inventory, no random spread.
+## Deterministic hitscan weapon with named handling profiles. The default
+## profile preserves the original single-ray rifle contract, while optional
+## profiles model the TTK-style roles we care about during controlled tests:
+## a mid-range rifle, a close-range pellet shotgun, a precision sidearm and
+## an SMG-like fast secondary. Profiles are simulation metadata, not new
+## policy actions: the PPO action space still has exactly one shoot button.
 class_name WeaponState
 extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
+const PROFILE_RIFLE: String = "rifle"
+const PROFILE_SHOTGUN: String = "shotgun"
+const PROFILE_PISTOL: String = "pistol"
+const PROFILE_SMG: String = "smg"
+const PROFILE_IDS: Array = [PROFILE_RIFLE, PROFILE_SHOTGUN, PROFILE_PISTOL, PROFILE_SMG]
 
+const PROFILE_DEFINITIONS: Dictionary = {
+	"rifle": {
+		"label": "Rifle",
+		"category": "primary",
+		"damage": SandboxConfig.WEAPON_DAMAGE,
+		"range_m": SandboxConfig.WEAPON_RANGE,
+		"cooldown_time": SandboxConfig.WEAPON_FIRE_COOLDOWN,
+		"hit_radius": SandboxConfig.WEAPON_HIT_RADIUS,
+		"projectile_count": 1,
+		"spread_deg": 0.0,
+		"description": "Baseline single-ray rifle used by the original training contract.",
+	},
+	"shotgun": {
+		"label": "Breach shotgun",
+		"category": "shotgun",
+		"damage": 112.0,
+		"range_m": 9.5,
+		"cooldown_time": 0.72,
+		"hit_radius": 0.55,
+		"projectile_count": 8,
+		"spread_deg": 5.0,
+		"description": "Close-range pellet pattern with one-shot potential if most pellets land.",
+	},
+	"pistol": {
+		"label": "Sidearm",
+		"category": "sidearm",
+		"damage": 20.0,
+		"range_m": 12.0,
+		"cooldown_time": 0.24,
+		"hit_radius": 0.65,
+		"projectile_count": 1,
+		"spread_deg": 0.0,
+		"description": "Lower damage, quick-ready backup weapon for finishing drills.",
+	},
+	"smg": {
+		"label": "SMG",
+		"category": "secondary_auto",
+		"damage": 14.0,
+		"range_m": 11.0,
+		"cooldown_time": 0.09,
+		"hit_radius": 0.62,
+		"projectile_count": 1,
+		"spread_deg": 0.0,
+		"description": "Fast close-range profile that rewards sustained tracking.",
+	},
+}
+
+var profile_id: String = PROFILE_RIFLE
+var profile_label: String = "Rifle"
+var category: String = "primary"
 var damage: float = SandboxConfig.WEAPON_DAMAGE
 var range_m: float = SandboxConfig.WEAPON_RANGE
 var cooldown_time: float = SandboxConfig.WEAPON_FIRE_COOLDOWN
 var hit_radius: float = SandboxConfig.WEAPON_HIT_RADIUS
+var projectile_count: int = 1
+var spread_deg: float = 0.0
 var cooldown_remaining: float = 0.0
 
 
@@ -22,11 +83,44 @@ func _init(
 	p_cooldown_time: float = SandboxConfig.WEAPON_FIRE_COOLDOWN,
 	p_hit_radius: float = SandboxConfig.WEAPON_HIT_RADIUS
 ) -> void:
+	configure_profile(PROFILE_RIFLE)
 	damage = maxf(0.0, p_damage)
 	range_m = maxf(0.1, p_range_m)
 	cooldown_time = maxf(0.0, p_cooldown_time)
 	hit_radius = maxf(0.01, p_hit_radius)
 	cooldown_remaining = 0.0
+
+
+static func has_profile(p_profile_id: String) -> bool:
+	return PROFILE_DEFINITIONS.has(p_profile_id)
+
+
+static func profile_definition(p_profile_id: String) -> Dictionary:
+	var resolved: String = p_profile_id if has_profile(p_profile_id) else PROFILE_RIFLE
+	return (PROFILE_DEFINITIONS[resolved] as Dictionary).duplicate(true)
+
+
+static func profile_ids() -> PackedStringArray:
+	var out := PackedStringArray()
+	for item in PROFILE_IDS:
+		out.append(str(item))
+	return out
+
+
+func configure_profile(p_profile_id: String) -> bool:
+	if not has_profile(p_profile_id):
+		return false
+	var spec: Dictionary = profile_definition(p_profile_id)
+	profile_id = p_profile_id
+	profile_label = str(spec.get("label", p_profile_id))
+	category = str(spec.get("category", "primary"))
+	damage = maxf(0.0, float(spec.get("damage", SandboxConfig.WEAPON_DAMAGE)))
+	range_m = maxf(0.1, float(spec.get("range_m", SandboxConfig.WEAPON_RANGE)))
+	cooldown_time = maxf(0.0, float(spec.get("cooldown_time", SandboxConfig.WEAPON_FIRE_COOLDOWN)))
+	hit_radius = maxf(0.01, float(spec.get("hit_radius", SandboxConfig.WEAPON_HIT_RADIUS)))
+	projectile_count = maxi(1, int(spec.get("projectile_count", 1)))
+	spread_deg = maxf(0.0, float(spec.get("spread_deg", 0.0)))
+	return true
 
 
 func reset() -> void:
@@ -49,6 +143,43 @@ func try_fire() -> bool:
 		return false
 	cooldown_remaining = cooldown_time
 	return true
+
+
+func projectile_damage() -> float:
+	return damage / float(maxi(1, projectile_count))
+
+
+## Deterministic ray directions for the current trigger pull. Single-projectile
+## profiles return the exact forward vector. Shotgun-style profiles return a
+## center pellet plus a fixed circular pattern, so seeded replays remain stable.
+func projectile_directions(direction: Vector3, up_hint: Vector3 = Vector3.UP) -> Array:
+	var dir: Vector3 = direction.normalized() if not direction.is_zero_approx() else Vector3.FORWARD
+	if projectile_count <= 1 or spread_deg <= 0.0:
+		return [dir]
+
+	var right: Vector3 = dir.cross(up_hint).normalized()
+	if right.is_zero_approx():
+		right = Vector3.RIGHT
+	var up: Vector3 = right.cross(dir).normalized()
+	if up.is_zero_approx():
+		up = Vector3.UP
+
+	var directions: Array = [dir]
+	var spread_rad: float = deg_to_rad(spread_deg)
+	var ring_count: int = projectile_count - 1
+	for pellet_index in range(ring_count):
+		var angle: float = TAU * float(pellet_index) / float(maxi(1, ring_count))
+		# Slightly stagger radius so the pattern covers the cone interior, not
+		# only its rim. Pure math, no RNG, so every replay is byte-stable.
+		var radius_scale: float = 0.45 + 0.55 * (float(pellet_index % 3) / 2.0)
+		var pellet_angle: float = spread_rad * radius_scale
+		var lateral: Vector3 = (
+			right * cos(angle) * sin(pellet_angle)
+			+ up * sin(angle) * sin(pellet_angle)
+		)
+		var pellet_dir: Vector3 = (dir * cos(pellet_angle) + lateral).normalized()
+		directions.append(pellet_dir)
+	return directions
 
 
 ## Computes the distance along the ray where it intersects/passes closest
@@ -78,10 +209,16 @@ func ray_hits_sphere(origin: Vector3, direction: Vector3, target_center: Vector3
 
 func to_dict() -> Dictionary:
 	return {
+		"profile_id": profile_id,
+		"profile_label": profile_label,
+		"category": category,
 		"damage": damage,
 		"range_m": range_m,
 		"cooldown_time": cooldown_time,
 		"hit_radius": hit_radius,
+		"projectile_count": projectile_count,
+		"projectile_damage": projectile_damage(),
+		"spread_deg": spread_deg,
 		"cooldown_remaining": cooldown_remaining,
 		"ready": is_ready(),
 	}

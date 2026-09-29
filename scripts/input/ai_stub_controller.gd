@@ -14,7 +14,6 @@ extends ControllerBase
 const AgentState = preload("res://scripts/agent/agent_state.gd")
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
-const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 
 const AIM_TOLERANCE_DEG: float = 5.0
@@ -46,9 +45,9 @@ func get_action(env: EnvironmentCore) -> Action:
 		look_yaw_axis = -1
 
 	var move_axis: int = 0
-	if distance > SandboxConfig.WEAPON_RANGE * APPROACH_DISTANCE_FACTOR:
+	if distance > agent.weapon.range_m * APPROACH_DISTANCE_FACTOR:
 		move_axis = 1
 
-	var shoot: bool = absf(yaw_diff) <= AIM_TOLERANCE_DEG and distance <= SandboxConfig.WEAPON_RANGE
+	var shoot: bool = absf(yaw_diff) <= AIM_TOLERANCE_DEG and distance <= agent.weapon.range_m
 
 	return Action.new(move_axis, 0, look_yaw_axis, 0, shoot)

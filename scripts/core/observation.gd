@@ -371,7 +371,7 @@ static func build(
 		obs.enemy_health_norm = primary.health / maxf(primary.max_health, 0.0001)
 		obs.enemy_alive = primary.alive
 		obs.enemy_bearing_norm = _horizontal_bearing_norm(agent, primary.position)
-		obs.in_combat = primary.alive and distance <= SandboxConfig.WEAPON_RANGE
+		obs.in_combat = primary.alive and distance <= agent.weapon.range_m
 
 	if ranked_alive.size() > 1:
 		var secondary: EnemyState = ranked_alive[1]
@@ -666,7 +666,7 @@ static func _apply_belief(
 			obs.enemy_health_norm = health
 			obs.enemy_alive = bool(belief.get("alive", true))
 			obs.enemy_bearing_norm = bearing
-			obs.in_combat = visible and distance <= SandboxConfig.WEAPON_RANGE
+			obs.in_combat = visible and distance <= agent.weapon.range_m
 			obs.primary_enemy_visible = visible
 			obs.primary_enemy_in_fov = bool(belief.get("in_fov", false))
 			obs.primary_enemy_los_clear = bool(belief.get("los_clear", false))
