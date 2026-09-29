@@ -50,10 +50,22 @@ static func compute_components(events: Dictionary) -> Dictionary:
 	components["reward_kill"] = SandboxConfig.REWARD_KILL if events.get("kill", false) else 0.0
 
 	var damage_taken: float = float(events.get("damage_taken", 0.0))
-	components["penalty_damage"] = damage_taken * SandboxConfig.PENALTY_DAMAGE_TAKEN_PER_HP if damage_taken > 0.0 else 0.0
+	components["penalty_damage"] = (
+		damage_taken * SandboxConfig.PENALTY_DAMAGE_TAKEN_PER_HP
+		if damage_taken > 0.0
+		else 0.0
+	)
 	components["penalty_death"] = SandboxConfig.PENALTY_DEATH if events.get("died", false) else 0.0
-	components["penalty_useless_shot"] = SandboxConfig.PENALTY_USELESS_SHOT if events.get("useless_shot", false) else 0.0
-	components["penalty_missed_shot"] = SandboxConfig.PENALTY_MISSED_SHOT if events.get("missed_shot", false) else 0.0
+	components["penalty_useless_shot"] = (
+		SandboxConfig.PENALTY_USELESS_SHOT
+		if events.get("useless_shot", false)
+		else 0.0
+	)
+	components["penalty_missed_shot"] = (
+		SandboxConfig.PENALTY_MISSED_SHOT
+		if events.get("missed_shot", false)
+		else 0.0
+	)
 
 	var positioning_delta: float = float(events.get("positioning_delta", 0.0))
 	components["reward_positioning"] = clampf(
@@ -73,12 +85,20 @@ static func compute_components(events: Dictionary) -> Dictionary:
 	)
 	var exploration_gain: float = float(events.get("exploration_gain", 0.0))
 	components["reward_exploration"] = exploration_gain
-	components["reward_exploration_complete"] = SandboxConfig.REWARD_EXPLORATION_COMPLETE if events.get("exploration_complete", false) else 0.0
+	components["reward_exploration_complete"] = (
+		SandboxConfig.REWARD_EXPLORATION_COMPLETE
+		if events.get("exploration_complete", false)
+		else 0.0
+	)
 
 	if events.get("alive", true) and not events.get("died", false):
 		var valid_target: bool = events.get("valid_target", false)
 		var combat_progress: bool = events.get("shot_fired", false) or positioning_delta > 0.0
-		components["reward_survive"] = SandboxConfig.REWARD_SURVIVE_TICK if not valid_target or combat_progress else 0.0
+		components["reward_survive"] = (
+			SandboxConfig.REWARD_SURVIVE_TICK
+			if not valid_target or combat_progress
+			else 0.0
+		)
 	else:
 		components["reward_survive"] = 0.0
 	return components

@@ -52,7 +52,10 @@ func test_aim_only_and_oscillation_do_not_farm_survival() -> SandboxTest:
 	var oscillation_total := 0.0
 	for i in range(60):
 		var a: Dictionary = aim.step(Action.from_discrete(Action.Discrete.LOOK_RIGHT))
-		var b: Dictionary = oscillation.step(Action.from_discrete(Action.Discrete.LOOK_RIGHT if i % 2 == 0 else Action.Discrete.LOOK_LEFT))
+		var oscillate: int = (
+			Action.Discrete.LOOK_RIGHT if i % 2 == 0 else Action.Discrete.LOOK_LEFT
+		)
+		var b: Dictionary = oscillation.step(Action.from_discrete(oscillate))
 		aim_total += float(a.reward)
 		oscillation_total += float(b.reward)
 	t.assert_lte(aim_total, 0.05)
@@ -66,7 +69,10 @@ func test_movement_cycle_does_not_repeat_distance_reward() -> SandboxTest:
 	var env := _level1()
 	var total := 0.0
 	for _i in range(120):
-		var action := Action.from_discrete(Action.Discrete.MOVE_FORWARD if _i % 2 == 0 else Action.Discrete.MOVE_BACKWARD)
+		var cycle: int = (
+			Action.Discrete.MOVE_FORWARD if _i % 2 == 0 else Action.Discrete.MOVE_BACKWARD
+		)
+		var action := Action.from_discrete(cycle)
 		total += float(env.step(action).reward)
 	t.assert_lt(total, 1.0, "movement cycling must not dominate the kill reward")
 	t.assert_eq(env.episode.kills, 0)
@@ -76,10 +82,21 @@ func test_repeated_shooting_is_worse_than_aligned_shooting() -> SandboxTest:
 	var t := SandboxTest.new("level1_repeated_shooting_vs_useful")
 	var spam := _level1()
 	var useful := _level1()
+	# The aligned arm uses the same explicit aim setup as
+	# test_aligned_shooting_kills_target_and_records_events and runs until
+	# the episode ends: killing the 100 HP target takes four 25-damage
+	# hits, which on the 0.5 s weapon cooldown cannot happen before tick 90
+	# (60 Hz). A 30-tick cap with no setup difference made this arm run the
+	# exact same trace as the spam arm, so the totals could only be equal.
+	useful.agent.position = Vector3(0.0, 0.0, 5.0)
+	useful.agent.yaw_deg = 0.0
+	useful.agent.pitch_deg = 0.0
+	useful.enemies[0].position = Vector3(0.0, 0.0, 0.0)
 	var spam_total := 0.0
 	var useful_total := 0.0
 	for _i in range(30):
 		spam_total += float(spam.step(Action.from_discrete(Action.Discrete.SHOOT)).reward)
+	for _i in range(100):
 		var useful_result: Dictionary = useful.step(Action.from_discrete(Action.Discrete.SHOOT))
 		useful_total += float(useful_result.reward)
 		if useful_result.done:
@@ -156,7 +173,8 @@ func test_reward_breakdown_reconciles_each_step() -> SandboxTest:
 	var t := SandboxTest.new("level1_reward_breakdown_reconciliation")
 	var env := _level1()
 	for i in range(20):
-		var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT if i % 3 == 0 else Action.Discrete.IDLE))
+		var discrete: int = Action.Discrete.SHOOT if i % 3 == 0 else Action.Discrete.IDLE
+		var result: Dictionary = env.step(Action.from_discrete(discrete))
 		var direct_components: Dictionary = result.info.reward_components
 		var direct_sum := 0.0
 		for value in direct_components.values():
