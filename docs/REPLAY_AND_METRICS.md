@@ -72,6 +72,30 @@ Two hard rules:
 Aggregation keys: `policy_id`, `map_id`, `scenario`, `lighting`,
 `enemy_count`, `curriculum_level`, `seed`, `episode_id`.
 
+### Weapon handling metrics (level 5+)
+
+Both implementations report the same handling diagnostics, so a number in
+the Control Center means the same thing as the number in an exported
+report:
+
+| Category | Metric | Meaning |
+| --- | --- | --- |
+| AIM | `headshots`, `headshot_rate` | Head-zone hits, and their share of all hits |
+| COMBAT | `trigger_discipline_events` | Trigger pulls the weapon refused: mid-cycle, mid-reload, empty, or a semi-auto that was never released |
+| COMBAT | `trigger_discipline_rate` | Those events as a share of all trigger pulls |
+| COMBAT | `reload_starts`, `reloading_time` | How often the agent ran dry, and how long it spent reloading |
+
+`trigger_discipline_events` is counted separately from `useless_shots` on
+purpose: one is bad weapon handling, the other is shooting at empty space,
+and a single "wasted shots" number cannot tell you which mistake a policy
+is making.
+
+All of these read zero on curriculum levels 1–4, where the handling layer
+is switched off. That is the correct reading — a flat reload count there is
+not a policy that never reloads, it is a system that does not exist yet.
+Use `curriculum_stages.weapon_handling_enabled(level)` to tell the two
+apart in reports.
+
 ## 3. Conditions, randomization and generalization
 
 - `conditions.py` — the condition space (map × lighting × scenario ×

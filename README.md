@@ -158,8 +158,15 @@ PYTHONPATH=python python -m unittest discover -s python/tests -v
 ```
 
 The Python suite also statically analyses and lints the GDScript half of the
-repository (`python/tests/test_gdscript_static.py`). That requires the
-optional `gdscript` extra:
+repository (`python/tests/test_gdscript_static.py`). It parses every `.gd`
+file with the real grammar and fails on the classes of defect a
+type-checked language would catch at compile time: unknown `preload`
+targets, wrong argument counts, unknown enum members, calls to undeclared
+helpers, and calls to methods that do not exist on a typed local
+(`var env := EnvironmentCore.new()` followed by `env.typo()`). That last
+check matters most on machines without the engine, where it is the only
+thing standing between a GDScript typo and a runtime failure. It requires
+the optional `gdscript` extra:
 
 ```bash
 pip install -e ".[test,gdscript]"
@@ -375,6 +382,34 @@ sandboxai evaluate \
 The evaluation directory includes `summary.json`, `summary.txt` and
 `episodes.csv`. It reports reward, kills, deaths, damage dealt/received,
 survival time, accuracy, shots fired/hit, win rate and loss rate.
+
+### Inspect weapon balance
+
+```bash
+sandboxai weapon-table                          # TTK / role matrix
+sandboxai weapon-table --distances 3,6,9,12 --json
+```
+
+Prints the time-to-kill matrix and the engagement band each weapon owns.
+The numbers are **parsed out of `scripts/weapon/weapon_state.gd` at call
+time**, not copied, so the table can never drift from the engine. Each cell
+is *ideal* / *actual* TTK: ideal assumes every round lands on centre mass,
+actual walks the trigger shot by shot with bloom, magazine and reload
+included.
+
+```
+profile  mode     rpm  mag  range         role          2m            5m           8m          11m          14m
+rifle    auto     120   30  15.0m         long   1.50/1.50s   1.50/1.50s   1.50/1.50s   1.50/1.50s   2.00/2.00s
+shotgun  pump      83    6   9.5m  point_blank   0.00/0.00s   0.72/0.72s   1.44/1.44s           --           --
+pistol   semi     250   15  12.0m          mid   0.96/0.96s   0.96/0.96s   1.20/1.20s   1.68/1.68s           --
+smg      auto     667   30  11.0m          mid   0.63/0.63s   0.63/0.63s   0.81/0.81s   1.35/2.61s           --
+```
+
+The same tables back `python/tests/test_weapon_balance.py`, which asserts
+the design intent (role separation, falloff monotonicity, "no weapon wins
+every band", spraying costs more than bursting at range) rather than the
+literal numbers — so retuning a profile either preserves those properties
+or fails with a specific explanation.
 
 ### Benchmark simulation throughput
 

@@ -327,6 +327,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     curriculum.add_argument("--json", action="store_true")
 
+    weapons = sub.add_parser(
+        "weapon-table",
+        help="print the weapon TTK / role matrix parsed from the Godot weapon tables",
+    )
+    weapons.add_argument("--json", action="store_true")
+    weapons.add_argument(
+        "--distances",
+        default="2,5,8,11,14",
+        help="comma-separated engagement distances in metres",
+    )
+    weapons.add_argument(
+        "--health", type=float, default=100.0, help="target health used for the TTK maths"
+    )
+
     adapter = sub.add_parser(
         "adapter-contract", help="print the external-game adapter contract (Roblox boundary)"
     )
@@ -638,6 +652,27 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(describe_progression(), indent=2, default=str))
         else:
             print(format_progression(), end="")
+        return 0
+    if args.command == "weapon-table":
+        from .weapons import format_ttk_table, role_ranking, ttk_table
+        distances = [float(v) for v in str(args.distances).split(",") if v.strip()]
+        table = ttk_table(distances, target_health=args.health)
+        if args.json:
+            payload = dict(table)
+            payload["role_ranking"] = {
+                band: [{"profile": name, "ttk": value} for name, value in entries]
+                for band, entries in role_ranking(target_health=args.health).items()
+            }
+            print(json.dumps(payload, indent=2, default=str))
+            return 0
+        print(format_ttk_table(table))
+        print()
+        print("Best profile per engagement band (by ideal TTK):")
+        for band, entries in role_ranking(target_health=args.health).items():
+            ranked = ", ".join(
+                f"{name} {value:.2f}s" for name, value in entries if value != float("inf")
+            )
+            print(f"  {band:<12} {ranked or 'nothing reaches this band'}")
         return 0
     if args.command == "adapter-contract":
         from .external_adapter import (

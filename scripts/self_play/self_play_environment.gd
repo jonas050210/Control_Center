@@ -22,6 +22,7 @@ const PerceptionSystem = preload("res://scripts/perception/perception_system.gd"
 const RewardSystem = preload("res://scripts/reward/reward_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SoundBus = preload("res://scripts/perception/sound_bus.gd")
+const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 const WorldGenerator = preload("res://scripts/world/world_generator.gd")
 
 var arena_half_extent: float = SandboxConfig.ARENA_HALF_EXTENT
@@ -170,6 +171,12 @@ func reset(seed_a: int = SandboxConfig.DEFAULT_RANDOM_SEED, seed_b: int = -1) ->
 		agent_a.reset(SandboxConfig.AGENT_SPAWN_POSITION + jitter_a, 0.0)
 		agent_b.reset(SandboxConfig.ENEMY_SPAWN_POSITION + jitter_b, 180.0)
 
+	# Both slots fight with the SAME handling model as the rest of the
+	# ladder, so a self-play duel measures policy skill rather than a
+	# different weapon simulation. Symmetric by construction: the two
+	# weapons are configured identically.
+	_apply_weapon_handling()
+
 	episode_a.start_new_episode()
 	episode_b.start_new_episode()
 	done = false
@@ -264,36 +271,56 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 	var attempted_shot_a: bool = action_a.shoot and agent_a.alive
 	var attempted_shot_b: bool = action_b.shoot and agent_b.alive
 
-	if attempted_shot_a and agent_a.weapon.try_fire():
+	var trigger_a: Dictionary = agent_a.weapon.pull_trigger(
+		attempted_shot_a, agent_a.speed_fraction, not agent_a.on_ground
+	)
+	var headshot_a: bool = false
+	if bool(trigger_a["fired"]):
 		shot_a = true
 		if sound_on:
 			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_a.position, 0)
-		var resolved_a: Dictionary = _resolve_agent_weapon_hit(agent_a, agent_b, eye_a, chest_b)
+		var resolved_a: Dictionary = _resolve_agent_weapon_hit(
+			agent_a, agent_b, eye_a, chest_b, trigger_a
+		)
 		damage_a = float(resolved_a["damage"])
+		headshot_a = bool(resolved_a["headshot"])
 		hit_a = damage_a > 0.0
 		kill_a = hit_a and not agent_b.alive
 		if hit_a and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_b.position, 1)
 		if kill_a and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.DEATH, agent_b.position, 1)
+		agent_a.apply_recoil(
+			float(trigger_a["recoil_pitch_deg"]), float(trigger_a["recoil_yaw_deg"])
+		)
 
-	if attempted_shot_b and agent_b.alive and agent_b.weapon.try_fire():
+	var trigger_b: Dictionary = agent_b.weapon.pull_trigger(
+		attempted_shot_b and agent_b.alive, agent_b.speed_fraction, not agent_b.on_ground
+	)
+	var headshot_b: bool = false
+	if bool(trigger_b["fired"]):
 		shot_b = true
 		if sound_on:
 			sound_bus.emit_sound(SoundBus.Category.SHOT, agent_b.position, 1)
-		var resolved_b: Dictionary = _resolve_agent_weapon_hit(agent_b, agent_a, eye_b, chest_a)
+		var resolved_b: Dictionary = _resolve_agent_weapon_hit(
+			agent_b, agent_a, eye_b, chest_a, trigger_b
+		)
 		damage_b = float(resolved_b["damage"])
+		headshot_b = bool(resolved_b["headshot"])
 		hit_b = damage_b > 0.0
 		kill_b = hit_b and not agent_a.alive
 		if hit_b and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.IMPACT, agent_a.position, 0)
 		if kill_b and sound_on:
 			sound_bus.emit_sound(SoundBus.Category.DEATH, agent_a.position, 0)
+		agent_b.apply_recoil(
+			float(trigger_b["recoil_pitch_deg"]), float(trigger_b["recoil_yaw_deg"])
+		)
 
 	if shot_a:
-		episode_a.record_shot(hit_a)
+		episode_a.record_shot(hit_a, headshot_a)
 	if shot_b:
-		episode_b.record_shot(hit_b)
+		episode_b.record_shot(hit_b, headshot_b)
 	if damage_a > 0.0:
 		episode_a.record_damage_dealt(damage_a)
 		episode_b.record_damage_taken(damage_a)
@@ -509,21 +536,45 @@ static func _chest_position(agent) -> Vector3:
 
 
 func _resolve_agent_weapon_hit(
-	shooter: AgentState, target: AgentState, eye: Vector3, chest: Vector3
+	shooter: AgentState, target: AgentState, eye: Vector3, chest: Vector3, trigger: Dictionary
 ) -> Dictionary:
 	var total_damage: float = 0.0
-	var directions: Array = shooter.weapon.projectile_directions(shooter.get_forward_vector())
+	var headshot: bool = false
+	var head: Vector3 = target.position + Vector3(0.0, SandboxConfig.ENEMY_HEAD_HEIGHT, 0.0)
+	var head_zones: bool = shooter.weapon.handling_enabled
+	var aim: Vector3 = shooter.weapon.apply_spread(
+		shooter.get_forward_vector(),
+		float(trigger.get("spread_deg", 0.0)),
+		int(trigger.get("shot_index", 0))
+	)
+	var directions: Array = shooter.weapon.projectile_directions(aim)
 	for direction_value in directions:
 		if not target.alive:
 			break
 		var direction: Vector3 = direction_value
-		var hit_distance: float = shooter.weapon.ray_hit_distance(eye, direction, chest)
+		var zone: Dictionary = shooter.weapon.resolve_hit_zone(
+			eye, direction, chest, head, head_zones
+		)
+		var hit_distance: float = float(zone["distance"])
 		if hit_distance < 0.0:
 			continue
 		if _weapon_ray_blocked_before(shooter, eye, direction, hit_distance):
 			continue
-		total_damage += target.take_damage(shooter.weapon.projectile_damage_at_distance(hit_distance))
-	return {"damage": total_damage}
+		if str(zone["zone"]) == WeaponState.ZONE_HEAD:
+			headshot = true
+		total_damage += target.take_damage(
+			shooter.weapon.projectile_damage_at_distance(hit_distance) * float(zone["multiplier"])
+		)
+	return {"damage": total_damage, "headshot": headshot}
+
+
+## Applies the ladder's weapon-handling capability to both slots.
+func _apply_weapon_handling() -> void:
+	var enabled: bool = curriculum_level >= CurriculumConfig.Level.OBSTACLES_COVER
+	agent_a.weapon.handling_enabled = enabled
+	agent_b.weapon.handling_enabled = enabled
+	agent_a.weapon.reset()
+	agent_b.weapon.reset()
 
 
 func _weapon_ray_blocked_before(

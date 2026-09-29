@@ -125,6 +125,20 @@ static func navigation_state(env) -> Dictionary:
 	}
 
 
+## Weapon + handling state, including the curriculum gate that decides
+## whether the handling layer is active at all. Read-only.
+static func weapon_state(env) -> Dictionary:
+	var info: Dictionary = env.agent.weapon.to_dict()
+	info["handling_capability"] = env.curriculum.weapon_handling_enabled()
+	info["hit_zones_capability"] = env.curriculum.hit_zones_enabled()
+	info["speed_fraction"] = env.agent.speed_fraction
+	info["effective_spread_deg"] = env.agent.weapon.current_spread_deg(
+		env.agent.speed_fraction, not env.agent.on_ground
+	)
+	info["movement_speed_scale"] = env.agent.weapon.movement_speed_scale()
+	return info
+
+
 ## Corpses, as pure environmental information. Never targetable.
 static func dead_bodies(env) -> Array:
 	var bodies: Array = []

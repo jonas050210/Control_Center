@@ -50,9 +50,38 @@ PROMOTION_METRICS: tuple[str, ...] = ("win_rate", "coverage", "survival_rate")
 ## ``MULTI_ENEMY_MIN``
 ##     CurriculumConfig.MULTIPLE_ENEMIES_MIN_COUNT: once at level 4-10 the
 ##     engine never creates fewer than this many enemies.
+## ``HANDLING_MIN_LEVEL``
+##     CurriculumConfig.weapon_handling_enabled() / hit_zones_enabled():
+##     the level from which recoil, bloom, magazines, reloads, fire modes
+##     and head/body hit zones are switched on. Below it the weapon is the
+##     original cooldown-gated hitscan, so levels 1-4 stay bit-for-bit
+##     comparable with checkpoints trained before the handling layer
+##     existed.
 WORLD_MIN_LEVEL: int = 5
 MULTI_ENEMY_MIN: int = 3
 MULTI_ENEMY_MAX_LEVEL: int = 10
+HANDLING_MIN_LEVEL: int = 5
+
+
+def weapon_handling_enabled(level: int) -> bool:
+    """Whether the engine arms the weapon handling layer at ``level``.
+
+    Mirrors ``CurriculumConfig.weapon_handling_enabled``. Reports and
+    dashboards need this to explain why a recoil or reload metric is
+    flat: on levels 1-4 it is not a policy failure, the system is off.
+    """
+    return int(level) >= HANDLING_MIN_LEVEL
+
+
+def hit_zones_enabled(level: int) -> bool:
+    """Whether head/body hit zones are resolved at ``level``.
+
+    Mirrors ``CurriculumConfig.hit_zones_enabled``. Shares a threshold
+    with the handling layer: both are the same step up in weapon fidelity
+    and splitting them would create a level where headshots exist but
+    recoil does not.
+    """
+    return int(level) >= HANDLING_MIN_LEVEL
 
 
 def applied_condition(condition: Condition) -> Condition:
@@ -166,8 +195,15 @@ STAGES: tuple[CurriculumStage, ...] = (
     CurriculumStage(
         level=5,
         name="cover",
-        focus="use geometry; stop standing in the open",
-        systems=("combat", "positioning", "cover", "navigation"),
+        focus="use geometry, and control a weapon that now fights back",
+        systems=(
+            "combat",
+            "positioning",
+            "cover",
+            "navigation",
+            "weapon_handling",
+            "hit_zones",
+        ),
         maps=("cover_field", "pillar_hall", "two_rooms", "combat_complex", "crossfire_lab"),
         scenarios=("cover_fight",),
         enemy_counts=(1, 2),

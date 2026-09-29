@@ -59,11 +59,14 @@ static func from_snapshot(snapshot: Dictionary) -> Dictionary:
 	var max_health: float = maxf(1.0, float(agent.get("max_health", 100.0)))
 
 	var categories: Dictionary = {}
+	var headshots: int = int(episode.get("headshots", 0))
 	categories["aim"] = {
 		"shots_fired": shots,
 		"shots_hit": hits,
 		"accuracy": float(hits) / float(maxi(1, shots)) if shots > 0 else 0.0,
 		"damage_per_shot": float(episode.get("damage_dealt", 0.0)) / float(maxi(1, shots)),
+		"headshots": headshots,
+		"headshot_rate": float(headshots) / float(maxi(1, hits)) if hits > 0 else 0.0,
 	}
 	categories["reaction"] = {
 		"steps": steps,
@@ -88,10 +91,26 @@ static func from_snapshot(snapshot: Dictionary) -> Dictionary:
 		"moving": bool(action.get("moving", false)),
 		"turning": bool(action.get("turning", false)),
 	}
+	# Weapon handling. `trigger_discipline_events` counts trigger pulls the
+	# weapon refused (cycling, reloading, empty, semi-auto not released);
+	# it is reported separately from wasted shots because the two describe
+	# different mistakes. All four degrade to zero when the handling layer
+	# is disabled by the curriculum, which is the correct reading: on
+	# levels 1-4 there is no magazine and no reload to get wrong.
+	var discipline: int = int(episode.get("trigger_discipline_events", 0))
 	categories["combat"] = {
 		"kills": int(episode.get("kills", 0)),
 		"damage_dealt": float(episode.get("damage_dealt", 0.0)),
 		"shooting": bool(action.get("shooting", false)),
+		"trigger_discipline_events": discipline,
+		"trigger_discipline_rate": (
+			float(discipline) / float(maxi(1, shots + discipline)) if shots + discipline > 0 else 0.0
+		),
+		"reload_starts": int(episode.get("reload_starts", 0)),
+		"reloading_time": float(episode.get("reloading_time", 0.0)),
+		"weapon_ammo": int(agent.get("weapon_ammo", 0)),
+		"weapon_reloading": bool(agent.get("weapon_reloading", false)),
+		"weapon_bloom_deg": float(agent.get("weapon_bloom_deg", 0.0)),
 	}
 	categories["survival"] = {
 		"alive": bool(agent.get("alive", true)),

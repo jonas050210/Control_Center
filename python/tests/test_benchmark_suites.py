@@ -31,12 +31,18 @@ class PlanTests(unittest.TestCase):
     def test_required_environment_counts(self):
         self.assertEqual(SUITE_ENVIRONMENT_COUNTS, (1, 4, 8, 16, 32, 64))
 
-    def test_four_distinct_suites(self):
-        self.assertEqual(len(SUITES), 4)
-        self.assertEqual(len(SUITES_BY_NAME), 4)
+    def test_five_distinct_suites(self):
+        self.assertEqual(len(SUITES), 5)
+        self.assertEqual(len(SUITES_BY_NAME), 5)
         self.assertEqual(
             sorted(SUITES_BY_NAME),
-            ["curriculum_1_4", "curriculum_5_10", "map_analyzer", "perception_combat"],
+            [
+                "curriculum_1_4",
+                "curriculum_5_10",
+                "map_analyzer",
+                "perception_combat",
+                "weapon_handling",
+            ],
         )
 
     def test_suites_cover_the_requested_workloads(self):
@@ -49,6 +55,16 @@ class PlanTests(unittest.TestCase):
             SUITES_BY_NAME["perception_combat"].enemy_count,
             SUITES_BY_NAME["curriculum_1_4"].enemy_count,
         )
+
+    def test_weapon_handling_suite_isolates_the_handling_layer(self):
+        handling = SUITES_BY_NAME["weapon_handling"]
+        baseline = SUITES_BY_NAME["curriculum_5_10"]
+        # The handling layer only switches on from level 5, so the suite
+        # has to sit at or above it to measure anything at all.
+        self.assertGreaterEqual(handling.curriculum_level, 5)
+        self.assertIn("weapon_handling", handling.stresses)
+        self.assertNotIn("weapon_handling", baseline.stresses)
+        self.assertEqual(handling.environment_counts, baseline.environment_counts)
 
     def test_every_suite_uses_the_same_counts_so_they_are_comparable(self):
         for suite in SUITES:

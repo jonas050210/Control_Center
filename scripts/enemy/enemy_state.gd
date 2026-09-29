@@ -185,6 +185,13 @@ func get_chest_position() -> Vector3:
 	return position + Vector3(0.0, chest_height, 0.0)
 
 
+## Centre of the head hit-sphere. Deliberately independent of
+## `eye_height` (which is a PERCEPTION origin, not a hitbox) so tuning one
+## never silently moves the other.
+func get_head_position() -> Vector3:
+	return position + Vector3(0.0, SandboxConfig.ENEMY_HEAD_HEIGHT, 0.0)
+
+
 func get_eye_position() -> Vector3:
 	return position + Vector3(0.0, eye_height, 0.0)
 

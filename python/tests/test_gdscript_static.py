@@ -7,8 +7,9 @@ part of that gap: it parses every `.gd` file and fails on the classes of
 defect that a type-checked language would catch at compile time — unknown
 `preload` targets, calls to methods that do not exist on a preloaded
 script, wrong argument counts, calls of instance members through a script
-class, unknown enum members and duplicate definitions. A second test runs
-gdtoolkit's `gdlint` style rules.
+class, calls on locals whose type is a known project script, unknown
+enum members and duplicate definitions. A second test runs gdtoolkit's
+`gdlint` style rules.
 
 It is deliberately a *static* check. It does NOT prove the simulation
 behaves correctly; only `godot --headless --path . --script
@@ -26,6 +27,8 @@ from sandboxai.gdscript_analysis import (
     analyze,
     check_local_method_calls,
     check_static_calls,
+    check_enum_members,
+    check_typed_local_calls,
     lint_all,
 )
 
@@ -267,6 +270,183 @@ class UndefinedLocalCallTests(unittest.TestCase):
             "(this is the Godot compile error that invalidated the script and "
             "cascaded through the Control Center suite)",
         )
+
+
+class TypedLocalCallTests(unittest.TestCase):
+    """`var x := Foo.new()` followed by `x.bar()` must be checked too.
+
+    This is the dominant call shape in the repository (every test and most
+    of the engine code builds its collaborators as typed locals), and it
+    was previously invisible to every static check: `check_symbols` only
+    looks at `Alias.member`, where the alias is a class name or a preload
+    constant, so a typo on a local survived until the engine ran it.
+    """
+
+    def _project(self, body: str) -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "project.godot").write_text("[application]\n", encoding="utf-8")
+        (root / "scripts").mkdir()
+        (root / "scripts" / "weapon.gd").write_text(
+            "class_name Weapon\n"
+            "extends RefCounted\n"
+            "\n"
+            "var ammo: int = 0\n"
+            "\n"
+            "func fire() -> bool:\n"
+            "\treturn true\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\nextends RefCounted\n\nfunc run() -> void:\n" + body,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_unknown_method_on_a_typed_local_is_flagged(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.detonate()\n")
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "unknown-member")
+        self.assertIn("w.detonate()", findings[0].message)
+
+    def test_unknown_method_in_a_declaration_right_hand_side_is_flagged(self):
+        # The commonest shape of all: the result is assigned to a new
+        # local, so the line is a declaration *and* a call site.
+        root = self._project("\tvar w := Weapon.new()\n\tvar ok: bool = w.detonate()\n")
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("w.detonate()", findings[0].message)
+
+    def test_declared_methods_and_engine_api_are_not_flagged(self):
+        root = self._project(
+            "\tvar w := Weapon.new()\n"
+            "\tw.fire()\n"
+            "\tw.get_script()\n"
+            "\tvar typed: Weapon = Weapon.new()\n"
+            "\ttyped.fire()\n"
+        )
+        self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
+
+    def test_reassigned_locals_are_dropped_rather_than_guessed(self):
+        # After `w = something_else` the declared type no longer holds, so
+        # reporting on it would be a false positive.
+        root = self._project(
+            "\tvar w := Weapon.new()\n\tw = make_other()\n\tw.detonate()\n"
+        )
+        self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
+
+    def test_scope_does_not_leak_between_functions(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.fire()\n")
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\n"
+            "extends RefCounted\n"
+            "\n"
+            "func a() -> void:\n"
+            "\tvar w := Weapon.new()\n"
+            "\tw.fire()\n"
+            "\n"
+            "func b(w) -> void:\n"
+            "\tw.anything_at_all()\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
+
+    def test_repository_has_no_typed_local_call_findings(self):
+        self.assertEqual(check_typed_local_calls(ProjectIndex(REPO_ROOT)), [])
+
+    def test_call_through_a_typed_property_is_checked(self):
+        # Regression guard for a real CI failure: `env.episode.to_metrics()`
+        # was called with no arguments against a 2-argument function. The
+        # direct-call check could not see it because the call goes one hop
+        # through a type-annotated member.
+        root = self._project("\tvar w := Weapon.new()\n\tw.sight.zero_in()\n")
+        (root / "scripts" / "sight.gd").write_text(
+            "class_name Sight\nextends RefCounted\n\nfunc zero_in(clicks: int) -> void:\n\tpass\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "weapon.gd").write_text(
+            "class_name Weapon\n"
+            "extends RefCounted\n"
+            "\n"
+            "var sight: Sight = Sight.new()\n"
+            "\n"
+            "func fire() -> bool:\n"
+            "\treturn true\n",
+            encoding="utf-8",
+        )
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "call-arity")
+        self.assertIn("w.sight.zero_in()", findings[0].message)
+
+    def test_unknown_method_through_a_typed_property_is_flagged(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.sight.explode()\n")
+        (root / "scripts" / "sight.gd").write_text(
+            "class_name Sight\nextends RefCounted\n\nfunc zero_in() -> void:\n\tpass\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "weapon.gd").write_text(
+            "class_name Weapon\nextends RefCounted\n\nvar sight: Sight = Sight.new()\n",
+            encoding="utf-8",
+        )
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "unknown-member")
+
+    def test_wrong_arity_on_a_direct_local_call_is_flagged(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.fire(1, 2, 3)\n")
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "call-arity")
+
+
+class EnumMemberTests(unittest.TestCase):
+    """`Alias.Enum.MEMBER` must be validated, not just `Alias.Enum`.
+
+    Regression guard for a real CI failure:
+    `CurriculumConfig.Level.STATIC_TARGETS` (the member is actually
+    `STATIONARY_TARGET`) passed every static check and only failed when
+    the engine compiled the script.
+    """
+
+    def _project(self, usage: str) -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "project.godot").write_text("[application]\n", encoding="utf-8")
+        (root / "scripts").mkdir()
+        (root / "scripts" / "cfg.gd").write_text(
+            "class_name Cfg\n"
+            "extends RefCounted\n"
+            "\n"
+            "enum Level {\n"
+            "\tFIRST = 1,\n"
+            "\tSECOND = 2,\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\nextends RefCounted\n\nfunc run() -> void:\n" + usage,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_unknown_enum_member_is_flagged(self):
+        findings = check_enum_members(ProjectIndex(self._project("\tvar a = Cfg.Level.THIRD\n")))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "unknown-enum-member")
+        self.assertIn("Cfg.Level.THIRD", findings[0].message)
+
+    def test_declared_enum_members_are_not_flagged(self):
+        root = self._project("\tvar a = Cfg.Level.FIRST\n\tvar b = Cfg.Level.SECOND\n")
+        self.assertEqual(check_enum_members(ProjectIndex(root)), [])
+
+    def test_unknown_enum_name_is_left_alone(self):
+        # `Cfg.NotAnEnum.x` is not an enum access this check can decide;
+        # `check_symbols` owns that case, so silence here is correct.
+        root = self._project("\tvar a = Cfg.NotAnEnum.FIRST\n")
+        self.assertEqual(check_enum_members(ProjectIndex(root)), [])
+
+    def test_repository_has_no_enum_member_findings(self):
+        self.assertEqual(check_enum_members(ProjectIndex(REPO_ROOT)), [])
 
 
 if __name__ == "__main__":

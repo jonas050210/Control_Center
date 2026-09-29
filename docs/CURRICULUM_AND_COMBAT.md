@@ -63,9 +63,97 @@ The changes below force the policy to actually:
 
 The exact predicates are `obstacles_enabled()`, `tactical_enemies_enabled()`,
 `ranged_enemies_enabled()`, `perception_enabled()`, `sound_enabled()`,
-`memory_enabled()`, `vertical_enabled()` and
-`randomized_scenarios_enabled()` on `CurriculumConfig`. Every one of them
-returns `false` for levels 1–4, which is what keeps the cheap levels cheap.
+`memory_enabled()`, `vertical_enabled()`, `weapon_handling_enabled()`,
+`hit_zones_enabled()` and `randomized_scenarios_enabled()` on
+`CurriculumConfig`. Every one of them returns `false` for levels 1–4, which
+is what keeps the cheap levels cheap.
+
+## Weapon handling (level 5+)
+
+Up to level 4 the weapon is a pure cooldown-gated hitscan: pull the trigger,
+and if the cooldown has expired a perfectly straight ray leaves the muzzle.
+That is the right model for teaching *aim*, and it is deliberately preserved
+bit-for-bit so early levels stay cheap and stay comparable with checkpoints
+trained before this layer existed.
+
+From level 5 (`OBSTACLES_COVER`) the same `WeaponState` switches on a
+handling layer, gated by `weapon_handling_enabled()`:
+
+| System | Effect | Why it is learnable |
+| --- | --- | --- |
+| **Fire mode** | `auto` (rifle, SMG), `semi` (pistol), `pump` (shotgun) | A semi-auto refuses a trigger that was never released, so "hold M1" stops being a universal policy |
+| **Recoil** | Vertical climb + horizontal drift accumulate per shot, then recover | The pattern is a fixed function of the shot index — no RNG — so it can be compensated |
+| **Bloom** | The cone widens per shot and collapses when you stop | Creates a real cost for spraying, and a reason to pause |
+| **Movement** | Firing plants you; moving and jumping widen the cone | Makes "stop to shoot" a decision rather than a free action |
+| **Magazine / reload** | Finite rounds; an empty magazine auto-reloads on the trigger | Turns sustained fire into a resource to manage |
+| **Hit zones** | A smaller head sphere inside the body sphere applies a damage multiplier | Rewards precise aim without adding an observation field |
+
+### It adds no observation and no action fields
+
+The observation stays at exactly 84 floats and the action space stays
+`MultiDiscrete([3,3,3,3,2,2])`. Handling is felt through channels that
+already exist:
+
+- **recoil** moves the agent's own view, so it shows up in `agent_forward`
+  and in the bearing/elevation to the target;
+- **reloading and an empty magazine** report through `weapon_ready`
+  (observation index 15), which `is_ready()` now returns `false` for. That
+  is the policy's only channel for "your trigger currently does nothing",
+  so it has to be honest about it;
+- **bloom** is not observed directly. It is a consequence of the agent's own
+  recent actions, which a recurrent or frame-stacked policy can infer, and
+  exposing it would have meant breaking the contract.
+
+There is no reload button, which is why an empty magazine reloads itself:
+with no way to ask for a reload, a dry weapon would make the episode
+unwinnable.
+
+### Determinism
+
+Nothing here uses RNG. Recoil is a closed-form function of the shot index,
+and pellet/bloom offsets come from a fixed golden-angle sunflower pattern.
+The same seed and the same actions produce the same fight, which is what
+replays and regression tests depend on.
+
+### Trigger discipline is not a wasted shot
+
+A trigger pull the weapon refuses — mid-cycle, mid-reload, empty, or a
+semi-auto that was never released — raises a `trigger_discipline` event
+carrying a small `PENALTY_TRIGGER_DISCIPLINE` (−0.002), *not* the
+`−0.1` `penalty_useless_shot` used for shooting at nothing. The two are
+different mistakes: one is bad weapon handling, the other is firing at
+empty space. Conflating them would both mis-price the error and hide which
+one a policy is actually making. With handling off, the old
+`useless_shot` / `shot_result = "cooldown"` contract is preserved exactly.
+
+### Weapon roles
+
+Run `sandboxai weapon-table` to print the live TTK matrix, parsed straight
+out of the GDScript so it cannot drift from the engine:
+
+```
+profile  mode     rpm  mag  range         role          2m            5m           8m          11m          14m
+rifle    auto     120   30  15.0m         long   1.50/1.50s   1.50/1.50s   1.50/1.50s   1.50/1.50s   2.00/2.00s
+shotgun  pump      83    6   9.5m  point_blank   0.00/0.00s   0.72/0.72s   1.44/1.44s           --           --
+pistol   semi     250   15  12.0m          mid   0.96/0.96s   0.96/0.96s   1.20/1.20s   1.68/1.68s           --
+smg      auto     667   30  11.0m          mid   0.63/0.63s   0.63/0.63s   0.81/0.81s   1.35/2.61s           --
+```
+
+Cells are *ideal* / *actual* TTK against 100 HP: ideal assumes every round
+lands on centre mass, actual walks the trigger shot by shot with bloom,
+magazine and reload included. They are identical for the rifle, pistol and
+shotgun because those fire slowly enough that the cone fully collapses
+between rounds — that is exactly what makes them the precision options.
+
+The SMG is the one profile whose cooldown (0.09 s) is shorter than the
+recoil recovery delay (0.12 s), so it can out-run its own bloom. At the edge
+of its range that costs it nearly a second (1.35 s → 2.61 s), and a
+disciplined 6-round burst recovers a chunk of it (2.15 s). That trade-off is
+the intended skill expression, and it is asserted by
+`python/tests/test_weapon_balance.py` rather than left to hope.
+
+Only the rifle reaches past 12 m, which is what keeps range selection a real
+decision on a map whose longest sight line is about 28 m.
 
 ## Automatic progression
 
@@ -191,6 +279,24 @@ Via the debug GUI (see `docs/DEBUG_GUI_AND_BENCHMARKING.md`): the
 - **No navmesh/obstacle avoidance.** Enemies move in straight lines (plus
   the strafe blend) toward the agent; the arena has no interior obstacles to
   navigate around.
+- **The GDScript half of this milestone was never executed.** The Godot
+  engine could not be obtained in the environment the handling layer was
+  written in, so `tests/run_tests.gd` — including the new
+  `tests/test_weapon_handling*.gd` — has not been run. It was validated by
+  the real GDScript grammar, gdlint, and the project's static analyzer
+  (symbols, call arity, and now calls on typed locals), plus a Python
+  mirror of the weapon maths in `python/sandboxai/weapons.py`. That catches
+  compile-class errors, not behavioural ones. **Run the Godot suite before
+  trusting these numbers in training.**
+- **Bloom is not observable.** The widening cone is a consequence of the
+  agent's own recent fire, so a memoryless policy cannot read it directly.
+  Exposing it would have required a new observation field, which the
+  contract forbids. A recurrent or frame-stacked policy can infer it.
+- **Enemies do not use the handling layer.** `EnemyBrain` still fires
+  through `try_fire()` with `handling_enabled = false`, so enemy weapons
+  have no recoil, bloom or magazine. Enemy difficulty is tuned through the
+  reaction/archetype profiles instead; arming enemy handling would change
+  every existing difficulty curve at once.
 - **Only 3 enemies are individually observed** even though more can exist
   and fight simultaneously (curriculum level 4 can be configured with more
   than 3). This is an explicit, documented observation-contract choice (see
