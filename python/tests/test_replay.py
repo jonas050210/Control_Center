@@ -10,12 +10,16 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import re
+
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.replay import (
     DetailLevel,
+    EVENT_KINDS,
     IMPORTANT_EVENT_KINDS,
     READABLE_VERSIONS,
     REPLAY_FORMAT_VERSION,
+    REPLAY_MAGIC,
     ReplayError,
     ReplayEpisode,
     ReplayHeader,
@@ -28,6 +32,8 @@ from sandboxai.replay import (
     validate_replay,
     verify_determinism,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ScriptedEnv:
@@ -391,6 +397,56 @@ class ReplayDeterminismTests(unittest.TestCase):
         self.assertEqual(first.actions(), second.actions())
         self.assertEqual(first.observations(), second.observations())
         self.assertEqual(first.rewards(), second.rewards())
+
+
+class GodotSourceDriftTests(unittest.TestCase):
+    """The replay format doc promises byte-compatibility between the Godot
+    recorder (``ReplayFormat``) and this module. Guard the vocabulary and
+    version constants both sides must agree on, the same way
+    ``test_contract.py`` and ``test_conditions.py`` guard the observation
+    contract and the condition-space ids.
+    """
+
+    def setUp(self):
+        self.source = (REPO_ROOT / "scripts/replay/replay_format.gd").read_text(encoding="utf-8")
+
+    def _const_string(self, name: str) -> str:
+        match = re.search(rf'const {name}: String = "([^"]*)"', self.source)
+        self.assertIsNotNone(match, f"could not locate const {name}")
+        return match.group(1)
+
+    def _const_int(self, name: str) -> int:
+        match = re.search(rf"const {name}: int = (\d+)", self.source)
+        self.assertIsNotNone(match, f"could not locate const {name}")
+        return int(match.group(1))
+
+    def _const_string_array(self, name: str) -> list[str]:
+        match = re.search(rf"const {name}: Array = \[(.*?)\]", self.source, re.S)
+        self.assertIsNotNone(match, f"could not locate const {name}")
+        return re.findall(r'"([^"]*)"', match.group(1))
+
+    def test_magic_matches_replay_format(self):
+        self.assertEqual(REPLAY_MAGIC, self._const_string("MAGIC"))
+
+    def test_format_version_matches_replay_format(self):
+        self.assertEqual(REPLAY_FORMAT_VERSION, self._const_int("FORMAT_VERSION"))
+
+    def test_readable_versions_matches_replay_format(self):
+        match = re.search(r"const READABLE_VERSIONS: Array = \[(.*?)\]", self.source)
+        self.assertIsNotNone(match, "could not locate const READABLE_VERSIONS")
+        versions = tuple(int(v) for v in match.group(1).split(","))
+        self.assertEqual(READABLE_VERSIONS, versions)
+
+    def test_event_kinds_matches_replay_format(self):
+        self.assertEqual(list(EVENT_KINDS), self._const_string_array("EVENT_KINDS"))
+
+    def test_important_event_kinds_matches_replay_format(self):
+        self.assertEqual(
+            list(IMPORTANT_EVENT_KINDS), self._const_string_array("IMPORTANT_EVENT_KINDS")
+        )
+        # Every "important" kind must also be a known event kind on both sides.
+        for kind in IMPORTANT_EVENT_KINDS:
+            self.assertIn(kind, EVENT_KINDS)
 
 
 if __name__ == "__main__":

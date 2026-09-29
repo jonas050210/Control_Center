@@ -83,9 +83,15 @@ func get_action(_env: EnvironmentCore) -> Action:
 	var shoot: bool = (
 		Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_key_pressed(KEY_SPACE)
 	)
+	# Contract v2 added a `jump` action field (curriculum level 9, vertical
+	# combat). `Space` is already bound to `shoot` above for keyboard-only
+	# play, so jump gets its own key; without this, human demonstrations
+	# could never contain a jump even though the recorder/BC pipeline both
+	# support it.
+	var jump: bool = Input.is_key_pressed(KEY_CTRL)
 
 	var action: Action = Action.new(
-		move_axis, strafe_axis, look_yaw_axis, look_pitch_axis, shoot, _pending_look_delta
+		move_axis, strafe_axis, look_yaw_axis, look_pitch_axis, shoot, _pending_look_delta, jump
 	)
 	_pending_look_delta = Vector2.ZERO
 	return action

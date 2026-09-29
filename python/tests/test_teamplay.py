@@ -1,7 +1,9 @@
 """Tests for the teamplay foundation (Phase 8)."""
 from __future__ import annotations
 
+import re
 import unittest
+from pathlib import Path
 
 from sandboxai.teamplay import (
     COMMS_SYMBOLS,
@@ -114,7 +116,7 @@ class IsolationTests(unittest.TestCase):
 
     def test_messages_never_cross_teams(self):
         self.channel.send(0, "contact", 0.3)
-        self.channel.send(2, "help", -0.2)
+        self.channel.send(2, "need_help", -0.2)
         team_zero = self.channel.inbox(1)
         team_one = self.channel.inbox(3)
         self.assertEqual([m.sender_slot for m in team_zero], [0])
@@ -126,10 +128,10 @@ class IsolationTests(unittest.TestCase):
 
     def test_budget_is_enforced_per_tick(self):
         self.assertIsNotNone(self.channel.send(0, "contact"))
-        self.assertIsNotNone(self.channel.send(0, "moving"))
-        self.assertIsNone(self.channel.send(0, "help"))
+        self.assertIsNotNone(self.channel.send(0, "advancing"))
+        self.assertIsNone(self.channel.send(0, "need_help"))
         self.channel.advance()
-        self.assertIsNotNone(self.channel.send(0, "help"))
+        self.assertIsNotNone(self.channel.send(0, "need_help"))
 
     def test_messages_are_transient(self):
         self.channel.send(0, "contact")
@@ -248,6 +250,22 @@ class TeamRewardTests(unittest.TestCase):
         self.assertEqual(summary["teams"]["0"]["kills"], 1)
         self.assertEqual(summary["teams"]["0"]["alive"], 1)
         self.assertEqual(summary["teams"]["1"]["alive"], 2)
+
+
+class GodotSourceDriftTests(unittest.TestCase):
+    """team_config.gd promises COMMS_SYMBOLS is byte-identical on both sides
+    of the language boundary. Previously this was false (the two lists had
+    almost no strings in common), so guard it the same way the observation
+    contract and the condition-space ids are guarded.
+    """
+
+    def test_comms_symbols_match_team_config(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        source = (repo_root / "scripts/team/team_config.gd").read_text(encoding="utf-8")
+        match = re.search(r"const COMMS_SYMBOLS: Array = \[(.*?)\]", source, re.S)
+        self.assertIsNotNone(match, "could not locate const COMMS_SYMBOLS")
+        godot_symbols = re.findall(r'"([^"]*)"', match.group(1))
+        self.assertEqual(list(COMMS_SYMBOLS), godot_symbols)
 
 
 if __name__ == "__main__":

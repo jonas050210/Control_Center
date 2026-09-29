@@ -40,15 +40,22 @@ from typing import Any, Iterable, Sequence
 SOLO_TEAM: int = 0
 
 ## Discrete communication vocabulary. Small on purpose (see module note).
+##
+## Kept byte-identical to ``TeamConfig.COMMS_SYMBOLS`` in
+## ``scripts/team/team_config.gd`` (guarded by
+## ``test_teamplay.py::GodotSourceDriftTests``), so a team experiment
+## configured on either side of the language boundary means the same
+## thing. Changing this list must change the GDScript list in the same
+## commit.
 COMMS_SYMBOLS: tuple[str, ...] = (
+    "none",  # explicit no-op / nothing to report
     "contact",  # I can see something
-    "lost",  # I lost the contact
-    "hit",  # I damaged something
-    "hurt",  # I am taking damage
-    "moving",  # I am repositioning
-    "hold",  # I am holding this position
-    "help",  # I want support here
-    "clear",  # nothing here
+    "contact_lost",  # I lost the contact
+    "need_help",  # I want support here
+    "holding",  # I am holding this position
+    "advancing",  # I am repositioning forward
+    "falling_back",  # I am repositioning backward / disengaging
+    "enemy_down",  # I killed something
 )
 
 ## Objectives a team run can be scored against. "eliminate" is today's

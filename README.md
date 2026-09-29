@@ -78,6 +78,7 @@ Environment 0 is human-controlled:
 - `W/A/S/D`: move and strafe
 - mouse or arrow keys: aim
 - left mouse button or `Space`: shoot
+- `Ctrl`: jump
 - `Esc`: release/capture the mouse
 
 The remaining default environments use the deterministic stub controller.

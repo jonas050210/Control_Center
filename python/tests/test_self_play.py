@@ -1,5 +1,6 @@
+import random
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.self_play import (
@@ -55,6 +56,41 @@ class SelfPlayTests(unittest.TestCase):
         self.assertFalse(result["metrics_b"]["win"])
         self.assertEqual(predict_a.call_count, 3)
         self.assertEqual(predict_b.call_count, 3)
+
+    def test_sample_opponent_without_explicit_rng_is_deterministic(self):
+        # Regression: sample_opponent() used to fall back to the unseeded
+        # global `random` module when no rng was supplied, so two
+        # coordinators built identically could draw different opponents on
+        # different runs. It must now fall back to an RNG seeded from the
+        # opponent slot's own `seed` field.
+        pool = ["ckpt_a.zip", "ckpt_b.zip", "ckpt_c.zip", "ckpt_d.zip"]
+
+        def build():
+            slot_a = PolicySlot(name="learning_agent", checkpoint="")
+            slot_b = PolicySlot(name="opponent_agent", checkpoint="", seed=777)
+            return SelfPlayCoordinator(slot_a, slot_b, opponent_pool=list(pool))
+
+        with patch.object(PolicySlot, "load", lambda self, device="cpu": None):
+            coord1 = build()
+            coord2 = build()
+            drawn1 = [coord1.sample_opponent().checkpoint for _ in range(10)]
+            drawn2 = [coord2.sample_opponent().checkpoint for _ in range(10)]
+            self.assertEqual(drawn1, drawn2)
+
+            # Different opponent-slot seeds should (almost certainly) diverge.
+            slot_a = PolicySlot(name="learning_agent", checkpoint="")
+            slot_b = PolicySlot(name="opponent_agent", checkpoint="", seed=999)
+            coord3 = SelfPlayCoordinator(slot_a, slot_b, opponent_pool=list(pool))
+            drawn3 = [coord3.sample_opponent().checkpoint for _ in range(10)]
+            self.assertNotEqual(drawn1, drawn3)
+
+            # An explicit rng always takes priority over the fallback.
+            coord4 = build()
+            explicit_rng = random.Random(12345)
+            drawn4 = [coord4.sample_opponent(rng=explicit_rng).checkpoint for _ in range(10)]
+            replay_rng = random.Random(12345)
+            replay = [replay_rng.choice(pool) for _ in range(10)]
+            self.assertEqual(drawn4, replay)
 
     def test_play_self_play_match_timeout_draw(self):
         client = MagicMock(spec=SelfPlayBatchClient)
