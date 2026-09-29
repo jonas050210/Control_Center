@@ -514,10 +514,24 @@ class SelfPlayConfig:
     opponent_pool: list[str] = field(default_factory=list)
     learning_slot: int = 0
     frozen_slot: int = 1
+    #: Opponent-selection rule; see sandboxai.self_play.OPPONENT_STRATEGIES.
+    #: Recorded here (rather than decided at the call site) so a run's
+    #: opponent stream is reproducible from the config snapshot alone.
+    opponent_strategy: str = "uniform"
+    #: Seed for opponent sampling. Kept separate from ``seed`` so the
+    #: opponent stream can be varied without changing episode seeding.
+    opponent_seed: int = 0
 
     def validate(self) -> "SelfPlayConfig":
+        from .self_play import OPPONENT_STRATEGIES
+
         if self.environment_count < 1:
             raise ValueError("self-play environment_count must be >= 1")
         if self.learning_slot == self.frozen_slot:
             raise ValueError("learning and frozen self-play slots must differ")
+        if self.opponent_strategy not in OPPONENT_STRATEGIES:
+            raise ValueError(
+                "unknown opponent_strategy %r; expected one of %s"
+                % (self.opponent_strategy, ", ".join(OPPONENT_STRATEGIES))
+            )
         return self

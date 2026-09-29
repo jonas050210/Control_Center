@@ -333,3 +333,154 @@ func test_self_play_deterministic_replay_trajectory() -> SandboxTest:
 		t.assert_eq(r1.observations[1].to_array(), r2.observations[1].to_array())
 
 	return t
+
+
+## Simultaneous lethal fire must kill BOTH agents.
+##
+## Regression test for a slot-order bias: fire used to be resolved slot A
+## first, mutating agent B's health before agent B's own trigger was
+## evaluated (and gating that trigger on `agent_b.alive`). A tie therefore
+## always scored as an agent_a_win, which is structurally unfair in
+## self-play, where one policy plays both slots and the win rate is read
+## back as skill.
+func test_self_play_simultaneous_lethal_exchange_kills_both() -> SandboxTest:
+	var t := SandboxTest.new("self_play_simultaneous_lethal_exchange_kills_both")
+	var res: Dictionary = _simultaneous_duel()
+
+	t.assert_false(bool(res["alive_a"]), "slot A must not survive a lethal exchange")
+	t.assert_false(bool(res["alive_b"]), "slot B must not survive a lethal exchange")
+	t.assert_true(bool(res["events_a"]["kill"]), "slot A scored the lethal hit")
+	t.assert_true(bool(res["events_b"]["kill"]), "slot B scored the lethal hit")
+	t.assert_true(bool(res["events_a"]["died"]))
+	t.assert_true(bool(res["events_b"]["died"]))
+	t.assert_eq(res["done_reason"], "draw")
+	t.assert_true(bool(res["done"]))
+	return t
+
+
+## The same exchange must be identical under a slot swap: with mirrored
+## inputs the two slots see mirrored events and receive equal reward.
+func test_self_play_lethal_exchange_is_slot_symmetric() -> SandboxTest:
+	var t := SandboxTest.new("self_play_lethal_exchange_is_slot_symmetric")
+	var res: Dictionary = _simultaneous_duel()
+	var events_a: Dictionary = res["events_a"]
+	var events_b: Dictionary = res["events_b"]
+
+	t.assert_eq(res["reward_a"], res["reward_b"], "mirrored slots must earn equal reward")
+	t.assert_eq(events_a["hit"], events_b["hit"])
+	t.assert_eq(events_a["kill"], events_b["kill"])
+	t.assert_eq(events_a["shot_result"], events_b["shot_result"])
+	t.assert_eq(events_a["damage_dealt"], events_b["damage_dealt"])
+	t.assert_eq(events_a["damage_taken"], events_b["damage_taken"])
+	t.assert_eq(res["kills_a"], res["kills_b"])
+	t.assert_eq(res["deaths_a"], res["deaths_b"])
+	return t
+
+
+## Damage bookkeeping must stay clamped: a volley can never drain more than
+## the target's remaining health, and dealt damage must equal taken damage
+## on the opposite slot.
+func test_self_play_simultaneous_damage_is_clamped_and_mirrored() -> SandboxTest:
+	var t := SandboxTest.new("self_play_simultaneous_damage_is_clamped_and_mirrored")
+	var res: Dictionary = _simultaneous_duel(1.0)
+	var events_a: Dictionary = res["events_a"]
+	var events_b: Dictionary = res["events_b"]
+
+	t.assert_eq(float(events_a["damage_dealt"]), 1.0, "damage is clamped to remaining health")
+	t.assert_eq(float(events_b["damage_dealt"]), 1.0)
+	t.assert_eq(events_a["damage_dealt"], events_b["damage_taken"])
+	t.assert_eq(events_b["damage_dealt"], events_a["damage_taken"])
+	t.assert_eq(res["health_a"], 0.0)
+	t.assert_eq(res["health_b"], 0.0)
+	return t
+
+
+## A non-lethal simultaneous exchange must still land both shots: the fix is
+## about resolution order, not about making every trade lethal.
+func test_self_play_simultaneous_nonlethal_exchange_damages_both() -> SandboxTest:
+	var t := SandboxTest.new("self_play_simultaneous_nonlethal_exchange_damages_both")
+	var res: Dictionary = _simultaneous_duel(-1.0)
+	var events_a: Dictionary = res["events_a"]
+	var events_b: Dictionary = res["events_b"]
+
+	t.assert_true(bool(events_a["hit"]))
+	t.assert_true(bool(events_b["hit"]))
+	t.assert_false(bool(events_a["kill"]))
+	t.assert_false(bool(events_b["kill"]))
+	t.assert_true(bool(res["alive_a"]))
+	t.assert_true(bool(res["alive_b"]))
+	t.assert_gt(float(events_a["damage_dealt"]), 0.0)
+	t.assert_eq(events_a["damage_dealt"], events_b["damage_dealt"])
+	t.assert_false(bool(res["done"]))
+	return t
+
+
+## Mirrored duel on a cleared arena: both agents face each other at equal
+## distance and both pull the trigger on the same tick. `health` <= 0.0
+## keeps full health (non-lethal trade); a positive value is assigned to
+## both agents to make a single hit lethal. The default curriculum level
+## keeps weapon handling (spread, bloom, recoil, magazines) OFF so the
+## hitscan outcome is exact; symmetry under full handling is asserted
+## separately.
+static func _simultaneous_duel(
+	health: float = 1.0, level: int = CurriculumConfig.Level.STATIONARY_TARGET
+) -> Dictionary:
+	var env := SelfPlayEnvironmentCore.new()
+	env.set_layout("open_arena")
+	env.set_curriculum_level(level)
+	env.reset(7, 7)
+	# Low ladder levels run without a world at all; higher ones must be
+	# emptied so only the mirrored geometry below decides the outcome.
+	if env.world != null:
+		env.world.clear()
+
+	env.agent_a.reset(Vector3(-2.0, 0.0, 0.0), 0.0)
+	env.agent_b.reset(Vector3(2.0, 0.0, 0.0), 0.0)
+	if health > 0.0:
+		env.agent_a.health = health
+		env.agent_b.health = health
+	env.agent_a.set_forward_horizontal(env.agent_b.position - env.agent_a.position)
+	env.agent_b.set_forward_horizontal(env.agent_a.position - env.agent_b.position)
+	env._sync_proxies()
+
+	var shoot := Action.new(0, 0, 0, 0, true, Vector2.ZERO, false)
+	var res: Dictionary = env.step([shoot, Action.new(0, 0, 0, 0, true, Vector2.ZERO, false)])
+	var metrics_a: Dictionary = res.infos[0].metrics
+	var metrics_b: Dictionary = res.infos[1].metrics
+	return {
+		"events_a": res.infos[0].events,
+		"events_b": res.infos[1].events,
+		"reward_a": res.rewards[0],
+		"reward_b": res.rewards[1],
+		"done": bool(res.done),
+		"done_reason": str(res.infos[0].done_reason),
+		"alive_a": env.agent_a.alive,
+		"alive_b": env.agent_b.alive,
+		"health_a": env.agent_a.health,
+		"health_b": env.agent_b.health,
+		"kills_a": metrics_a["kills"],
+		"kills_b": metrics_b["kills"],
+		"deaths_a": metrics_a["deaths"],
+		"deaths_b": metrics_b["deaths"],
+	}
+
+
+## Symmetry must survive full weapon handling (spread, bloom, recoil,
+## magazines): mirrored slots consume the same deterministic spread index,
+## so whatever the outcome, both slots must observe the same one.
+func test_self_play_simultaneous_fire_symmetric_with_weapon_handling() -> SandboxTest:
+	var t := SandboxTest.new("self_play_simultaneous_fire_symmetric_with_weapon_handling")
+	var res: Dictionary = _simultaneous_duel(1.0, CurriculumConfig.Level.AGENT_VS_AGENT)
+	var events_a: Dictionary = res["events_a"]
+	var events_b: Dictionary = res["events_b"]
+
+	t.assert_eq(events_a["shot_fired"], events_b["shot_fired"])
+	t.assert_eq(events_a["hit"], events_b["hit"])
+	t.assert_eq(events_a["kill"], events_b["kill"])
+	t.assert_eq(events_a["damage_dealt"], events_b["damage_dealt"])
+	t.assert_eq(events_a["shot_result"], events_b["shot_result"])
+	t.assert_eq(res["reward_a"], res["reward_b"])
+	t.assert_eq(res["alive_a"], res["alive_b"])
+	t.assert_ne(res["done_reason"], "agent_a_win", "a mirrored tick cannot favour slot A")
+	t.assert_ne(res["done_reason"], "agent_b_win", "a mirrored tick cannot favour slot B")
+	return t
