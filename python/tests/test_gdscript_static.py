@@ -27,6 +27,7 @@ from sandboxai.gdscript_analysis import (
     analyze,
     check_local_method_calls,
     check_static_calls,
+    check_enum_members,
     check_typed_local_calls,
     lint_all,
 )
@@ -352,6 +353,100 @@ class TypedLocalCallTests(unittest.TestCase):
 
     def test_repository_has_no_typed_local_call_findings(self):
         self.assertEqual(check_typed_local_calls(ProjectIndex(REPO_ROOT)), [])
+
+    def test_call_through_a_typed_property_is_checked(self):
+        # Regression guard for a real CI failure: `env.episode.to_metrics()`
+        # was called with no arguments against a 2-argument function. The
+        # direct-call check could not see it because the call goes one hop
+        # through a type-annotated member.
+        root = self._project("\tvar w := Weapon.new()\n\tw.sight.zero_in()\n")
+        (root / "scripts" / "sight.gd").write_text(
+            "class_name Sight\nextends RefCounted\n\nfunc zero_in(clicks: int) -> void:\n\tpass\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "weapon.gd").write_text(
+            "class_name Weapon\n"
+            "extends RefCounted\n"
+            "\n"
+            "var sight: Sight = Sight.new()\n"
+            "\n"
+            "func fire() -> bool:\n"
+            "\treturn true\n",
+            encoding="utf-8",
+        )
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "call-arity")
+        self.assertIn("w.sight.zero_in()", findings[0].message)
+
+    def test_unknown_method_through_a_typed_property_is_flagged(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.sight.explode()\n")
+        (root / "scripts" / "sight.gd").write_text(
+            "class_name Sight\nextends RefCounted\n\nfunc zero_in() -> void:\n\tpass\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "weapon.gd").write_text(
+            "class_name Weapon\nextends RefCounted\n\nvar sight: Sight = Sight.new()\n",
+            encoding="utf-8",
+        )
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "unknown-member")
+
+    def test_wrong_arity_on_a_direct_local_call_is_flagged(self):
+        root = self._project("\tvar w := Weapon.new()\n\tw.fire(1, 2, 3)\n")
+        findings = check_typed_local_calls(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "call-arity")
+
+
+class EnumMemberTests(unittest.TestCase):
+    """`Alias.Enum.MEMBER` must be validated, not just `Alias.Enum`.
+
+    Regression guard for a real CI failure:
+    `CurriculumConfig.Level.STATIC_TARGETS` (the member is actually
+    `STATIONARY_TARGET`) passed every static check and only failed when
+    the engine compiled the script.
+    """
+
+    def _project(self, usage: str) -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "project.godot").write_text("[application]\n", encoding="utf-8")
+        (root / "scripts").mkdir()
+        (root / "scripts" / "cfg.gd").write_text(
+            "class_name Cfg\n"
+            "extends RefCounted\n"
+            "\n"
+            "enum Level {\n"
+            "\tFIRST = 1,\n"
+            "\tSECOND = 2,\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\nextends RefCounted\n\nfunc run() -> void:\n" + usage,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_unknown_enum_member_is_flagged(self):
+        findings = check_enum_members(ProjectIndex(self._project("\tvar a = Cfg.Level.THIRD\n")))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "unknown-enum-member")
+        self.assertIn("Cfg.Level.THIRD", findings[0].message)
+
+    def test_declared_enum_members_are_not_flagged(self):
+        root = self._project("\tvar a = Cfg.Level.FIRST\n\tvar b = Cfg.Level.SECOND\n")
+        self.assertEqual(check_enum_members(ProjectIndex(root)), [])
+
+    def test_unknown_enum_name_is_left_alone(self):
+        # `Cfg.NotAnEnum.x` is not an enum access this check can decide;
+        # `check_symbols` owns that case, so silence here is correct.
+        root = self._project("\tvar a = Cfg.NotAnEnum.FIRST\n")
+        self.assertEqual(check_enum_members(ProjectIndex(root)), [])
+
+    def test_repository_has_no_enum_member_findings(self):
+        self.assertEqual(check_enum_members(ProjectIndex(REPO_ROOT)), [])
 
 
 if __name__ == "__main__":

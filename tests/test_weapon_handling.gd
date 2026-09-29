@@ -114,7 +114,7 @@ func test_curriculum_gates_handling_at_level_five() -> SandboxTest:
 func test_level_one_environment_keeps_the_legacy_shot_contract() -> SandboxTest:
 	var t := SandboxTest.new("level_one_environment_keeps_the_legacy_shot_contract")
 	var env := EnvironmentCore.new(0, 1)
-	env.curriculum.level = CurriculumConfig.Level.STATIC_TARGETS
+	env.curriculum.level = CurriculumConfig.Level.STATIONARY_TARGET
 	env.reset(7)
 	t.assert_false(env.agent.weapon.handling_enabled, "level 1 must not arm handling")
 

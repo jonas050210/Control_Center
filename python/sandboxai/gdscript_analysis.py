@@ -51,6 +51,13 @@ _SIGNAL_RE = re.compile(r"^\s*signal\s+([A-Za-z_]\w*)")
 _ENUM_RE = re.compile(r"^\s*enum\s+([A-Za-z_]\w*)?\s*\{")
 _INNER_CLASS_RE = re.compile(r"^\s*class\s+([A-Za-z_]\w*)")
 _MEMBER_ACCESS_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Za-z_]\w*)")
+## `var name: SomeType` at class scope (the `= value` part is optional).
+_TYPED_MEMBER_RE = re.compile(
+    r"^\s*(?:@export[^\s]*\s+|@onready\s+|static\s+)*var\s+([A-Za-z_]\w*)\s*:\s*"
+    r"([A-Z][A-Za-z0-9_]*)"
+)
+## `Alias.Enum.MEMBER`
+_NESTED_ENUM_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Z][A-Za-z0-9_]*)\.([A-Za-z_]\w*)")
 
 ## Godot built-in globals whose members we intentionally never check.
 BUILTIN_TYPES = frozenset(
@@ -137,6 +144,14 @@ class ScriptInfo:
     static_functions: set[str] = field(default_factory=set)
     preloads: dict[str, str] = field(default_factory=dict)
     res_references: set[str] = field(default_factory=set)
+    ## Named enums -> their member identifiers. `enum Level { A = 1 }`
+    ## puts "Level" in `members` (so `Alias.Level` resolves) and the member
+    ## names here (so `Alias.Level.A` can be validated too).
+    enum_values: dict[str, set[str]] = field(default_factory=dict)
+    ## Type-annotated members -> the annotation, e.g. `var episode:
+    ## EpisodeState` gives {"episode": "EpisodeState"}. Lets a one-hop
+    ## chain like `env.episode.to_metrics()` be resolved and checked.
+    member_types: dict[str, str] = field(default_factory=dict)
     lines: list[str] = field(default_factory=list)
 
 
@@ -313,6 +328,7 @@ def parse_script(path: Path, root: Path) -> ScriptInfo:
         if enum_match:
             if enum_match.group(1):
                 info.members.add(enum_match.group(1))
+                info.enum_values[enum_match.group(1)] = _parse_enum_values(lines, index)
             else:
                 info.members.update(_parse_enum_values(lines, index))
             continue
@@ -341,6 +357,9 @@ def parse_script(path: Path, root: Path) -> ScriptInfo:
             member_match = pattern.match(cleaned)
             if member_match:
                 info.members.add(member_match.group(1))
+                typed = _TYPED_MEMBER_RE.match(cleaned)
+                if typed:
+                    info.member_types[typed.group(1)] = typed.group(2)
                 break
     return info
 
@@ -692,44 +711,81 @@ def check_local_method_calls(index: ProjectIndex) -> list[Finding]:
 _TYPED_LOCAL_RE = re.compile(
     r"^\s*var\s+([a-z_]\w*)\s*(?::\s*([A-Z][A-Za-z0-9_]*)\s*=|:=\s*([A-Z][A-Za-z0-9_]*)\.new\s*\()"
 )
-## A call on one of those locals.
-_LOCAL_MEMBER_CALL_RE = re.compile(r"\b([a-z_]\w*)\.([a-z_]\w*)\s*\(")
+## A call on one of those locals. The lookbehind stops it matching the
+## tail of a longer chain (`env.episode.to_metrics(`), which is handled
+## separately by `_LOCAL_CHAIN_CALL_RE`.
+_LOCAL_MEMBER_CALL_RE = re.compile(r"(?<![.\w])([a-z_]\w*)\.([a-z_]\w*)\s*\(")
+## `local.property.method(` — one hop through a type-annotated member.
+_LOCAL_CHAIN_CALL_RE = re.compile(r"(?<![.\w])([a-z_]\w*)\.([a-z_]\w*)\.([a-z_]\w*)\s*\(")
 ## Any other assignment to the local invalidates our type knowledge.
 _LOCAL_REBIND_RE = re.compile(r"^\s*([a-z_]\w*)\s*=\s*(?!=)")
 
 
+def _arity_finding(
+    info: ScriptInfo,
+    target: ScriptInfo,
+    label: str,
+    method: str,
+    source: str,
+    call_end: int,
+    line_number: int,
+) -> Finding | None:
+    """Argument-count check for a resolved call, or None when it is fine."""
+    if method not in target.functions:
+        return None
+    args_text, complete = _extract_call_args(source, call_end)
+    if not complete:
+        return None
+    args = [part for part in _split_top_level(args_text) if part.strip()]
+    required, maximum = target.functions[method]
+    if required <= len(args) <= maximum:
+        return None
+    return Finding(
+        info.res_path,
+        line_number,
+        "call-arity",
+        (
+            f"{label}.{method}() called with {len(args)} argument(s); "
+            f"{target.res_path} declares {required}..{maximum}"
+        ),
+    )
+
+
 def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
-    """Flags method calls on locals whose type is a known project script.
+    """Checks method calls on locals whose type is a known project script.
 
     ``check_symbols`` only sees ``Alias.member``, i.e. accesses through a
     ``class_name`` or a ``preload`` constant. The overwhelmingly common
     shape in this repository is different::
 
         var env := EnvironmentCore.new(0, 1)
-        env.get_weapon_state()          # <- previously unchecked
+        env.get_weapon_state()            # <- checked here
+        env.episode.to_metrics()          # <- and one hop further
 
-    A typo there is a runtime error that no Python test can reach, and on
-    a machine without the Godot binary nothing else catches it. Because
-    the declaration pins the local's type to an indexed script, the member
-    set is known and the call is checkable.
+    Both were previously invisible to every static check, and both are
+    runtime errors no Python test can reach. On a machine without the
+    Godot binary this is the only thing between a GDScript typo and a
+    failure in CI. Membership *and* argument count are verified, because
+    a wrong arity is the same class of compile error.
 
     Scope is kept narrow so a finding is always real:
 
     * only locals declared with an explicit project type in the same
-      function body; the scope is reset at every ``func`` declaration;
+      function body; the scope resets at every ``func`` declaration;
     * the type must resolve to a project script whose full member set is
-      knowable (``all_members`` returns ``None`` as soon as the
-      inheritance chain leaves the project, e.g. ``extends Node``, and
-      those locals are skipped entirely);
-    * a local that is later reassigned is dropped, since the new value may
-      be of any type;
+      knowable (``all_members`` returns ``None`` once the inheritance
+      chain leaves the project, e.g. ``extends Node``);
+    * the one-hop form additionally needs the property to carry a type
+      annotation that resolves to another project script;
+    * a local that is later reassigned is dropped, since the new value
+      may be of any type;
     * ``UNIVERSAL_MEMBERS`` (``free``, ``call``, ``get`` ...) are engine
       API available on everything.
     """
     findings: list[Finding] = []
     for info in index.by_res.values():
-        ## local name -> member set, valid until the end of this function.
-        scope: dict[str, set[str]] = {}
+        ## local name -> the script it was declared as, until the function ends.
+        scope: dict[str, ScriptInfo] = {}
         for line_number, raw in enumerate(info.lines, start=1):
             cleaned = _strip_strings_and_comments(raw)
             if not cleaned.strip():
@@ -755,17 +811,52 @@ def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
                     alias in info.preloads or alias in index.by_class
                 ):
                     target = index.resolve(alias, info)
-                    if target is not None:
-                        members = index.all_members(target)
-                        if members is not None:
-                            scope[local] = members
+                    if target is not None and index.all_members(target) is not None:
+                        scope[local] = target
 
             if not scope:
                 continue
+
+            # One hop through a typed property: `local.prop.method(...)`.
+            for match in _LOCAL_CHAIN_CALL_RE.finditer(cleaned):
+                local, prop, method = match.groups()
+                holder = scope.get(local)
+                if holder is None or method in UNIVERSAL_MEMBERS:
+                    continue
+                prop_type = holder.member_types.get(prop)
+                if prop_type is None or prop_type in BUILTIN_TYPES:
+                    continue
+                target = index.resolve(prop_type, holder) or index.by_class.get(prop_type)
+                if target is None:
+                    continue
+                members = index.all_members(target)
+                if members is None:
+                    continue
+                label = f"{local}.{prop}"
+                if method not in members:
+                    findings.append(
+                        Finding(
+                            info.res_path,
+                            line_number,
+                            "unknown-member",
+                            f"{label}.{method}() is not declared by {target.res_path}",
+                        )
+                    )
+                    continue
+                problem = _arity_finding(
+                    info, target, label, method, cleaned, match.end(), line_number
+                )
+                if problem is not None:
+                    findings.append(problem)
+
+            # Direct call on the local: `local.method(...)`.
             for match in _LOCAL_MEMBER_CALL_RE.finditer(cleaned):
                 local, method = match.group(1), match.group(2)
-                members = scope.get(local)
-                if members is None or method in UNIVERSAL_MEMBERS:
+                target = scope.get(local)
+                if target is None or method in UNIVERSAL_MEMBERS:
+                    continue
+                members = index.all_members(target)
+                if members is None:
                     continue
                 if method not in members:
                     findings.append(
@@ -776,6 +867,73 @@ def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
                             f"{local}.{method}() is not declared by the type of {local}",
                         )
                     )
+                    continue
+                problem = _arity_finding(
+                    info, target, local, method, cleaned, match.end(), line_number
+                )
+                if problem is not None:
+                    findings.append(problem)
+    return findings
+
+
+def _enum_members(index: "ProjectIndex", info: ScriptInfo, name: str) -> set[str] | None:
+    """Members of the named enum ``name`` on ``info`` or a project base."""
+    seen: set[str] = set()
+    current: ScriptInfo | None = info
+    while current is not None and current.res_path not in seen:
+        seen.add(current.res_path)
+        if name in current.enum_values:
+            return current.enum_values[name]
+        base = current.extends
+        if not base or base in BUILTIN_TYPES or "." in base:
+            return None
+        nxt = index.by_class.get(base) or index.by_res.get(base)
+        if nxt is None:
+            base_res = current.preloads.get(base)
+            nxt = index.by_res.get(base_res) if base_res else None
+        current = nxt
+    return None
+
+
+def check_enum_members(index: ProjectIndex) -> list[Finding]:
+    """Flags `Alias.Enum.MEMBER` where MEMBER is not in that enum.
+
+    ``check_symbols`` stops one level too early: it validates that
+    ``CurriculumConfig.Level`` exists and never looks at what follows, so
+    ``CurriculumConfig.Level.STATIC_TARGETS`` (the real name is
+    ``STATIONARY_TARGET``) sailed through and only failed when the engine
+    compiled the script. Enum members are compile-time constants in
+    GDScript, so this is decidable statically.
+    """
+    findings: list[Finding] = []
+    for info in index.by_res.values():
+        for line_number, raw in enumerate(info.lines, start=1):
+            cleaned = _strip_strings_and_comments(raw)
+            if not cleaned.strip():
+                continue
+            for match in _NESTED_ENUM_RE.finditer(cleaned):
+                alias, enum_name, member = match.groups()
+                if alias in BUILTIN_TYPES:
+                    continue
+                if alias not in info.preloads and alias not in index.by_class:
+                    continue
+                target = index.resolve(alias, info)
+                if target is None:
+                    continue
+                values = _enum_members(index, target, enum_name)
+                if values is None or member in values:
+                    continue
+                findings.append(
+                    Finding(
+                        info.res_path,
+                        line_number,
+                        "unknown-enum-member",
+                        (
+                            f"{alias}.{enum_name}.{member} is not a member of "
+                            f"enum {enum_name} in {target.res_path}"
+                        ),
+                    )
+                )
     return findings
 
 
@@ -861,6 +1019,7 @@ def analyze(root: Path | str | None = None) -> list[Finding]:
     findings.extend(check_static_calls(index))
     findings.extend(check_local_method_calls(index))
     findings.extend(check_typed_local_calls(index))
+    findings.extend(check_enum_members(index))
     return findings
 
 

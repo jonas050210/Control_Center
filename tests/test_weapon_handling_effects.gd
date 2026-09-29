@@ -243,7 +243,7 @@ func test_episode_metrics_expose_the_handling_counters() -> SandboxTest:
 	var env := EnvironmentCore.new(0, 1)
 	env.curriculum.level = CurriculumConfig.Level.OBSTACLES_COVER
 	env.reset(3)
-	var metrics: Dictionary = env.episode.to_metrics()
+	var metrics: Dictionary = env.episode.to_metrics(SandboxConfig.SIMULATION_DT, 1)
 	for key in [
 		"headshots", "headshot_rate", "trigger_discipline_events", "reload_starts", "reloading_time"
 	]:
