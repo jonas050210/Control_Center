@@ -453,6 +453,21 @@ class BCConfig:
     checkpoint_frequency: int = 5
     early_stopping_patience: int = 5
     output_root: str = "training"
+    ## Train/validation separation. "auto" splits by EPISODE whenever the
+    ## dataset exposes episode structure and only falls back to the
+    ## transition shuffle (recording the reason) for group-less datasets;
+    ## "episode" refuses to run without episode groups; "transition" is
+    ## the historical leaky shuffle and must be chosen explicitly.
+    split_strategy: str = "auto"
+    ## Refuse datasets whose observation width is not the live contract.
+    ## A BC checkpoint trained on a different width can never be loaded
+    ## into a policy for this simulator, so the failure belongs at data
+    ## load time, not at warm-start time.
+    require_contract_observations: bool = True
+    ## Hard ceiling on exact-duplicate transitions. Duplicates bias the
+    ## loss toward repeated states and usually mean a stuck recorder.
+    ## 1.0 disables the check.
+    max_duplicate_fraction: float = 0.5
 
     def validate(self) -> "BCConfig":
         if self.epochs < 1 or self.batch_size < 1:
@@ -463,6 +478,10 @@ class BCConfig:
             raise ValueError("BC hidden sizes must be positive")
         if self.early_stopping_patience < 0:
             raise ValueError("early_stopping_patience must be non-negative")
+        if self.split_strategy not in ("auto", "episode", "transition"):
+            raise ValueError("split_strategy must be one of auto, episode, transition")
+        if not 0.0 < self.max_duplicate_fraction <= 1.0:
+            raise ValueError("max_duplicate_fraction must be in (0, 1]")
         return self
 
     def resolved_device(self) -> str:

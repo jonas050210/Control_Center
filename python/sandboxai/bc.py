@@ -116,7 +116,21 @@ def train_behavior_cloning(
         raise RuntimeError("numpy is required for behavior cloning") from exc
 
     full = DemonstrationDataset.load(dataset_path)
-    train_set, validation_set = full.split(config.validation_fraction, config.seed)
+    # Load-time validation only checks structural sanity; BC additionally
+    # pins the observation width to the live contract so an unusable
+    # checkpoint cannot be produced at all.
+    full.validate(require_contract_width=config.require_contract_observations)
+    statistics = full.statistics()
+    duplicate_fraction = float(statistics["duplicates"]["duplicate_fraction"])
+    if duplicate_fraction > config.max_duplicate_fraction:
+        raise ValueError(
+            f"dataset is {duplicate_fraction:.1%} exact-duplicate transitions, above the "
+            f"configured limit of {config.max_duplicate_fraction:.1%}. Re-record or "
+            "raise BCConfig.max_duplicate_fraction deliberately."
+        )
+    train_set, validation_set, split_report = full.split_with_report(
+        config.validation_fraction, config.seed, config.split_strategy
+    )
     train_arrays = train_set.arrays()
     validation_arrays = validation_set.arrays()
     device = config.resolved_device()
@@ -137,6 +151,24 @@ def train_behavior_cloning(
     destination = Path(output_dir or Path(config.output_root) / "bc_runs" / "latest")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "config.json").write_text(json.dumps({**config.__dict__, "device": device}, indent=2) + "\n", encoding="utf-8")
+    # Dataset provenance and the exact split that produced the validation
+    # number reported below. Written before training so an aborted run
+    # still explains what it was trained on.
+    (destination / "dataset_report.json").write_text(
+        json.dumps(
+            {
+                "format": "sandboxai.bc_dataset_report/v1",
+                "dataset": str(dataset_path),
+                "fingerprint": full.fingerprint,
+                "statistics": statistics,
+                "split": split_report.to_dict(),
+            },
+            indent=2,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     metrics_path = destination / "metrics.jsonl"
     loss_csv = destination / "loss.csv"
     if start_epoch == 0:
@@ -243,6 +275,8 @@ def train_behavior_cloning(
             checkpoint = {
                 "format": "sandboxai.bc.v1",
                 "epoch": epoch + 1,
+                "split": split_report.to_dict(),
+                "dataset_fingerprint": full.fingerprint,
                 "observation_dim": model.observation_dim,
                 "hidden_sizes": list(model.hidden_sizes),
                 "action_nvec": list(model.action_nvec),
@@ -273,6 +307,22 @@ def train_behavior_cloning(
         "epochs": completed_epochs,
         "validation_loss": best_validation,
         "stopped": stopped,
+        # Surfaced in the CLI output: a validation number is only
+        # meaningful together with how the validation set was separated.
+        "split": split_report.to_dict(),
+        "dataset_report": str(destination / "dataset_report.json"),
+        "dataset_fingerprint": full.fingerprint,
+        "dataset_statistics": {
+            key: statistics[key]
+            for key in (
+                "transitions",
+                "episodes",
+                "observation_dim",
+                "matches_contract",
+                "constant_action_components",
+                "episode_boundary_problems",
+            )
+        },
     }
 
 
