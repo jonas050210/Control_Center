@@ -35,7 +35,12 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--checkpoint-frequency", type=int)
     parser.add_argument("--evaluation-frequency", type=int)
     parser.add_argument("--evaluation-episodes", type=int)
-    parser.add_argument("--eval-env-count", type=int, dest="evaluation_environment_count")
+    parser.add_argument(
+        "--eval-env-count",
+        type=int,
+        dest="evaluation_environment_count",
+        help="bridge environments for exact plan-scheduled normal evaluation (default 8)",
+    )
     parser.add_argument(
         "--checkpoint-eval-env-count",
         type=int,

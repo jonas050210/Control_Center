@@ -17,6 +17,8 @@ import os
 import stat
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -61,6 +63,18 @@ def env_count_from_argv(default=2):
 
 ENV_COUNT = env_count_from_argv()
 
+
+def seed_from_argv(default=1234):
+    for i, a in enumerate(sys.argv):
+        if a == "--seed" and i + 1 < len(sys.argv):
+            try:
+                return int(sys.argv[i + 1])
+            except ValueError:
+                return default
+    return default
+
+
+BASE_SEED = seed_from_argv()
 SPAWN_LOG = __SPAWN_LOG__
 
 
@@ -74,12 +88,22 @@ if SPAWN_LOG:
         fh.write(str(SPAWN_LOG) + "\n")
 
 staged = []
-step_counts = {}
+pending = {}
+step_counts = {i: 0 for i in range(ENV_COUNT)}
+current_seeds = {i: BASE_SEED + i for i in range(ENV_COUNT)}
 
 
 def obs(index):
-    value = (step_counts.get(index, 0) % 7) * 0.125 - 0.5
+    # Include the episode seed so serial-vs-vector equivalence tests prove
+    # that plan scheduling preserves the exact seed flow, not merely length.
+    value = ((step_counts.get(index, 0) + current_seeds.get(index, 0)) % 7) * 0.125 - 0.5
     return [round(value, 6)] * OBS_DIM
+
+
+def consume_pending(index):
+    if index in pending:
+        current_seeds[index] = int(pending.pop(index))
+    step_counts[index] = 0
 
 
 for line in sys.stdin:
@@ -95,20 +119,25 @@ for line in sys.stdin:
                                    "shape": [OBS_DIM], "low": -1.0, "high": 1.0}})
     elif command == "reset":
         seed = int(request.get("seed", -1))
-        step_counts.clear()
         for i in range(ENV_COUNT):
-            step_counts[i] = 0
+            if i in pending:
+                consume_pending(i)
+            else:
+                if seed >= 0:
+                    current_seeds[i] = seed + i
+                step_counts[i] = 0
         out({"ok": True, "observations": [obs(i) for i in range(ENV_COUNT)],
-             "infos": [{"seed": seed} for _ in range(ENV_COUNT)]})
+             "infos": [{"seed": current_seeds[i]} for i in range(ENV_COUNT)]})
     elif command == "reset_indices":
         for item in request.get("indices", []):
-            step_counts[int(item)] = 0
+            index = int(item)
+            consume_pending(index)
         out({"ok": True, "results": [{"index": int(item), "observation": obs(int(item))}
                                      for item in request.get("indices", [])]})
     elif command == "set_episode_plans":
         staged = request.get("plans", [])
         for plan in staged:
-            step_counts[int(plan.get("index", -1))] = 0
+            pending[int(plan.get("index", -1))] = int(plan.get("seed", -1))
         out({"ok": True, "staged": [int(p.get("index", -1)) for p in staged]})
     elif command == "episode_conditions":
         out({"ok": True, "conditions": staged})
@@ -121,7 +150,8 @@ for line in sys.stdin:
             reward = 1.0 if (i < len(actions) and actions[i][4] == 1) else 0.01
             info = {"done_reason": "timeout" if done else "", "events": {}}
             if done or not request.get("compact_infos", False):
-                info["metrics"] = {"episode_reward": reward, "episode_length": step_counts[i],
+                info["metrics"] = {"episode_reward": 1.0, "episode_length": step_counts[i],
+                                   "evaluation_seed": current_seeds[i],
                                    "win": False, "loss": True, "truncated": True,
                                    "kills": 1, "deaths": 0, "damage_dealt": 2.0,
                                    "damage_received": 0.0, "survival_time": 1.0,
@@ -129,7 +159,7 @@ for line in sys.stdin:
             if done:
                 info["terminal_observation"] = [0.5] * OBS_DIM
                 info["TimeLimit.truncated"] = True
-                step_counts[i] = 0
+                consume_pending(i)
             observations.append(obs(i))
             rewards.append(reward)
             dones.append(done)
@@ -226,6 +256,7 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
         from sandboxai.godot_env import GodotVecEnv
 
         model = self._model()
+        serial = evaluate_model(model, self.env_kwargs, episodes=5, seed=900)
         kwargs = {**self.env_kwargs, "environment_count": 3}
         fresh = evaluate_model(model, kwargs, episodes=5, seed=900)
         env = GodotVecEnv(**kwargs)
@@ -241,6 +272,61 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
         ]
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused["episodes_detail"]))
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused_again["episodes_detail"]))
+        self.assertEqual(
+            strip(serial["episodes_detail"]),
+            strip(fresh["episodes_detail"]),
+            "batched evaluation must run the exact serial seed+episode set",
+        )
+        self.assertEqual(
+            [row["evaluation_seed"] for row in fresh["episodes_detail"]],
+            [900, 901, 902, 903, 904],
+        )
+
+
+class ParallelEvaluationCoordinatorTest(unittest.TestCase):
+    def test_jobs_overlap_but_results_keep_semantic_order(self):
+        from sandboxai.evaluation import run_parallel_evaluations
+
+        barrier = threading.Barrier(2, timeout=2.0)
+
+        def job(name):
+            barrier.wait()
+            time.sleep(0.04)
+            return name
+
+        normal, battery, timing = run_parallel_evaluations(
+            lambda: job("normal"), lambda: job("battery")
+        )
+        self.assertEqual((normal, battery), ("normal", "battery"))
+        self.assertGreater(timing["overlap_seconds"], 0.0)
+        self.assertLess(timing["wall_seconds"], timing["normal_seconds"] + timing["battery_seconds"])
+
+    def test_synchronized_model_never_enters_predict_concurrently(self):
+        from sandboxai.evaluation import SynchronizedModel, run_parallel_evaluations
+
+        class _Model:
+            def __init__(self):
+                self.active = 0
+                self.max_active = 0
+
+            def predict(self, value, deterministic=True):
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                time.sleep(0.02)
+                self.active -= 1
+                return value
+
+            def save(self, path):
+                return path
+
+        model = _Model()
+        synchronized = SynchronizedModel(model)
+        normal, battery, _timing = run_parallel_evaluations(
+            lambda: synchronized.predict("normal"),
+            lambda: synchronized.predict("battery"),
+        )
+        self.assertEqual((normal, battery), ("normal", "battery"))
+        self.assertEqual(model.max_active, 1)
 
 
 @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
@@ -354,6 +440,54 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
             b = json.loads((Path(second["run_dir"]) / "evaluations/latest.json").read_text(encoding="utf-8"))
             self.assertEqual(a.get(key), b.get(key), f"latest.json[{key}] diverged between identical runs")
 
+    def test_parallel_path_preserves_best_selection_and_reward_stop(self):
+        from sandboxai.ppo import train_ppo
+
+        result = train_ppo(
+            self._config(
+                total_training_steps=160,
+                min_eval_reward=-1_000_000.0,
+                early_stopping_patience=5,
+                run_id="parallel_selection_stop",
+            )
+        )
+        run_dir = Path(result["run_dir"])
+        step_dirs = sorted(path for path in (run_dir / "evaluations").glob("step_*") if path.is_dir())
+        self.assertEqual(len(step_dirs), 1, "reward threshold must stop after the first joined boundary")
+        best = json.loads((run_dir / "evaluations" / "best.json").read_text(encoding="utf-8"))
+        latest = json.loads((run_dir / "evaluations" / "latest.json").read_text(encoding="utf-8"))
+        report = json.loads((step_dirs[0] / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(best["mean_reward"], latest["mean_episode_reward"])
+        self.assertEqual(best["timesteps"], latest["timesteps"])
+        self.assertEqual(
+            report["normal_evaluation"]["mean_episode_reward"],
+            latest["mean_episode_reward"],
+        )
+        self.assertTrue((run_dir / "checkpoints" / "best_eval.zip").is_file())
+        self.assertTrue((step_dirs[0] / "normal_episodes.csv").is_file())
+        self.assertLess(result["timesteps"], 160)
+
+    def test_parallel_path_preserves_patience_and_first_best_checkpoint(self):
+        from sandboxai.ppo import train_ppo
+
+        result = train_ppo(
+            self._config(
+                total_training_steps=160,
+                early_stopping_patience=1,
+                min_eval_reward=None,
+                run_id="parallel_patience_stop",
+            )
+        )
+        run_dir = Path(result["run_dir"])
+        step_dirs = sorted(path for path in (run_dir / "evaluations").glob("step_*") if path.is_dir())
+        self.assertEqual(len(step_dirs), 2, "first tie must consume one patience check")
+        first = json.loads((step_dirs[0] / "summary.json").read_text(encoding="utf-8"))
+        second = json.loads((step_dirs[1] / "summary.json").read_text(encoding="utf-8"))
+        self.assertEqual(first["mean_episode_reward"], second["mean_episode_reward"])
+        best = json.loads((run_dir / "evaluations" / "best.json").read_text(encoding="utf-8"))
+        self.assertEqual(best["timesteps"], first["timesteps"])
+        self.assertLess(result["timesteps"], 160)
+
     def test_profile_reports_evaluation_breakdown(self):
         from sandboxai.ppo import train_ppo
 
@@ -367,17 +501,28 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
             "eval.normal.predict",
             "eval.normal.env_step",
             "eval.battery.total",
+            "eval.battery.execution",
             "eval.battery.predict",
             "eval.battery.env_step",
             "eval.battery.bridge.step.total",
             "eval.normal.bridge.step.total",
+            "eval.parallel.wall",
+            "eval.parallel.overlap",
         ):
             self.assertIn(bucket, timings, f"missing profiling bucket {bucket}")
             self.assertGreater(timings[bucket]["total_seconds"], 0.0, bucket)
         # The training bridge's step bucket must not include evaluation steps:
         # 96 steps / 2 envs = 48 vector steps for the training bridge only.
         self.assertEqual(timings["bridge.step.total"]["count"], 48)
-        self.assertEqual(profile["counters"]["eval.normal.env_steps"], 3 * 8 * self._boundaries(Path(result["run_dir"])))
+        # Three requested 8-step episodes run in one planned vector wave.
+        # The configured maximum is capped to the requested episode count so
+        # no idle slots are simulated.
+        expected_normal_steps = 3 * 8 * self._boundaries(Path(result["run_dir"]))
+        self.assertEqual(profile["counters"]["eval.normal.env_steps"], expected_normal_steps)
+        latest = json.loads(
+            (Path(result["run_dir"]) / "evaluations" / "latest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(latest["environment_count"], 3)
 
 
 class CheckpointBatteryBatchingTest(unittest.TestCase):
@@ -406,6 +551,7 @@ class CheckpointBatteryBatchingTest(unittest.TestCase):
             checkpoint_league_eval = False
             league_matches_per_checkpoint = 0
             condition_eval_episodes = 1
+            generalization_episodes_per_cell = 1
             replay_mode = "off"
 
         return _Config()
@@ -423,6 +569,7 @@ class CheckpointBatteryBatchingTest(unittest.TestCase):
 
             class driver:
                 used_conditions = []
+                level = 5
 
                 class tracker:
                     @staticmethod
@@ -469,6 +616,61 @@ class CheckpointBatteryBatchingTest(unittest.TestCase):
                 executor_factory=_FakeExecutor,
             )
         self.assertEqual(captured["env_kwargs"]["environment_count"], 5)
+
+    def test_condition_and_generalization_share_one_executor_run(self):
+        from sandboxai.checkpoint_eval import run_checkpoint_evaluation
+
+        calls = []
+
+        class _CombinedExecutor:
+            def run(self, model, plans, **kwargs):
+                calls.append(list(plans))
+                return [
+                    {
+                        "labels": dict(plan.labels),
+                        "condition": plan.condition.to_dict(),
+                        "seed": plan.condition.seed,
+                        "environment_index": index % 3,
+                        "episode_reward": float(index),
+                        "episode_length": 2,
+                        "win": index % 2 == 0,
+                    }
+                    for index, plan in enumerate(plans)
+                ]
+
+            def close(self):
+                raise AssertionError("provided executor must not be closed")
+
+        config = self._config(3)
+        config.checkpoint_generalization_eval = True
+        pipeline = self._pipeline()
+        pipeline.driver.used_conditions = [
+            {
+                "seed": 41,
+                "map_id": "open_field",
+                "scenario": "cover_fight",
+                "lighting": "normal",
+                "enemy_count": 1,
+                "level": 5,
+            }
+        ]
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = run_checkpoint_evaluation(
+                model=self._model(),
+                step=1,
+                config=config,
+                pipeline=pipeline,
+                output_dir=tmp,
+                executor=_CombinedExecutor(),
+            )
+        self.assertEqual(len(calls), 1, "both planned sections must share one vector tail")
+        self.assertEqual(len(report["condition_evaluation"]["episodes_detail"]), 1)
+        self.assertGreater(report["generalization"]["episodes"], 0)
+        # Both sections use local _position values starting at zero; scheduler
+        # order must still keep the condition row first.
+        self.assertEqual(report["condition_evaluation"]["episodes_detail"][0]["episode_reward"], 0.0)
 
     def test_provided_executor_is_reused_and_not_closed(self):
         from sandboxai.checkpoint_eval import run_checkpoint_evaluation

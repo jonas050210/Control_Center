@@ -296,16 +296,19 @@ behavior can no longer be discovered. Omit the flag to use the safe default.
 Evaluation-related performance knobs (results are identical either way —
 see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
 
-- `--checkpoint-eval-env-count N` (default 8): bridge environments used by
-  the checkpoint condition/generalization battery. Its planned episodes are
-  seed-scheduled, so batching them is a pure speed change.
+- `--eval-env-count N` and `--checkpoint-eval-env-count N` (both default 8):
+  bridge environments used by normal evaluation and the checkpoint battery.
+  Both paths explicitly plan every seed and restore report order, so batching
+  changes wall time only. During training their separate persistent bridge
+  processes run concurrently and are joined before best-model selection or
+  early stopping.
 - `--inference-device cpu` (default `auto`): run rollout/evaluation policy
   inference on CPU while PPO updates stay on `--device`. On CUDA hardware
   this removes the per-step host<->device round trip that makes GPU training
   *slower* than CPU for the tiny (84 -> 128 -> 128) policy.
 - `--profile-training`: writes `logs/training_profile.json`, including a
   per-boundary evaluation breakdown (process startup, prediction,
-  environment stepping, battery sections).
+  environment stepping, combined battery execution and role overlap).
 
 A JSON config can replace command-line editing:
 
@@ -485,10 +488,12 @@ training/
       latest.json
       best.json
       step_<timesteps>/
-        summary.json, episodes.csv, summary.txt
+        summary.json, summary.txt       # normal evaluation summary
+        normal_episodes.csv             # normal evaluation rows (auto mode)
+        episodes.csv                    # generalization rows (auto mode)
         report.json                    # checkpoint battery (auto mode)
         policy.zip                     # frozen policy under evaluation
-        generalization.json/.csv/.txt  # seen/unseen split results
+        generalization.json/.txt       # seen/unseen split results
         replays/                       # when replay-mode all|evaluation
     replays/                           # training replays (interesting/every_n/all)
     league/                            # only when --checkpoint-league-eval

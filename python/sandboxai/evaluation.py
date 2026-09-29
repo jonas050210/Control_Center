@@ -1,11 +1,13 @@
 """Weight-frozen evaluation and machine-readable summaries."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
 from pathlib import Path
+import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .godot_env import GodotGymEnv
 
@@ -34,6 +36,67 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+class SynchronizedModel:
+    """Serializes access to a weight-frozen model shared by eval workers.
+
+    Normal and checkpoint-battery simulations can run in separate Godot
+    processes at the same time, but both call the same in-memory SB3 model.
+    Read-only PyTorch inference is thread-safe; serializing the very short
+    ``predict`` calls is stricter still and prevents an implementation detail
+    such as ``set_training_mode(False)`` from racing. Expensive environment
+    steps remain concurrent. ``save`` uses the same lock because checkpoint
+    evaluation also serializes the frozen weights.
+    """
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+        self._lock = threading.Lock()
+
+    def predict(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return self._model.predict(*args, **kwargs)
+
+    def save(self, *args: Any, **kwargs: Any) -> Any:
+        with self._lock:
+            return self._model.save(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._model, name)
+
+
+def run_parallel_evaluations(
+    normal_job: Callable[[], Any],
+    battery_job: Callable[[], Any],
+) -> tuple[Any, Any, dict[str, float]]:
+    """Runs the two independent evaluation roles concurrently.
+
+    Both jobs are joined before the caller performs checkpoint selection or
+    early stopping, preserving the same strict boundary ordering as the
+    former sequential path. Return order is fixed (normal, battery), never
+    completion order. Timing metadata makes the overlap visible in training
+    profiles and supports a deterministic regression benchmark.
+    """
+
+    def timed(job: Callable[[], Any]) -> tuple[Any, float]:
+        started = time.perf_counter()
+        value = job()
+        return value, time.perf_counter() - started
+
+    started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sandboxai-eval") as pool:
+        normal_future = pool.submit(timed, normal_job)
+        battery_future = pool.submit(timed, battery_job)
+        normal, normal_seconds = normal_future.result()
+        battery, battery_seconds = battery_future.result()
+    wall_seconds = time.perf_counter() - started
+    return normal, battery, {
+        "normal_seconds": normal_seconds,
+        "battery_seconds": battery_seconds,
+        "wall_seconds": wall_seconds,
+        "overlap_seconds": max(0.0, normal_seconds + battery_seconds - wall_seconds),
+    }
+
+
 def evaluate_model(
     model: Any,
     env_kwargs: dict[str, Any],
@@ -54,8 +117,9 @@ def evaluate_model(
     ``env`` (optional) reuses an already-running evaluation environment
     across calls instead of spawning a fresh Godot bridge process per
     call. This is exact, not approximate: every episode is (re)started
-    through an explicit ``reset(seed)`` over the bridge, and the engine
-    derives the whole world deterministically from that seed
+    through an explicit seeded reset (directly in serial mode, through a
+    complete staged plan in vector mode), and the engine derives the whole
+    world deterministically from that seed
     (``EnvironmentCore.reset`` re-seeds the RNG and rebuilds every
     subsystem), so a reused process produces bit-identical episodes to a
     fresh one. The caller owns the env lifecycle when it passes one: it is
@@ -67,7 +131,13 @@ def evaluate_model(
     """
     if episodes < 1:
         raise ValueError("episodes must be positive")
-    environment_count = int(env_kwargs.get("environment_count", 1) or 1)
+    requested_environment_count = int(env_kwargs.get("environment_count", 1) or 1)
+    if env is None:
+        environment_count = min(episodes, requested_environment_count)
+    else:
+        environment_count = int(
+            getattr(env, "environment_count", getattr(env, "num_envs", requested_environment_count))
+        )
     started = time.perf_counter()
     if environment_count > 1:
         rows = _evaluate_vectorized(model, env_kwargs, episodes, seed, environment_count, env, profiler)
@@ -137,13 +207,16 @@ def _evaluate_vectorized(
     env: Any = None,
     profiler: Any = None,
 ) -> list[dict[str, Any]]:
-    """Collects `episodes` finished episodes from N parallel environments.
+    """Runs the serial evaluation episode set on N bridge environments.
 
-    The bridge auto-resets a finished sub-environment, so episodes are
-    harvested from the `done` infos. Collection stops as soon as `episodes`
-    episodes have completed; any extra episodes that finish on the same
-    step are discarded so the requested count is exact.
+    Every episode is explicitly plan-scheduled with the same ``seed + j``
+    that :func:`_evaluate_serial` passes to ``reset``. Results are sorted by
+    ``j`` after collection. Parallelism therefore changes neither coverage,
+    seed flow nor evaluation ordering; it only batches deterministic policy
+    inference and overlaps independent simulation slots.
     """
+    from .checkpoint_eval import PlanExecutor, PlannedEpisode
+    from .conditions import Condition
     from .godot_env import GodotVecEnv
 
     owned = env is None
@@ -152,55 +225,45 @@ def _evaluate_vectorized(
         kwargs["environment_count"] = environment_count
         kwargs.setdefault("seed", seed)
         env = GodotVecEnv(**kwargs)
-    rows: list[dict[str, Any]] = []
-    steps_per_env = [0] * environment_count
-    rewards_per_env = [0.0] * environment_count
+    if profiler is not None:
+        from .training_profile import PrefixedProfiler
+
+        executor_profiler: Any = PrefixedProfiler(profiler, "eval.normal.")
+    else:
+        executor_profiler = None
+    executor = PlanExecutor.from_client(
+        env.client, skill_metrics=False, profiler=executor_profiler
+    )
+    plans = [
+        PlannedEpisode(
+            condition=Condition(
+                map_id="",
+                scenario="",
+                lighting="",
+                enemy_count=int(env_kwargs.get("enemy_count", 1)),
+                level=int(env_kwargs.get("curriculum_level", 3)),
+                seed=seed + episode_index,
+            ),
+            labels={"eval": "normal", "_position": episode_index},
+        )
+        for episode_index in range(episodes)
+    ]
     try:
-        if not owned:
-            # Put a reused process into exactly the RNG state a freshly
-            # built bridge would be in. A fresh transport is constructed
-            # with env_kwargs["seed"] and its build() resets environment i
-            # with (transport_seed + i); the loop below then continues
-            # that stream with a seedless reset. Re-seeding to the same
-            # transport base first makes reuse bit-identical to a fresh
-            # process (for a fresh process the build already performed
-            # this exact reset, so issuing it again would merely replay
-            # the same draws).
-            transport_seed = int(env_kwargs.get("seed", seed))
-            env.client.reset(transport_seed)
-        observations = env.reset()
-        while len(rows) < episodes:
-            predict_started = time.perf_counter() if profiler is not None else 0.0
-            prediction = model.predict(observations, deterministic=True)
-            actions = prediction[0] if isinstance(prediction, tuple) else prediction
-            if hasattr(actions, "cpu"):
-                actions = actions.cpu().numpy()
-            if profiler is not None:
-                profiler.record("eval.normal.predict", time.perf_counter() - predict_started)
-                step_started = time.perf_counter()
-            observations, step_rewards, dones, infos = env.step(actions)
-            if profiler is not None:
-                profiler.record("eval.normal.env_step", time.perf_counter() - step_started)
-                profiler.add("eval.normal.env_steps", environment_count)
-            for index in range(environment_count):
-                steps_per_env[index] += 1
-                rewards_per_env[index] += float(step_rewards[index])
-                if not bool(dones[index]):
-                    continue
-                if len(rows) >= episodes:
-                    break
-                metrics = dict(infos[index].get("metrics", {}))
-                metrics.setdefault("episode_reward", rewards_per_env[index])
-                metrics.setdefault("episode_length", steps_per_env[index])
-                metrics["episode_index"] = len(rows)
-                metrics["environment_index"] = index
-                metrics["seed"] = seed + index
-                rows.append(metrics)
-                steps_per_env[index] = 0
-                rewards_per_env[index] = 0.0
+        planned_rows = executor.run(model, plans, policy_id="normal_evaluation")
     finally:
         if owned:
             env.close()
+
+    rows: list[dict[str, Any]] = []
+    for episode_index, planned in enumerate(planned_rows):
+        row = {
+            key: value
+            for key, value in planned.items()
+            if key not in ("labels", "condition", "skill", "seed")
+        }
+        row["episode_index"] = episode_index
+        row["seed"] = seed + episode_index
+        rows.append(row)
     return rows
 
 
@@ -224,16 +287,35 @@ def _summarize(
     summary["timeout_rate"] = summary.get("mean_truncated", 0.0)
     summary["episodes_detail"] = rows
     if output_dir is not None:
-        destination = Path(output_dir)
-        destination.mkdir(parents=True, exist_ok=True)
-        (destination / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
-        with (destination / "episodes.csv").open("w", newline="", encoding="utf-8") as stream:
-            fields = sorted({key for row in rows for key in row})
+        write_evaluation_artifacts(summary, output_dir)
+    return summary
+
+
+def write_evaluation_artifacts(
+    summary: dict[str, Any],
+    output_dir: str | Path,
+    episodes_name: str = "episodes.csv",
+) -> None:
+    """Writes a completed normal-evaluation summary without rerunning it.
+
+    The training callback uses ``normal_episodes.csv`` because the checkpoint
+    generalization exporter owns the historical ``episodes.csv`` in the same
+    step directory. Keeping distinct files also removes a write race now that
+    the two evaluations execute concurrently.
+    """
+    destination = Path(output_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "summary.json").write_text(
+        json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
+    )
+    rows = list(summary.get("episodes_detail", []))
+    with (destination / episodes_name).open("w", newline="", encoding="utf-8") as stream:
+        fields = sorted({key for row in rows for key in row})
+        if fields:
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
-        (destination / "summary.txt").write_text(format_summary(summary), encoding="utf-8")
-    return summary
+    (destination / "summary.txt").write_text(format_summary(summary), encoding="utf-8")
 
 
 def format_summary(summary: dict[str, Any]) -> str:
