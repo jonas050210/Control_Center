@@ -430,7 +430,8 @@ func step(action: Action, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 
 	var shot: Dictionary = _resolve_agent_shot(action, sound_on)
 	var aiming_delta: float = _target_alignment(prev_enemy) - prev_alignment
-	var meaningful_action: bool = bool(shot["shot_fired"]) or aiming_delta > 0.0 or positioning_delta > 0.0
+	var shot_fired: bool = bool(shot["shot_fired"])
+	var meaningful_action: bool = shot_fired or aiming_delta > 0.0 or positioning_delta > 0.0
 
 	var damage_taken: float = _update_enemies(dt, sound_on)
 	if damage_taken > 0.0:

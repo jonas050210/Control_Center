@@ -77,7 +77,10 @@ func _trace(level: int, enemies: int, seed: int) -> Array:
 	env.reset(seed)
 	var trace: Array = []
 	for i in range(30):
-		var result: Dictionary = env.step(Action.from_multidiscrete([i % 3, (i + 1) % 3, i % 3, 0, i % 2, 0]))
+		var action := Action.from_multidiscrete(
+			[i % 3, (i + 1) % 3, i % 3, 0, i % 2, 0]
+		)
+		var result: Dictionary = env.step(action)
 		trace.append({
 			"observation": Array(result.observation.to_array()),
 			"reward": result.reward,

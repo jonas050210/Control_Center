@@ -83,15 +83,19 @@ func test_missed_shot_is_cheaper_than_useless_shot() -> SandboxTest:
 
 func test_passive_live_target_is_penalized() -> SandboxTest:
 	var t := SandboxTest.new("reward_passive_live_target")
-	var reward := RewardSystem.compute({"alive": true, "valid_target": true, "meaningful_action": false})
-t.assert_almost_eq(reward, SandboxConfig.PENALTY_PASSIVITY, 0.0001)
-t.assert_lt(reward, 0.0, "survival farming must be negative with a live target")
+	var reward := RewardSystem.compute(
+		{"alive": true, "valid_target": true, "meaningful_action": false}
+	)
+	t.assert_almost_eq(reward, SandboxConfig.PENALTY_PASSIVITY, 0.0001)
+	t.assert_lt(reward, 0.0, "survival farming must be negative with a live target")
 	return t
 
 
 func test_aiming_progress_is_rewarded_but_bounded() -> SandboxTest:
 	var t := SandboxTest.new("reward_aiming_progress")
-	var reward := RewardSystem.compute({"aiming_delta": 0.5, "alive": true, "valid_target": true, "meaningful_action": true})
+	var reward := RewardSystem.compute(
+		{"aiming_delta": 0.5, "alive": true, "valid_target": true, "meaningful_action": true}
+	)
 	t.assert_gt(reward, SandboxConfig.REWARD_SURVIVE_TICK)
 	t.assert_lte(reward, SandboxConfig.REWARD_AIMING_MAX + SandboxConfig.REWARD_SURVIVE_TICK)
 	return t
@@ -99,17 +103,32 @@ func test_aiming_progress_is_rewarded_but_bounded() -> SandboxTest:
 
 func test_aim_only_cannot_farm_survival_bonus() -> SandboxTest:
 	var t := SandboxTest.new("aim_only_no_survival_farm")
-	var reward := RewardSystem.compute({"aiming_delta": 0.0, "alive": true, "valid_target": true, "meaningful_action": true})
-	t.assert_almost_eq(reward, 0.0, 0.0001, "aim-only progress must not receive a repeated survival bonus")
+	var reward := RewardSystem.compute(
+		{"aiming_delta": 0.0, "alive": true, "valid_target": true, "meaningful_action": true}
+	)
+	t.assert_almost_eq(
+		reward, 0.0, 0.0001, "aim-only progress must not receive a repeated survival bonus"
+	)
 	return t
 
 
 func test_shot_hit_beats_miss_and_passivity() -> SandboxTest:
 	var t := SandboxTest.new("reward_useful_shot_balance")
-	var hit := RewardSystem.compute({"hit": true, "shot_fired": true, "alive": true, "valid_target": true, "meaningful_action": true})
-	var passive := RewardSystem.compute({"alive": true, "valid_target": true, "meaningful_action": false})
+	var hit_events := {
+		"hit": true, "shot_fired": true, "alive": true, "valid_target": true,
+		"meaningful_action": true,
+	}
+	var hit := RewardSystem.compute(hit_events)
+	var passive := RewardSystem.compute(
+		{"alive": true, "valid_target": true, "meaningful_action": false}
+	)
 	t.assert_gt(hit, passive)
-	t.assert_gt(hit, RewardSystem.compute({"missed_shot": true, "alive": true, "valid_target": true, "meaningful_action": true}))
+	t.assert_gt(
+		hit,
+		RewardSystem.compute(
+			{"missed_shot": true, "alive": true, "valid_target": true, "meaningful_action": true}
+		)
+	)
 	return t
 
 
