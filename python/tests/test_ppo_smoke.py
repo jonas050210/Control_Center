@@ -22,6 +22,7 @@ from pathlib import Path
 
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.godot_env import GodotVecEnv
+from sandboxai.manifest import MANIFEST_FORMAT
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -289,7 +290,7 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         import json
 
         manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest.get("format"), "sandboxai.run_manifest/v1")
+        self.assertEqual(manifest.get("format"), MANIFEST_FORMAT)
         self.assertEqual(manifest.get("seed"), 1234)
         reports = list((run_dir / "evaluations").glob("step_*/report.json"))
         self.assertTrue(reports, "no checkpoint battery report was produced")

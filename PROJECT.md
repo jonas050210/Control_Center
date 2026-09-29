@@ -325,7 +325,7 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 | --- | --- |
 | PPO checkpoints | SB3 `.zip`: periodic `ppo_*`, `latest.zip`, `best_eval.zip`, run `final.zip`, battery `policy.zip` |
 | BC checkpoints | PyTorch `.pt`, format tag `sandboxai.bc.v1`, model + optimizer |
-| Config/provenance | `config.json`, `run_summary.json`, `warm_start.json`, `run_manifest.json` (`sandboxai.run_manifest/v1`), curriculum state |
+| Config/provenance | `config.json`, `run_summary.json`, `warm_start.json`, `run_manifest.json` (`sandboxai.run_manifest/v2`: + host/Godot/code-dirty/parallelism/selection-rule provenance), curriculum state |
 | Evaluation | per-evaluation-step `summary.json`/episode CSV; atomic battery `report.json`; rolling `latest.json`/`best.json` |
 | Telemetry/profile | JSONL, TensorBoard events, optional `training_profile.json` |
 | Replay | JSONL format v1; light stores deterministic setup/actions/reward/done, detailed also stores observations |
