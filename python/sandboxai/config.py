@@ -150,6 +150,22 @@ def find_godot_executable(preferred: str = "godot") -> str:
 @dataclass
 class TrainingConfig:
     environment_count: int = 8
+    ## Godot processes hosting `environment_count` environments.
+    ##
+    ## One `rl_server.gd` process steps its environments serially in a
+    ## single GDScript thread, so a single bridge saturates about one CPU
+    ## core regardless of how many environments it holds. Splitting the
+    ## same environments over several processes is the multi-core lever on
+    ## this architecture (python/sandboxai/sharded_env.py).
+    ##
+    ## Values: 1 = the historical single-process bridge; N > 1 = N shards;
+    ## 0 = "auto" (see `resolved_env_workers()`), which sizes the pool from
+    ## the host CPU while leaving cores for the trainer itself.
+    ##
+    ## Sharding is result-preserving: environments never interact and each
+    ## shard is seeded so environment i keeps the seed it had in the
+    ## single-process layout, so only wall time changes.
+    env_workers: int = 1
     enemy_count: int = 1
     learning_rate: float = 3e-4
     rollout_length: int = 2048
@@ -259,6 +275,8 @@ class TrainingConfig:
             raise ValueError("environment_count must be >= 1")
         if self.enemy_count < 1:
             raise ValueError("enemy_count must be >= 1")
+        if self.env_workers < 0:
+            raise ValueError("env_workers must be >= 0 (0 = auto, 1 = single process)")
         if self.rollout_length < 1:
             raise ValueError("rollout_length must be >= 1")
         if self.batch_size < 1 or self.batch_size > self.rollout_length * self.environment_count:
@@ -371,6 +389,21 @@ class TrainingConfig:
             raise RuntimeError("CUDA inference was requested but torch.cuda.is_available() is false")
         return self.inference_device
 
+    def resolved_env_workers(self) -> int:
+        """Concrete number of Godot bridge processes for training.
+
+        ``0`` means auto: one worker per environment, bounded by an
+        estimate of the physical cores left after reserving some for the
+        trainer process itself. An explicit value is clamped to the
+        environment count because an empty shard would cost a process and
+        simulate nothing.
+        """
+        from .sharded_env import recommended_worker_count
+
+        if self.env_workers == 0:
+            return recommended_worker_count(self.environment_count)
+        return max(1, min(int(self.env_workers), int(self.environment_count)))
+
     def run_directory(self) -> Path:
         import datetime as _datetime
 
@@ -383,6 +416,9 @@ class TrainingConfig:
         data["net_arch"] = list(self.net_arch)
         data["project_path"] = str(self.project)
         data["resolved_device"] = self.resolved_device()
+        # Provenance: an "auto" worker pool resolves against the machine
+        # that ran the experiment, so the concrete value is recorded.
+        data["resolved_env_workers"] = self.resolved_env_workers()
         return data
 
     def save(self, path: str | Path) -> Path:

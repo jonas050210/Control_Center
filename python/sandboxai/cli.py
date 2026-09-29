@@ -20,9 +20,34 @@ from .config import (
 from .wsl import GodotLaunchError, WindowsInterop, is_windows_shell, normalize_host_path
 
 
+def _env_workers_argument(value: str) -> int:
+    """``--env-workers N|auto`` -> the TrainingConfig integer (0 = auto)."""
+    text = str(value).strip().lower()
+    if text == "auto":
+        return 0
+    try:
+        number = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--env-workers expects a positive integer or 'auto', got {value!r}"
+        ) from exc
+    if number < 1:
+        raise argparse.ArgumentTypeError("--env-workers must be >= 1 (or 'auto')")
+    return number
+
+
 def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", help="JSON TrainingConfig file")
     parser.add_argument("--env-count", type=int, dest="environment_count")
+    parser.add_argument(
+        "--env-workers",
+        type=_env_workers_argument,
+        dest="env_workers",
+        help="Godot processes hosting the environments: 1 = single process (default), "
+        "N = shard the environments over N concurrently simulating processes, "
+        "'auto' = size the pool from the host CPU. Sharding preserves per-environment "
+        "seeds and therefore results; only wall time changes.",
+    )
     parser.add_argument("--enemy-count", type=int)
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--rollout-length", type=int)
@@ -354,6 +379,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     benchmark = sub.add_parser("benchmark", help="measure headless Godot throughput")
     benchmark.add_argument("--env-counts", default="1,2,4,8,16,24,32,48,64")
+    benchmark.add_argument(
+        "--worker-counts",
+        default="1",
+        help="comma-separated Godot worker-process counts to sweep per environment count "
+        "(e.g. 1,2,4,8); 1 is the single-process baseline. Worker counts above the "
+        "environment count are clamped.",
+    )
     benchmark.add_argument("--steps", type=int, default=2000)
     benchmark.add_argument("--enemy-count", type=int, default=1)
     benchmark.add_argument("--seed", type=int, default=1234)
@@ -667,6 +699,7 @@ def main(argv: list[str] | None = None) -> int:
         from .benchmark import benchmark_simulation, summarize_scaling
         project = _resolve_project_path(args.project_path)
         counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
+        workers = [int(value) for value in str(args.worker_counts).split(",") if value.strip()]
         result = benchmark_simulation(
             project,
             args.godot_executable,
@@ -677,6 +710,7 @@ def main(argv: list[str] | None = None) -> int:
             args.curriculum_level,
             args.output_dir,
             args.max_seconds_per_config,
+            worker_counts=workers or (1,),
         )
         print(json.dumps(result, indent=2, default=str))
         print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))

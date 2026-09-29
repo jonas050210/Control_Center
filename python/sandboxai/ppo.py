@@ -36,6 +36,7 @@ def _require_sb3():
 def _env_kwargs(
     config: TrainingConfig,
     profiler: TrainingProfiler | None = None,
+    worker_count: int = 1,
 ) -> dict[str, Any]:
     values: dict[str, Any] = {
         "project_path": config.project,
@@ -45,6 +46,10 @@ def _env_kwargs(
         "seed": config.seed,
         "curriculum_level": config.curriculum_level,
         "compact_infos": config.compact_training_infos,
+        # 1 = single Godot process (historical). Evaluation bridges pass
+        # 1 explicitly: they already run concurrently with each other and
+        # are not the throughput bottleneck the training bridge is.
+        "worker_count": int(worker_count),
     }
     if profiler is not None:
         values["profiler"] = profiler
@@ -170,11 +175,13 @@ def train_ppo(
             minibatch_size=config.batch_size,
             compact_training_infos=config.compact_training_infos,
         )
-    env = GodotVecEnv(**_env_kwargs(config, profiler=profiler))
+    env_workers = config.resolved_env_workers()
+    env = GodotVecEnv(**_env_kwargs(config, profiler=profiler, worker_count=env_workers))
     if profiler is not None:
         profiler.set_metadata(
             observation_floats=env.client.observation_dim,
             action_components=len(env.action_space.nvec),
+            env_workers=env_workers,
         )
     resource_monitor = ResourceMonitor()
     telemetry = JsonlTelemetry(logs / "training.jsonl")
@@ -230,6 +237,7 @@ def train_ppo(
             start_values = {
                 "event": "training_start",
                 "environment_count": config.environment_count,
+                "env_workers": env_workers,
                 "device": device,
                 "run_start_timesteps": self.start_timesteps,
                 "total_training_steps": self.target_timesteps,
@@ -700,7 +708,6 @@ def train_ppo(
     if config.inference_device != "auto":
         inference_scheduler = InferenceDeviceScheduler(model=None, training_device=device, inference_device=config.resolved_inference_device())
         callback_items.insert(0, InferenceDeviceCallback(inference_scheduler))
-    callbacks = CallbackList(callback_items)
     callbacks = CallbackList(callback_items)
     try:
         if checkpoint_path:

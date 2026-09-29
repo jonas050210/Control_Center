@@ -30,6 +30,28 @@ except ImportError:  # pragma: no cover
     spaces = None
 
 
+class PendingRequest:
+    """Bookkeeping for one in-flight bridge request.
+
+    Deliberately tiny and allocation-cheap: one of these exists per
+    outstanding request per shard on every environment step.
+    """
+
+    __slots__ = ("command", "total_started", "wait_started", "deadline")
+
+    def __init__(
+        self,
+        command: str,
+        total_started: float,
+        wait_started: float,
+        deadline: float,
+    ) -> None:
+        self.command = command
+        self.total_started = total_started
+        self.wait_started = wait_started
+        self.deadline = deadline
+
+
 class GodotProcessTransport:
     def __init__(
         self,
@@ -129,14 +151,23 @@ class GodotProcessTransport:
     def stderr_tail(self) -> str:
         return "".join(self._stderr_tail)[-2000:]
 
-    def request(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def send(self, payload: dict[str, Any]) -> "PendingRequest":
+        """Writes one request and returns without waiting for the answer.
+
+        Split from :meth:`request` so several bridge processes can be kept
+        busy at once (see :mod:`sandboxai.sharded_env`): the caller sends to
+        every shard first and only then collects the responses, which is
+        what turns N serial Godot processes into N concurrently simulating
+        ones. Single-process callers keep using :meth:`request`, which is
+        exactly ``receive(send(payload))``.
+        """
         if self._closed or self.process.poll() is not None:
             raise RuntimeError("Godot bridge process is not running")
         assert self.process.stdin is not None
         profiler = self.profiler
         command = str(payload.get("cmd", "unknown"))
         total_started = time.perf_counter() if profiler is not None else 0.0
-        encode_started = time.perf_counter() if profiler is not None else 0.0
+        encode_started = total_started
         encoded = json.dumps(payload, separators=(",", ":")) + "\n"
         if profiler is not None:
             profiler.record(f"bridge.{command}.json_encode", time.perf_counter() - encode_started)
@@ -149,12 +180,21 @@ class GodotProcessTransport:
                 profiler.record(f"bridge.{command}.write_flush", time.perf_counter() - write_started)
         except (BrokenPipeError, OSError) as exc:
             raise RuntimeError(f"Godot bridge pipe is broken. {self.stderr_tail()}") from exc
+        return PendingRequest(
+            command=command,
+            total_started=total_started,
+            wait_started=time.perf_counter() if profiler is not None else 0.0,
+            deadline=time.monotonic() + self.request_timeout,
+        )
+
+    def receive(self, pending: "PendingRequest") -> dict[str, Any]:
+        """Blocks until the response to `pending` arrives (or times out)."""
+        profiler = self.profiler
+        command = pending.command
         # Godot can emit startup informational lines. Only protocol JSON is
         # accepted; a malformed protocol response is a hard error.
-        deadline = time.monotonic() + self.request_timeout
-        wait_started = time.perf_counter() if profiler is not None else 0.0
         while True:
-            remaining = deadline - time.monotonic()
+            remaining = pending.deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(
                     f"Godot bridge request timed out after {self.request_timeout}s. "
@@ -173,13 +213,16 @@ class GodotProcessTransport:
                 continue
             if profiler is not None:
                 now = time.perf_counter()
-                profiler.record(f"bridge.{command}.wait_response", decode_started - wait_started)
+                profiler.record(f"bridge.{command}.wait_response", decode_started - pending.wait_started)
                 profiler.record(f"bridge.{command}.json_decode", now - decode_started)
-                profiler.record(f"bridge.{command}.total", now - total_started)
+                profiler.record(f"bridge.{command}.total", now - pending.total_started)
                 profiler.add(f"bridge.{command}.response_bytes", len(line.encode("utf-8")))
             if not response.get("ok", False):
                 raise RuntimeError(response.get("error", "Godot bridge returned an error"))
             return response
+
+    def request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.receive(self.send(payload))
 
     def close(self) -> None:
         if self._closed:
@@ -246,9 +289,15 @@ class GodotBatchClient:
                 % (self.observation_dim, OBSERVATION_FIELD_COUNT)
             )
 
-    def reset(self, seed: int | None = None):
-        response = self.transport.request({"cmd": "reset", "seed": -1 if seed is None else int(seed)})
+    def reset_send(self, seed: int | None = None) -> PendingRequest:
+        return self.transport.send({"cmd": "reset", "seed": -1 if seed is None else int(seed)})
+
+    def reset_receive(self, pending: PendingRequest):
+        response = self.transport.receive(pending)
         return np.asarray(response["observations"], dtype=np.float32), response.get("infos", [])
+
+    def reset(self, seed: int | None = None):
+        return self.reset_receive(self.reset_send(seed))
 
     def reset_indices(self, indices: list[int], seed: int | None = None):
         response = self.transport.request({
@@ -258,18 +307,20 @@ class GodotBatchClient:
         })
         return response.get("results", [])
 
-    def step(self, actions):
-        profiler = self.profiler
-        started = time.perf_counter() if profiler is not None else 0.0
+    def step_send(self, actions) -> PendingRequest:
         if hasattr(actions, "tolist"):
             actions = actions.tolist()
-        response = self.transport.request(
+        return self.transport.send(
             {
                 "cmd": "step",
                 "actions": actions,
                 "compact_infos": self.compact_infos,
             }
         )
+
+    def step_receive(self, pending: PendingRequest):
+        profiler = self.profiler
+        response = self.transport.receive(pending)
         convert_started = time.perf_counter() if profiler is not None else 0.0
         observations = np.asarray(response["observations"], dtype=np.float32)
         rewards = np.asarray(response["rewards"], dtype=np.float32)
@@ -277,8 +328,15 @@ class GodotBatchClient:
         infos = response.get("infos", [{} for _ in range(self.environment_count)])
         if profiler is not None:
             profiler.record("env.numpy_conversion", time.perf_counter() - convert_started)
-            profiler.record("env.step_total", time.perf_counter() - started)
         return observations, rewards, dones, infos
+
+    def step(self, actions):
+        profiler = self.profiler
+        started = time.perf_counter() if profiler is not None else 0.0
+        result = self.step_receive(self.step_send(actions))
+        if profiler is not None:
+            profiler.record("env.step_total", time.perf_counter() - started)
+        return result
 
     def health_check(self):
         return self.transport.request({"cmd": "health_check"}).get("health", [])
@@ -330,6 +388,24 @@ class GodotBatchClient:
         self.transport.close()
 
 
+def make_batch_client(**kwargs: Any):
+    """Builds the single-process or multi-process batch client.
+
+    ``worker_count`` (default 1) selects how many Godot processes host the
+    requested ``environment_count``. One process keeps the historical
+    behaviour bit-for-bit; more than one shards the environments across
+    concurrently simulating processes with identical per-environment seeds
+    (see :mod:`sandboxai.sharded_env`).
+    """
+    worker_count = int(kwargs.pop("worker_count", 1) or 1)
+    environment_count = int(kwargs.get("environment_count", 1) or 1)
+    if worker_count <= 1 or environment_count <= 1:
+        return GodotBatchClient(**kwargs)
+    from .sharded_env import ShardedBatchClient
+
+    return ShardedBatchClient(worker_count=worker_count, **kwargs)
+
+
 if gym is not None:
 
     class GodotGymEnv(gym.Env):  # type: ignore[misc]
@@ -339,6 +415,8 @@ if gym is not None:
 
         def __init__(self, **kwargs: Any) -> None:
             kwargs["environment_count"] = 1
+            # One environment can only live in one process.
+            kwargs.pop("worker_count", None)
             self.client = GodotBatchClient(**kwargs)
             self.observation_space = spaces.Box(
                 low=-1.0,
@@ -406,9 +484,12 @@ if VecEnv is not None:
         def __init__(self, **kwargs: Any) -> None:
             if np is None or spaces is None:
                 raise RuntimeError("numpy and gymnasium are required for PPO")
-            self.client = GodotBatchClient(**kwargs)
+            # `worker_count > 1` spreads the environments over several
+            # Godot processes; the client surface is identical either way.
+            self.client = make_batch_client(**kwargs)
             self.profiler = self.client.profiler
             self.environment_count = self.client.environment_count
+            self.worker_count = int(getattr(self.client, "worker_count", 1))
             observation_space = spaces.Box(
                 low=-1.0,
                 high=1.0,
