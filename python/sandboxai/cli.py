@@ -5,7 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import shutil
-import subprocess
+import subprocess  # noqa: F401  (kept as the documented mock seam for CLI launch tests)
 import sys
 import tempfile
 from typing import Any
@@ -17,6 +17,7 @@ from .config import (
     load_godot_executable_setting,
     save_godot_executable_setting,
 )
+from .wsl import GodotLaunchError, WindowsInterop, is_windows_shell, normalize_host_path
 
 
 def _add_training_options(parser: argparse.ArgumentParser) -> None:
@@ -96,7 +97,8 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
 
 def _resolve_project_path(project_path: str | None) -> Path:
     if project_path:
-        return Path(project_path).expanduser().resolve()
+        # WSL users may hand over the Windows form (C:\...) of the path.
+        return Path(normalize_host_path(project_path)).expanduser().resolve()
     # python/sandboxai/cli.py -> repository root
     return Path(__file__).resolve().parents[2]
 
@@ -111,19 +113,21 @@ def build_record_command(
     """Build the Godot invocation for the graphical demonstration recorder.
 
     The output path is resolved to an absolute path so the recording is saved
-    predictably regardless of the Godot process working directory.
+    predictably regardless of the Godot process working directory. Paths are
+    handed to a Windows Godot binary from WSL in Windows form.
     """
     executable = find_godot_executable(godot_executable)
     project = _resolve_project_path(project_path)
+    interop = WindowsInterop(executable)
     return [
         executable,
         "--path",
-        str(project),
+        interop.windows_path(project),
         "--script",
         "res://scripts/recording/record_demo.gd",
         "--",
         "--output",
-        str(Path(output).expanduser().resolve()),
+        interop.windows_path(Path(output).expanduser().resolve()),
         "--duration",
         str(duration),
         "--enemy-count",
@@ -153,7 +157,7 @@ def build_control_center_command(
     command = [
         executable,
         "--path",
-        str(project),
+        WindowsInterop(executable).windows_path(project),
         "res://scenes/control_center.tscn",
         "--",
         f"--mode={mode}",
@@ -165,6 +169,29 @@ def build_control_center_command(
     if scenario:
         command.append(f"--scenario={scenario}")
     return command
+
+
+def _call_godot_process(command: list[str]) -> int:
+    """Launch a graphical Godot tool and wait for it, WSL/Windows aware.
+
+    On WSL with a Windows Godot binary the paths in `command` are already in
+    Windows form (the builders convert them); the wrapper retries a refused
+    direct .exe launch through ``cmd.exe /C call``. Any launch failure is a
+    clean CLI error (exit code 1), matching the previous OSError behavior.
+    """
+    try:
+        return WindowsInterop(command[0]).call(command)
+    except GodotLaunchError as exc:
+        # Already carries the executable name and all attempted launches.
+        print(str(exc), file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as exc:
+        print(
+            f"Could not launch Godot executable {command[0]!r}: {exc}. "
+            "Install Godot 4.7.2 and put it on PATH or pass --godot-executable.",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
@@ -201,6 +228,10 @@ def _remember_godot_executable(args: argparse.Namespace) -> None:
     """
     executable = getattr(args, "godot_executable", None)
     if not executable or executable == "godot":
+        return
+    if is_windows_shell(executable):
+        # Passing cmd.exe was a workaround for the WSL launch problems the
+        # interop layer now handles; remembering it would poison later runs.
         return
     if not (shutil.which(executable) or Path(executable).expanduser().is_file()):
         return
@@ -481,44 +512,36 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(DemonstrationDataset.load(args.dataset).summary(), indent=2, default=str))
         return 0
     if args.command == "record":
-        command = build_record_command(
-            args.godot_executable,
-            args.project_path,
-            args.output,
-            args.duration,
-            args.enemy_count,
-        )
+        try:
+            command = build_record_command(
+                args.godot_executable,
+                args.project_path,
+                args.output,
+                args.duration,
+                args.enemy_count,
+            )
+        except ValueError as exc:
+            print(f"Invalid Godot executable: {exc}", file=sys.stderr)
+            return 1
         print("Launching Godot demonstration recorder:", " ".join(command))
-        try:
-            return subprocess.call(command)
-        except OSError as exc:
-            print(
-                f"Could not launch Godot executable {command[0]!r}: {exc}. "
-                "Install Godot 4.7.2 and put it on PATH or pass --godot-executable.",
-                file=sys.stderr,
-            )
-            return 1
+        return _call_godot_process(command)
     if args.command == "control-center":
-        command = build_control_center_command(
-            args.godot_executable,
-            args.project_path,
-            args.mode,
-            args.environment_count,
-            args.enemy_count,
-            args.curriculum_level,
-            args.seed,
-            args.scenario,
-        )
-        print("Launching SandboxAI Control Center:", " ".join(command))
         try:
-            return subprocess.call(command)
-        except OSError as exc:
-            print(
-                f"Could not launch Godot executable {command[0]!r}: {exc}. "
-                "Install Godot 4.7.2 and put it on PATH or pass --godot-executable.",
-                file=sys.stderr,
+            command = build_control_center_command(
+                args.godot_executable,
+                args.project_path,
+                args.mode,
+                args.environment_count,
+                args.enemy_count,
+                args.curriculum_level,
+                args.seed,
+                args.scenario,
             )
+        except ValueError as exc:
+            print(f"Invalid Godot executable: {exc}", file=sys.stderr)
             return 1
+        print("Launching SandboxAI Control Center:", " ".join(command))
+        return _call_godot_process(command)
     if args.command == "bc-train":
         from .bc import train_behavior_cloning
         from .run_control import from_cli_paths

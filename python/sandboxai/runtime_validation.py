@@ -17,12 +17,12 @@ import json
 from pathlib import Path
 import platform
 import shutil
-import subprocess
 import time
 from typing import Any, Sequence
 
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+from .wsl import WindowsInterop, normalize_host_path
 
 
 @dataclass
@@ -73,7 +73,7 @@ class RuntimeValidator:
         timeout: float = 15.0,
     ) -> None:
         self.project_path = (
-            Path(project_path).expanduser().resolve()
+            Path(normalize_host_path(project_path)).expanduser().resolve()
             if project_path
             else Path(__file__).resolve().parents[2]
         )
@@ -89,7 +89,9 @@ class RuntimeValidator:
 
     def probe_version(self, executable: str) -> str | None:
         try:
-            res = subprocess.run(
+            # WindowsInterop is a pass-through outside WSL; on WSL it lets a
+            # refused direct .exe launch (PermissionError) retry via cmd.exe.
+            res = WindowsInterop(executable).run(
                 [executable, "--version", "--headless"],
                 capture_output=True,
                 text=True,

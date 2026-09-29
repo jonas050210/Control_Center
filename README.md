@@ -47,6 +47,24 @@ without repeating the flag. Resolution order: an explicit
 variables, then the remembered setting, then `godot` on PATH. Delete
 `.sandboxai/settings.json` to return to the PATH default.
 
+Running from **WSL** (Windows Subsystem for Linux) works with either Godot
+build. With the Linux Godot build nothing special is needed. With the
+**Windows** Godot build — the usual case when the checkout lives on
+`/mnt/<drive>` — point `--godot-executable` at the Windows binary, e.g.
+`python -m sandboxai validate-runtime --godot-executable "/mnt/c/tools/Godot_v4.7.2-stable_win64_console.exe"`.
+SandboxAI then converts the project path (and every other path handed to the
+engine) to Windows form (`C:\...`) automatically, and if the direct `.exe`
+launch is refused by the OS (`PermissionError`, broken `binfmt` interop
+registration, ...) it retries through `cmd.exe /C call` before failing with
+an error that lists every attempt. Windows-form executable paths
+(`C:\...` — for example a setting remembered by a Windows-side run of the
+same checkout) are translated with `wslpath` as well. Do not pass `cmd.exe`
+itself as `--godot-executable`: it is rejected with guidance, because the
+wrapper is applied automatically when needed. Reliable direct launches
+require `[interop] enabled=true` in `/etc/wsl.conf`, the WSLInterop
+`systemd-binfmt` registration, and the execute bit on the `.exe` as seen
+from WSL.
+
 Then from the repository root:
 
 ```bash
