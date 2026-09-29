@@ -112,13 +112,23 @@ The run writes `logs/training_profile.json`. It measures:
 - Godot request parse, command handling (including `command_step`), response
   encode and stdout write time when the bridge supports the profiling command;
 - synchronous evaluation, checkpoint saves and resource-snapshot lookup;
+- a full evaluation-boundary breakdown: `eval.env_startup` (bridge process
+  spawns), `eval.normal.*` (the frozen normal evaluation: total wall time,
+  policy prediction, environment stepping, and its bridge's transport
+  timings under `eval.normal.bridge.*`), and `eval.battery.*` (the
+  checkpoint condition/generalization battery, split per section plus its
+  own predict/step/bridge buckets). Evaluation buckets are namespaced, so
+  they never fold into the training bridge's `bridge.step.*` numbers;
 - one row per PPO iteration, which makes periodic throughput cliffs visible.
 
 Profiling is aggregate rather than a per-step trace, and is disabled by
 default. Timings are nested: for example, `env.step_total` includes all
 `bridge.step.*` buckets, while `bridge.step.wait_response` includes Godot and
 pipe transit. The Godot-side section is what separates simulation from that
-wait bucket.
+wait bucket. `eval.env_startup` firing more than twice in a whole run
+(normal evaluation + battery) means evaluation bridge processes are being
+respawned per boundary again — that is the single most expensive regression
+to watch for, since each spawn pays full engine and project startup.
 
 ### What causes the reported FPS drops
 
@@ -148,9 +158,16 @@ Other intentional stop-the-world work is easy to distinguish in the profile:
 - a Control Center-managed run polls its cooperative command file from the
   per-vector-step callback.
 
+Evaluation is synchronous by design, not by accident: its results feed
+best-checkpoint selection, early stopping (`early_stopping_patience`,
+`min_eval_reward`) and the battery's frozen `policy.zip`/curriculum snapshot,
+all of which must be strictly ordered against training progress for a run to
+be reproducible. What has been removed is the *avoidable* cost inside that
+synchronous block (see below), not the ordering.
+
 ### Removed avoidable overhead
 
-Two hot-path costs were unnecessary and are now avoided without changing
+Five hot-path costs were unnecessary and are now avoided without changing
 observations, actions, rewards, episode boundaries, RNG use or PPO data:
 
 1. Training telemetry used to launch `nvidia-smi` synchronously every 100
@@ -166,6 +183,37 @@ observations, actions, rewards, episode boundaries, RNG use or PPO data:
    disableable in config/CLI) retains events and exact terminal metrics while
    omitting only those redundant non-terminal dictionaries. The public
    `GodotBatchClient` default remains full-info mode.
+3. Every evaluation boundary spawned fresh Godot bridge processes: one for
+   the normal evaluation and one for the checkpoint battery (three with the
+   league enabled). Each spawn pays full engine and project startup. Both
+   processes now live for the whole run and are re-seeded over the bridge at
+   every boundary (`reset(seed)` / staged episode plans), which reproduces
+   bit-identical episodes because the engine derives the world
+   deterministically from the seed. `eval.env_startup` in the profile shows
+   exactly two spawns per run instead of two per boundary.
+4. The checkpoint battery ran its planned episodes on a single environment
+   (`evaluation_environment_count`, default 1). Planned episodes are
+   result-invariant under scheduling by construction (every plan carries its
+   own seed and fully reconfigures its environment), so the battery now runs
+   `checkpoint_eval_environment_count` (default 8, CLI
+   `--checkpoint-eval-env-count`) bridge environments: per-step policy
+   inference and bridge round trips amortise across the batch while every
+   episode stays bit-identical. The normal evaluation keeps
+   `evaluation_environment_count` with its exact serial semantics, because
+   its per-episode seeds are not plan-scheduled.
+5. The battery bridge now requests compact infos (it consumes only events
+   and terminal metrics, both retained in compact mode), halving its
+   per-step response payload like the training bridge already does.
+
+For CUDA runs there is additionally `--inference-device cpu`: rollout
+collection and frozen evaluation then run their policy forward passes on CPU
+while PPO updates stay on the GPU. For this tiny policy the per-step
+host<->device round trip and kernel-launch overhead exceed the matmuls
+themselves, which is why CUDA measured ~2.5x slower than CPU on this
+workload. This is opt-in (default `auto` keeps inference coupled to the
+training device) because the sampled rollout actions then follow the CPU RNG
+stream — deterministic and reproducible, but not bit-identical to a
+coupled-device run.
 
 A schema-representative 4-environment JSON sample was 13,576 bytes in full
 mode and 8,592 bytes in compact mode (36.7% smaller); Python `json.loads` on

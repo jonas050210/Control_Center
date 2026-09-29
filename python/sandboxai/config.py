@@ -169,6 +169,29 @@ class TrainingConfig:
     ## Environments used by the periodic in-training evaluation. Kept at 1
     ## by default so evaluation stays cheap and exactly reproducible.
     evaluation_environment_count: int = 1
+    ## Bridge environments for the checkpoint battery (condition +
+    ## generalization planned episodes). Unlike the normal evaluation, the
+    ## battery's episodes are PLAN-scheduled and therefore
+    ## result-invariant under parallelism (PlanExecutor: "only the wall
+    ## time changes with N"), so batching them across environments is a
+    ## pure speed change: per-step policy inference and bridge round trips
+    ## amortise over the batch while every episode stays bit-identical.
+    checkpoint_eval_environment_count: int = 8
+    ## Device used for policy INFERENCE (rollout collection and frozen
+    ## evaluation) while PPO updates stay on `device`. "auto" keeps the
+    ## historical behavior (inference coupled to the training device).
+    ## Setting "cpu" with device="cuda" removes the per-step host<->device
+    ## round trip that makes CUDA ~2.5x slower than CPU for this tiny
+    ## (84 -> 128 -> 128) policy; the PPO update itself still runs on the
+    ## configured device. Opt-in because the sampled rollout actions (and
+    ## therefore the training trajectory) then follow the CPU RNG stream
+    ## instead of the CUDA one - deterministic and reproducible either
+    ## way, but no longer bit-identical to a coupled-device run.
+    ## Checkpoints saved mid-rollout (best_eval.zip, ppo_*.zip) pin their
+    ## metadata back to the training device; the battery's policy.zip
+    ## keeps the inference-device tag, which no internal loader uses (all
+    ## pass an explicit device).
+    inference_device: str = "auto"
     seed: int = 1234
     device: str = "auto"
     curriculum_level: int = 3
@@ -270,6 +293,10 @@ class TrainingConfig:
             raise ValueError(f"curriculum_level must be between 1 and {CURRICULUM_LEVEL_COUNT}")
         if self.evaluation_environment_count < 1:
             raise ValueError("evaluation_environment_count must be >= 1")
+        if self.checkpoint_eval_environment_count < 1:
+            raise ValueError("checkpoint_eval_environment_count must be >= 1")
+        if self.inference_device not in ("auto", "cpu", "cuda"):
+            raise ValueError("inference_device must be one of auto, cpu, cuda")
         if self.early_stopping_patience < 0:
             raise ValueError("early_stopping_patience must be non-negative")
         # Integrated pipeline fields.
@@ -321,6 +348,26 @@ class TrainingConfig:
         if requested == "cuda" and not available:
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
         return "cuda" if requested == "cuda" or (requested == "auto" and available) else "cpu"
+
+    def resolved_inference_device(self) -> str:
+        """Concrete device for rollout/evaluation inference.
+
+        "auto" couples inference to the training device (the historical
+        behavior); an explicit device is validated against the same rules
+        as `device` so a CUDA request without CUDA fails at config time,
+        not mid-run.
+        """
+        if self.inference_device == "auto":
+            return self.resolved_device()
+        try:
+            import torch  # type: ignore
+        except ImportError:
+            if self.inference_device == "cuda":
+                raise RuntimeError("CUDA inference was requested but PyTorch is not installed")
+            return "cpu"
+        if self.inference_device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA inference was requested but torch.cuda.is_available() is false")
+        return self.inference_device
 
     def run_directory(self) -> Path:
         import datetime as _datetime

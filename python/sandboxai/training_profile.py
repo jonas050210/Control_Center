@@ -105,6 +105,21 @@ class TrainingProfiler:
                 "bridge.step.wait_response",
                 "bridge.step.json_encode",
                 "bridge.step.json_decode",
+                # Evaluation-path breakdown (see sandboxai.evaluation and
+                # sandboxai.checkpoint_eval). `callback.evaluation` remains
+                # the full synchronous boundary cost; these buckets split it
+                # so a profile answers where the time actually went:
+                # process startup, prediction, environment stepping, and
+                # the per-section battery cost.
+                "eval.env_startup",
+                "eval.normal.total",
+                "eval.normal.predict",
+                "eval.normal.env_step",
+                "eval.normal.bridge.step.total",
+                "eval.battery.total",
+                "eval.battery.predict",
+                "eval.battery.env_step",
+                "eval.battery.bridge.step.total",
             )
         }
         phase_percent = {
@@ -125,6 +140,8 @@ class TrainingProfiler:
                 "Nested phases intentionally overlap (for example env.step_total includes bridge timings).",
                 "bridge.*.wait_response includes pipe transit plus Godot parsing, simulation and response encoding.",
                 "godot_server separates those server-side phases when the running Godot bridge supports profiling.",
+                "eval.* buckets belong to the evaluation bridges only; they never fold into the training bridge.* buckets.",
+                "eval.env_startup counts bridge process spawns: with process reuse it should fire once per role per run, not once per evaluation boundary.",
             ],
         }
 
@@ -133,3 +150,37 @@ class TrainingProfiler:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(self.report(), indent=2, default=str) + "\n", encoding="utf-8")
         return destination
+
+
+class PrefixedProfiler:
+    """Read-only *view* of a :class:`TrainingProfiler` under a name prefix.
+
+    The evaluation bridges must not pollute the training bridge's
+    ``bridge.*`` buckets: a reused evaluation environment stepping tens of
+    thousands of times would silently fold its transport timings into
+    ``bridge.step.wait_response`` and make the training-side numbers
+    meaningless. Handing the (already instrumented) transports this view
+    instead of the profiler itself keeps every bucket separable:
+
+    * training bridge  -> ``bridge.step.*``
+    * normal eval      -> ``eval.normal.bridge.step.*``
+    * battery executor -> ``eval.battery.bridge.step.*``
+
+    Implements exactly the profiler surface the transport/client code uses
+    (``record``, ``add``); ``is not None`` checks elsewhere keep working.
+    """
+
+    def __init__(self, profiler: TrainingProfiler, prefix: str) -> None:
+        if not prefix.endswith("."):
+            prefix += "."
+        self.profiler = profiler
+        self.prefix = prefix
+
+    def record(self, name: str, seconds: float) -> None:
+        self.profiler.record(self.prefix + str(name), seconds)
+
+    def add(self, name: str, value: float) -> None:
+        self.profiler.add(self.prefix + str(name), value)
+
+    def set_metadata(self, **values: Any) -> None:
+        self.profiler.set_metadata(**values)

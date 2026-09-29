@@ -293,6 +293,20 @@ actions, a zero entropy coefficient lets PPO collapse to a degenerate action
 (for example never shooting) in the first few updates, after which useful
 behavior can no longer be discovered. Omit the flag to use the safe default.
 
+Evaluation-related performance knobs (results are identical either way —
+see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
+
+- `--checkpoint-eval-env-count N` (default 8): bridge environments used by
+  the checkpoint condition/generalization battery. Its planned episodes are
+  seed-scheduled, so batching them is a pure speed change.
+- `--inference-device cpu` (default `auto`): run rollout/evaluation policy
+  inference on CPU while PPO updates stay on `--device`. On CUDA hardware
+  this removes the per-step host<->device round trip that makes GPU training
+  *slower* than CPU for the tiny (84 -> 128 -> 128) policy.
+- `--profile-training`: writes `logs/training_profile.json`, including a
+  per-boundary evaluation breakdown (process startup, prediction,
+  environment stepping, battery sections).
+
 A JSON config can replace command-line editing:
 
 ```bash
