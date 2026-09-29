@@ -289,6 +289,30 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         self.assertIn("plan", first_row)
         self.assertIn("engine_metrics", first_row)
 
+    def test_profiled_training_writes_rollout_update_and_bridge_breakdown(self):
+        import json
+        from sandboxai.ppo import train_ppo
+
+        result = train_ppo(
+            self._config(
+                total_training_steps=32,
+                checkpoint_frequency=10_000,
+                evaluation_frequency=10_000,
+                curriculum_mode="fixed",
+                profile_training=True,
+            )
+        )
+        profile_path = Path(result["training_profile"])
+        self.assertTrue(profile_path.is_file())
+        report = json.loads(profile_path.read_text(encoding="utf-8"))
+        self.assertEqual(report["format"], "sandboxai.training_profile/v1")
+        self.assertEqual(report["metadata"]["observation_floats"], OBSERVATION_FIELD_COUNT)
+        self.assertEqual(report["metadata"]["action_components"], len(ACTION_NVEC))
+        self.assertGreater(report["timings"]["ppo.rollout_collection"]["total_seconds"], 0.0)
+        self.assertGreater(report["timings"]["ppo.policy_update"]["total_seconds"], 0.0)
+        self.assertEqual(report["timings"]["bridge.step.total"]["count"], 16)
+        self.assertEqual(len(report["iterations"]), 1)
+
     def test_resume_from_latest_zip_stays_in_the_same_run_directory(self):
         from sandboxai.ppo import train_ppo
 

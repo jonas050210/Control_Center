@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -56,6 +57,14 @@ def _nvidia_smi_snapshot(timeout: float = 0.75) -> dict[str, Any]:
 
 
 def resource_snapshot() -> dict[str, Any]:
+    """Collect one resource sample synchronously.
+
+    This remains the right API for one-shot commands such as ``benchmark``.
+    Training loops must use :class:`ResourceMonitor` instead: ``nvidia-smi``
+    is an external process and can take tens or hundreds of milliseconds on
+    Windows/WSL, so launching it synchronously from a PPO callback stalls
+    rollout collection.
+    """
     snapshot: dict[str, Any] = {}
     try:
         import psutil  # type: ignore
@@ -74,6 +83,77 @@ def resource_snapshot() -> dict[str, Any]:
         pass
     snapshot.update(_nvidia_smi_snapshot())
     return snapshot
+
+
+class ResourceMonitor:
+    """Periodically samples resources without blocking the training thread.
+
+    The worker owns every potentially slow probe, including ``nvidia-smi``.
+    ``snapshot()`` only copies the most recent dictionary under a lock and is
+    therefore bounded independently of driver/OS latency.  Resource readings
+    are diagnostics and never feed the policy, reward, curriculum, or RNG.
+    """
+
+    def __init__(self, interval_seconds: float = 5.0, autostart: bool = True) -> None:
+        if interval_seconds <= 0.0:
+            raise ValueError("resource monitor interval must be positive")
+        self.interval_seconds = float(interval_seconds)
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._latest: dict[str, Any] = {}
+        self._sampled_at: float | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="sandboxai-resource-monitor",
+            daemon=True,
+        )
+        self._started = False
+        if autostart:
+            self.start()
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            sample = resource_snapshot()
+            sampled_at = time.monotonic()
+            with self._lock:
+                self._latest = sample
+                self._sampled_at = sampled_at
+            if self._stop.wait(self.interval_seconds):
+                break
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            result = dict(self._latest)
+            sampled_at = self._sampled_at
+        if sampled_at is not None:
+            result["resource_sample_age_seconds"] = max(0.0, time.monotonic() - sampled_at)
+        else:
+            # Startup can legitimately reach the first progress callback
+            # before a slow first nvidia-smi probe has completed. Reporting
+            # that state is more honest than synchronously waiting for it.
+            result["resource_sample_pending"] = True
+        return result
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._started:
+            # Do not turn shutdown into another telemetry stall. A stuck
+            # external probe has its own timeout and the daemon may finish
+            # after this bounded join.
+            self._thread.join(timeout=1.0)
+
+    def __enter__(self) -> "ResourceMonitor":
+        self.start()
+        return self
+
+    def __exit__(self, *_args) -> None:
+        self.close()
 
 
 class JsonlTelemetry:

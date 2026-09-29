@@ -183,6 +183,14 @@ class TrainingConfig:
     early_stopping_patience: int = 0
     min_eval_reward: float | None = None
     reward_breakdown_logging: bool = True
+    # Drop per-step diagnostics that PPO never consumes. Episode-terminal
+    # metrics and all event data used by skill metrics/replays are retained;
+    # only redundant non-terminal metrics and reward-component dictionaries
+    # are omitted from the JSON wire payload.
+    compact_training_infos: bool = True
+    # Opt-in aggregate wall-clock profiling. Disabled runs pay no timer or
+    # report-writing cost.
+    profile_training: bool = False
 
     # --- Integrated research pipeline (python/sandboxai/pipeline.py) ------
     # "auto" drives every environment from CurriculumDirector episode plans

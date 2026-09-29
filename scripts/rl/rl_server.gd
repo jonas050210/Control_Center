@@ -29,9 +29,17 @@ var simulation_manager: SimulationManager
 var adapter: RLAdapter
 var self_play_adapter: SelfPlayAdapter
 
+## Opt-in aggregate profiling. The normal bridge never calls a clock or adds
+## fields to step responses. Python enables this with `--profile 1` and reads
+## one summary at the end of training.
+var profiling_enabled: bool = false
+var _profile_timings: Dictionary = {}
+var _profile_counters: Dictionary = {}
+
 
 func _initialize() -> void:
 	var options: Dictionary = _parse_user_args(OS.get_cmdline_user_args())
+	profiling_enabled = int(options.get("profile", 0)) > 0
 	if int(options.get("self-play", 0)) > 0:
 		self_play_adapter = SelfPlayAdapter.new(
 			int(options.get("env-count", 1)),
@@ -73,13 +81,26 @@ func _serve_stdio() -> void:
 		for line in chunk.split("\n", false):
 			if line.strip_edges().is_empty():
 				continue
+			var parse_started: int = Time.get_ticks_usec() if profiling_enabled else 0
 			var request = JSON.parse_string(line)
+			_profile_add_time("request_parse", parse_started)
+			var command: String = str(request.get("cmd", "invalid")) if request is Dictionary else "invalid"
+			var handle_started: int = Time.get_ticks_usec() if profiling_enabled else 0
 			var response: Dictionary = (
 				_handle_self_play_request(request)
 				if self_play_adapter != null
 				else _handle_request(request)
 			)
-			print(JSON.stringify(response))
+			_profile_add_time("command_%s" % command, handle_started)
+			var encode_started: int = Time.get_ticks_usec() if profiling_enabled else 0
+			var encoded: String = JSON.stringify(response)
+			_profile_add_time("response_encode", encode_started)
+			var write_started: int = Time.get_ticks_usec() if profiling_enabled else 0
+			print(encoded)
+			_profile_add_time("response_write", write_started)
+			if profiling_enabled:
+				_profile_add_counter("request_bytes", line.to_utf8_buffer().size())
+				_profile_add_counter("response_bytes", encoded.to_utf8_buffer().size() + 1)
 			if bool(response.get("close", false)):
 				closing = true
 				break
@@ -124,6 +145,8 @@ func _handle_self_play_request(request) -> Dictionary:
 				response["ok"] = true
 		"health_check":
 			response = {"ok": true, "health": self_play_adapter.health_check()}
+		"profile_snapshot":
+			response = {"ok": true, "profile": _profile_snapshot()}
 		"set_map":
 			var map_id: String = str(request.get("map_id", ""))
 			var ok: bool = self_play_adapter.set_map(map_id)
@@ -197,7 +220,7 @@ func _handle_request(request) -> Dictionary:
 			}
 		"step":
 			var actions: Array = request.get("actions", [])
-			response = adapter.step(actions)
+			response = adapter.step(actions, bool(request.get("compact_infos", false)))
 			response["ok"] = true
 		"metrics":
 			response = {"ok": true, "metrics": simulation_manager.get_metrics()}
@@ -213,11 +236,56 @@ func _handle_request(request) -> Dictionary:
 			response = {"ok": true, "conditions": adapter.get_episode_conditions()}
 		"health_check":
 			response = {"ok": true, "health": simulation_manager.health_check_all()}
+		"profile_snapshot":
+			response = {"ok": true, "profile": _profile_snapshot()}
 		"close":
 			response = {"ok": true, "close": true}
 		_:
 			response = {"ok": false, "error": "unknown command: %s" % command}
 	return response
+
+
+func _profile_add_time(name: String, started_usec: int) -> void:
+	if not profiling_enabled or started_usec <= 0:
+		return
+	var elapsed: int = maxi(0, Time.get_ticks_usec() - started_usec)
+	var entry: Dictionary = _profile_timings.get(
+		name,
+		{"count": 0, "total_usec": 0, "min_usec": elapsed, "max_usec": 0}
+	)
+	entry["count"] = int(entry["count"]) + 1
+	entry["total_usec"] = int(entry["total_usec"]) + elapsed
+	entry["min_usec"] = mini(int(entry["min_usec"]), elapsed)
+	entry["max_usec"] = maxi(int(entry["max_usec"]), elapsed)
+	_profile_timings[name] = entry
+
+
+func _profile_add_counter(name: String, value: int) -> void:
+	if profiling_enabled:
+		_profile_counters[name] = int(_profile_counters.get(name, 0)) + value
+
+
+func _profile_snapshot() -> Dictionary:
+	if not profiling_enabled:
+		return {"available": false, "reason": "Godot bridge profiling disabled"}
+	var timings: Dictionary = {}
+	for name_value in _profile_timings:
+		var name: String = str(name_value)
+		var source: Dictionary = _profile_timings[name]
+		var count: int = int(source.get("count", 0))
+		var total_usec: int = int(source.get("total_usec", 0))
+		timings[name] = {
+			"count": count,
+			"total_seconds": float(total_usec) / 1000000.0,
+			"mean_ms": float(total_usec) / float(maxi(1, count)) / 1000.0,
+			"min_ms": float(source.get("min_usec", 0)) / 1000.0,
+			"max_ms": float(source.get("max_usec", 0)) / 1000.0,
+		}
+	return {
+		"available": true,
+		"timings": timings,
+		"counters": _profile_counters.duplicate(true),
+	}
 
 
 func _parse_user_args(args: PackedStringArray) -> Dictionary:
