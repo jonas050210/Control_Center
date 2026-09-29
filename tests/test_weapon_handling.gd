@@ -196,14 +196,17 @@ func test_magazine_drains_and_auto_reloads_when_empty() -> SandboxTest:
 	t.assert_eq(weapon.ammo_in_magazine, 0, "magazine should be empty")
 	t.assert_true(weapon.is_magazine_empty())
 
-	# The next pull cannot fire, and starts the reload by itself: there is
-	# no reload bit in the action space, so a dry weapon must recover
-	# without one or the episode becomes unwinnable.
+	# The reload begins on the shot that empties the magazine, not on the
+	# next trigger pull: there is no reload bit in the action space, so a
+	# dry weapon must recover on its own or the episode becomes
+	# unwinnable, and making the agent spend a pull to discover it is dry
+	# would just be a tax. The following pull is therefore blocked as
+	# "reloading" rather than "empty".
+	t.assert_true(weapon.is_reloading(), "emptying the magazine must start the reload at once")
 	weapon.cooldown_remaining = 0.0
 	var dry: Dictionary = weapon.pull_trigger(true)
-	t.assert_false(bool(dry["fired"]), "an empty magazine cannot fire")
-	t.assert_eq(dry["blocked_reason"], "empty")
-	t.assert_true(weapon.is_reloading(), "an empty weapon must start reloading itself")
+	t.assert_false(bool(dry["fired"]), "a reloading weapon cannot fire")
+	t.assert_eq(dry["blocked_reason"], "reloading")
 	t.assert_false(weapon.is_ready(), "a reloading weapon is not ready")
 
 	# Reloading blocks the trigger for exactly reload_time seconds.
