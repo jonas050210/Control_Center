@@ -201,7 +201,7 @@ always win):
 | `N` | single simulation step |
 | `R` | reset the selected environment |
 | `Tab` | next inspector tab |
-| `W A S D`, mouse, LMB/`Space`, `Esc` | gameplay (HUMAN mode) |
+| `W A S D`, mouse, LMB/`Space`, `Ctrl`, `Esc` | gameplay (HUMAN mode) |
 | right-drag, `W A S D`, `Q`/`E`, `Shift` | free camera (non-HUMAN modes) |
 
 ---

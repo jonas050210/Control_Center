@@ -6,9 +6,16 @@
 ## Nothing in the existing environment changes unless a caller explicitly
 ## enables teams.
 ##
-## The Python mirror is python/sandboxai/teamplay.py; the two share the
-## same symbol vocabulary and the same friendly-fire and isolation rules so
-## a team experiment configured on either side means the same thing.
+## The Python mirror is python/sandboxai/teamplay.py. `COMMS_SYMBOLS` is
+## kept byte-identical on both sides (guarded by a source-drift test in
+## `python/tests/test_teamplay.py`), and both sides enforce the same
+## friendly-fire and no-ground-truth-leakage rules -- so "comms are on" or
+## "friendly fire is off" means the same thing on either side. The teammate
+## *report* schema is NOT field-name-identical: `REPORT_FIELDS` here and
+## Python's `TeammateReport` are two independently shaped perception-only
+## payloads for the same foundation, each validated against its own side's
+## forbidden-field list. Wiring an actual bridge between them is future
+## work, not something either side should assume exists today.
 ##
 ## What this file deliberately does NOT do: it does not give a teammate
 ## privileged knowledge. A teammate report is built from what the *teammate*

@@ -61,6 +61,13 @@ class SelfPlayCoordinator:
         if opponent_slot.checkpoint and opponent_slot.checkpoint not in self.opponent_pool:
             self.opponent_pool.append(opponent_slot.checkpoint)
         self.metrics: dict[str, list[dict[str, Any]]] = {learning_slot.name: [], opponent_slot.name: []}
+        # Lazily created, seeded fallback RNG used only when a caller does not
+        # supply its own `rng` to sample_opponent(). Seeded from the opponent
+        # slot's own `seed` field rather than the unseeded global `random`
+        # module, so a coordinator built with the same slots draws the same
+        # opponent sequence on every run -- a training-determinism hazard
+        # otherwise, since the global module seeds from OS entropy.
+        self._fallback_rng: random.Random | None = None
 
     def add_to_pool(self, checkpoint_path: str | Path) -> None:
         path_str = str(checkpoint_path)
@@ -70,7 +77,13 @@ class SelfPlayCoordinator:
     def sample_opponent(self, device: str = "cpu", rng: random.Random | None = None) -> PolicySlot:
         if not self.opponent_pool:
             return self.opponent_slot
-        picker = rng or random
+        picker: random.Random
+        if rng is not None:
+            picker = rng
+        else:
+            if self._fallback_rng is None:
+                self._fallback_rng = random.Random(self.opponent_slot.seed)
+            picker = self._fallback_rng
         chosen = picker.choice(self.opponent_pool)
         self.opponent_slot.checkpoint = chosen
         self.opponent_slot.load(device)
