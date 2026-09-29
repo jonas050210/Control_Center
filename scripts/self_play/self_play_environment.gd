@@ -587,6 +587,7 @@ static func _action_is_meaningful(
 	action: Action, shot_fired: bool, target_hittable: bool
 ) -> bool:
 	if shot_fired:
+		return true
 	if action.move_axis != 0 or action.strafe_axis != 0 or action.jump:
 		return true
 	if not target_hittable:
