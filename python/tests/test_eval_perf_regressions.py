@@ -459,6 +459,13 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
         report = json.loads((step_dirs[0] / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(best["mean_reward"], latest["mean_episode_reward"])
         self.assertEqual(best["timesteps"], latest["timesteps"])
+        # The selection rule is recorded next to the score it produced, so
+        # a later resume can tell whether the two are comparable.
+        self.assertEqual(
+            best["selection_rule"],
+            {"metric": "mean_episode_reward", "goal": "max", "min_delta": 0.0},
+        )
+        self.assertEqual(best["score"], best["mean_reward"])
         self.assertEqual(
             report["normal_evaluation"]["mean_episode_reward"],
             latest["mean_episode_reward"],

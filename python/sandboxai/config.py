@@ -223,6 +223,24 @@ class TrainingConfig:
     net_arch: tuple[int, int] = (128, 128)
     early_stopping_patience: int = 0
     min_eval_reward: float | None = None
+    ## Checkpoint-selection rule (python/sandboxai/selection.py). The
+    ## default reproduces the historical behavior exactly: keep the
+    ## checkpoint with the strictly highest mean shaped episode reward of
+    ## the normal evaluation. It is configurable because "best" is a
+    ## research decision - a reward-weight or curriculum change moves the
+    ## shaped-reward scale, and selecting on win rate or accuracy is then
+    ## the honest comparison. Dotted paths reach the mirrored checkpoint
+    ## report sections (e.g. "condition_evaluation.mean_win_rate").
+    ## The active rule is written into evaluations/best.json; a resume
+    ## that finds an incomparable rule there starts selection over rather
+    ## than comparing two different quantities.
+    checkpoint_selection_metric: str = "mean_episode_reward"
+    ## "max" or "min".
+    checkpoint_selection_goal: str = "max"
+    ## Minimum improvement that counts as an improvement. 0.0 keeps the
+    ## historical strict inequality; a positive value stops near-noise
+    ## churn of best_eval.zip (and of the early-stopping patience counter).
+    checkpoint_selection_min_delta: float = 0.0
     reward_breakdown_logging: bool = True
     # Drop per-step diagnostics that PPO never consumes. Episode-terminal
     # metrics and all event data used by skill metrics/replays are retained;
@@ -319,6 +337,9 @@ class TrainingConfig:
             raise ValueError("inference_device must be one of auto, cpu, cuda")
         if self.early_stopping_patience < 0:
             raise ValueError("early_stopping_patience must be non-negative")
+        # Fails fast here rather than at the first evaluation boundary,
+        # which can be tens of minutes into a run.
+        self.checkpoint_selection_rule()
         # Integrated pipeline fields.
         if self.curriculum_mode not in ("auto", "fixed"):
             raise ValueError("curriculum_mode must be 'auto' or 'fixed'")
@@ -388,6 +409,12 @@ class TrainingConfig:
         if self.inference_device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA inference was requested but torch.cuda.is_available() is false")
         return self.inference_device
+
+    def checkpoint_selection_rule(self):
+        """Builds the run's checkpoint-selection rule (validating it)."""
+        from .selection import CheckpointSelectionRule
+
+        return CheckpointSelectionRule.from_config(self)
 
     def resolved_env_workers(self) -> int:
         """Concrete number of Godot bridge processes for training.

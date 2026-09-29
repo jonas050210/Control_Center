@@ -212,13 +212,35 @@ def train_ppo(
                     }
                 )
         write_manifest(run_dir, pipeline.manifest())
-    best_score = float("-inf")
+    # Checkpoint selection is an explicit, recorded rule (see
+    # sandboxai/selection.py). The default is identical to the historical
+    # behavior: strictly higher mean shaped episode reward.
+    selection_rule = config.checkpoint_selection_rule()
+    best_score = selection_rule.initial_score()
     best_path = checkpoints / "best_eval.zip"
     eval_patience_counter = 0
     stop_training = False
 
-    if (evaluations / "best.json").exists():
-        best_score = float(json.loads((evaluations / "best.json").read_text(encoding="utf-8")).get("mean_reward", best_score))
+    best_record_path = evaluations / "best.json"
+    if best_record_path.exists():
+        previous_best = json.loads(best_record_path.read_text(encoding="utf-8"))
+        if selection_rule.matches(previous_best.get("selection_rule")):
+            # "score" is the rule's own quantity; "mean_reward" is the
+            # legacy field, which under the default rule is the same number.
+            inherited = previous_best.get("score", previous_best.get("mean_reward"))
+            if isinstance(inherited, (int, float)) and not isinstance(inherited, bool):
+                best_score = float(inherited)
+        else:
+            # Inheriting a score produced by a different metric or
+            # direction would compare two unrelated quantities, so this
+            # run restarts selection - and says so.
+            telemetry.write(
+                {
+                    "event": "checkpoint_selection_rule_changed",
+                    "previous": previous_best.get("selection_rule"),
+                    "current": selection_rule.as_dict(),
+                }
+            )
 
     class MetricsCallback(BaseCallback):
         def __init__(self):
@@ -238,6 +260,7 @@ def train_ppo(
                 "event": "training_start",
                 "environment_count": config.environment_count,
                 "env_workers": env_workers,
+                "checkpoint_selection": selection_rule.as_dict(),
                 "device": device,
                 "run_start_timesteps": self.start_timesteps,
                 "total_training_steps": self.target_timesteps,
@@ -575,16 +598,40 @@ def train_ppo(
             reward = float(summary.get("mean_episode_reward", 0.0))
             (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
             best_started = time.perf_counter() if profiler is not None else 0.0
-            if reward > best_score:
-                best_score = reward
+            score = selection_rule.score(summary)
+            if score is None:
+                # A rule pointed at a metric this run does not produce must
+                # not silently select on something else; it counts as "no
+                # improvement" and is reported once per evaluation.
+                telemetry.write(
+                    {
+                        "event": "checkpoint_selection_metric_missing",
+                        "metric": selection_rule.metric,
+                        "timesteps": self.num_timesteps,
+                    }
+                )
+            if score is not None and selection_rule.is_improvement(score, best_score):
+                best_score = score
                 eval_patience_counter = 0
                 if inference_scheduler is not None:
                     with inference_scheduler.training_device_context():
                         self.model.save(best_path)
                 else:
                     self.model.save(best_path)
-                (evaluations / "best.json").write_text(
-                    json.dumps({"mean_reward": reward, "timesteps": self.num_timesteps, "checkpoint": str(best_path)}, indent=2) + "\n",
+                best_record_path.write_text(
+                    json.dumps(
+                        {
+                            # Legacy field, kept so existing readers and
+                            # resume paths keep working.
+                            "mean_reward": reward,
+                            "score": score,
+                            "timesteps": self.num_timesteps,
+                            "checkpoint": str(best_path),
+                            "selection_rule": selection_rule.as_dict(),
+                        },
+                        indent=2,
+                    )
+                    + "\n",
                     encoding="utf-8",
                 )
             else:

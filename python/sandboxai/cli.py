@@ -80,6 +80,26 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
         "(cpu removes the per-step host<->device round trip that makes CUDA slower "
         "than CPU for this tiny policy)",
     )
+    parser.add_argument(
+        "--checkpoint-selection-metric",
+        default=None,
+        help="evaluation-summary key that selects best_eval.zip (default "
+        "mean_episode_reward); dotted paths reach mirrored report sections, "
+        "e.g. condition_evaluation.mean_win_rate",
+    )
+    parser.add_argument(
+        "--checkpoint-selection-goal",
+        choices=["max", "min"],
+        default=None,
+        help="whether the selection metric is maximised (default) or minimised",
+    )
+    parser.add_argument(
+        "--checkpoint-selection-min-delta",
+        type=float,
+        default=None,
+        help="minimum improvement that replaces best_eval.zip (default 0.0 = any "
+        "strict improvement)",
+    )
     parser.add_argument("--seed", type=int)
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--curriculum-level", type=int)
