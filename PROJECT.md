@@ -219,9 +219,11 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 
 **CURRENT anti-hacking measures.** Aim reward is target-hittable-gated; survival reward is zero in combat; time/passivity costs prevent hiding; hit credit is damage/pellet normalized; timeout is reported separately from loss; diagnostic skill metrics are not reward inputs.
 
+**CURRENT exploit regression suite.** `tests/test_reward_exploits.gd` pins each of those properties as an invariant instead of prose: empty tick pays exactly zero; idling with a live target is negative every tick; closed aim/positioning oscillation cycles are net negative; shaping is clamped per tick and cannot outbid a hit or kill; an even HP trade is a loss; the flat hit bonus is fire-rate neutral per HP removed and clamped; pellet clipping earns only its landed fraction; useless shots cost more than honest near-misses and both stay negative; dying costs the full death penalty and `|death| >= kill`; the survival trickle stays opt-in; the component set is closed and the scalar reward equals its published decomposition, end to end over a real episode. Assertions are signs and orderings derived from `SandboxConfig`, so retuning stays possible but exploitability does not.
+
 **CURRENT limitation:** at perception-gated levels, aiming, passivity, and combat-time gates still use simulator targetability/hittability rather than only the policy's current belief. This privileged training signal is not added to the observation, but strict perception-purity experiments must ablate or redesign it.
 
-**CONSTRAINT:** best-checkpoint selection currently uses **mean shaped episode reward**, not win rate or generalization. Independent win/loss/timeout, accuracy, encounter duration/steps, condition spread, and skill metrics must therefore be reviewed for proxy exploitation; the separate weapon TTK table is a simulator diagnostic, not a measured policy-TTK metric.
+**CONSTRAINT:** best-checkpoint selection *defaults* to **mean shaped episode reward** (`checkpoint_selection_metric`), not win rate or generalization. Independent win/loss/timeout, accuracy, encounter duration/steps, condition spread, and skill metrics must therefore be reviewed for proxy exploitation; the separate weapon TTK table is a simulator diagnostic, not a measured policy-TTK metric.
 
 **RESEARCH:** for new dense shaping, prefer task-success outcomes plus carefully tested potential-based shaping `F(s,s') = γΦ(s') − Φ(s)` where applicable. Add an exploit test before tuning coefficients: stationary firing, wall firing, spinning, corner camping, damage farming, deliberate timeout, target-switch churn, and map-coverage loops. Evaluate policies on unshaped success metrics.
 
@@ -251,7 +253,9 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 
 **CURRENT safe direct demonstration path.** `sandboxai record` opens the local graphical Godot recorder. Human keyboard/mouse control passes through the same `Action`, `EnvironmentCore`, reward, and observation path as policies. It writes JSONL metadata then transitions containing observation, canonical action, next observation, reward, done, timestamps, episode/environment IDs, and info. This is the preferred source for BC because observations and actions are synchronized in the exact current contract.
 
-**PLANNED manual TTK measurement.** Ordinary human testing can ethically calibrate combat without any private API:
+**CURRENT manual TTK evidence pipeline.** `python/sandboxai/ttk.py` (schema `sandboxai.ttk_trials` v1) + `sandboxai ttk-report` implement the protocol below as data, not prose: `TTKTrial` records weapon, distance, target health, movement state, hit zone, acquisition/first-trigger/first-damage/lethal timestamps, shots fired/hit, outcome (`kill`, `target_escaped`, `tester_died`, `aborted`, `no_damage`), annotator/tester/session/build/frame-rate/start-convention and explicit `consent`. `validate_trial` enforces required fields, monotonic timestamps, `kill <-> lethal_time`, `shots_hit <= shots_fired`, `consent=True`, and **rejects any field whose name suggests a private/cheat source** (`memory_`, `process_`, `packet`, `server_authoritative`, `hidden_`, `injected`, `hook_`, `exploit`, `aimbot`). `TTKDataset` reports censoring separately, summarises per condition (3 m distance buckets) with median/IQM and deterministic seeded bootstrap intervals, and splits a tester/session holdout. `compare_with_simulator()` diffs human medians against `weapons.py` ideal and handling-aware TTK per weapon. There is deliberately no `arrays()` export: TTK trials are calibration evidence, not BC transitions.
+
+The protocol the schema encodes:
 
 1. Record the game/simulator screen and the tester's own input timing with consent, using public UI and ordinary controls only.
 2. Freeze weapon/loadout, target health, distance band, movement state, hit zone, patch/version, frame rate, network context, and start convention.
@@ -265,12 +269,12 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 
 - **CURRENT:** JSON or JSONL `sandboxai.demonstrations` schema; finite-value and action validation; legacy action conversion.
 - **CURRENT:** two-layer Tanh MLP, default `84 → 128 → 128`, with one categorical head per action component (sizes `3,3,3,3,2,2`). Loss is the sum of six cross-entropies.
-- **CURRENT:** seeded transition-level random train/validation split, Adam, validation loss, component accuracy, exact-six-component accuracy, early stopping, CSV/JSONL metrics.
+- **CURRENT:** seeded **episode/group-aware** train/validation split (`split_strategy` = `auto`|`episode`|`transition`), Adam, validation loss, component accuracy, exact-six-component accuracy, early stopping, CSV/JSONL metrics. `auto` splits by episode group (`run_id|environment_id|episode_id`) when the dataset has at least two groups and otherwise falls back to the transition shuffle while recording `degraded_reason`; `episode` raises rather than leaking; `transition` must be asked for explicitly.
+- **CURRENT:** every BC run writes `dataset_report.json` (split report with `leakage_free`, dataset fingerprint `blake2b:<hex>`, episode structure, action histograms, duplicate fraction, observation-range violations) and stamps the split + fingerprint into each checkpoint. `sandboxai inspect-dataset --statistics` prints the same report without training. `BCConfig.require_contract_observations` and `max_duplicate_fraction` fail a bad corpus before it becomes a model.
 - **CURRENT:** resumable trusted PyTorch `sandboxai.bc.v1` `.pt` files containing model and optimizer state; atomic `latest.pt`, `best.pt`, periodic epochs.
 - **CURRENT:** compatible hidden layers and categorical heads can initialize SB3 PPO's actor. PPO's value network remains newly initialized. Any shape/layout mismatch raises.
-- **CONSTRAINT:** the current split is by **transition**, not by episode. Adjacent states from one episode can leak across train/validation; fixing this is a high-priority data-quality task.
 - **CONSTRAINT:** BC is supervised imitation, not offline RL. It does not infer counterfactual returns or improve beyond dataset support by itself.
-- **RESEARCH:** plain BC suffers covariate shift and compounding errors. Add episode/group holdouts first, then evaluate DAgger-style corrective data collected on learner-visited simulator states. Preserve expert consent and never silently blend evaluation episodes into training.
+- **RESEARCH:** plain BC suffers covariate shift and compounding errors. Episode/group holdouts now exist; next, evaluate DAgger-style corrective data collected on learner-visited simulator states. Preserve expert consent and never silently blend evaluation episodes into training.
 
 ## 7. PPO and online learning
 
@@ -278,7 +282,7 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 
 | Default | Value |
 | --- | ---: |
-| Environments | 8 in one Godot process |
+| Environments | 8, in `env_workers` Godot processes (default 1; `--env-workers N|auto` shards them) |
 | Total timesteps | 1,000,000 |
 | Rollout length | 2,048 per environment (16,384 transitions/update at 8 envs) |
 | Batch size | 256 |
@@ -313,9 +317,11 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 - **CURRENT:** normal and checkpoint-battery bridges persist across boundaries. In auto mode the two independent Godot processes simulate concurrently; access to the shared model is locked and both jobs join before selection/early stopping.
 - **CURRENT:** checkpoint batteries can run a 24-episode condition sample, held-out generalization cells (one episode/cell default), diagnostic skill summaries, optional replays, and optional league matches.
 - **CURRENT:** condition reports expose win/loss/timeout, reward, map/scenario/lighting/enemy count, skill groups, worst conditions, and spread instead of only a global mean.
-- **CONSTRAINT:** `best_eval.zip` is replaced only when normal evaluation's mean shaped reward strictly improves. Battery/generalization evidence is reported but does not select the best model.
+- **CURRENT:** the checkpoint-selection rule is explicit, configurable and recorded (`python/sandboxai/selection.py`). `CheckpointSelectionRule(metric, goal, min_delta)` is built from `checkpoint_selection_{metric,goal,min_delta}`, validated at config load, written into `evaluations/best.json` next to the score it produced, and mirrored in the run manifest and the `training_start` telemetry event. Dotted metrics reach the mirrored report sections (e.g. `condition_evaluation.mean_win_rate`); `goal=min` selects on quantities like TTK or deaths; `min_delta` suppresses near-noise churn. Defaults reproduce the historical behaviour exactly: strictly higher `mean_episode_reward`.
+- **CURRENT:** a resume compares the recorded rule with the configured one. An incomparable rule (different metric or direction) restarts selection and emits `checkpoint_selection_rule_changed` instead of comparing win rate against shaped reward; a metric the run does not produce counts as no improvement and emits `checkpoint_selection_metric_missing`.
+- **CONSTRAINT:** battery/generalization evidence is reported and *reachable* by the rule, but the default rule still selects on the normal evaluation's mean shaped reward.
 
-**PLANNED model-selection rule.** Predeclare a lexicographic or constrained score such as: minimum win rate and maximum timeout rate on core tasks; then worst-condition/generalization success; then median/IQM success or TTK; shaped reward only as a tie-breaker. Keep a final untouched test seed/map split. Report all training seeds, not the luckiest run.
+**PLANNED model-selection rule (remaining).** Predeclare a lexicographic or constrained score such as: minimum win rate and maximum timeout rate on core tasks; then worst-condition/generalization success; then median/IQM success or TTK; shaped reward only as a tie-breaker. Keep a final untouched test seed/map split. Report all training seeds, not the luckiest run.
 
 **RESEARCH reporting.** With limited runs, store all per-seed scores and add stratified bootstrap intervals, interquartile mean, probability of improvement, and performance profiles. Never tune on the final holdout.
 
@@ -324,7 +330,9 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 | Artifact | CURRENT format/boundary |
 | --- | --- |
 | PPO checkpoints | SB3 `.zip`: periodic `ppo_*`, `latest.zip`, `best_eval.zip`, run `final.zip`, battery `policy.zip` |
-| BC checkpoints | PyTorch `.pt`, format tag `sandboxai.bc.v1`, model + optimizer |
+| BC checkpoints | PyTorch `.pt`, format tag `sandboxai.bc.v1`, model + optimizer, carrying the split report + dataset fingerprint |
+| BC data provenance | `dataset_report.json` (split/leakage report, fingerprint, statistics) next to the BC run's `config.json` |
+| Human TTK evidence | JSONL `sandboxai.ttk_trials` v1 trial files (optional leading metadata object); `sandboxai.ttk_simulator_comparison/v1` comparison documents |
 | Config/provenance | `config.json`, `run_summary.json`, `warm_start.json`, `run_manifest.json` (`sandboxai.run_manifest/v2`: + host/Godot/code-dirty/parallelism/selection-rule provenance), curriculum state |
 | Evaluation | per-evaluation-step `summary.json`/episode CSV; atomic battery `report.json`; rolling `latest.json`/`best.json` |
 | Telemetry/profile | JSONL, TensorBoard events, optional `training_profile.json` |
@@ -335,8 +343,9 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 ## 9. Self-play and league status
 
 - **CURRENT:** `SelfPlayEnvironmentCore` accepts both policy actions for one tick, applies both movements before combat, and gives both slots symmetric 84-float observations, handling configuration, independent seeded RNG streams, per-slot reward/metrics, and no privileged opponent fields.
-- **CURRENT limitation:** fire is then resolved slot A before slot B; if A kills B, B's same-tick trigger is suppressed. This is not fully simultaneous combat and creates a lethal-tie slot-order bias that must be fixed before training claims.
+- **CURRENT:** fire is **simultaneous**. Both slots pull their trigger and both volleys are resolved against the pre-tick world (positions, health, alive flags); damage is applied afterwards, clamped to the target's remaining health exactly as `AgentState.take_damage` clamps it. A lethal exchange therefore kills both agents and ends `draw`, neither trigger is cancelled by the other's outcome, and near-miss geometry is sampled before damage lands. Pinned by symmetric-duel tests (mutual kill, slot symmetry, clamped/mirrored damage, non-lethal trade, symmetry under full weapon handling).
 - **CURRENT:** Python can load independent frozen checkpoints, register snapshots, verify fingerprints/weight independence, sample opponent pools, schedule deterministic tournaments, and compute reporting-only Elo.
+- **CURRENT:** opponent sampling is deterministic by construction. `SelfPlayCoordinator` owns a seeded generator (never the global `random` module) and supports `uniform`, `latest`, `recency_weighted` and `round_robin`; `reset_sampling()` rewinds the stream, `choose_opponent_checkpoint()` selects without loading a model, and `sampling_snapshot()` records strategy/seed/draws/pool for manifests. `SelfPlayConfig.opponent_strategy`/`opponent_seed` put the rule in the config snapshot (`SelfPlayCoordinator.from_config`). `League` was already seeded and is unchanged.
 - **CURRENT:** checkpoint-time league evaluation is optional and off by default.
 - **CONSTRAINT:** there is no public `self-play` training command, population optimizer, PFSP loop, exploiter role, or automatic promotion of league policies. Level 11 is a match/evaluation hook, not part of standard single-policy PPO.
 - **PLANNED:** create an explicit learner-vs-frozen-opponent training VecEnv, snapshot cadence, immutable policy IDs, recent/historical/best pools, and regression gates.
@@ -349,6 +358,7 @@ Cells are ideal/handling-aware TTK. These are model calculations, not human perf
 - **CURRENT profiling:** Python rollout/update/callback/model/bridge timings plus opt-in Godot parse/simulation/encode/write aggregates and request/response byte counters.
 - **CURRENT benchmark:** environment-count sweeps and five comparable suites—early curriculum, advanced curriculum, perception combat, map analyzer, weapon handling—at `1/4/8/16/32/64` environments. It reports measured throughput/resources only.
 - **CURRENT Control Center:** watch/training-throughput/human modes, exact pause/step/speed controls, one lazily rendered environment, perception and observation inspectors, result/metric/replay tabs, and a background system monitor. It does not train or run a neural checkpoint inside Godot.
+- **CURRENT run inspection:** `python/sandboxai/run_inspection.py` + `sandboxai inspect-runs` are a strictly read-only backend over the run directory layout (state with the evidence it came from, progress, checkpoint/evaluation inventory, log sizes, manifest provenance, `problems` vs `warnings`). Documents are versioned (`sandboxai.run_report/v1`, `sandboxai.run_index/v1`); the Control Center consumes them instead of re-implementing the layout in GDScript.
 - **CURRENT replay:** light deterministic replays for routine capture; detailed observations for debugging contract or nondeterminism. `interesting` mode is default and capped at 64/run.
 
 ## 11. CLI, configuration, testing, and reproducibility
@@ -369,9 +379,9 @@ Public subcommands are exactly:
 
 ```text
 install  train  resume  evaluate  record  control-center
-bc-train  inspect-dataset  benchmark  benchmark-suites  replay
-curriculum  weapon-table  adapter-contract  validate-runtime
-compare-experiments  summarize-experiment  smoke-test
+bc-train  inspect-dataset  inspect-runs  benchmark  benchmark-suites
+replay  curriculum  weapon-table  ttk-report  adapter-contract
+validate-runtime  compare-experiments  summarize-experiment  smoke-test
 ```
 
 Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` commands.
@@ -390,13 +400,13 @@ Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` co
 
 ### Validation snapshot and commands
 
-At source commit `d0d60a2` the repository's GitHub checks were green for Python and Godot 4.7.2 on Windows and Linux. During this audit:
+At source commit `d0d60a2` the repository's GitHub checks were green for Python and Godot 4.7.2 on Windows and Linux. The most recent engineering pass (baseline `23115e0`) measured, with CPU PyTorch installed:
 
-- `gdlint scripts tests`: passed.
-- Python `compileall`: passed.
-- Minimal local pytest environment: 609 passed, 49 skipped, 2 failed only because two inference-scheduler tests import absent optional PyTorch; this was not a full-dependency run. CI installs CPU PyTorch and passed.
-- `validate-runtime`: Godot unavailable locally, so 10 live checks were skipped.
-- Headless throughput: not measured; no numbers are asserted here.
+- `python -m pytest -q`: 659 passed / 1 skipped at the baseline, 779 passed / 1 skipped / 502 subtests after the pass. No test was removed, weakened or skipped to get there.
+- `gdlint scripts tests` and the real-GDScript-grammar parse check (both run through `python/tests/test_gdscript_static.py`): passed, including the new GDScript suites.
+- Godot itself could not be installed in that environment, so `tests/run_tests.gd`, live-bridge smoke tests and any Godot throughput number were **not** executed locally; they rest on CI. New GDScript logic was instead checked with `gdscript_analysis`, gdlint, the grammar parser, and by re-deriving every numeric reward claim in Python from the real `SandboxConfig` constants.
+- `validate-runtime`: Godot unavailable locally, so the 10 live checks were skipped.
+- Headless throughput: still not measured; no Godot performance number is asserted anywhere in this file. `tools/bridge_scaling_probe.py` measures the transport with a synthetic workload only.
 
 Canonical checks:
 
@@ -417,11 +427,11 @@ sandboxai benchmark-suites --godot-executable <Godot-4.7.2>
 | --- | --- | --- | --- |
 | Headless | `--headless --script`, Dummy display/audio, no simulation views | `--headless`; `--disable-render-loop`; `--fixed-fps`; exported release binaries | Benchmark editor vs exported release. Do not add flags without measuring; bridge stepping already supplies fixed dt. |
 | GDScript | Typed GDScript analytic hot path | Easy iteration; optional static typing; lower peak speed than native code | Profile first. Move only proven kernels to C#/GDExtension; preserve a reference implementation and parity tests. |
-| Threads | Simulation environments are serial; Python threads drain pipes/telemetry and overlap two eval processes | `Thread`, `WorkerThreadPool`, mutex/semaphore; group tasks for expensive independent work | Prefer process sharding first. Worker tasks may help only if each environment step is heavy enough to beat scheduling/synchronization overhead. |
+| Threads | Simulation environments are serial *within* a shard; requests to all shards are issued before any reply is awaited (`send`/`receive` split on the transport), so N processes simulate concurrently; Python threads drain pipes/telemetry and overlap two eval processes | `Thread`, `WorkerThreadPool`, mutex/semaphore; group tasks for expensive independent work | Prefer process sharding first. Worker tasks may help only if each environment step is heavy enough to beat scheduling/synchronization overhead. |
 | Thread safety | No threaded scene-tree simulation | Active scene tree is not generally thread-safe; servers have documented rules; resources/shared containers require care | If trialed, worker code may mutate only its own `EnvironmentCore`; stage immutable inputs, wait, then gather in index order on the main thread. |
 | Physics | Analytic `ArenaWorld`/`CharacterMotor`; no PhysicsServer-driven canonical state | Fixed physics callbacks exist, but engine physics is not deterministic | Keep analytic path for research reproducibility. Use engine physics only behind a separately versioned environment. |
 | IPC | Strict request/response newline JSON; compact info mode; batched observations/actions; packed observations become generic arrays for `JSON.stringify()` | Packed arrays and Variant binary serialization exist | Profile JSON bytes/encode time. If material, add a versioned length-prefixed binary data plane; keep JSON control/debug path. |
-| Isolation | One training Godot process; separate persistent normal/battery eval processes | Multiple independent headless processes are ordinary OS isolation | Add a multi-process sharded VecEnv before risky in-engine threading. Restart failed shards without corrupting others. |
+| Isolation | **CURRENT:** `sharded_env.py` splits the environments over `env_workers` independent headless processes (`--env-workers N|auto`, `TrainingConfig.env_workers`); separate persistent normal/battery eval processes | Multiple independent headless processes are ordinary OS isolation | Sharding is result-preserving: shard *k* owning global envs `[off, off+m)` is launched with `--seed base+off`, matching `SimulationManager`'s `base_seed + index` contract, so trajectories are identical and only wall time changes (`test_sharding_is_result_preserving`). A shard failure raises `ShardFailure` naming the shard and closes the rest. Still to measure on target hardware. |
 | Navigation | Custom deterministic grid/A* | NavigationServer queries are thread-friendly; shared AStar objects are not | Current custom graph is the reproducibility baseline. Only migrate after parity/performance evidence. |
 | High-frequency stepping | One synchronous round trip per 60 Hz conceptual tick | Engine can run without real-time synchronization | Consider action-repeat/internal-step batching only as a new MDP version; accumulate rewards and terminal state correctly. |
 
@@ -434,7 +444,7 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 1. **CURRENT expectation:** structured simulation is CPU/IPC-bound; the tiny 84→128→128 MLP often makes per-step CPU inference more sensible than CUDA. The RTX is most useful for PPO update minibatches, BC, and future CNNs—not Godot's headless analytic state.
 2. **PLANNED baseline matrix:** measure native Windows Python+Godot, WSL Python+Linux Godot, and (if needed) WSL Python+Windows Godot. WSL interop is supported but must not be assumed free.
 3. **PLANNED sweep:** first run existing `1,2,4,8,16,24,32,48,64` single-process benchmarks. Record steps/s, episodes/s, p50/p95 step latency, JSON bytes, CPU/RAM, and profile buckets.
-4. **RESEARCH process sharding:** benchmark approximately `2,4,6,8,10,12` Godot processes with small batches per process, keeping total environments constant. Reserve capacity for Python, PyTorch, evaluation, and Windows; do not blindly create 20 CPU-bound workers.
+4. **CURRENT tooling, PLANNED measurement:** `sandboxai benchmark --worker-counts 1,2,4,8` sweeps worker processes per environment count and reports measured steps/s per configuration; `recommended_worker_count` (`--env-workers auto`) estimates physical cores and reserves two for the trainer. `tools/bridge_scaling_probe.py` isolates transport/process-parallelism scaling **with a synthetic workload** - it is a transport probe, never a Godot measurement. No target-hardware Godot scaling number is claimed yet.
 5. **CONSTRAINT:** control oversubscription. Set/measure `torch_threads`, BLAS/OpenMP threads, Godot process count, and eval process count together. More logical threads can reduce throughput through contention.
 6. **PLANNED selection:** choose the knee of throughput vs latency/RAM, not the largest environment count. Re-run advanced perception/weapon suites, not only the cheap level-3 baseline.
 7. **RESEARCH transport:** binary framing or shared memory is justified only if JSON encode/copy is a measured bottleneck. Shared memory likely requires native support and a ring-buffer synchronization design; it is not current Godot/GDScript code.
@@ -443,17 +453,17 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 
 - **CURRENT limitation:** no checked-in trained policy or target-hardware run establishes learning quality or throughput.
 - **CURRENT limitation:** only structured observations are trained; no RGB, CNN, frame stack, recurrent PPO, or visual sim-transfer pipeline.
-- **CURRENT limitation:** one bridge process steps N environments serially, leaving many target CPU cores unused.
+- **CURRENT limitation:** `env_workers` defaults to 1, so out of the box one bridge process still steps N environments serially; the sharded path exists and is tested but its throughput gain is unmeasured on target hardware.
 - **CURRENT limitation:** JSON serialization copies 84 floats/environment/tick plus metadata; compact infos reduce but do not remove this cost.
 - **CURRENT limitation:** feed-forward PPO cannot infer long hidden histories; ammo and bloom are consequences of actions but are not explicit observations.
-- **CURRENT limitation:** the current BC validation split can leak adjacent transitions from the same episode.
-- **CURRENT limitation:** best checkpoint is selected by mean shaped reward; reward hacking/generalization regressions can win selection.
+- **CURRENT limitation:** BC splits are episode-aware, but a dataset with no episode structure at all still degrades to a transition shuffle (reported as `degraded_reason`, never silent).
+- **CURRENT limitation:** the *default* checkpoint-selection rule is still mean shaped reward, so reward hacking/generalization regressions can win selection unless the rule is configured otherwise.
 - **CURRENT limitation:** scripted enemies do not use the same complete handling layer as the agent.
 - **CURRENT limitation:** only three contacts have individual state; overflow contacts are aggregates.
 - **CURRENT limitation:** normal dependencies are not fully pinned/locked; repeatable experiments need an environment snapshot.
 - **CURRENT limitation:** bridge and replay formats have weak evolution/negotiation compared with the observation contract.
-- **CURRENT limitation:** self-play is match/league/evaluation infrastructure, not end-to-end population training; same-tick lethal fire is slot-order-biased because A's shot resolves before B's.
-- **CURRENT limitation:** Godot must be installed separately. This audit could not run local live validation or a benchmark, although exact-4.7.2 CI at the audited source commit passed on Windows and Linux.
+- **CURRENT limitation:** self-play is match/league/evaluation infrastructure, not end-to-end population training. (Same-tick lethal fire is no longer slot-order-biased: fire resolves simultaneously.)
+- **CURRENT limitation:** Godot must be installed separately. Neither this nor the previous audit could run local live validation or a benchmark; the GDScript suite and all live-bridge/throughput claims rest on CI (exact 4.7.2, Windows + Linux). GDScript changes in this pass were checked with `gdscript_analysis`, gdlint and the real GDScript grammar parser, and their numeric claims re-derived in Python against the real `SandboxConfig` constants.
 - **CONSTRAINT:** external adapter code is only a contract checker and mock. There is no Roblox connection, private API, Studio plugin, live input automation, or transfer evidence.
 - **TRUTH WARNING:** some older prose is stale. In particular, limitations in `docs/CURRICULUM_AND_COMBAT.md` / `docs/ARCHITECTURE.md` may claim no verticality/navigation, missing recoil/ammo, five BC heads, or twelve scenarios. Current source has vertical worlds, custom navigation, recoil/bloom/magazines/reloads, six action heads, and sixteen scenarios. Re-check source/tests before repeating documentation claims.
 
@@ -488,11 +498,11 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 | ---: | --- | --- | --- |
 | P0 | **PLANNED** | Reproduce full Python/Godot suite and live runtime validation on target machine | Exact versions archived; all checks green; repeated replay agrees |
 | P0 | **PLANNED** | Measure five benchmark suites on all three relevant Windows/WSL runtime combinations | Raw JSON/CSV committed to experiment storage; no estimated numbers |
-| P1 | **PLANNED** | Human TTK protocol + local Godot demonstration corpus | Consent/provenance/condition metadata; holdout subjects/episodes; uncertainty reported |
-| P1 | **PLANNED** | Episode/group-aware BC split and contract/provenance validation | No episode overlap; old-format behavior tested; BC baseline reported |
+| P1 | **CURRENT (tooling) / PLANNED (corpus)** | Human TTK protocol + local Godot demonstration corpus | `sandboxai.ttk` + `ttk-report` enforce consent/provenance/condition metadata, tester/session holdout and bootstrap uncertainty; no corpus is collected yet |
+| P1 | **CURRENT (split) / PLANNED (baseline)** | Episode/group-aware BC split and contract/provenance validation | No episode overlap (`leakage_free` in `dataset_report.json`); old-format behavior tested; BC baseline still unreported |
 | P2 | **PLANNED** | Multi-seed BC→PPO baseline through levels 1–10 | Learning curves, all seeds, win/loss/timeout, TTK, worst conditions, generalization |
-| P2 | **PLANNED** | Success/generalization-aware checkpoint selection | Adversarial reward tests pass; selection rule predeclared and tested |
-| P3 | **RESEARCH→PLANNED after profiling** | Multi-process sharded VecEnv | Deterministic seed mapping; crash cleanup; measured throughput gain without RAM/latency regression |
+| P2 | **CURRENT (mechanism) / PLANNED (rule choice)** | Success/generalization-aware checkpoint selection | Adversarial reward tests exist and pass; the rule is predeclared, validated, recorded in `best.json`/manifest and tested - choosing a non-default rule still needs multi-seed evidence |
+| P3 | **CURRENT (implementation) / PLANNED (measurement)** | Multi-process sharded VecEnv | Deterministic seed mapping and crash cleanup done and tested (`sharded_env.py`, `--env-workers`); measured throughput gain on target hardware still outstanding |
 | P3 | **RESEARCH** | Binary bridge only if serialization is material | Protocol version/parity/fuzz tests; JSON debug fallback; measured end-to-end gain |
 | P4 | **RESEARCH** | Recurrence/history and DAgger | Beats feed-forward/BC baselines on lost-contact and handling holdouts across seeds |
 | P5 | **PLANNED** | End-to-end self-play trainer using frozen league pools | Immutable snapshots, matchup matrix, historical regression and anti-cycling evidence |
@@ -507,7 +517,7 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 2. Run `git status`; preserve the session branch and user changes.
 3. If touching observations/actions, update both languages, the canonical table, adapter groups, recorder/dataset compatibility, replays, and drift tests together.
 4. If touching episode/reset/vector logic, test terminal observations, partial resets, staged-plan consumption, and seed/order invariance.
-5. If touching reward, add exploit tests and inspect independent success metrics.
+5. If touching reward, add a case to `tests/test_reward_exploits.gd` and inspect independent success metrics. Adding a reward component fails `test_reward_component_set_is_closed` until it is documented there.
 6. If touching performance, profile and benchmark the exact workload before and after; never report estimates as measurements.
 7. If touching serialization/checkpoints, state the trust and version boundary and test old/new behavior explicitly.
 
@@ -519,11 +529,16 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 | Episode order and reward events | `scripts/env/environment_core.gd` |
 | Batch/reset/auto-reset | `scripts/core/simulation_manager.gd`, `scripts/rl/rl_adapter.gd` |
 | Weapon and TTK truth | `scripts/weapon/weapon_state.gd`, `python/sandboxai/weapons.py` |
-| Reward constants/combination | `scripts/core/sandbox_config.gd`, `scripts/reward/reward_system.gd` |
+| Reward constants/combination | `scripts/core/sandbox_config.gd`, `scripts/reward/reward_system.gd`, exploit invariants in `tests/test_reward_exploits.gd` |
 | Curriculum semantics/plans | `scripts/core/curriculum_config.gd`, `python/sandboxai/{curriculum_stages,auto_curriculum,randomization,pipeline}.py` |
 | Bridge/process behavior | `scripts/rl/rl_server.gd`, `python/sandboxai/godot_env.py` |
 | PPO/config/checkpoints | `python/sandboxai/{config,ppo,checkpoint_eval}.py` |
+| Checkpoint-selection rule | `python/sandboxai/selection.py` |
+| Multi-process env sharding | `python/sandboxai/{sharded_env,godot_env}.py`, `tools/bridge_scaling_probe.py` |
+| Run provenance/manifest | `python/sandboxai/manifest.py` |
+| Read-only run inspection | `python/sandboxai/run_inspection.py` |
 | Demonstrations/BC | `scripts/recording/`, `python/sandboxai/{dataset,bc}.py` |
+| Human TTK evidence | `python/sandboxai/ttk.py` |
 | Evaluation/generalization | `python/sandboxai/{evaluation,checkpoint_eval,conditions,generalization}.py` |
 | Self-play/league | `scripts/self_play/`, `python/sandboxai/{self_play,league,policies}.py` |
 | Replay/metrics/profile | `python/sandboxai/{replay,metrics,telemetry,training_profile}.py` |
