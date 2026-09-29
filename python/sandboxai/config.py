@@ -8,6 +8,8 @@ import os
 import shutil
 from typing import Any
 
+from .wsl import is_wsl, looks_like_windows_path, windows_to_wsl_path
+
 ## Highest curriculum level accepted by the Godot side. Mirrors
 ## CurriculumConfig.Level (1-10 combat, 11 = agent-vs-agent self-play) in
 ## scripts/core/curriculum_config.gd.
@@ -53,6 +55,12 @@ def _resolve_executable(candidate: str | None) -> str | None:
     (``shutil.which`` on Windows also applies PATHEXT, so ``godot`` finds
     ``godot.exe``). Returns None when `candidate` cannot be resolved, so
     callers can keep probing their next fallback.
+
+    Under WSL a Windows-form path (``C:\\...``) is accepted as well: it is
+    translated through ``wslpath -u`` to its ``/mnt/<drive>/...`` form. This
+    matters for a checkout shared between Windows and WSL, where the
+    remembered --godot-executable (or the flag itself) may have been written
+    down by the Windows side.
     """
     if not candidate:
         return None
@@ -62,6 +70,10 @@ def _resolve_executable(candidate: str | None) -> str | None:
     expanded = Path(candidate).expanduser()
     if expanded.is_file():
         return str(expanded)
+    if looks_like_windows_path(candidate) and is_wsl():
+        translated = windows_to_wsl_path(candidate)
+        if translated != candidate and Path(translated).is_file():
+            return translated
     return None
 
 

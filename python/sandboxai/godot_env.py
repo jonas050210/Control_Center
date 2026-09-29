@@ -12,6 +12,7 @@ from typing import Any
 
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+from .wsl import WindowsInterop, normalize_host_path
 
 try:
     import numpy as np  # type: ignore
@@ -38,17 +39,22 @@ class GodotProcessTransport:
         request_timeout: float = 30.0,
         self_play: bool = False,
     ) -> None:
-        project = Path(project_path).expanduser().resolve()
+        project = Path(normalize_host_path(project_path)).expanduser().resolve()
         if not project.exists():
             raise FileNotFoundError(f"Godot project path does not exist: {project}")
         executable = find_godot_executable(godot_executable)
         self.executable = executable
         self.request_timeout = request_timeout
+        # WSL driving the Windows Godot build: the project path must reach the
+        # engine in Windows form (C:\...) and the spawn must survive a refused
+        # direct .exe launch (cmd.exe fallback). Everywhere else this adapter
+        # is an exact pass-through.
+        interop = WindowsInterop(executable)
         command = [
             executable,
             "--headless",
             "--path",
-            str(project),
+            interop.windows_path(project),
             "--script",
             "res://scripts/rl/rl_server.gd",
             "--",
@@ -66,22 +72,15 @@ class GodotProcessTransport:
             # Two-agent match batch (league evaluation); see
             # scripts/rl/self_play_adapter.gd for the wire shapes.
             command += ["--self-play", "1"]
-        try:
-            self.process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                bufsize=1,
-            )
-        except OSError as exc:
-            raise RuntimeError(
-                f"Could not launch Godot executable {executable!r}. "
-                "Install Godot 4.7.2 and put it on PATH, set the GODOT_PATH "
-                "environment variable, or pass --godot-executable."
-            ) from exc
+        self.process = interop.popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+        )
         self._closed = False
         # Both output pipes are drained by daemon threads. Draining stderr is
         # not optional: a long training run in which Godot logs warnings would
