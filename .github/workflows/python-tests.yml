@@ -12,7 +12,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # write, not read: the failure-diagnostics commit comment needs it.
+  # Nothing else in this workflow writes to the repository.
+  contents: write
 
 # A new push to the same ref makes the in-flight run obsolete. `main` is
 # exempt so the history of what actually landed stays complete.
@@ -196,6 +198,37 @@ jobs:
           print(raw[-40000:])
           print("```")
           PY
+
+      # Same reasoning as the summary step, one layer more robust: a commit
+      # comment is readable through the plain REST API, so a failure can be
+      # diagnosed without reaching the Actions log blob store at all. Only
+      # on failure - a comment on every green run is noise that buries the
+      # real ones, which godot-tests.yml learned the hard way.
+      - name: Comment on the commit when the suite fails
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          path = "pytest-output.txt"
+          raw = (
+              open(path, encoding="utf-8", errors="replace").read()
+              if os.path.exists(path)
+              else "(no output captured)"
+          )
+          body = (
+              f"### :x: Python suite failed on {os.environ.get('RUNNER_OS', '?')}\n"
+              f"```text\n{raw[-40000:]}\n```"
+          )
+          with open("payload.json", "w", encoding="utf-8") as handle:
+              json.dump({"body": body}, handle)
+          PY
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            --method POST --input payload.json
 
   coverage:
     name: Coverage (training extras, gate 70%)
