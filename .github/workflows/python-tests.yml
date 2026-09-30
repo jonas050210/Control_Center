@@ -48,25 +48,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # The Python suite had never run on Windows CI before this workflow
-    # (the pre-existing godot-tests.yml only ran it on ubuntu-latest). The
-    # first Windows run here found 10 pre-existing test failures, none of
-    # them a real product bug - all ten were test-fixture issues that only
-    # a real Windows runner could surface (see git history / test-file
-    # comments for the full diagnosis of each): missing os.name/USERPROFILE
-    # mocks, a resolved-vs-raw path comparison, a POSIX-only fake
-    # executable, a ProcessManager background-thread race, and four tests
-    # in test_wsl_interop.py that mock is_wsl()=True (simulating being
-    # inside real WSL, always a POSIX host) while running under native
-    # Windows' WindowsPath, which resolves their fake POSIX-ish
-    # intermediate path by inventing a drive letter from cwd instead of
-    # behaving like a real POSIX filesystem. All ten now have fixes;
-    # continue-on-error stays here as a safety net (so a genuine future
-    # Windows-only regression is reported, not silently blocking) but is
-    # expected to run clean.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # Windows CI previously found 10 pre-existing, Windows-only test-fixture
+    # bugs (see git history around commits 86cdff8/386c341 for the full
+    # diagnosis of each). All ten are fixed and this leg has run green on
+    # windows-latest since; continue-on-error was removed once that was
+    # confirmed so a genuine future regression here blocks merges like any
+    # other leg. macos-latest is new and unverified until its first green
+    # run, so it stays non-blocking until then.
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+
     steps:
       - uses: actions/checkout@v4
 
