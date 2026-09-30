@@ -6,6 +6,7 @@ visual token palette can evolve without growing the application shell module.
 
 from __future__ import annotations
 
+import concurrent.futures
 import gc
 import os
 import queue
@@ -14,7 +15,7 @@ import sys
 import threading
 import tkinter as tk
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
@@ -78,6 +79,9 @@ class BackgroundRunner:
     are being read from disk or a process list is being walked.
     """
 
+    #: How long ``close`` will wait for work already in flight.
+    CLOSE_TIMEOUT_S = 5.0
+
     def __init__(self, root: tk.Misc, workers: int = 3, poll_ms: int = 100) -> None:
         self._root = root
         self._executor = ThreadPoolExecutor(
@@ -88,6 +92,8 @@ class BackgroundRunner:
         ] = queue.Queue()
         self._closed = False
         self._poll_ms = poll_ms
+        self._pending: set[Future[None]] = set()
+        self._pending_lock = threading.Lock()
         # Collect every tenth pump rather than every one: a full sweep of a
         # live GUI heap costs a few milliseconds, which is fine once a
         # second and wasteful ten times a second.
@@ -110,7 +116,14 @@ class BackgroundRunner:
             else:
                 self._queue.put((callback, result, None))
 
-        self._executor.submit(_run)
+        future = self._executor.submit(_run)
+        with self._pending_lock:
+            self._pending.add(future)
+        future.add_done_callback(self._forget)
+
+    def _forget(self, future: Future[None]) -> None:
+        with self._pending_lock:
+            self._pending.discard(future)
 
     def _pump(self) -> None:
         try:
@@ -155,12 +168,25 @@ class BackgroundRunner:
 
         ``cancel_futures`` throws away everything that has not started,
         so the wait is bounded by the single in-flight call rather than
-        by the whole queue.
+        by the whole queue - and by ``CLOSE_TIMEOUT_S`` on top of that,
+        because a wedged adapter call must not be able to hang the
+        window shut.
         """
         if self._closed:
             return
         self._closed = True
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        with self._pending_lock:
+            pending = set(self._pending)
+        for future in pending:
+            future.cancel()
+        # Bounded, not open-ended. Waiting is what keeps a worker from
+        # outliving the widgets it can reach, but an adapter call that
+        # has wedged - a process listing that will not come back, a
+        # network path that stopped answering - must not take the window
+        # with it. Whatever is still running after this has already lost
+        # the race with the GC suspension above, which is the real guard.
+        concurrent.futures.wait(pending, timeout=self.CLOSE_TIMEOUT_S)
+        self._executor.shutdown(wait=False, cancel_futures=True)
         # Results that arrived while shutting down. Nothing will deliver
         # them now, and each one holds a callback holding widgets; drain
         # them here so they are released on the Tk thread instead of

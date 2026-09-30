@@ -206,6 +206,33 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
             "finalise Tk objects off the Tk thread, which kills the process on Windows",
         )
 
+    def test_close_gives_up_on_a_wedged_worker(self) -> None:
+        """A stuck adapter call must not be able to hang the window shut.
+
+        Waiting is the right default, but unbounded waiting turns one
+        wedged process listing into a window that will not close. The
+        GC suspension is the guard that still holds in that case.
+        """
+        import threading
+
+        from sandboxai.control_center_widgets import BackgroundRunner
+
+        runner = self._runner()
+        runner.CLOSE_TIMEOUT_S = 0.2  # type: ignore[misc]
+        release = threading.Event()
+        self.addCleanup(release.set)
+        runner.submit(lambda: release.wait(30), lambda _result, _error: None)
+        time.sleep(0.1)
+
+        started = time.monotonic()
+        runner.close()
+        elapsed = time.monotonic() - started
+
+        self.assertLess(
+            elapsed, 5.0, f"close() waited {elapsed:.1f}s on a worker that never finishes"
+        )
+        self.assertTrue(BackgroundRunner.CLOSE_TIMEOUT_S >= 1.0, "the real timeout stays generous")
+
     def test_close_leaves_no_live_worker_threads(self) -> None:
         import threading
 
