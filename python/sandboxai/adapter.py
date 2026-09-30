@@ -423,7 +423,19 @@ class SandboxAIAdapter:
 
     def __init__(self, project_root: str | Path | None = None, output_root: str | Path = "training") -> None:
         self.project_root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
-        self.output_root = (self.project_root / output_root).resolve() if not Path(output_root).is_absolute() else Path(output_root)
+        # Two real bugs fixed here: (1) an already-absolute output_root used
+        # to skip .resolve() entirely, so it could disagree (as a plain
+        # string) with anything downstream that does resolve it - e.g.
+        # TrainingConfig.run_directory(); (2) "~/..." is not Path.is_absolute()
+        # in pathlib, so it used to fall into the *relative* branch and get
+        # literally joined onto project_root as a folder named "~" instead of
+        # expanding to the home directory.
+        expanded_output_root = Path(output_root).expanduser()
+        self.output_root = (
+            expanded_output_root.resolve()
+            if expanded_output_root.is_absolute()
+            else (self.project_root / expanded_output_root).resolve()
+        )
         self.processes = ProcessManager()
         self._series_cache: "OrderedDict[str, _RunSeries]" = OrderedDict()
         self._series_cache_limit = 6
