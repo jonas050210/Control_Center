@@ -85,8 +85,8 @@ func setup(p_session) -> void:
 	_grid.add_theme_constant_override("v_separation", 10)
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_child(_grid)
-	_empty = ControlCenterTheme.make_label(
-		"No agents yet.", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+	_empty = ControlCenterTheme.make_empty_label(
+		"No agents yet. Configure and start your first training agent above."
 	)
 	root.add_child(_empty)
 	refresh()

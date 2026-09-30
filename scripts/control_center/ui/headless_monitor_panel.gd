@@ -120,8 +120,9 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 		str(snapshot.get("label", "Agent %d" % agent_id)),
 		str(snapshot.get("algorithm", "")),
 	]
-	_state.text = state_name.to_upper()
-	_state.add_theme_color_override("font_color", ControlCenterTheme.state_color(state_name))
+	ControlCenterTheme.apply_status_badge(
+		_state, state_name, ControlCenterTheme.state_color(state_name)
+	)
 	_progress.value = clampf(float(snapshot.get("progress", 0.0)), 0.0, 1.0) * 100.0
 	_status_text.text = "\n".join(build_status_rows(snapshot))
 	_pause.disabled = state_id != TrainingRunController.State.RUNNING

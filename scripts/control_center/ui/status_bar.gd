@@ -195,13 +195,12 @@ func refresh(snapshot: Dictionary) -> void:
 		state_text += (
 			"  |  input: CAPTURED" if bool(status["human_input_enabled"]) else "  |  input: released"
 		)
-	_state_label.text = state_text
 	var state_color: Color = ControlCenterTheme.COLOR_OK if running else ControlCenterTheme.COLOR_WARN
 	if training_state in ["Starting", "Paused", "Stopping"]:
 		state_color = ControlCenterTheme.COLOR_WARN
 	elif training_state == "Error":
 		state_color = ControlCenterTheme.COLOR_BAD
-	_state_label.add_theme_color_override("font_color", state_color)
+	ControlCenterTheme.apply_status_badge(_state_label, state_text, state_color)
 
 	if training.has("steps_per_second"):
 		_rate_label.text = (

@@ -81,6 +81,36 @@ static func make_value_label(text: String = "") -> Label:
 	return label
 
 
+static func make_empty_label(text: String) -> Label:
+	var label := make_label(text, FONT_SIZE_NORMAL, COLOR_MUTED)
+	label.custom_minimum_size = Vector2(0.0, 64.0)
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.add_theme_stylebox_override(
+		"normal", control_style(Color("#0f172a"), Color("#243044"))
+	)
+	return label
+
+
+static func badge_style(color: Color) -> StyleBoxFlat:
+	var background := Color(color.r, color.g, color.b, 0.14)
+	var border := Color(color.r, color.g, color.b, 0.42)
+	var style := control_style(background, border)
+	style.set_corner_radius_all(99)
+	style.content_margin_left = 10.0
+	style.content_margin_right = 10.0
+	style.content_margin_top = 3.0
+	style.content_margin_bottom = 3.0
+	return style
+
+
+static func apply_status_badge(label: Label, text: String, color: Color) -> void:
+	label.text = text
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_stylebox_override("normal", badge_style(color))
+
+
 static func control_style(background: Color, border: Color = COLOR_BORDER) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = background

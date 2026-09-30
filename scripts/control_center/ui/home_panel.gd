@@ -47,10 +47,8 @@ func setup(p_session) -> void:
 	root.add_child(_active_header)
 	_active_grid = _make_grid()
 	root.add_child(_active_grid)
-	_active_empty = ControlCenterTheme.make_label(
-		"No active agents. Start one from the AGENTS or TRAINING page.",
-		ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED
+	_active_empty = ControlCenterTheme.make_empty_label(
+		"No active agents. Start one from the Agents or Training page."
 	)
 	root.add_child(_active_empty)
 
@@ -60,10 +58,8 @@ func setup(p_session) -> void:
 	root.add_child(_recent_header)
 	_recent_grid = _make_grid()
 	root.add_child(_recent_grid)
-	_recent_empty = ControlCenterTheme.make_label(
-		"Finished and failed agents appear here until cleared.",
-		ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED
+	_recent_empty = ControlCenterTheme.make_empty_label(
+		"Finished and failed agents appear here until cleared."
 	)
 	root.add_child(_recent_empty)
 	refresh()

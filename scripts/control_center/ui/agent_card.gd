@@ -88,9 +88,8 @@ func update_from(snapshot: Dictionary) -> void:
 	var state_id: int = int(snapshot.get("state_id", TrainingRunController.State.IDLE))
 	_title.text = str(snapshot.get("label", "Agent"))
 	_algorithm.text = str(snapshot.get("algorithm", ""))
-	_state.text = state_name.to_upper()
-	_state.add_theme_color_override(
-		"font_color", ControlCenterTheme.state_color(state_name)
+	ControlCenterTheme.apply_status_badge(
+		_state, state_name, ControlCenterTheme.state_color(state_name)
 	)
 	var has_progress: bool = snapshot.has("progress")
 	_progress.value = clampf(float(snapshot.get("progress", 0.0)), 0.0, 1.0) * 100.0

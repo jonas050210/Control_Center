@@ -1461,8 +1461,10 @@ class ControlCenter(tk.Tk):
                         background=COLOR_HOVER, foreground=COLOR_ACCENT,
                         font=(_FONT_FAMILY, 10, "bold"))
         style.map("NavSelected.TButton", background=[("active", COLOR_HOVER)])
-        style.configure("Warning.TLabel", background=COLOR_BG, foreground=COLOR_WARN)
-        style.configure("Error.TLabel", background=COLOR_BG, foreground=COLOR_ERROR)
+        style.configure("Warning.TLabel", background="#302711", foreground=COLOR_WARN,
+                        padding=(12, 9), font=(_FONT_FAMILY, 10, "bold"))
+        style.configure("Error.TLabel", background="#351923", foreground=COLOR_ERROR,
+                        padding=(12, 9), font=(_FONT_FAMILY, 10, "bold"))
         style.configure("Treeview", background=COLOR_SURFACE, fieldbackground=COLOR_SURFACE,
                         foreground=COLOR_TEXT, rowheight=30, borderwidth=0)
         style.configure("Treeview.Heading", background=COLOR_SURFACE_RAISED,
