@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import weakref
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -100,6 +101,15 @@ class BackgroundRunner:
         self._pumps_between_collections = max(1, 1000 // max(poll_ms, 1))
         self._pumps_since_collection = 0
         _suspend_automatic_gc()
+        # Tied to the object, not just to close(): a runner that is dropped
+        # without being closed - a constructor that raised half-way, a test
+        # that forgot - must still hand the collector back. Leaving
+        # automatic collection off process-wide because one runner leaked
+        # would slow everything after it to a crawl, which is a worse
+        # failure than the one this guards against, and a silent one.
+        # Calling a finalize object runs it at most once, so close() and
+        # collection cannot both release the same suspension.
+        self._gc_release = weakref.finalize(self, _resume_automatic_gc)
         self._pump()
 
     def submit(
@@ -200,7 +210,7 @@ class BackgroundRunner:
         # about to destroy does not become a worker's problem later, then
         # hand the collector back.
         gc.collect()
-        _resume_automatic_gc()
+        self._gc_release()
 
 
 # ---------------------------------------------------------------------------

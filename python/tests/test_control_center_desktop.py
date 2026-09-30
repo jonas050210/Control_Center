@@ -182,7 +182,11 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
     def _runner(self):
         from sandboxai.control_center_widgets import BackgroundRunner
 
-        return BackgroundRunner(self._StubRoot())  # type: ignore[arg-type]
+        runner = BackgroundRunner(self._StubRoot())  # type: ignore[arg-type]
+        # Unconditionally, not just on the happy path: an unclosed runner
+        # leaves automatic collection off for every test that follows.
+        self.addCleanup(runner.close)
+        return runner
 
     def test_close_waits_for_work_that_already_started(self) -> None:
         import threading
