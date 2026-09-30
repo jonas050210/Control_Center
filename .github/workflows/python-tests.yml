@@ -52,18 +52,18 @@ jobs:
       - name: Install virtual display and Tk
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb python3-tk
+          sudo apt-get install -y xvfb python3-tk python3-venv
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      # actions/setup-python is intentionally not used here: its standalone
+      # interpreter cannot see Ubuntu's python3-tk system package. A venv over
+      # the system interpreter keeps Tk available while isolating test deps.
       - name: Install test dependencies
-        run: pip install -e ".[test]"
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages .ui-venv
+          .ui-venv/bin/python -m pip install -e ".[test]"
 
       - name: Build every desktop page on a real Tk interpreter
-        run: xvfb-run -a python -m pytest python/tests/test_control_center_desktop.py -q
+        run: xvfb-run -a .ui-venv/bin/python -m pytest python/tests/test_control_center_desktop.py -q
         env:
           PYTHONPATH: python
 

@@ -41,7 +41,7 @@ class Page(ttk.Frame):
     title = ""
     subtitle = ""
 
-    def __init__(self, parent: tk.Misc, app: "ControlCenter") -> None:
+    def __init__(self, parent: tk.Misc, app: Any) -> None:
         super().__init__(parent, padding=14)
         self.app = app
         self.adapter = app.adapter

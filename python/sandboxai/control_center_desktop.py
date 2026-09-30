@@ -27,8 +27,6 @@ import tkinter as tk
 from tkinter import messagebox, ttk  # messagebox re-export keeps the public test/embedding seam stable
 
 from .adapter import SandboxAIAdapter
-from . import control_center_viewmodel as vm
-
 from .control_center_widgets import (
     BackgroundRunner,
     COLOR_ACCENT,
@@ -40,6 +38,7 @@ from .control_center_widgets import (
     COLOR_SURFACE,
     COLOR_SURFACE_RAISED,
     COLOR_TEXT,
+    COLOR_WARN,
     ToolTip,
     _FONT_FAMILY,
 )
@@ -50,6 +49,9 @@ from .control_center_pages import PAGE_CLASSES, Page
 # ---------------------------------------------------------------------------
 # Application shell
 # ---------------------------------------------------------------------------
+
+__all__ = ["ControlCenter", "PAGE_CLASSES", "main", "messagebox"]
+
 
 
 class ControlCenter(tk.Tk):
