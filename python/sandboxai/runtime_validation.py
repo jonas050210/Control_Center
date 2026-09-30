@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import platform
 import shutil
+import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -82,10 +83,13 @@ class RuntimeValidator:
         self.timeout = float(timeout)
 
     def is_godot_available(self) -> bool:
+        # find_godot_executable reads the environment, the remembered
+        # settings file and the filesystem: OSError covers an unreadable
+        # or vanished path, ValueError a corrupt settings JSON.
         try:
             resolved = find_godot_executable(self.godot_executable_raw)
             return bool(shutil.which(resolved) or Path(resolved).is_file())
-        except Exception:
+        except (OSError, ValueError):
             return False
 
     def probe_version(self, executable: str) -> str | None:
@@ -101,7 +105,10 @@ class RuntimeValidator:
             )
             out = res.stdout.strip()
             return out if out else res.stderr.strip() or "unknown"
-        except Exception:
+        except (OSError, ValueError, subprocess.SubprocessError):
+            # Missing binary, a refused launch, or a build that never
+            # answers --version. None means "could not be determined",
+            # which the report distinguishes from a wrong version.
             return None
 
     # --- orchestration ---------------------------------------------------
@@ -168,7 +175,7 @@ class RuntimeValidator:
     def _resolve_executable(self) -> tuple[str, bool]:
         try:
             executable = find_godot_executable(self.godot_executable_raw)
-        except Exception:
+        except (OSError, ValueError):
             return self.godot_executable_raw, False
         return executable, bool(shutil.which(executable) or Path(executable).is_file())
 

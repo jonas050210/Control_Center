@@ -29,7 +29,9 @@ by running the engine, not by this module.
 
 from __future__ import annotations
 
+import ast
 import math
+import operator
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -74,6 +76,62 @@ _ENTRY_RE = re.compile(r'"(?P<id>[a-z_]+)"\s*:\s*\{(?P<body>.*?)\n\t\},', re.S)
 _FIELD_RE = re.compile(r'"(?P<key>[a-z_]+)"\s*:\s*(?P<value>[^,\n]+),')
 
 
+# Arithmetic the GDScript config actually uses in `const` initialisers.
+_BINARY_OPERATORS: dict[type[ast.operator], Any] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Pow: operator.pow,
+    # Bit shifts: `const STDIN_BUFFER_SIZE: int = 1 << 20` is a real
+    # initialiser in scripts/rl/rl_server.gd.
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+}
+_UNARY_OPERATORS: dict[type[ast.unaryop], Any] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+class _UnsupportedExpression(Exception):
+    """A `const` initialiser this parser deliberately refuses to evaluate."""
+
+
+def _evaluate_numeric_expression(node: ast.expr, constants: dict[str, float]) -> float:
+    """Evaluates one node of a GDScript numeric constant expression.
+
+    This exists instead of `eval`: the input is a checked-in source file
+    today, but a whitelist walker cannot be turned into code execution by
+    a future caller that feeds it something else. Only numeric literals,
+    names of constants already parsed from the same file, and the six
+    arithmetic operators below are accepted; everything else raises and
+    the caller skips the constant rather than guessing a value.
+    """
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise _UnsupportedExpression(f"non-numeric literal: {node.value!r}")
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        if node.id not in constants:
+            raise _UnsupportedExpression(f"unknown constant: {node.id}")
+        return constants[node.id]
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
+        return float(
+            _UNARY_OPERATORS[type(node.op)](_evaluate_numeric_expression(node.operand, constants))
+        )
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
+        left = _evaluate_numeric_expression(node.left, constants)
+        right = _evaluate_numeric_expression(node.right, constants)
+        if isinstance(node.op, (ast.LShift, ast.RShift)):
+            if left != int(left) or right != int(right):
+                raise _UnsupportedExpression("shift operands must be integers")
+            return float(_BINARY_OPERATORS[type(node.op)](int(left), int(right)))
+        return float(_BINARY_OPERATORS[type(node.op)](left, right))
+    raise _UnsupportedExpression(f"unsupported expression node: {type(node).__name__}")
+
+
 def _parse_scalar_constants(source: str) -> dict[str, float]:
     """Numeric ``const NAME: float|int = <expr>`` values from a GDScript file.
 
@@ -88,8 +146,9 @@ def _parse_scalar_constants(source: str) -> dict[str, float]:
             continue
         name, raw = match.group(1), match.group(2).strip()
         try:
-            values[name] = float(eval(raw, {"__builtins__": {}}, dict(values)))  # noqa: S307
-        except Exception:  # pragma: no cover - defensive, non-numeric consts
+            parsed = ast.parse(raw, mode="eval")
+            values[name] = _evaluate_numeric_expression(parsed.body, values)
+        except (SyntaxError, _UnsupportedExpression, ArithmeticError):
             continue
     return values
 

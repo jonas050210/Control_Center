@@ -129,7 +129,9 @@ class GodotProcessTransport:
         self._stderr_thread.start()
         try:
             self.spaces = self.request({"cmd": "spaces"})
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: a Ctrl-C during the handshake
+            # would otherwise leak the Godot process and its pump threads.
             self.close()
             raise
 

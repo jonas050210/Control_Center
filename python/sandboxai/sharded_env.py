@@ -228,7 +228,7 @@ class ShardedBatchClient:
         if client is not None:
             try:
                 tail = client.transport.stderr_tail()
-            except Exception:  # pragma: no cover - diagnostics only
+            except (OSError, AttributeError, ValueError):  # pragma: no cover - diagnostics
                 tail = ""
         failure = ShardFailure(shard.worker, shard.offset, shard.count, cause)
         if tail:

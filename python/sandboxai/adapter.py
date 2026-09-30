@@ -105,7 +105,7 @@ def _pid_tree(pid: int) -> list[int]:
     try:
         process = psutil.Process(pid)
         return [pid] + [child.pid for child in process.children(recursive=True)]
-    except Exception:  # pragma: no cover - process may have already exited
+    except (psutil.Error, OSError):  # pragma: no cover - process may have exited
         return [pid]
 
 

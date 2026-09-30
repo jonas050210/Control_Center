@@ -458,7 +458,9 @@ def _flatten_parameter(parameter: Any) -> list[float]:
             tolist = getattr(flat, "tolist", None)
             if callable(tolist):
                 return [float(value) for value in _iter_flat(tolist())]
-        except Exception:  # pragma: no cover - defensive against exotic types
+        except (AttributeError, TypeError, ValueError):
+            # An array-like whose flatten()/tolist() does not behave; fall
+            # through to the generic element walk below.
             pass
     return [float(value) for value in _iter_flat(parameter)]
 
