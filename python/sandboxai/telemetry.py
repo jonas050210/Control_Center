@@ -75,12 +75,16 @@ def resource_snapshot() -> dict[str, Any]:
         pass
     try:
         import torch  # type: ignore
+        snapshot["torch_available"] = True
+        snapshot["torch_version"] = torch.__version__
+        snapshot["cuda_available"] = bool(torch.cuda.is_available())
         if torch.cuda.is_available():
+            snapshot["cuda_device_count"] = torch.cuda.device_count()
             snapshot["cuda_allocated_mb"] = torch.cuda.memory_allocated() / (1024 * 1024)
             snapshot["cuda_reserved_mb"] = torch.cuda.memory_reserved() / (1024 * 1024)
             snapshot["cuda_device"] = torch.cuda.get_device_name(0)
     except ImportError:
-        pass
+        snapshot["torch_available"] = False
     snapshot.update(_nvidia_smi_snapshot())
     return snapshot
 
@@ -154,6 +158,74 @@ class ResourceMonitor:
 
     def __exit__(self, *_args) -> None:
         self.close()
+
+
+class IncrementalJsonlTailer:
+    """Reads only the bytes appended to a JSONL file since the last call.
+
+    A GUI polling a long-running training log with :func:`tail_jsonl` would
+    re-read its trailing window (bounded, but still real disk I/O and JSON
+    parsing) on every poll. This class instead keeps a byte offset and a
+    small buffer for a not-yet-terminated final line, so repeated polling
+    costs are proportional to what was actually written since the previous
+    call, not to the file's size or the poll interval.
+
+    Truncation - the file shrinking below the last known offset, e.g. a new
+    run reusing the same path - is treated as a fresh file: reading resumes
+    from byte zero. Malformed or half-written trailing lines are held back
+    (not discarded) until more bytes complete them; non-JSON or non-object
+    lines are skipped rather than raising, matching the tolerance of
+    ``tail_jsonl``.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self._offset = 0
+        self._partial = b""
+
+    def read_new(self, max_rows: int | None = None) -> list[dict[str, Any]]:
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return []
+        if size < self._offset:
+            # Truncated or replaced: there is no safe partial offset to
+            # resume from, so start over rather than mis-parsing a mix of
+            # old and new bytes.
+            self._offset = 0
+            self._partial = b""
+        if size == self._offset:
+            return []
+        try:
+            with self.path.open("rb") as handle:
+                handle.seek(self._offset)
+                chunk = handle.read()
+        except OSError:
+            return []
+        self._offset += len(chunk)
+        data = self._partial + chunk
+        lines = data.split(b"\n")
+        # The last element is either empty (data ended on a newline) or an
+        # in-progress final line; either way it is not yet a complete row.
+        self._partial = lines.pop()
+        rows: list[dict[str, Any]] = []
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                value = json.loads(raw.decode("utf-8", errors="replace"))
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+        if max_rows is not None and len(rows) > max_rows:
+            rows = rows[-max_rows:]
+        return rows
+
+    def reset(self) -> None:
+        self._offset = 0
+        self._partial = b""
 
 
 class JsonlTelemetry:

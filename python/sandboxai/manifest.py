@@ -157,9 +157,9 @@ def godot_snapshot(config: Any, probe: bool = True) -> dict[str, Any]:
     if not probe:
         return snapshot
     try:
-        from .runtime_validation import GodotRuntimeValidator
+        from .runtime_validation import RuntimeValidator
 
-        validator = GodotRuntimeValidator(raw)
+        validator = RuntimeValidator(godot_executable=raw)
         if validator.is_godot_available():
             snapshot["version"] = validator.probe_version(snapshot["resolved"])
     except Exception:

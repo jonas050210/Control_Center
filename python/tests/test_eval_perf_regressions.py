@@ -22,7 +22,7 @@ import time
 import unittest
 from pathlib import Path
 
-from optional_deps import HAS_SB3, SB3_REASON
+from optional_deps import HAS_SB3, HAS_TORCH, SB3_REASON, TORCH_REASON
 
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
@@ -742,6 +742,7 @@ class CheckpointBatteryBatchingTest(unittest.TestCase):
                 self.fail("cuda inference_device must raise without CUDA")
 
 
+@unittest.skipUnless(HAS_TORCH, TORCH_REASON)
 class InferenceDeviceSchedulerTest(unittest.TestCase):
     """The opt-in inference-device split: rollout inference may run on a
     different device than the PPO update, switched exactly at rollout

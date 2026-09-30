@@ -1,5 +1,7 @@
 """Run-manifest provenance: code, host, simulator and selection rule."""
 import json
+import stat
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -56,6 +58,32 @@ class ProvenanceSectionTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["configured"], "definitely-not-installed-godot")
         self.assertIsNone(snapshot["version"])
+
+    def test_godot_snapshot_reports_the_probed_version_when_available(self):
+        # Regression test: godot_snapshot used to import a class named
+        # GodotRuntimeValidator that does not exist (the real class is
+        # RuntimeValidator), so a broad `except Exception` silently
+        # swallowed the ImportError and every manifest's godot.version was
+        # None even when Godot ran successfully. A fake executable that
+        # answers `--version --headless` like the real engine catches that
+        # class of bug instead of only exercising the "absent" path.
+        with TemporaryDirectory() as tmp:
+            script = Path(tmp) / "fake_godot.py"
+            script.write_text(
+                "import sys\n"
+                "if '--version' in sys.argv:\n"
+                "    print('4.7.2.stable.official')\n",
+                encoding="utf-8",
+            )
+            wrapper = Path(tmp) / "fake_godot"
+            wrapper.write_text(
+                f"#!/bin/sh\nexec '{sys.executable}' '{script}' \"$@\"\n", encoding="utf-8"
+            )
+            wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            snapshot = godot_snapshot(
+                TrainingConfig(godot_executable=str(wrapper)), probe=True
+            )
+        self.assertEqual(snapshot["version"], "4.7.2.stable.official")
 
     def test_godot_snapshot_can_skip_the_subprocess_probe(self):
         with mock.patch("sandboxai.manifest.subprocess.run") as run:

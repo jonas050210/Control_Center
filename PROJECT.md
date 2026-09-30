@@ -383,9 +383,10 @@ Public subcommands are exactly:
 
 ```text
 install  train  resume  evaluate  record  control-center
-bc-train  inspect-dataset  inspect-runs  benchmark  benchmark-suites
-replay  curriculum  weapon-table  ttk-report  adapter-contract
-validate-runtime  compare-experiments  summarize-experiment  smoke-test
+control-center-desktop  bc-train  inspect-dataset  inspect-runs  benchmark
+benchmark-suites  replay  curriculum  weapon-table  ttk-report
+adapter-contract  validate-runtime  compare-experiments  summarize-experiment
+smoke-test
 ```
 
 Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` commands.
