@@ -26,7 +26,7 @@ func setup(p_session) -> void:
 	add_child(row)
 	row.add_child(
 		ControlCenterTheme.make_label(
-			"TRAINING", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Training", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_start = _button(row, "Start", _on_start, "Launch the configured real Python backend")
@@ -35,7 +35,7 @@ func setup(p_session) -> void:
 	_resume = _button(row, "Resume", _on_resume, "Resume a cooperatively paused backend")
 	_reset = _button(row, "Reset", _on_reset, "Clear a finished/error run from the dashboard")
 	row.add_child(VSeparator.new())
-	_state = ControlCenterTheme.make_label("Idle", ControlCenterTheme.FONT_SIZE_NORMAL)
+	_state = ControlCenterTheme.make_status_label("Idle")
 	_state.custom_minimum_size = Vector2(90.0, 0.0)
 	row.add_child(_state)
 	_detail = ControlCenterTheme.make_label(
@@ -66,7 +66,6 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 	_resume.disabled = state != TrainingRunController.State.PAUSED
 	_reset.disabled = state not in [TrainingRunController.State.FINISHED,
 		TrainingRunController.State.ERROR]
-	_state.text = TrainingRunController.state_name(state)
 	var color: Color = ControlCenterTheme.COLOR_MUTED
 	if state == TrainingRunController.State.RUNNING:
 		color = ControlCenterTheme.COLOR_OK
@@ -75,7 +74,7 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 		color = ControlCenterTheme.COLOR_WARN
 	elif state == TrainingRunController.State.ERROR:
 		color = ControlCenterTheme.COLOR_BAD
-	_state.add_theme_color_override("font_color", color)
+	ControlCenterTheme.apply_status_badge(_state, TrainingRunController.state_name(state), color)
 	if not validation.is_empty() and state in [TrainingRunController.State.IDLE,
 		TrainingRunController.State.FINISHED, TrainingRunController.State.ERROR]:
 		_detail.text = validation

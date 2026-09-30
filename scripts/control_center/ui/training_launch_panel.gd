@@ -33,8 +33,8 @@ func setup(p_session, p_config_panel: ControlCenterTrainingConfigPanel) -> void:
 
 	var action_row := ControlCenterTheme.make_row()
 	root.add_child(action_row)
-	_start = ControlCenterTheme.make_button(
-		"START TRAINING", "Launch the configured Python backend as the primary agent"
+	_start = ControlCenterTheme.make_primary_button(
+		"Start training", "Launch the configured Python backend as the primary agent"
 	)
 	_start.custom_minimum_size = Vector2(180.0, 34.0)
 	_start.pressed.connect(_on_start)

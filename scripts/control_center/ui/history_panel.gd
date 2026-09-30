@@ -29,7 +29,7 @@ func setup(_p_session = null) -> void:
 	root.add_child(header)
 	header.add_child(
 		ControlCenterTheme.make_label(
-			"TRAINING HISTORY", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Training history", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_count_label = ControlCenterTheme.make_label(

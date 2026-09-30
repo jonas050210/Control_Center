@@ -42,7 +42,7 @@ func setup(p_session) -> void:
 
 	add_child(
 		ControlCenterTheme.make_label(
-			"SCENARIO", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Scenario", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_scenario_option = ControlCenterTheme.make_option_button(
@@ -62,7 +62,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"LIVE SETTINGS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Live settings", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	var curriculum_row := ControlCenterTheme.make_row()
@@ -87,7 +87,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"REQUIRES RESET", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_WARN
+			"Requires reset", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_WARN
 		)
 	)
 	var grid := ControlCenterTheme.make_grid(2)
@@ -136,7 +136,7 @@ func setup(p_session) -> void:
 
 	var button_row := ControlCenterTheme.make_row()
 	add_child(button_row)
-	_apply_button = ControlCenterTheme.make_button(
+	_apply_button = ControlCenterTheme.make_primary_button(
 		"Apply & reset", "Rebuilds every environment with the pending settings."
 	)
 	_apply_button.pressed.connect(_on_apply_pressed)
@@ -156,7 +156,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"PANELS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Panels", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	var panel_row := ControlCenterTheme.make_row()
@@ -191,7 +191,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"HEADLESS TRAINING", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Headless training", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	var training_note := ControlCenterTheme.make_label(

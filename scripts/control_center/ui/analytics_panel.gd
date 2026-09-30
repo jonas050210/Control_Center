@@ -35,7 +35,7 @@ func setup(p_session) -> void:
 	scroll.add_child(root)
 	root.add_child(
 		ControlCenterTheme.make_label(
-			"ANALYTICS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Analytics", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	root.add_child(
@@ -50,8 +50,8 @@ func setup(p_session) -> void:
 	_list.add_theme_constant_override("separation", 8)
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_child(_list)
-	_empty = ControlCenterTheme.make_label(
-		"No launched agents.", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+	_empty = ControlCenterTheme.make_empty_label(
+		"No analytics yet. Start an agent to collect live metrics."
 	)
 	root.add_child(_empty)
 	refresh()

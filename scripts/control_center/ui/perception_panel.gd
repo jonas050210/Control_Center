@@ -62,7 +62,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"PERCEPTION FEATURES",
+			"Perception features",
 			ControlCenterTheme.FONT_SIZE_SMALL,
 			ControlCenterTheme.COLOR_MUTED
 		)

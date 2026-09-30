@@ -43,6 +43,30 @@ jobs:
       - name: Run the Python suite
         run: PYTHONPATH=python python -m pytest python/tests -q
 
+  desktop-ui-tests:
+    name: Desktop UI tests (virtual display)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install virtual display and Tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk python3-venv
+
+      # actions/setup-python is intentionally not used here: its standalone
+      # interpreter cannot see Ubuntu's python3-tk system package. A venv over
+      # the system interpreter keeps Tk available while isolating test deps.
+      - name: Install test dependencies
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages .ui-venv
+          .ui-venv/bin/python -m pip install -e ".[test]"
+
+      - name: Build every desktop page on a real Tk interpreter
+        run: xvfb-run -a .ui-venv/bin/python -m pytest python/tests/test_control_center_desktop.py -q
+        env:
+          PYTHONPATH: python
+
   full-tests:
     name: pytest (full training extras, ${{ matrix.os }})
     strategy:

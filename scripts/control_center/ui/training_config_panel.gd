@@ -48,7 +48,7 @@ func setup(p_session) -> void:
 	add_theme_constant_override("separation", 6)
 	add_child(
 		ControlCenterTheme.make_label(
-			"TRAINING CONFIGURATION",
+			"Training configuration",
 			ControlCenterTheme.FONT_SIZE_TITLE,
 			ControlCenterTheme.COLOR_TITLE
 		)
@@ -136,7 +136,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"BACKEND PARAMETERS",
+			"Backend parameters",
 			ControlCenterTheme.FONT_SIZE_TITLE,
 			ControlCenterTheme.COLOR_TITLE
 		)

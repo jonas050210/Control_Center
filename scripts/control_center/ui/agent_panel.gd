@@ -25,7 +25,7 @@ func setup() -> void:
 	add_child(box)
 
 	_title = ControlCenterTheme.make_label(
-		"AGENT", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		"Agent", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	box.add_child(_title)
 
@@ -66,7 +66,7 @@ func setup() -> void:
 	box.add_child(ControlCenterTheme.make_separator())
 	box.add_child(
 		ControlCenterTheme.make_label(
-			"CURRENT ACTION", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+			"Current action", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
 		)
 	)
 	_action_label = ControlCenterTheme.make_value_label("-")

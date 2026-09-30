@@ -59,6 +59,9 @@ const ControlCenterTrainingDashboardPanel = preload(
 const ControlCenterTrainingLaunchPanel = preload(
 	"res://scripts/control_center/ui/training_launch_panel.gd"
 )
+const TrainingRunController = preload(
+	"res://scripts/control_center/training_run_controller.gd"
+)
 
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
@@ -66,14 +69,14 @@ const RIGHT_PANEL_WIDTH: float = 380.0
 
 ## Navigation entries: page id -> label, in display order.
 const PAGES: Array = [
-	["home", "HOME"],
-	["agents", "AGENTS"],
-	["headless", "HEADLESS"],
-	["training", "TRAINING"],
-	["simulation", "SIMULATION"],
-	["analytics", "ANALYTICS"],
-	["history", "HISTORY"],
-	["settings", "SETTINGS"],
+	["home", "Home"],
+	["agents", "Agents"],
+	["headless", "Headless"],
+	["training", "Training"],
+	["simulation", "Simulation"],
+	["analytics", "Analytics"],
+	["history", "History"],
+	["settings", "Settings"],
 ]
 
 var session
@@ -125,16 +128,17 @@ func setup(p_session) -> void:
 
 func _build_layout() -> void:
 	var root := MarginContainer.new()
+	root.theme = ControlCenterTheme.build_theme()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_theme_constant_override("margin_left", 6)
-	root.add_theme_constant_override("margin_right", 6)
-	root.add_theme_constant_override("margin_top", 6)
-	root.add_theme_constant_override("margin_bottom", 6)
+	root.add_theme_constant_override("margin_left", 12)
+	root.add_theme_constant_override("margin_right", 12)
+	root.add_theme_constant_override("margin_top", 12)
+	root.add_theme_constant_override("margin_bottom", 12)
 	add_child(root)
 
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", 10)
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(column)
 
@@ -142,16 +146,24 @@ func _build_layout() -> void:
 	status_bar.setup(session)
 	column.add_child(status_bar)
 
-	column.add_child(_build_navigation())
-
 	training_controls_panel = ControlCenterTrainingControlsPanel.new()
 	training_controls_panel.setup(session)
 	column.add_child(training_controls_panel)
 
+	# Keep navigation visually separate from the working area. A persistent
+	# rail is easier to scan than a dense row of eight equally weighted tabs.
+	var workspace := HBoxContainer.new()
+	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	workspace.add_theme_constant_override("separation", 12)
+	workspace.mouse_filter = Control.MOUSE_FILTER_PASS
+	column.add_child(workspace)
+	workspace.add_child(_build_navigation())
+
 	_page_container = Control.new()
+	_page_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_page_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(_page_container)
+	workspace.add_child(_page_container)
 
 	_build_simulation_page()
 	_build_dashboard_pages()
@@ -167,21 +179,48 @@ func _build_layout() -> void:
 
 
 func _build_navigation() -> Control:
-	var bar := PanelContainer.new()
-	bar.add_theme_stylebox_override(
+	var rail := PanelContainer.new()
+	rail.custom_minimum_size = Vector2(176.0, 0.0)
+	rail.add_theme_stylebox_override(
 		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
 	)
-	var row := ControlCenterTheme.make_row()
-	bar.add_child(row)
-	for page_value in PAGES:
+	var items := VBoxContainer.new()
+	items.add_theme_constant_override("separation", 5)
+	rail.add_child(items)
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"Workspace", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
+	for index in range(PAGES.size()):
+		if index == 5:
+			items.add_child(ControlCenterTheme.make_separator())
+			items.add_child(
+				ControlCenterTheme.make_label(
+					"Insights", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+				)
+			)
+		elif index == 7:
+			items.add_child(ControlCenterTheme.make_separator())
+		var page_value: Array = PAGES[index]
 		var page_id: String = str(page_value[0])
 		var button := ControlCenterTheme.make_toggle(
 			str(page_value[1]), false, "Open the %s page" % str(page_value[1])
 		)
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.pressed.connect(_on_nav_pressed.bind(page_id))
-		row.add_child(button)
+		items.add_child(button)
 		_nav_buttons[page_id] = button
-	return bar
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	items.add_child(spacer)
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"F1–F3 toggle panels", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
+	return rail
 
 
 ## The classic simulation operator view (3D view + docks) as one page.
@@ -309,7 +348,7 @@ func _make_side_column(width: float) -> Control:
 	var column := VBoxContainer.new()
 	column.custom_minimum_size = Vector2(width, 0.0)
 	column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", 10)
 	return column
 
 
@@ -384,8 +423,15 @@ func set_page(page_id: String, persist: bool = true) -> void:
 	session.config.active_page = resolved
 	if persist:
 		session.config.save_preferences()
+	var selected_page: Control = _pages[resolved] as Control
 	for existing_id in _pages:
 		(_pages[existing_id] as Control).visible = str(existing_id) == resolved
+	# A short opacity transition makes context changes readable without
+	# slowing an operator down or animating live telemetry itself.
+	selected_page.modulate.a = 0.0
+	var transition := create_tween()
+	transition.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	transition.tween_property(selected_page, "modulate:a", 1.0, 0.14)
 	for nav_id in _nav_buttons:
 		(_nav_buttons[nav_id] as Button).button_pressed = str(nav_id) == resolved
 	if resolved == "history":
@@ -510,7 +556,7 @@ func _apply_panel_visibility() -> void:
 		session.config.is_tile_visible("agent")
 		and not session.is_training_mode()
 		and not headless_dashboard
-		and viewport_width >= 1200.0
+		and viewport_width >= 1400.0
 	)
 	_right_container.visible = (
 		inspector_visible and (not headless_dashboard or viewport_width >= 900.0)
@@ -525,7 +571,17 @@ func _apply_panel_visibility() -> void:
 	)
 	var logs_visible: bool = session.config.is_tile_visible("logs")
 	_bottom_container.visible = (controls_visible or logs_visible) and not headless_dashboard
-	training_controls_panel.visible = session.config.is_tile_visible("training")
+	var training_state: int = int(session.training_run.state)
+	var training_active: bool = training_state in [
+		TrainingRunController.State.STARTING,
+		TrainingRunController.State.RUNNING,
+		TrainingRunController.State.PAUSED,
+		TrainingRunController.State.STOPPING,
+	]
+	training_controls_panel.visible = (
+		session.config.is_tile_visible("training")
+		and (active_page() == "training" or training_active)
+	)
 	controls_panel.visible = controls_visible
 	log_panel.visible = logs_visible
 

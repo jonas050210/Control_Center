@@ -53,9 +53,7 @@ func setup(p_session, p_agent_id: int, compact: bool = false) -> void:
 		"Agent %d" % agent_id, ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	header.add_child(_title)
-	_state = ControlCenterTheme.make_label(
-		"Idle", ControlCenterTheme.FONT_SIZE_NORMAL, ControlCenterTheme.COLOR_MUTED
-	)
+	_state = ControlCenterTheme.make_status_label("Idle")
 	_state.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_state.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	header.add_child(_state)
@@ -78,7 +76,7 @@ func setup(p_session, p_agent_id: int, compact: bool = false) -> void:
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(body)
 
-	var status_panel := ControlCenterTheme.make_panel("LIVE STATUS")
+	var status_panel := ControlCenterTheme.make_panel("Live status")
 	status_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_panel.size_flags_stretch_ratio = 0.42
 	body.add_child(status_panel)
@@ -89,7 +87,7 @@ func setup(p_session, p_agent_id: int, compact: bool = false) -> void:
 	_status_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_scroll.add_child(_status_text)
 
-	var log_panel := ControlCenterTheme.make_panel("LIVE LOG")
+	var log_panel := ControlCenterTheme.make_panel("Live log")
 	log_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_panel.size_flags_stretch_ratio = 0.58
 	body.add_child(log_panel)
@@ -120,8 +118,9 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 		str(snapshot.get("label", "Agent %d" % agent_id)),
 		str(snapshot.get("algorithm", "")),
 	]
-	_state.text = state_name.to_upper()
-	_state.add_theme_color_override("font_color", ControlCenterTheme.state_color(state_name))
+	ControlCenterTheme.apply_status_badge(
+		_state, state_name, ControlCenterTheme.state_color(state_name)
+	)
 	_progress.value = clampf(float(snapshot.get("progress", 0.0)), 0.0, 1.0) * 100.0
 	_status_text.text = "\n".join(build_status_rows(snapshot))
 	_pause.disabled = state_id != TrainingRunController.State.RUNNING

@@ -33,15 +33,11 @@ import time
 import uuid
 from typing import Any, Iterable
 
+from .artifact_repository import ArtifactRepository
 from .benchmark import summarize_scaling
 from .config import TrainingConfig, find_godot_executable
-from .run_inspection import (
-    discover_run_directories,
-    inspect_run,
-    inspect_runs,
-    read_json,
-    tail_jsonl,
-)
+from .control_center_schema import DashboardSnapshot, ProcessSnapshot
+from .run_inspection import read_json, tail_jsonl
 from .telemetry import IncrementalJsonlTailer, resource_snapshot
 
 #: Numeric telemetry.jsonl fields the Control Center can chart. Anything not
@@ -250,10 +246,10 @@ class ProcessManager:
         with self._lock:
             return list(self._records.values())
 
-    def snapshot(self, process_id: str) -> dict[str, Any]:
+    def snapshot(self, process_id: str) -> ProcessSnapshot:
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error": "process not found"}
+            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
         with self._lock:
             result = {
                 "id": record.id, "kind": record.kind, "state": record.state,
@@ -278,6 +274,7 @@ class ProcessManager:
         except FileNotFoundError:
             pass
         except (OSError, json.JSONDecodeError) as exc:
+            result["backend_error_code"] = "status_unreadable"
             result["backend_error"] = f"status.json unreadable: {exc.__class__.__name__}"
         return result
 
@@ -295,7 +292,7 @@ class ProcessManager:
         """
         record = self.get(process_id)
         if record is None:
-            return {"error": "process not found", "stdout": [], "stderr": []}
+            return {"error_code": "process_not_found", "error": "process not found", "stdout": [], "stderr": []}
         with self._lock:
             new_stdout = [(seq, text) for seq, text in record.stdout if seq > stdout_after][-limit:]
             new_stderr = [(seq, text) for seq, text in record.stderr if seq > stderr_after][-limit:]
@@ -325,7 +322,7 @@ class ProcessManager:
         """
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error": "process not found"}
+            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
         if record.returncode is None:
             if record.kind == "training":
                 command_file = record.run_dir / "command.json"
@@ -348,7 +345,7 @@ class ProcessManager:
         """
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error": "process not found"}
+            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
         if record.returncode is None:
             _stop_process_tree(record.process, hard=True)
         return self.snapshot(process_id)
@@ -358,7 +355,7 @@ class ProcessManager:
     def terminate(self, process_id: str, timeout: float = 5.0) -> dict[str, Any]:
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error": "process not found"}
+            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
         if record.returncode is None:
             self.cancel(process_id)
             try:
@@ -437,6 +434,7 @@ class SandboxAIAdapter:
             else (self.project_root / expanded_output_root).resolve()
         )
         self.processes = ProcessManager()
+        self.artifacts = ArtifactRepository(self.output_root)
         self._series_cache: "OrderedDict[str, _RunSeries]" = OrderedDict()
         self._series_cache_limit = 6
 
@@ -481,7 +479,7 @@ class SandboxAIAdapter:
     # ------------------------------------------------------------------
 
     def project_status(self) -> dict[str, Any]:
-        index = inspect_runs(self.output_root, limit=1, event_limit=10)
+        index = self.artifacts.list_runs(limit=1)
         return {
             "output_root": str(self.output_root),
             "runs": index,
@@ -489,7 +487,7 @@ class SandboxAIAdapter:
             "processes": self.list_processes(active_only=False),
         }
 
-    def dashboard_snapshot(self) -> dict[str, Any]:
+    def dashboard_snapshot(self) -> DashboardSnapshot:
         """Everything the Dashboard page needs, assembled from existing
         read-only inspection and the process registry. Computes nothing of
         its own beyond picking the newest run.
@@ -500,55 +498,21 @@ class SandboxAIAdapter:
         exist, unlike calling ``inspect_runs`` with a small ``limit``
         (which reports the *sliced* count, not the true total).
         """
-        run_dirs = discover_run_directories(self.output_root)
-        latest_run = inspect_run(run_dirs[-1], event_limit=5) if run_dirs else None
-        return {
-            "output_root": str(self.output_root),
-            "run_count": len(run_dirs),
-            "latest_run": latest_run,
-            "active_processes": self.list_processes(active_only=True),
-        }
+        return self.artifacts.dashboard(lambda: self.list_processes(active_only=True))
 
     def list_runs(self, limit: int = 100) -> dict[str, Any]:
-        return inspect_runs(self.output_root, limit=limit, event_limit=0)
+        return self.artifacts.list_runs(limit)
 
     def inspect_run(self, run: str | Path, event_limit: int = 50) -> dict[str, Any]:
-        return inspect_run(run, event_limit=event_limit)
+        return self.artifacts.inspect_run(run, event_limit)
 
     def list_checkpoints(self, run: str | Path) -> dict[str, Any]:
         report = self.inspect_run(run)
         return report.get("checkpoints", {}) if isinstance(report, dict) else {}
 
     def discover_checkpoints(self, limit: int = 300) -> list[dict[str, Any]]:
-        """Flat, newest-first checkpoint inventory across every run.
-
-        Powers the Evaluation page's checkpoint picker. Reuses
-        ``run_inspection``'s per-run checkpoint inventory instead of
-        re-walking run directories with new logic.
-        """
-        entries: list[dict[str, Any]] = []
-        for run_dir in discover_run_directories(self.output_root):
-            report = inspect_run(run_dir)
-            checkpoints = report.get("checkpoints", {})
-            run_id = report.get("run_id") or run_dir.name
-            directory = Path(checkpoints.get("directory", run_dir / "checkpoints"))
-            for item in checkpoints.get("entries", []):
-                name = item.get("name", "")
-                kind = {"latest.zip": "latest", "best_eval.zip": "best"}.get(name, "checkpoint")
-                entries.append({
-                    "run_id": run_id, "run_dir": str(run_dir), "kind": kind,
-                    "path": str(directory / name), "bytes": item.get("bytes"),
-                    "modified_utc": item.get("modified_utc"),
-                })
-            final_path = run_dir / "final.zip"
-            if final_path.is_file():
-                entries.append({
-                    "run_id": run_id, "run_dir": str(run_dir), "kind": "final",
-                    "path": str(final_path), "bytes": final_path.stat().st_size,
-                    "modified_utc": _modified_utc(final_path),
-                })
-        entries.sort(key=lambda item: item.get("modified_utc") or "", reverse=True)
-        return entries[:limit]
+        """Newest-first checkpoint inventory from the central artifact repository."""
+        return self.artifacts.checkpoints(limit)
 
     def run_metrics(self, run: str | Path) -> dict[str, Any]:
         report = self.inspect_run(run, event_limit=100)
@@ -591,18 +555,7 @@ class SandboxAIAdapter:
         }
 
     def _resolve_training_log(self, run: str | Path | None) -> Path | None:
-        if run is not None:
-            candidate = Path(run)
-            if candidate.is_file():
-                return candidate
-            if candidate.is_dir():
-                # The run exists but may not have written telemetry yet
-                # (still starting): that is a legitimate "available, empty"
-                # state, not an error.
-                return candidate / "logs" / "training.jsonl"
-            return None  # the named run does not exist at all
-        dirs = discover_run_directories(self.output_root)
-        return dirs[-1] / "logs" / "training.jsonl" if dirs else None
+        return self.artifacts.resolve_training_log(run)
 
     def profiling(self, run: str | Path) -> dict[str, Any]:
         path = Path(run) / "logs" / "training_profile.json"
@@ -623,16 +576,7 @@ class SandboxAIAdapter:
         evaluation output root. Each entry is cheap; call
         :meth:`evaluation_detail` for the full structured summary.
         """
-        roots: list[Path] = []
-        if run is not None:
-            run_path = Path(run)
-            roots.append(run_path / "evaluations" if (run_path / "evaluations").is_dir() else run_path)
-        else:
-            for run_dir in discover_run_directories(self.output_root):
-                roots.append(run_dir / "evaluations")
-            default_eval_root = self.output_root / "evaluations"
-            if default_eval_root.is_dir():
-                roots.append(default_eval_root)
+        roots = self.artifacts.evaluation_roots(run)
         entries: list[dict[str, Any]] = []
         seen: set[Path] = set()
         for root in roots:

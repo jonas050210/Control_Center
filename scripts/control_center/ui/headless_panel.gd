@@ -34,7 +34,7 @@ func setup(p_session) -> void:
 	root.add_child(header)
 	header.add_child(
 		ControlCenterTheme.make_label(
-			"HEADLESS AGENTS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Headless agents", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_selector_row = ControlCenterTheme.make_row()
@@ -49,10 +49,8 @@ func setup(p_session) -> void:
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	root.add_child(_grid)
 
-	_empty = ControlCenterTheme.make_label(
-		"No launched agents. Start one from the AGENTS or TRAINING page.",
-		ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED
+	_empty = ControlCenterTheme.make_empty_label(
+		"No launched agents. Start one from the Agents or Training page."
 	)
 	root.add_child(_empty)
 	refresh()

@@ -42,28 +42,24 @@ func setup(p_session) -> void:
 	root.add_child(system_status_panel)
 
 	_active_header = ControlCenterTheme.make_label(
-		"ACTIVE AGENTS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		"Active agents", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	root.add_child(_active_header)
 	_active_grid = _make_grid()
 	root.add_child(_active_grid)
-	_active_empty = ControlCenterTheme.make_label(
-		"No active agents. Start one from the AGENTS or TRAINING page.",
-		ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED
+	_active_empty = ControlCenterTheme.make_empty_label(
+		"No active agents. Start one from the Agents or Training page."
 	)
 	root.add_child(_active_empty)
 
 	_recent_header = ControlCenterTheme.make_label(
-		"RECENT", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		"Recent", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	root.add_child(_recent_header)
 	_recent_grid = _make_grid()
 	root.add_child(_recent_grid)
-	_recent_empty = ControlCenterTheme.make_label(
-		"Finished and failed agents appear here until cleared.",
-		ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED
+	_recent_empty = ControlCenterTheme.make_empty_label(
+		"Finished and failed agents appear here until cleared."
 	)
 	root.add_child(_recent_empty)
 	refresh()
@@ -102,7 +98,7 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 	_prune_cards(seen)
 	_layout_grid(_active_grid)
 	_layout_grid(_recent_grid)
-	_active_header.text = "ACTIVE AGENTS (%d)" % active_count
+	_active_header.text = "Active agents (%d)" % active_count
 	_active_empty.visible = active_count == 0
 	_recent_empty.visible = recent_count == 0
 

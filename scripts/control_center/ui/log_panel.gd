@@ -45,7 +45,7 @@ func setup(p_session) -> void:
 	root.add_child(header)
 	header.add_child(
 		ControlCenterTheme.make_label(
-			"EVENT LOG", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Event log", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	for option_value in ControlCenterEventLog.filter_options():

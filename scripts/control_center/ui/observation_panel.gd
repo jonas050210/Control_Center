@@ -25,7 +25,7 @@ var _header: Label
 func setup() -> void:
 	add_theme_constant_override("separation", 6)
 	_header = ControlCenterTheme.make_label(
-		"OBSERVATION VECTOR", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		"Observation vector", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	add_child(_header)
 	add_child(
@@ -88,7 +88,7 @@ func refresh(snapshot: Dictionary) -> void:
 	if snapshot.is_empty() or not snapshot.has("observation"):
 		_header.text = "OBSERVATION VECTOR (disabled in TRAINING mode)"
 		return
-	_header.text = "OBSERVATION VECTOR"
+	_header.text = "Observation vector"
 	var rows: Array = snapshot["observation"]["rows"]
 	for row_value in rows:
 		var row: Dictionary = row_value
