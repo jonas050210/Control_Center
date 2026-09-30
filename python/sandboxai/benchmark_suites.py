@@ -229,12 +229,16 @@ def format_report(report: dict[str, Any]) -> str:
     lines = ["Benchmark suites", "=" * 72]
     for result in report.get("suites", []):
         lines.append(f"\n{result['suite']}: {result['config']['description']}")
-        lines.append(f"{'envs':>6}{'steps/s':>14}{'episodes/s':>14}{'elapsed s':>12}")
+        lines.append(
+            f"{'envs':>6}{'steps/s':>14}{'episodes/s':>14}{'p50 ms':>11}{'p95 ms':>11}{'elapsed s':>12}"
+        )
         lines.append("-" * 72)
         for row in result.get("rows", []):
             lines.append(
                 f"{int(row['environments']):>6}{float(row['steps_per_second']):>14.1f}"
                 f"{float(row['episodes_per_second']):>14.2f}"
+                f"{float(row.get('vector_step_latency_p50_ms', 0.0)):>11.2f}"
+                f"{float(row.get('vector_step_latency_p95_ms', 0.0)):>11.2f}"
                 f"{float(row['elapsed_seconds']):>12.2f}"
             )
         scaling = result.get("scaling", {})

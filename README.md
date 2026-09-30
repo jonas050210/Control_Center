@@ -312,12 +312,22 @@ fields added for curriculum levels with more than one enemy).
 ```bash
 sandboxai train \
   --env-count 8 --env-workers auto --steps 1000000 \
-  --rollout-length 2048 --batch-size 256 \
-  --learning-rate 0.0003 --gamma 0.99 --gae-lambda 0.95 \
+  --rollout-length 0 --batch-size 256 --ppo-epochs 10 \
+  --torch-threads 0 --learning-rate 0.0003 --gamma 0.99 --gae-lambda 0.95 \
   --entropy-coefficient 0.01 --clip-range 0.2 \
   --checkpoint-frequency 100000 --evaluation-frequency 50000 \
   --seed 1234 --device auto --curriculum-level 3
 ```
+
+`--rollout-length 0` is the default auto schedule: it keeps the aggregate
+rollout near 16,384 transitions as `--env-count` changes (while capping the
+per-environment horizon at 2,048). For example, 48 environments resolve to
+352 steps/environment = 16,896 transitions/update instead of silently growing
+to 98,304. A positive value requests that exact legacy horizon. Likewise,
+`--torch-threads 0` selects a bounded pool after reserving CPUs for Godot
+workers; use a positive value only after benchmarking it on the target host.
+Both resolved values and the full-rollout timestep schedule are saved in
+`config.json` and the optional training profile.
 
 The entropy coefficient is non-zero by default (0.01): with MultiDiscrete
 actions, a zero entropy coefficient lets PPO collapse to a degenerate action

@@ -25,6 +25,43 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingConfig(environment_count=2, rollout_length=4, batch_size=9).validate()
 
+    def test_auto_rollout_preserves_aggregate_update_scale_at_48_envs(self):
+        config = TrainingConfig(
+            environment_count=48,
+            rollout_length=0,
+            batch_size=256,
+            total_training_steps=500_000,
+        ).validate()
+        # 352 * 48 = 16,896: close to the historical 8 * 2,048 =
+        # 16,384 batch and exactly minibatch-divisible. This yields 30
+        # collect/update cycles rather than six 98,304-transition cycles.
+        self.assertEqual(config.resolved_rollout_length(), 352)
+        self.assertEqual(
+            config.rollout_schedule(),
+            {
+                "auto": True,
+                "rollout_length": 352,
+                "rollout_batch_size": 16_896,
+                "expected_updates": 30,
+                "requested_timesteps": 500_000,
+                "scheduled_timesteps": 506_880,
+                "overshoot_timesteps": 6_880,
+                "overshoot_fraction": 0.01376,
+            },
+        )
+
+    def test_explicit_rollout_length_is_never_auto_changed(self):
+        config = TrainingConfig(environment_count=48, rollout_length=2048, batch_size=256)
+        self.assertEqual(config.resolved_rollout_length(), 2048)
+
+    def test_auto_torch_threads_are_bounded_after_worker_reservation(self):
+        config = TrainingConfig(environment_count=48, env_workers=4, torch_threads=0)
+        with mock.patch.object(TrainingConfig, "_available_cpu_count", return_value=20):
+            self.assertEqual(config.resolved_torch_threads(), 4)
+        with mock.patch.object(TrainingConfig, "_available_cpu_count", return_value=2):
+            self.assertEqual(config.resolved_torch_threads(), 1)
+        self.assertEqual(TrainingConfig(torch_threads=7).resolved_torch_threads(), 7)
+
     def test_invalid_curriculum_level_rejected(self):
         # 1-10 are combat levels, 11 is the self-play hook; 0 and 12 are not.
         with self.assertRaises(ValueError):

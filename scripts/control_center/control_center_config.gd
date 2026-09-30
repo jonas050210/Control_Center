@@ -80,6 +80,8 @@ const MAX_ENVIRONMENT_COUNT: int = 64
 const MAX_ENEMY_COUNT: int = 12
 const MAX_TRAINING_STEPS: int = 2_000_000_000
 const MAX_BC_EPOCHS: int = 100_000
+const DEFAULT_ROLLOUT_BATCH_TARGET: int = 16_384
+const MAX_AUTO_ROLLOUT_LENGTH: int = 2_048
 const PREFERENCES_PATH: String = "user://control_center.cfg"
 
 ## Stable dashboard page identifiers for the persistent navigation. The
@@ -216,7 +218,8 @@ var bc_dataset_path: String = "training/datasets/human_demo.jsonl"
 var checkpoint_path: String = ""
 var resume_from_checkpoint: bool = false
 var learning_rate: float = 0.0003
-var rollout_length: int = 2048
+## 0 delegates to Python's aggregate-rollout auto schedule.
+var rollout_length: int = 0
 var batch_size: int = 256
 var gamma: float = 0.99
 var gae_lambda: float = 0.95
@@ -394,6 +397,35 @@ func apply_scenario(scenario_identifier: String) -> PackedStringArray:
 	return changed
 
 
+## Mirrors TrainingConfig.resolved_rollout_length() for UI validation and
+## preview. Python remains authoritative and records the concrete value.
+func resolved_rollout_length() -> int:
+	if rollout_length > 0:
+		return rollout_length
+	var raw: int = mini(
+		MAX_AUTO_ROLLOUT_LENGTH,
+		ceili(float(DEFAULT_ROLLOUT_BATCH_TARGET) / float(maxi(1, environment_count)))
+	)
+	var safe_batch: int = maxi(1, batch_size)
+	var quantum: int = int(
+		float(safe_batch) / float(_greatest_common_divisor(safe_batch, environment_count))
+	)
+	var aligned: int = ceili(float(raw) / float(quantum)) * quantum
+	if aligned <= ceili(float(raw) * 1.10):
+		return aligned
+	return raw
+
+
+static func _greatest_common_divisor(left: int, right: int) -> int:
+	var a: int = absi(left)
+	var b: int = absi(right)
+	while b != 0:
+		var remainder: int = a % b
+		a = b
+		b = remainder
+	return maxi(1, a)
+
+
 ## Clamps every numeric field into a range the simulation accepts.
 func sanitize() -> void:
 	mode = clampi(mode, Mode.TRAINING, Mode.HUMAN)
@@ -416,8 +448,9 @@ func sanitize() -> void:
 	total_training_steps = clampi(total_training_steps, 1, MAX_TRAINING_STEPS)
 	bc_epochs = clampi(bc_epochs, 1, MAX_BC_EPOCHS)
 	learning_rate = maxf(0.0000001, learning_rate)
-	rollout_length = maxi(1, rollout_length)
-	batch_size = clampi(batch_size, 1, rollout_length * environment_count)
+	rollout_length = maxi(0, rollout_length)
+	batch_size = maxi(1, batch_size)
+	batch_size = mini(batch_size, resolved_rollout_length() * environment_count)
 	gamma = clampf(gamma, 0.000001, 1.0)
 	gae_lambda = clampf(gae_lambda, 0.0, 1.0)
 	entropy_coefficient = maxf(0.0, entropy_coefficient)
@@ -457,6 +490,7 @@ func to_dict() -> Dictionary:
 		"resume_from_checkpoint": resume_from_checkpoint,
 		"learning_rate": learning_rate,
 		"rollout_length": rollout_length,
+		"resolved_rollout_length": resolved_rollout_length(),
 		"batch_size": batch_size,
 		"gamma": gamma,
 		"gae_lambda": gae_lambda,

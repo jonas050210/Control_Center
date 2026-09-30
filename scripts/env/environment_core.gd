@@ -833,7 +833,12 @@ func _update_enemies(dt: float, sound_on: bool) -> float:
 	var context: Dictionary = _brain_context
 	if tactical:
 		context["world"] = world
-		context["navigation"] = _ensure_navigation()
+		# Preserve the navigation layer's exception-path contract: baking the
+		# A* grid for every tactical episode up front made the first step pay
+		# the full graph cost even when every enemy moved directly forever.
+		# A null graph still lets NavigationAgent accumulate stuck_time; the
+		# per-enemy loop below bakes once only after that evidence exists.
+		context["navigation"] = navigation
 		context["lighting"] = lighting
 		context["sound_bus"] = sound_bus if sound_on else null
 		context["rng"] = rng
@@ -855,6 +860,14 @@ func _update_enemies(dt: float, sound_on: bool) -> float:
 			continue
 		var damage: float = 0.0
 		if tactical:
+			# NavigationAgent increments stuck_time even with a null graph. On
+			# the following tick this supplies the shared graph and planning can
+			# begin. Once baked, later enemies reuse the same graph.
+			if (
+				navigation == null
+				and enemy.navigation.stuck_time >= SandboxConfig.NAV_STUCK_TIME
+			):
+				context["navigation"] = _ensure_navigation()
 			var brain_events: Dictionary = EnemyBrain.update(enemy, context)
 			damage = float(brain_events["damage"])
 			if sound_on:

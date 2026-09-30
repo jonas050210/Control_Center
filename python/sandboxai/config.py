@@ -4,16 +4,30 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import json
+import math
 import os
 import shutil
 from typing import Any
 
+from .schedule import full_rollout_schedule
 from .wsl import is_wsl, looks_like_windows_path, windows_to_wsl_path
 
 ## Highest curriculum level accepted by the Godot side. Mirrors
 ## CurriculumConfig.Level (1-10 combat, 11 = agent-vs-agent self-play) in
 ## scripts/core/curriculum_config.gd.
 CURRICULUM_LEVEL_COUNT: int = 11
+
+# PPO's historical defaults produce 2,048 *per-environment* steps. That is
+# sensible at the default eight environments (16,384 transitions/update),
+# but silently grows to 98,304 transitions/update at 48 environments. The
+# policy then receives only six feedback cycles in a nominal 500k-step run.
+# Auto rollout sizing keeps approximately the proven historical aggregate
+# batch while never lengthening an individual trajectory beyond 2,048.
+DEFAULT_ROLLOUT_BATCH_TARGET: int = 16_384
+MAX_AUTO_ROLLOUT_LENGTH: int = 2_048
+# This MLP is too small to benefit from a large CPU thread pool. Keep auto
+# scheduling conservative; users can still request an exact measured value.
+MAX_AUTO_TORCH_THREADS: int = 4
 
 # Machine-local settings directory/file (relative to the repository root).
 # The last explicitly used --godot-executable is remembered here so that a
@@ -168,8 +182,14 @@ class TrainingConfig:
     env_workers: int = 1
     enemy_count: int = 1
     learning_rate: float = 3e-4
-    rollout_length: int = 2048
+    ## Per-environment PPO rollout horizon. 0 (default) automatically keeps
+    ## the aggregate rollout near DEFAULT_ROLLOUT_BATCH_TARGET as env_count
+    ## changes; an explicit positive value preserves exact legacy behavior.
+    rollout_length: int = 0
     batch_size: int = 256
+    ## Explicit rather than inheriting an SB3 library default: this is part
+    ## of the optimizer schedule and therefore part of reproducibility.
+    ppo_epochs: int = 10
     gamma: float = 0.99
     gae_lambda: float = 0.95
     # Non-zero by default: with MultiDiscrete actions a 0 entropy coefficient
@@ -219,6 +239,8 @@ class TrainingConfig:
     run_id: str = ""
     experiment_id: str = ""
     bc_checkpoint: str = ""
+    ## 0 = bounded auto scheduling after reserving CPUs for Godot workers;
+    ## a positive value requests that exact PyTorch intra-op thread count.
     torch_threads: int = 0
     net_arch: tuple[int, int] = (128, 128)
     early_stopping_patience: int = 0
@@ -295,13 +317,18 @@ class TrainingConfig:
             raise ValueError("enemy_count must be >= 1")
         if self.env_workers < 0:
             raise ValueError("env_workers must be >= 0 (0 = auto, 1 = single process)")
-        if self.rollout_length < 1:
-            raise ValueError("rollout_length must be >= 1")
-        if self.batch_size < 1 or self.batch_size > self.rollout_length * self.environment_count:
+        if self.rollout_length < 0:
+            raise ValueError("rollout_length must be >= 0 (0 = auto)")
+        resolved_rollout = self.resolved_rollout_length()
+        rollout_batch = resolved_rollout * self.environment_count
+        if self.batch_size < 1 or self.batch_size > rollout_batch:
             raise ValueError(
-                f"batch_size ({self.batch_size}) must be in [1, rollout_length * environment_count] "
-                f"([1, {self.rollout_length * self.environment_count}])"
+                f"batch_size ({self.batch_size}) must be in [1, resolved_rollout_length * "
+                f"environment_count] ([1, {rollout_batch}]); resolved rollout length is "
+                f"{resolved_rollout}"
             )
+        if self.ppo_epochs < 1:
+            raise ValueError("ppo_epochs must be >= 1")
         if not 0.0 < self.gamma <= 1.0:
             raise ValueError("gamma must be in (0, 1]")
         if not 0.0 <= self.gae_lambda <= 1.0:
@@ -324,7 +351,7 @@ class TrainingConfig:
         if len(self.net_arch) < 1 or any(size < 1 for size in self.net_arch):
             raise ValueError("net_arch must contain at least one positive layer size")
         if self.torch_threads < 0:
-            raise ValueError("torch_threads must be non-negative (0 = engine default)")
+            raise ValueError("torch_threads must be non-negative (0 = bounded auto)")
         # 1-10 are the combat levels, 11 is the self-play hook. Mirrors
         # CurriculumConfig.Level in scripts/core/curriculum_config.gd.
         if self.curriculum_level not in range(1, CURRICULUM_LEVEL_COUNT + 1):
@@ -416,6 +443,65 @@ class TrainingConfig:
 
         return CheckpointSelectionRule.from_config(self)
 
+    def resolved_rollout_length(self) -> int:
+        """Concrete per-environment horizon used by PPO.
+
+        An explicit positive value is never changed. In auto mode the
+        aggregate rollout stays near 16,384 transitions as environments are
+        added, instead of multiplying SB3's 2,048-step horizon by every
+        environment. When a nearby horizon makes the aggregate exactly
+        divisible by the minibatch size, prefer it to avoid a tiny final
+        minibatch; the adjustment is capped at 10% so unusual environment
+        counts cannot inflate the rollout substantially.
+        """
+        if self.rollout_length > 0:
+            return int(self.rollout_length)
+        raw = max(
+            1,
+            min(
+                MAX_AUTO_ROLLOUT_LENGTH,
+                math.ceil(DEFAULT_ROLLOUT_BATCH_TARGET / self.environment_count),
+            ),
+        )
+        quantum = self.batch_size // math.gcd(self.batch_size, self.environment_count)
+        aligned = math.ceil(raw / quantum) * quantum
+        if aligned <= math.ceil(raw * 1.10):
+            return int(aligned)
+        return int(raw)
+
+    def rollout_schedule(self) -> dict[str, int | float | bool]:
+        """Nominal collect/update geometry for a fresh training call."""
+        return {
+            "auto": self.rollout_length == 0,
+            **full_rollout_schedule(
+                self.total_training_steps,
+                self.environment_count,
+                self.resolved_rollout_length(),
+            ),
+        }
+
+    @staticmethod
+    def _available_cpu_count() -> int:
+        """Logical CPUs available to this process, respecting affinity."""
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except (AttributeError, OSError):  # Windows / restricted runtimes
+            return max(1, int(os.cpu_count() or 1))
+
+    def resolved_torch_threads(self) -> int:
+        """Concrete PyTorch intra-op CPU thread count.
+
+        Tiny MLP forwards and 256-sample PPO minibatches are latency-bound;
+        letting Torch consume every host thread adds thread-pool overhead and
+        contends with the Godot shards. Auto mode reserves one logical CPU per
+        bridge process and caps the remaining pool at four. The concrete
+        value is persisted in config/profile artifacts for reproducibility.
+        """
+        if self.torch_threads > 0:
+            return int(self.torch_threads)
+        available = max(1, self._available_cpu_count() - self.resolved_env_workers())
+        return min(MAX_AUTO_TORCH_THREADS, available)
+
     def resolved_env_workers(self) -> int:
         """Concrete number of Godot bridge processes for training.
 
@@ -443,9 +529,12 @@ class TrainingConfig:
         data["net_arch"] = list(self.net_arch)
         data["project_path"] = str(self.project)
         data["resolved_device"] = self.resolved_device()
-        # Provenance: an "auto" worker pool resolves against the machine
-        # that ran the experiment, so the concrete value is recorded.
+        # Provenance: auto scheduling resolves against the run's environment
+        # count and host resources, so every concrete value is recorded.
         data["resolved_env_workers"] = self.resolved_env_workers()
+        data["resolved_rollout_length"] = self.resolved_rollout_length()
+        data["rollout_schedule"] = self.rollout_schedule()
+        data["resolved_torch_threads"] = self.resolved_torch_threads()
         return data
 
     def save(self, path: str | Path) -> Path:

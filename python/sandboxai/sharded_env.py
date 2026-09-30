@@ -240,7 +240,9 @@ class ShardedBatchClient:
                 pending[worker] = client.transport.send(payload_for(self.shards[worker]))
             except BaseException as exc:  # noqa: BLE001 - re-raised as ShardFailure
                 self._drain(pending)
-                raise self._fail(worker, exc) from exc
+                failure = self._fail(worker, exc)
+                self.close()
+                raise failure from exc
         responses: list[dict[str, Any]] = []
         first_error: ShardFailure | None = None
         for worker, client in enumerate(self.clients):
@@ -253,6 +255,7 @@ class ShardedBatchClient:
                 if first_error is None:
                     first_error = self._fail(worker, exc)
         if first_error is not None:
+            self.close()
             raise first_error
         return responses
 
@@ -335,8 +338,9 @@ class ShardedBatchClient:
 
         Validation stays atomic *per worker* (the Godot side rejects the
         whole batch on one bad plan); an out-of-range global index is
-        rejected here before anything is staged, so a typo cannot leave
-        half the run on a new distribution.
+        rejected here before anything is staged. Requests are dispatched as
+        one fan-out operation, and any remote rejection closes every shard,
+        so callers cannot continue on a partially staged distribution.
         """
         if not plans:
             return {"ok": True, "staged": []}
@@ -351,18 +355,24 @@ class ShardedBatchClient:
             local = dict(plan)
             local["index"] = shard.local_index(index)
             per_worker[shard.worker].append(local)
+        # Dispatch every shard before collecting any response, just like a
+        # simulation step. If one shard rejects/fails, _broadcast closes the
+        # entire facade: callers can never continue with a partially staged
+        # worker set.
+        responses = self._broadcast(
+            lambda shard: {
+                "cmd": "set_episode_plans",
+                "plans": per_worker[shard.worker],
+            }
+        )
         staged: list[int] = []
-        for worker, worker_plans in enumerate(per_worker):
-            if not worker_plans:
-                continue
-            try:
-                response = self.clients[worker].set_episode_plans(worker_plans)
-            except BaseException as exc:  # noqa: BLE001
-                raise self._fail(worker, exc) from exc
+        for worker, response in enumerate(responses):
             if not response.get("ok", True):
-                raise self._fail(
+                failure = self._fail(
                     worker, RuntimeError(str(response.get("error", "plan staging failed")))
                 )
+                self.close()
+                raise failure
             offset = self.shards[worker].offset
             staged.extend(offset + int(value) for value in response.get("staged", []))
         return {"ok": True, "staged": sorted(staged)}
@@ -379,7 +389,9 @@ class ShardedBatchClient:
             try:
                 values.extend(getattr(client, method)())
             except BaseException as exc:  # noqa: BLE001
-                raise self._fail(worker, exc) from exc
+                failure = self._fail(worker, exc)
+                self.close()
+                raise failure from exc
         return values
 
     def metrics(self):

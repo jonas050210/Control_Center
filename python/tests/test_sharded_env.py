@@ -189,6 +189,11 @@ class ShardedExecutionTests(unittest.TestCase):
             self.assertEqual(caught.exception.worker, 1)
             self.assertEqual(caught.exception.offset, 2)
             self.assertIn("environments 2..3", str(caught.exception))
+            self.assertEqual(
+                sharded.clients,
+                [],
+                "one failed shard must close the whole facade; a partial batch may never continue",
+            )
         finally:
             del os.environ["SANDBOXAI_FAKE_CRASH_AFTER_STEPS"]
             del os.environ["SANDBOXAI_FAKE_CRASH_SEED"]

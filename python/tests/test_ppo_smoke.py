@@ -314,6 +314,7 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
                 evaluation_frequency=10_000,
                 curriculum_mode="fixed",
                 profile_training=True,
+                torch_threads=1,
             )
         )
         profile_path = Path(result["training_profile"])
@@ -324,6 +325,11 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         self.assertEqual(report["metadata"]["action_components"], len(ACTION_NVEC))
         self.assertGreater(report["timings"]["ppo.rollout_collection"]["total_seconds"], 0.0)
         self.assertGreater(report["timings"]["ppo.policy_update"]["total_seconds"], 0.0)
+        self.assertGreater(report["timings"]["ppo.optimizer_update"]["total_seconds"], 0.0)
+        self.assertEqual(report["metadata"]["expected_updates"], 1)
+        self.assertEqual(report["metadata"]["scheduled_timesteps"], 32)
+        self.assertEqual(report["metadata"]["torch_threads"], 1)
+        self.assertGreater(report["counters"]["policy.action_decisions"], 0)
         self.assertEqual(report["timings"]["bridge.step.total"]["count"], 16)
         self.assertEqual(len(report["iterations"]), 1)
 
