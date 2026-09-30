@@ -438,6 +438,11 @@ class MockExternalEnvironment(ExternalEnvironment):
         return vector
 
 
+## The canonical do-nothing action under the v3 contract, used to drive an
+## adapter through an episode without the checker taking a policy dependency.
+_IDLE_ACTION = [1, 1, 1, 1, 0, 0]
+
+
 class AdapterContractChecker:
     """Runs an adapter through the contract and reports every violation.
 
@@ -451,6 +456,24 @@ class AdapterContractChecker:
         self.adapter = adapter
 
     def run(self, steps: int = 16, seed: int = 123) -> list[str]:
+        """Exercises an adapter against the contract; empty list means conformant.
+
+        Never raises on the adapter's behalf: a broken implementation has to
+        show up as a readable problem list, not as a traceback out of the
+        checker.
+        """
+        problems, reset_ok = self._check_reset(seed)
+        if not reset_ok:
+            # reset() failed outright; nothing after it is meaningful.
+            return problems
+        problems += self._check_episode(steps)
+        problems += self._check_finished_episode_rejects_steps()
+        if self.adapter.describe().get("observation_dim") != OBSERVATION_FIELD_COUNT:
+            problems.append("describe() reports the wrong observation dimension")
+        return problems
+
+    def _check_reset(self, seed: int) -> tuple[list[str], bool]:
+        """Capabilities plus the reset handshake. The flag is False if reset() raised."""
         problems: list[str] = []
         capabilities = self.adapter.capabilities
         try:
@@ -461,25 +484,27 @@ class AdapterContractChecker:
         try:
             observation = self.adapter.reset(seed=seed)
         except Exception as exc:  # noqa: BLE001 - report, do not crash the check
-            return problems + [f"reset() raised {type(exc).__name__}: {exc}"]
+            return problems + [f"reset() raised {type(exc).__name__}: {exc}"], False
 
         try:
             validate_observation(observation, capabilities)
         except AdapterContractError as exc:
             problems.append(f"reset observation: {exc}")
 
-        status = self.adapter.status()
-        if status.state != "running":
-            problems.append(
-                f"after reset the episode state is {status.state!r}, expected 'running'"
-            )
+        state = self.adapter.status().state
+        if state != "running":
+            problems.append(f"after reset the episode state is {state!r}, expected 'running'")
+        return problems, True
 
-        idle_action = [1, 1, 1, 1, 0, 0]
+    def _check_episode(self, steps: int) -> list[str]:
+        """Steps the episode, checking every transition against the contract."""
+        problems: list[str] = []
+        capabilities = self.adapter.capabilities
         for index in range(steps):
             if self.adapter.status().finished:
                 break
             try:
-                observation, reward, done, info = self.adapter.step(idle_action)
+                observation, reward, done, info = self.adapter.step(_IDLE_ACTION)
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"step {index} raised {type(exc).__name__}: {exc}")
                 break
@@ -491,26 +516,22 @@ class AdapterContractChecker:
                 problems.append(f"step {index}: non-finite reward")
             if not isinstance(info, dict):
                 problems.append(f"step {index}: info is {type(info).__name__}, expected dict")
-            if bool(done) != self.adapter.status().finished:
-                problems.append(
-                    f"step {index}: done={done} disagrees with status {self.adapter.status().state!r}"
-                )
-
-        # Stepping a finished episode must fail loudly rather than
-        # returning made-up transitions.
-        if self.adapter.status().finished:
-            try:
-                self.adapter.step(idle_action)
-                problems.append("stepping a finished episode was accepted")
-            except AdapterContractError:
-                pass
-            except Exception as exc:  # noqa: BLE001
-                problems.append(f"stepping a finished episode raised {type(exc).__name__}: {exc}")
-
-        description = self.adapter.describe()
-        if description.get("observation_dim") != OBSERVATION_FIELD_COUNT:
-            problems.append("describe() reports the wrong observation dimension")
+            status = self.adapter.status()
+            if bool(done) != status.finished:
+                problems.append(f"step {index}: done={done} disagrees with status {status.state!r}")
         return problems
+
+    def _check_finished_episode_rejects_steps(self) -> list[str]:
+        """Stepping a finished episode must fail loudly, not invent transitions."""
+        if not self.adapter.status().finished:
+            return []
+        try:
+            self.adapter.step(_IDLE_ACTION)
+        except AdapterContractError:
+            return []
+        except Exception as exc:  # noqa: BLE001
+            return [f"stepping a finished episode raised {type(exc).__name__}: {exc}"]
+        return ["stepping a finished episode was accepted"]
 
 
 def contract_summary() -> dict[str, Any]:

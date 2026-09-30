@@ -949,6 +949,119 @@ def _arity_finding(
     )
 
 
+def _update_local_scope(
+    index: ProjectIndex, info: ScriptInfo, cleaned: str, scope: dict[str, ScriptInfo]
+) -> None:
+    """Applies one line's effect on the typed-local scope, in place.
+
+    A rebind drops the local (the new value may be of any type); a typed
+    declaration adds it, but only when the annotation resolves to a project
+    script whose full member set is knowable.
+    """
+    rebind = _LOCAL_REBIND_RE.match(cleaned)
+    if rebind:
+        scope.pop(rebind.group(1), None)
+
+    declaration = _TYPED_LOCAL_RE.match(cleaned)
+    if declaration is None:
+        return
+    local = declaration.group(1)
+    alias = declaration.group(2) or declaration.group(3)
+    scope.pop(local, None)
+    if alias in BUILTIN_TYPES or (alias not in info.preloads and alias not in index.by_class):
+        return
+    target = index.resolve(alias, info)
+    if target is not None and index.all_members(target) is not None:
+        scope[local] = target
+
+
+def _member_call_finding(
+    index: ProjectIndex,
+    info: ScriptInfo,
+    target: ScriptInfo,
+    label: str,
+    method: str,
+    cleaned: str,
+    call_end: int,
+    line_number: int,
+    unknown_message: str,
+) -> Finding | None:
+    """Membership first, then arity, for one resolved `label.method(...)` call."""
+    members = index.all_members(target)
+    if members is None:
+        return None
+    if method not in members:
+        return Finding(info.res_path, line_number, "unknown-member", unknown_message)
+    return _arity_finding(info, target, label, method, cleaned, call_end, line_number)
+
+
+def _chained_call_findings(
+    index: ProjectIndex,
+    info: ScriptInfo,
+    cleaned: str,
+    line_number: int,
+    scope: dict[str, ScriptInfo],
+) -> list[Finding]:
+    """One hop through a typed property: `local.prop.method(...)`."""
+    findings: list[Finding] = []
+    for match in _LOCAL_CHAIN_CALL_RE.finditer(cleaned):
+        local, prop, method = match.groups()
+        holder = scope.get(local)
+        if holder is None or method in UNIVERSAL_MEMBERS:
+            continue
+        prop_type = holder.member_types.get(prop)
+        if prop_type is None or prop_type in BUILTIN_TYPES:
+            continue
+        target = index.resolve(prop_type, holder) or index.by_class.get(prop_type)
+        if target is None:
+            continue
+        label = f"{local}.{prop}"
+        finding = _member_call_finding(
+            index,
+            info,
+            target,
+            label,
+            method,
+            cleaned,
+            match.end(),
+            line_number,
+            f"{label}.{method}() is not declared by {target.res_path}",
+        )
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
+def _direct_call_findings(
+    index: ProjectIndex,
+    info: ScriptInfo,
+    cleaned: str,
+    line_number: int,
+    scope: dict[str, ScriptInfo],
+) -> list[Finding]:
+    """Direct call on the local: `local.method(...)`."""
+    findings: list[Finding] = []
+    for match in _LOCAL_MEMBER_CALL_RE.finditer(cleaned):
+        local, method = match.group(1), match.group(2)
+        target = scope.get(local)
+        if target is None or method in UNIVERSAL_MEMBERS:
+            continue
+        finding = _member_call_finding(
+            index,
+            info,
+            target,
+            local,
+            method,
+            cleaned,
+            match.end(),
+            line_number,
+            f"{local}.{method}() is not declared by the type of {local}",
+        )
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
 def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
     """Checks method calls on locals whose type is a known project script.
 
@@ -992,85 +1105,15 @@ def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
                 scope = {}
                 continue
 
-            rebind = _LOCAL_REBIND_RE.match(cleaned)
-            if rebind:
-                scope.pop(rebind.group(1), None)
-
-            declaration = _TYPED_LOCAL_RE.match(cleaned)
-            if declaration:
-                local = declaration.group(1)
-                alias = declaration.group(2) or declaration.group(3)
-                scope.pop(local, None)
-                # Note: no `continue`. The right-hand side of a declaration
-                # is the most common place to call a method on an existing
-                # local (`var d: Dictionary = env.get_metrics()`), so the
-                # line still has to be scanned for calls below.
-                if alias not in BUILTIN_TYPES and (
-                    alias in info.preloads or alias in index.by_class
-                ):
-                    target = index.resolve(alias, info)
-                    if target is not None and index.all_members(target) is not None:
-                        scope[local] = target
-
+            # Note: the scope update does not `continue`. The right-hand
+            # side of a declaration is the most common place to call a
+            # method on an existing local (`var d: Dictionary =
+            # env.get_metrics()`), so the line is still scanned for calls.
+            _update_local_scope(index, info, cleaned, scope)
             if not scope:
                 continue
-
-            # One hop through a typed property: `local.prop.method(...)`.
-            for match in _LOCAL_CHAIN_CALL_RE.finditer(cleaned):
-                local, prop, method = match.groups()
-                holder = scope.get(local)
-                if holder is None or method in UNIVERSAL_MEMBERS:
-                    continue
-                prop_type = holder.member_types.get(prop)
-                if prop_type is None or prop_type in BUILTIN_TYPES:
-                    continue
-                target = index.resolve(prop_type, holder) or index.by_class.get(prop_type)
-                if target is None:
-                    continue
-                members = index.all_members(target)
-                if members is None:
-                    continue
-                label = f"{local}.{prop}"
-                if method not in members:
-                    findings.append(
-                        Finding(
-                            info.res_path,
-                            line_number,
-                            "unknown-member",
-                            f"{label}.{method}() is not declared by {target.res_path}",
-                        )
-                    )
-                    continue
-                problem = _arity_finding(
-                    info, target, label, method, cleaned, match.end(), line_number
-                )
-                if problem is not None:
-                    findings.append(problem)
-
-            # Direct call on the local: `local.method(...)`.
-            for match in _LOCAL_MEMBER_CALL_RE.finditer(cleaned):
-                local, method = match.group(1), match.group(2)
-                target = scope.get(local)
-                if target is None or method in UNIVERSAL_MEMBERS:
-                    continue
-                members = index.all_members(target)
-                if members is None:
-                    continue
-                if method not in members:
-                    findings.append(
-                        Finding(
-                            info.res_path,
-                            line_number,
-                            "unknown-member",
-                            f"{local}.{method}() is not declared by the type of {local}",
-                        )
-                    )
-                    continue
-                problem = _arity_finding(
-                    info, target, local, method, cleaned, match.end(), line_number
-                )
-                if problem is not None:
-                    findings.append(problem)
+            findings += _chained_call_findings(index, info, cleaned, line_number, scope)
+            findings += _direct_call_findings(index, info, cleaned, line_number, scope)
     return findings
 
 

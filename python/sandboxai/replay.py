@@ -542,21 +542,48 @@ def load_replay(path: str | Path, strict_contract: bool = True) -> ReplayEpisode
     return parse_replay(text.splitlines(), strict_contract=strict_contract)
 
 
+def _decode_replay_line(raw: str, number: int) -> dict[str, Any] | None:
+    """One JSONL line as a record dict, or None for a blank line."""
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ReplayError(f"replay line {number} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ReplayError(f"replay line {number} is not a JSON object")
+    return payload
+
+
+def _check_tick_sequence(ticks: list[ReplayTick], expected_action_width: int) -> None:
+    """Ticks must be contiguous from 0 and match the header's action width.
+
+    A gap means the recorder dropped a frame, which silently changes what a
+    replay proves; refusing to load is better than analysing a hole.
+    """
+    for tick in ticks:
+        if len(tick.action) != expected_action_width:
+            raise ReplayError(
+                f"tick {tick.tick} has a {len(tick.action)}-component action, "
+                f"header declares {expected_action_width}"
+            )
+    for index, tick in enumerate(ticks):
+        if tick.tick != index:
+            raise ReplayError(
+                f"replay ticks are not contiguous: expected {index}, found {tick.tick}"
+            )
+
+
 def parse_replay(lines: Iterable[str], strict_contract: bool = True) -> ReplayEpisode:
     header: ReplayHeader | None = None
     ticks: list[ReplayTick] = []
     events: list[ReplayEvent] = []
     result: dict[str, Any] = {}
     for number, raw in enumerate(lines, start=1):
-        line = raw.strip()
-        if not line:
+        payload = _decode_replay_line(raw, number)
+        if payload is None:
             continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ReplayError(f"replay line {number} is not valid JSON: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise ReplayError(f"replay line {number} is not a JSON object")
         if "header" in payload:
             if header is not None:
                 raise ReplayError(f"replay line {number}: a second header")
@@ -575,18 +602,7 @@ def parse_replay(lines: Iterable[str], strict_contract: bool = True) -> ReplayEp
             raise ReplayError(f"replay line {number}: unknown record {sorted(payload)}")
     if header is None:
         raise ReplayError("empty replay: no header")
-    expected_action_width = len(header.action_nvec)
-    for tick in ticks:
-        if len(tick.action) != expected_action_width:
-            raise ReplayError(
-                f"tick {tick.tick} has a {len(tick.action)}-component action, "
-                f"header declares {expected_action_width}"
-            )
-    for index, tick in enumerate(ticks):
-        if tick.tick != index:
-            raise ReplayError(
-                f"replay ticks are not contiguous: expected {index}, found {tick.tick}"
-            )
+    _check_tick_sequence(ticks, len(header.action_nvec))
     return ReplayEpisode(header=header, ticks=ticks, events=events, result=result)
 
 

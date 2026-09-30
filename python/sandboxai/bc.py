@@ -113,6 +113,132 @@ def load_bc_checkpoint(path: str | Path, device: str = "cpu") -> BehaviorCloning
     return model
 
 
+def _prepare_dataset(
+    dataset_path: str | Path, config: BCConfig
+) -> tuple[DemonstrationDataset, dict[str, Any], Any, Any, Any]:
+    """Loads, gates and splits the demonstration dataset.
+
+    The duplicate gate is deliberately a hard error: a dataset that is
+    mostly repeated frames trains a policy that looks excellent on its own
+    validation split and does nothing in the simulator.
+    """
+    full = DemonstrationDataset.load(dataset_path)
+    # Load-time validation only checks structural sanity; BC additionally
+    # pins the observation width to the live contract so an unusable
+    # checkpoint cannot be produced at all.
+    full.validate(require_contract_width=config.require_contract_observations)
+    statistics = full.statistics()
+    duplicate_fraction = float(statistics["duplicates"]["duplicate_fraction"])
+    if duplicate_fraction > config.max_duplicate_fraction:
+        raise ValueError(
+            f"dataset is {duplicate_fraction:.1%} exact-duplicate transitions, above the "
+            f"configured limit of {config.max_duplicate_fraction:.1%}. Re-record or "
+            "raise BCConfig.max_duplicate_fraction deliberately."
+        )
+    train_set, validation_set, split_report = full.split_with_report(
+        config.validation_fraction, config.seed, config.split_strategy
+    )
+    return full, statistics, split_report, train_set.arrays(), validation_set.arrays()
+
+
+def _restore_checkpoint(
+    resume_checkpoint: str | Path | None, model: Any, optimizer: Any, device: str
+) -> tuple[int, float]:
+    """Returns (start_epoch, best_validation_loss), restoring model/optimizer in place."""
+    if not resume_checkpoint:
+        return 0, float("inf")
+    checkpoint = torch.load(Path(resume_checkpoint), map_location=device, weights_only=False)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    return (
+        int(checkpoint.get("epoch", 0)),
+        float(checkpoint.get("best_validation_loss", float("inf"))),
+    )
+
+
+def _write_run_documents(
+    destination: Path,
+    config: BCConfig,
+    device: str,
+    dataset_path: str | Path,
+    full: DemonstrationDataset,
+    statistics: dict[str, Any],
+    split_report: Any,
+) -> None:
+    """Writes config.json and dataset_report.json before the first epoch.
+
+    Written up front on purpose: an aborted run still has to explain what
+    it was trained on and how the validation set was separated.
+    """
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "config.json").write_text(
+        json.dumps({**config.__dict__, "device": device}, indent=2) + "\n", encoding="utf-8"
+    )
+    (destination / "dataset_report.json").write_text(
+        json.dumps(
+            {
+                "format": "sandboxai.bc_dataset_report/v1",
+                "dataset": str(dataset_path),
+                "fingerprint": full.fingerprint,
+                "statistics": statistics,
+                "split": split_report.to_dict(),
+            },
+            indent=2,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _run_epoch_batches(
+    *,
+    model: Any,
+    optimizer: Any,
+    observations: Any,
+    actions: Any,
+    generator: Any,
+    config: BCConfig,
+    device: str,
+    epoch: int,
+    run_control: RunControl | None,
+) -> tuple[float, int, bool]:
+    """One training epoch. Returns (summed loss, batch count, stopped-early).
+
+    `stopped` means the Control Center asked the run to halt between
+    batches; the caller then writes a resumable checkpoint rather than a
+    completed-epoch one.
+    """
+    model.train()
+    permutation = torch.randperm(observations.shape[0], generator=generator)
+    batches = permutation.split(config.batch_size)
+    total_batches = len(batches)
+    loss_total = 0.0
+    completed = 0
+    for batch_number, batch_indices in enumerate(batches, start=1):
+        if run_control is not None and not run_control.checkpoint():
+            return loss_total, completed, True
+        batch_observations = observations[batch_indices].to(device)
+        batch_actions = actions[batch_indices].to(device)
+        optimizer.zero_grad(set_to_none=True)
+        loss, _component, _exact = _metrics_from_logits(model(batch_observations), batch_actions)
+        loss.backward()
+        optimizer.step()
+        loss_total += float(loss.item())
+        completed += 1
+        if run_control is not None and (batch_number == total_batches or batch_number % 10 == 0):
+            run_control.update(
+                epoch=epoch,
+                total_epochs=config.epochs,
+                batch=batch_number,
+                total_batches=total_batches,
+                progress=(epoch + batch_number / max(total_batches, 1)) / config.epochs,
+                **resource_snapshot(),
+            )
+    return loss_total, completed, False
+
+
 def train_behavior_cloning(
     dataset_path: str | Path,
     config: BCConfig | None = None,
@@ -131,62 +257,17 @@ def train_behavior_cloning(
     except ImportError as exc:
         raise RuntimeError("numpy is required for behavior cloning") from exc
 
-    full = DemonstrationDataset.load(dataset_path)
-    # Load-time validation only checks structural sanity; BC additionally
-    # pins the observation width to the live contract so an unusable
-    # checkpoint cannot be produced at all.
-    full.validate(require_contract_width=config.require_contract_observations)
-    statistics = full.statistics()
-    duplicate_fraction = float(statistics["duplicates"]["duplicate_fraction"])
-    if duplicate_fraction > config.max_duplicate_fraction:
-        raise ValueError(
-            f"dataset is {duplicate_fraction:.1%} exact-duplicate transitions, above the "
-            f"configured limit of {config.max_duplicate_fraction:.1%}. Re-record or "
-            "raise BCConfig.max_duplicate_fraction deliberately."
-        )
-    train_set, validation_set, split_report = full.split_with_report(
-        config.validation_fraction, config.seed, config.split_strategy
+    full, statistics, split_report, train_arrays, validation_arrays = _prepare_dataset(
+        dataset_path, config
     )
-    train_arrays = train_set.arrays()
-    validation_arrays = validation_set.arrays()
     device = config.resolved_device()
     model = BehaviorCloningPolicy(train_arrays[0].shape[1], config.hidden_sizes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
-    start_epoch = 0
-    best_validation = float("inf")
     patience_counter = 0
-
-    if resume_checkpoint:
-        checkpoint = torch.load(Path(resume_checkpoint), map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        if "optimizer_state_dict" in checkpoint:
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        start_epoch = int(checkpoint.get("epoch", 0))
-        best_validation = float(checkpoint.get("best_validation_loss", best_validation))
+    start_epoch, best_validation = _restore_checkpoint(resume_checkpoint, model, optimizer, device)
 
     destination = Path(output_dir or Path(config.output_root) / "bc_runs" / "latest")
-    destination.mkdir(parents=True, exist_ok=True)
-    (destination / "config.json").write_text(
-        json.dumps({**config.__dict__, "device": device}, indent=2) + "\n", encoding="utf-8"
-    )
-    # Dataset provenance and the exact split that produced the validation
-    # number reported below. Written before training so an aborted run
-    # still explains what it was trained on.
-    (destination / "dataset_report.json").write_text(
-        json.dumps(
-            {
-                "format": "sandboxai.bc_dataset_report/v1",
-                "dataset": str(dataset_path),
-                "fingerprint": full.fingerprint,
-                "statistics": statistics,
-                "split": split_report.to_dict(),
-            },
-            indent=2,
-            default=str,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    _write_run_documents(destination, config, device, dataset_path, full, statistics, split_report)
     metrics_path = destination / "metrics.jsonl"
     loss_csv = destination / "loss.csv"
     if start_epoch == 0:
@@ -223,37 +304,17 @@ def train_behavior_cloning(
             )
             run_control.event("system", "behavior-cloning optimization started")
         for epoch in range(start_epoch, config.epochs):
-            model.train()
-            permutation = torch.randperm(train_observations.shape[0], generator=generator)
-            train_loss_total = 0.0
-            train_batches = 0
-            batches = permutation.split(config.batch_size)
-            total_batches = len(batches)
-            for batch_number, batch_indices in enumerate(batches, start=1):
-                if run_control is not None and not run_control.checkpoint():
-                    stopped = True
-                    break
-                batch_observations = train_observations[batch_indices].to(device)
-                batch_actions = train_actions[batch_indices].to(device)
-                optimizer.zero_grad(set_to_none=True)
-                loss, _component, _exact = _metrics_from_logits(
-                    model(batch_observations), batch_actions
-                )
-                loss.backward()
-                optimizer.step()
-                train_loss_total += float(loss.item())
-                train_batches += 1
-                if run_control is not None and (
-                    batch_number == total_batches or batch_number % 10 == 0
-                ):
-                    run_control.update(
-                        epoch=epoch,
-                        total_epochs=config.epochs,
-                        batch=batch_number,
-                        total_batches=total_batches,
-                        progress=(epoch + batch_number / max(total_batches, 1)) / config.epochs,
-                        **resource_snapshot(),
-                    )
+            train_loss_total, train_batches, stopped = _run_epoch_batches(
+                model=model,
+                optimizer=optimizer,
+                observations=train_observations,
+                actions=train_actions,
+                generator=generator,
+                config=config,
+                device=device,
+                epoch=epoch,
+                run_control=run_control,
+            )
             if stopped:
                 # Keep the normal resumable checkpoint contract even when
                 # stopping between epochs. ``epoch`` is the number of fully
