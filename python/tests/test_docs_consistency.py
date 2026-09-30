@@ -33,6 +33,7 @@ WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 # contract.GODOT_VERSION.
 ENGINE_VERSION_DOCUMENTS = (
     "README.md",
+    "AGENTS.md",
     "CONTRIBUTING.md",
     "PROJECT.md",
     "docs/ARCHITECTURE.md",

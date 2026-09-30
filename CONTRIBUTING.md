@@ -45,6 +45,11 @@ register it once:
 python -m sandboxai validate-runtime --godot-executable /path/to/godot
 ```
 
+> Working with an AI coding agent? Point it at
+> [`AGENTS.md`](AGENTS.md) first. It carries the same rules as this file
+> plus the sandbox constraints, the traps previous sessions fell into and
+> the list of verified-but-unfixed findings.
+
 ## Running the checks
 
 Everything CI runs, in the order CI runs it:
