@@ -53,9 +53,7 @@ func setup(p_session, p_agent_id: int, compact: bool = false) -> void:
 		"Agent %d" % agent_id, ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	header.add_child(_title)
-	_state = ControlCenterTheme.make_label(
-		"Idle", ControlCenterTheme.FONT_SIZE_NORMAL, ControlCenterTheme.COLOR_MUTED
-	)
+	_state = ControlCenterTheme.make_status_label("Idle")
 	_state.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_state.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	header.add_child(_state)

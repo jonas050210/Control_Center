@@ -59,6 +59,9 @@ const ControlCenterTrainingDashboardPanel = preload(
 const ControlCenterTrainingLaunchPanel = preload(
 	"res://scripts/control_center/ui/training_launch_panel.gd"
 )
+const TrainingRunController = preload(
+	"res://scripts/control_center/training_run_controller.gd"
+)
 
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
@@ -553,7 +556,7 @@ func _apply_panel_visibility() -> void:
 		session.config.is_tile_visible("agent")
 		and not session.is_training_mode()
 		and not headless_dashboard
-		and viewport_width >= 1200.0
+		and viewport_width >= 1400.0
 	)
 	_right_container.visible = (
 		inspector_visible and (not headless_dashboard or viewport_width >= 900.0)
@@ -568,7 +571,17 @@ func _apply_panel_visibility() -> void:
 	)
 	var logs_visible: bool = session.config.is_tile_visible("logs")
 	_bottom_container.visible = (controls_visible or logs_visible) and not headless_dashboard
-	training_controls_panel.visible = session.config.is_tile_visible("training")
+	var training_state: int = int(session.training_run.state)
+	var training_active: bool = training_state in [
+		TrainingRunController.State.STARTING,
+		TrainingRunController.State.RUNNING,
+		TrainingRunController.State.PAUSED,
+		TrainingRunController.State.STOPPING,
+	]
+	training_controls_panel.visible = (
+		session.config.is_tile_visible("training")
+		and (active_page() == "training" or training_active)
+	)
 	controls_panel.visible = controls_visible
 	log_panel.visible = logs_visible
 

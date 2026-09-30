@@ -53,7 +53,7 @@ func setup(p_session) -> void:
 		_mode_buttons[mode] = button
 
 	row.add_child(VSeparator.new())
-	_state_label = ControlCenterTheme.make_label("", ControlCenterTheme.FONT_SIZE_NORMAL)
+	_state_label = ControlCenterTheme.make_status_label()
 	row.add_child(_state_label)
 
 	row.add_child(VSeparator.new())

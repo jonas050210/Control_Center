@@ -35,7 +35,7 @@ func setup(p_session) -> void:
 	_resume = _button(row, "Resume", _on_resume, "Resume a cooperatively paused backend")
 	_reset = _button(row, "Reset", _on_reset, "Clear a finished/error run from the dashboard")
 	row.add_child(VSeparator.new())
-	_state = ControlCenterTheme.make_label("Idle", ControlCenterTheme.FONT_SIZE_NORMAL)
+	_state = ControlCenterTheme.make_status_label("Idle")
 	_state.custom_minimum_size = Vector2(90.0, 0.0)
 	row.add_child(_state)
 	_detail = ControlCenterTheme.make_label(

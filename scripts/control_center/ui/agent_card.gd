@@ -19,7 +19,7 @@ var _title: Label
 var _algorithm: Label
 var _state: Label
 var _progress: ProgressBar
-var _metrics: Label
+var _metric_values: Dictionary = {}
 var _footer: Label
 var _pause: Button
 var _resume: Button
@@ -47,9 +47,7 @@ func setup(show_details_button: bool = true) -> void:
 		"", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_AI
 	)
 	header.add_child(_algorithm)
-	_state = ControlCenterTheme.make_label(
-		"Idle", ControlCenterTheme.FONT_SIZE_NORMAL, ControlCenterTheme.COLOR_MUTED
-	)
+	_state = ControlCenterTheme.make_status_label("Idle")
 	_state.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_state.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	header.add_child(_state)
@@ -61,9 +59,18 @@ func setup(show_details_button: bool = true) -> void:
 	_progress.custom_minimum_size = Vector2(0.0, 6.0)
 	root.add_child(_progress)
 
-	_metrics = ControlCenterTheme.make_value_label("")
-	_metrics.clip_text = false
-	root.add_child(_metrics)
+	var metrics_grid := ControlCenterTheme.make_grid(2)
+	root.add_child(metrics_grid)
+	for key in ["progress", "episodes", "reward", "kills/deaths", "accuracy", "throughput", "loss"]:
+		var caption := ControlCenterTheme.make_label(
+			key.capitalize(), ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+		metrics_grid.add_child(caption)
+		var value := ControlCenterTheme.make_value_label("n/a")
+		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		value.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		metrics_grid.add_child(value)
+		_metric_values[key] = value
 
 	_footer = ControlCenterTheme.make_label(
 		"", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
@@ -71,14 +78,16 @@ func setup(show_details_button: bool = true) -> void:
 	_footer.clip_text = true
 	root.add_child(_footer)
 
-	var buttons := ControlCenterTheme.make_row()
-	root.add_child(buttons)
-	_pause = _make_button(buttons, "Pause", _on_pause)
-	_resume = _make_button(buttons, "Resume", _on_resume)
-	_stop = _make_button(buttons, "Stop", _on_stop)
-	_details = _make_button(buttons, "Details", _on_details)
+	var transport_buttons := ControlCenterTheme.make_row()
+	root.add_child(transport_buttons)
+	_pause = _make_button(transport_buttons, "Pause", _on_pause)
+	_resume = _make_button(transport_buttons, "Resume", _on_resume)
+	_stop = _make_button(transport_buttons, "Stop", _on_stop)
+	var detail_buttons := ControlCenterTheme.make_row()
+	root.add_child(detail_buttons)
+	_details = _make_button(detail_buttons, "Details", _on_details)
 	_details.visible = show_details_button
-	_remove = _make_button(buttons, "Clear", _on_remove)
+	_remove = _make_button(detail_buttons, "Clear", _on_remove)
 
 
 ## Renders one agent snapshot (see TrainingAgentManager.agent_snapshot).
@@ -94,7 +103,16 @@ func update_from(snapshot: Dictionary) -> void:
 	var has_progress: bool = snapshot.has("progress")
 	_progress.value = clampf(float(snapshot.get("progress", 0.0)), 0.0, 1.0) * 100.0
 	_progress.modulate = Color(1, 1, 1, 1.0 if has_progress else 0.25)
-	_metrics.text = "\n".join(_metric_rows(snapshot))
+	for value_label in _metric_values.values():
+		(value_label as Label).text = "n/a"
+	for row_value in _metric_rows(snapshot):
+		var parts: PackedStringArray = str(row_value).split(" ", false)
+		if parts.is_empty():
+			continue
+		var metric_key: String = parts[0]
+		if _metric_values.has(metric_key):
+			var value_parts: PackedStringArray = parts.slice(1)
+			(_metric_values[metric_key] as Label).text = " ".join(value_parts)
 	_footer.text = _footer_text(snapshot)
 	_pause.disabled = state_id != TrainingRunController.State.RUNNING
 	_resume.disabled = state_id != TrainingRunController.State.PAUSED
@@ -113,16 +131,16 @@ static func _metric_rows(snapshot: Dictionary) -> Array:
 	var rows: Array = []
 	if snapshot.has("timesteps") or snapshot.has("total_training_steps"):
 		rows.append(
-			"steps        %d / %d"
+			"progress     %d / %d"
 			% [int(snapshot.get("timesteps", 0)), int(snapshot.get("total_training_steps", 0))]
 		)
 	elif snapshot.has("epoch") or snapshot.has("total_epochs"):
 		rows.append(
-			"epoch        %d / %d"
+			"progress     %d / %d"
 			% [int(snapshot.get("epoch", 0)), int(snapshot.get("total_epochs", 0))]
 		)
 	else:
-		rows.append("steps        n/a")
+		rows.append("progress     n/a")
 	rows.append("episodes     " + ControlCenterTheme.optional_metric(snapshot, "episodes", 0))
 	rows.append(
 		"reward       " + ControlCenterTheme.optional_metric(snapshot, "mean_episode_reward", 3)
@@ -168,6 +186,7 @@ static func _footer_text(snapshot: Dictionary) -> String:
 
 func _make_button(parent: Control, text: String, callback: Callable) -> Button:
 	var button := ControlCenterTheme.make_button(text)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.pressed.connect(callback)
 	parent.add_child(button)
 	return button
