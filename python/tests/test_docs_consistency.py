@@ -14,6 +14,7 @@ here with the file name in the message.
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 import unittest
@@ -24,6 +25,7 @@ from sandboxai.contract import GODOT_VERSION
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DOCS = REPOSITORY_ROOT / "docs"
+PACKAGE = REPOSITORY_ROOT / "python" / "sandboxai"
 WORKFLOWS = REPOSITORY_ROOT / ".github" / "workflows"
 
 # Files that quote the engine version in prose or configuration. Each one
@@ -161,6 +163,128 @@ class DocumentationIndexTests(unittest.TestCase):
                         (document.parent / target).resolve().exists(),
                         f"{document.name} links to a missing path: {target}",
                     )
+
+
+def _package_modules() -> dict[str, str]:
+    """Map every public module name to the first line of its docstring."""
+    modules: dict[str, str] = {}
+    for path in sorted(PACKAGE.glob("*.py")):
+        if path.name.startswith("__"):
+            continue
+        docstring = ast.get_docstring(ast.parse(path.read_text(encoding="utf-8")))
+        if docstring is None:
+            modules[path.stem] = ""
+        else:
+            modules[path.stem] = docstring.splitlines()[0].strip()
+    return modules
+
+
+def _module_level_imports(path: Path) -> set[str]:
+    """Sibling modules imported when ``path`` is imported.
+
+    Only module-level statements count, plus the bodies of ``if`` blocks
+    (that is where ``if TYPE_CHECKING:`` lives, and a cycle there still
+    breaks tooling even though it never runs). Imports inside functions
+    are deliberately excluded: deferring an import into a function is the
+    standard way to break a cycle, and several modules here do exactly
+    that on purpose.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    siblings: set[str] = set()
+    for node in tree.body:
+        candidates = ast.walk(node) if isinstance(node, ast.If) else [node]
+        for candidate in candidates:
+            relative = isinstance(candidate, ast.ImportFrom) and candidate.level == 1
+            if relative and candidate.module:
+                siblings.add(candidate.module.split(".")[0])
+    return siblings
+
+
+class ModuleMapTests(unittest.TestCase):
+    """docs/PYTHON_MODULE_MAP.md is generated from the package, so it must match it.
+
+    The package is flat by choice (see the document's own preamble). The
+    price of that choice is that nothing about the grouping is enforced
+    by the directory layout, so it is enforced here instead: a new module
+    that nobody classified fails this, and a description that no longer
+    matches the module docstring fails this.
+    """
+
+    ROW = re.compile(
+        r"^\| \[`([a-z0-9_]+)`\]\(\.\./python/sandboxai/([a-z0-9_]+)\.py\) \| (.+?) \|$"
+    )
+
+    def setUp(self) -> None:
+        self.map_path = DOCS / "PYTHON_MODULE_MAP.md"
+        self.rows = [
+            match.groups()
+            for match in (
+                self.ROW.match(line)
+                for line in self.map_path.read_text(encoding="utf-8").splitlines()
+            )
+            if match is not None
+        ]
+        self.modules = _package_modules()
+
+    def test_every_module_is_classified_exactly_once(self) -> None:
+        listed = [name for name, _, _ in self.rows]
+        self.assertEqual(
+            sorted(listed),
+            sorted(self.modules),
+            "docs/PYTHON_MODULE_MAP.md disagrees with python/sandboxai/ about which modules exist",
+        )
+        self.assertEqual(len(listed), len(set(listed)), "a module is listed twice")
+
+    def test_each_link_target_matches_its_label(self) -> None:
+        for name, target, _ in self.rows:
+            with self.subTest(module=name):
+                self.assertEqual(name, target)
+
+    def test_descriptions_are_the_module_docstring_summaries(self) -> None:
+        for name, _, description in self.rows:
+            with self.subTest(module=name):
+                self.assertEqual(
+                    description,
+                    self.modules[name],
+                    f"the map describes {name} with a line that is not its "
+                    f"docstring summary; edit the docstring instead",
+                )
+
+    def test_the_stated_module_count_is_right(self) -> None:
+        text = self.map_path.read_text(encoding="utf-8")
+        self.assertIn(f"all {len(self.modules)} modules sit directly under", text)
+
+    def test_the_module_level_import_graph_is_acyclic(self) -> None:
+        graph = {
+            path.stem: _module_level_imports(path)
+            for path in sorted(PACKAGE.glob("*.py"))
+            if not path.name.startswith("__")
+        }
+        # Iteratively strip modules with no un-visited sibling imports. A
+        # non-empty remainder is a cycle, and its members are named.
+        remaining = {name: set(deps) & set(graph) for name, deps in graph.items()}
+        while True:
+            resolved = {name for name, deps in remaining.items() if not deps}
+            if not resolved:
+                break
+            remaining = {
+                name: deps - resolved for name, deps in remaining.items() if name not in resolved
+            }
+        # What survives is the cycle plus everything that depends on it.
+        # Strip the dependants too, so the message names only the modules
+        # that are actually in a loop.
+        while True:
+            imported = {dep for deps in remaining.values() for dep in deps}
+            dependants = set(remaining) - imported
+            if not dependants:
+                break
+            remaining = {name: deps for name, deps in remaining.items() if name not in dependants}
+        self.assertEqual(
+            remaining,
+            {},
+            "module-level import cycle in sandboxai: "
+            + ", ".join(f"{name} -> {sorted(deps)}" for name, deps in sorted(remaining.items())),
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover - manual entry point

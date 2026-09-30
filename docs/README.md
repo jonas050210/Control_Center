@@ -17,6 +17,7 @@ truth for versions and the engine contract.
 | --- | --- |
 | [OBSERVATION_ACTION_CONTRACT.md](OBSERVATION_ACTION_CONTRACT.md) | The single source of truth for what a policy sees and does. Read this before touching the bridge, the observation builder or the action space. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The Godot/Python runtime split, the module map, and the testing rules the suite is held to. |
+| [PYTHON_MODULE_MAP.md](PYTHON_MODULE_MAP.md) | Where to find things in `python/sandboxai/`: all 46 modules grouped by theme, with each description generated from the module's own docstring. |
 | [CURRICULUM_AND_COMBAT.md](CURRICULUM_AND_COMBAT.md) | Curriculum levels, enemy behaviour and the multi-enemy combat model. |
 | [REPLAY_AND_METRICS.md](REPLAY_AND_METRICS.md) | Replay format, research metrics, generalization conditions and curriculum telemetry. |
 
