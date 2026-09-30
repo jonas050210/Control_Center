@@ -13,8 +13,17 @@ the failure reported from a real WSL machine:
   resolve under WSL.
 
 Everything here stubs the platform probes (sandboxai.wsl.is_wsl,
-sandboxai.wsl._wslpath) so the suite runs identically on Linux, native
-Windows and real WSL. No machine-specific paths are hardcoded.
+sandboxai.wsl._wslpath) so almost all of the suite runs identically on
+Linux, native Windows and real WSL. No machine-specific paths are
+hardcoded. A handful of tests mock is_wsl() to True while exercising a
+*project path built from this host's real tempdir* - on Linux that is a
+faithful stand-in for a real WSL machine (a genuine POSIX filesystem),
+but on native Windows it is not: is_wsl() can only ever really be True
+under a POSIX Python, so `pathlib.Path` there is always PurePosixPath,
+never the WindowsPath this suite would actually get on a native Windows
+CI runner. Those specific tests are skipped off POSIX; see their
+docstrings/comments for exactly what breaks and why it cannot occur in
+production.
 """
 from __future__ import annotations
 
@@ -368,6 +377,13 @@ class GodotTransportWslTests(unittest.TestCase):
         transport.close()
         return transport, popen
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "assumes self.project/self.executable are real POSIX paths, as they "
+        "would be inside real WSL; on native Windows they are WindowsPaths "
+        "and the expected 'C:\\\\wsl' + path formula does not apply (see "
+        "module docstring)",
+    )
     def test_direct_launch_converts_project_path_to_windows_form(self):
         transport, popen = self._make_transport([self._fake_process()])
         self.assertEqual(popen.call_count, 1)
@@ -376,6 +392,13 @@ class GodotTransportWslTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\"))
         self.assertEqual(transport.executable, str(self.executable))
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "assumes self.project/self.executable are real POSIX paths, as they "
+        "would be inside real WSL; on native Windows they are WindowsPaths "
+        "and the expected 'C:\\\\wsl' + path formula does not apply (see "
+        "module docstring)",
+    )
     def test_permission_error_falls_back_to_cmd_call_with_windows_paths(self):
         _transport, popen = self._make_transport(
             [PermissionError(13, "Permission denied", str(self.executable)), self._fake_process()]
@@ -527,6 +550,15 @@ class CliWslLaunchTests(unittest.TestCase):
             mock.patch("sandboxai.cli.load_godot_executable_setting", return_value=None),
         )
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "build_record_command resolves project_path through "
+        "normalize_host_path()+Path.resolve(); with is_wsl() mocked True "
+        "that assumes a POSIX Path, as it would be under real WSL, but on "
+        "native Windows Path.resolve() is WindowsPath.resolve() and "
+        "invents a drive letter from cwd for the fake POSIX-ish "
+        "intermediate value instead (see module docstring)",
+    )
     def test_record_command_converts_project_and_output_paths(self):
         from sandboxai.cli import build_record_command
 
@@ -546,6 +578,15 @@ class CliWslLaunchTests(unittest.TestCase):
         self.assertTrue(output_value.startswith("C:\\wsl"), output_value)
         self.assertNotIn("/mnt/", " ".join(command))
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "build_control_center_command resolves project_path through "
+        "normalize_host_path()+Path.resolve(); with is_wsl() mocked True "
+        "that assumes a POSIX Path, as it would be under real WSL, but on "
+        "native Windows Path.resolve() is WindowsPath.resolve() and "
+        "invents a drive letter from cwd for the fake POSIX-ish "
+        "intermediate value instead (see module docstring)",
+    )
     def test_control_center_command_converts_project_path(self):
         from sandboxai.cli import build_control_center_command
 
