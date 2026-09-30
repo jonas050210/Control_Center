@@ -12,6 +12,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Tkinter ships with the supported CPython Windows installer and is supplied
+# by the OS package manager on Linux; this named profile documents intent and
+# gives installers a stable target even though it has no PyPI dependency.
+desktop = []
 training = [
   "torch>=2.1",
   "gymnasium>=0.29",
@@ -32,6 +36,11 @@ gdscript = [
 # from `test` so running the suite locally never requires it.
 lint = [
   "ruff>=0.6",
+]
+dev = [
+  "pytest>=7.4",
+  "ruff>=0.6",
+  "gdtoolkit>=4.3,<5",
 ]
 
 [project.scripts]

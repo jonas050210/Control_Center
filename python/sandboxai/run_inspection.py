@@ -26,6 +26,8 @@ from typing import Any
 import json
 import time
 
+from .control_center_schema import validate_status
+
 RUN_REPORT_FORMAT = "sandboxai.run_report/v1"
 RUN_INDEX_FORMAT = "sandboxai.run_index/v1"
 
@@ -287,6 +289,8 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
     control, problem = read_json(path / "status.json")
     if problem:
         problems.append(problem)
+    elif control is not None:
+        problems.extend(f"status.json: {entry}" for entry in validate_status(control))
 
     checkpoints = _checkpoint_inventory(path)
     evaluation = _evaluation_inventory(path, problems)

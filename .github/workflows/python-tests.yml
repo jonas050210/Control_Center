@@ -43,6 +43,30 @@ jobs:
       - name: Run the Python suite
         run: PYTHONPATH=python python -m pytest python/tests -q
 
+  desktop-ui-tests:
+    name: Desktop UI tests (virtual display)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install virtual display and Tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: pip install -e ".[test]"
+
+      - name: Build every desktop page on a real Tk interpreter
+        run: xvfb-run -a python -m pytest python/tests/test_control_center_desktop.py -q
+        env:
+          PYTHONPATH: python
+
   full-tests:
     name: pytest (full training extras, ${{ matrix.os }})
     strategy:
