@@ -223,7 +223,65 @@ Single-user project. Checkpoints are never loaded from third parties.
 There is no release process and none is wanted — do not propose PyPI
 publishing, semantic-version ceremony or a support policy.
 
-## 10. Session/branch hygiene
+## 10. Open: the Windows Tk/GC saga (read this before touching BackgroundRunner)
+
+Status at handover: **unresolved in CI**. Everything below is measured,
+not guessed, but the final green Windows run has not been seen.
+
+The symptom was `pytest (full training extras, windows-latest)` dying
+with `Windows fatal exception: code 0x80000003` - no traceback, no
+failing assertion, the process simply stops. The thread dump (see
+below for how to get one) showed a `BackgroundRunner` worker
+garbage-collecting inside `discover_run_directories` while the main
+thread reconfigured a Tk widget.
+
+Diagnosis, in order:
+
+1. Tk objects may only be finalised on the thread owning the Tcl
+   interpreter. CPython runs the cyclic collector in whichever thread
+   trips the allocation threshold. Discarded widget trees are cyclic.
+   A worker walking directories allocates hard, trips it, and runs
+   `tkinter.Variable.__del__` from the wrong thread. Linux usually
+   survives; Windows does not.
+2. `close()` used `shutdown(wait=False)`, so workers outlived the
+   window. Fixed - but waiting *unbounded* then hung the job for
+   fourteen minutes, so the wait is now capped by `CLOSE_TIMEOUT_S`.
+3. Automatic collection is suspended while a runner lives and driven
+   from `_pump` (the Tk thread). The suspension is process-wide, so it
+   is tied to the runner's lifetime via `weakref.finalize` - a leaked
+   runner must not leave the whole suite running without a collector.
+
+**Last known state:** the Windows leg was still slow (~12 min vs ~2)
+on commit `c854cc8`. Commit `9f70085` (the `weakref.finalize` one)
+targets the most likely cause of that slowness and has *not* been
+confirmed in CI. If it is still slow, suspect the GC suspension
+approach itself rather than looking for a new bug, and consider
+whether the crash is worth the cure: the maintainer runs one window,
+not the twenty a test suite opens back to back.
+
+**Do not "fix" this by deleting the suspension** without re-reading
+point 1. And do not assert on thread teardown the instant `close()`
+returns - that was a flaky test of mine; measured, two workers were
+still winding down in four runs out of five.
+
+### Getting a failure out of CI
+
+Downloading raw Actions logs needs the Azure blob store, which is not
+reachable from every network (`gh run view --log` fails with `EOF`).
+Both pytest legs therefore post their output as a **commit comment**
+on failure, which plain REST can read:
+
+```bash
+MERGE=$(git ls-remote origin refs/pull/<PR>/merge | cut -f1)
+gh api "repos/jonas050210/SandboxAI/commits/$MERGE/comments" --jq '.[].body'
+```
+
+Note the merge SHA: on `pull_request` events `GITHUB_SHA` is the merge
+commit, not the branch head, so comments do not appear on your HEAD.
+`pytest` also has `faulthandler_timeout = 300`, so a wedged test dumps
+every thread's stack instead of sitting there silently.
+
+## 11. Session/branch hygiene
 
 Arena sessions are pinned to one branch (`arena/<id>-sandboxai`). Commit
 and push only there, and open PRs from there. Do not create or switch to
