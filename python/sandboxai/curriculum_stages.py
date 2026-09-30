@@ -25,7 +25,7 @@ mid-episode is how a curriculum corrupts its own statistics.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict, replace
+from dataclasses import dataclass, asdict, replace
 from typing import Any, Sequence
 
 from .auto_curriculum import AutoCurriculum, CurriculumSchedule

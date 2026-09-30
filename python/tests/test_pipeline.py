@@ -17,7 +17,6 @@ import re
 import unittest
 from pathlib import Path
 
-from sandboxai import pipeline as pipeline_mod
 from sandboxai.config import TrainingConfig
 from sandboxai.conditions import Condition
 from sandboxai.curriculum_stages import (
@@ -31,7 +30,6 @@ from sandboxai.pipeline import (
     ReplayController,
     SkillMetricsSink,
     TrainingPipeline,
-    build_manifest,
     contract_fingerprint,
     write_manifest,
 )

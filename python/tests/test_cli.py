@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from optional_deps import HAS_TORCH, TORCH_REASON
+from optional_deps import HAS_TKINTER, HAS_TORCH, TKINTER_REASON, TORCH_REASON
 from sandboxai.cli import build_control_center_command, build_record_command, main
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +85,24 @@ class CliTests(unittest.TestCase):
         with mock.patch("sandboxai.cli.subprocess.call", side_effect=OSError("not found")):
             exit_code = main(["control-center"])
         self.assertEqual(exit_code, 1)
+
+    @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+    def test_control_center_desktop_is_dispatched_with_project_and_output_root(self):
+        # Importing sandboxai.control_center_desktop (even just to patch its
+        # main()) requires Tkinter; this never opens a real window because
+        # main() itself is replaced before cli.main() reaches it.
+        with mock.patch("sandboxai.control_center_desktop.main", return_value=0) as desktop_main:
+            exit_code = main([
+                "control-center-desktop", "--project-path", "/tmp/some-project", "--output-root", "runs-out",
+            ])
+        self.assertEqual(exit_code, 0)
+        desktop_main.assert_called_once_with(project_root="/tmp/some-project", output_root="runs-out")
+
+    @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+    def test_control_center_desktop_defaults_to_no_explicit_project_path(self):
+        with mock.patch("sandboxai.control_center_desktop.main", return_value=0) as desktop_main:
+            main(["control-center-desktop"])
+        desktop_main.assert_called_once_with(project_root=None, output_root="training")
 
     def test_help_lists_workflow_commands(self):
         result = subprocess.run([sys.executable, "-m", "sandboxai", "--help"], capture_output=True, text=True, check=True, env=_subprocess_env())

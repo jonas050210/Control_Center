@@ -522,7 +522,14 @@ class TrainingConfig:
 
         run_id = self.run_id or _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
         prefix = f"{self.experiment_id}_" if self.experiment_id else ""
-        return Path(self.output_root).expanduser() / "runs" / f"{prefix}{run_id}"
+        # Resolve output_root (not the run subdirectory, which may not exist
+        # yet - resolve() only needs the existing prefix). Without this, a
+        # fresh run's reported run_dir and the SAME run's run_dir as derived
+        # from resuming a checkpoint (ppo.train_ppo resolves the checkpoint
+        # path) can disagree as plain strings whenever output_root sits under
+        # a symlink - e.g. macOS's /var -> /private/var, or a symlinked tmp
+        # dir - even though both name the identical directory on disk.
+        return Path(self.output_root).expanduser().resolve() / "runs" / f"{prefix}{run_id}"
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

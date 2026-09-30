@@ -33,7 +33,7 @@ enemy count, curriculum level and seed, and exports to JSON and CSV.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 import csv
 import json
 import math

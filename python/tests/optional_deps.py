@@ -32,8 +32,10 @@ HAS_SB3: bool = has_module("stable_baselines3")
 HAS_TENSORBOARD: bool = has_module("tensorboard")
 HAS_PSUTIL: bool = has_module("psutil")
 HAS_GDTOOLKIT: bool = has_module("gdtoolkit")
+HAS_TKINTER: bool = has_module("tkinter")
 
 TORCH_REASON = "PyTorch is an optional training extra and is not installed"
 GYMNASIUM_REASON = "gymnasium is an optional training extra and is not installed"
 SB3_REASON = "stable-baselines3 is an optional training extra and is not installed"
 GDTOOLKIT_REASON = "gdtoolkit is an optional GDScript tooling extra and is not installed"
+TKINTER_REASON = "Tkinter is not available in this Python installation (Tk widgets need it)"

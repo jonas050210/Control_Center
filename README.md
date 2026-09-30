@@ -157,6 +157,38 @@ commands and read-only status files with that process.
 
 Full documentation: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
+### Desktop Control Center (Python/Tkinter)
+
+A separate, local Python desktop application for operating training runs
+without opening Godot at all - useful while a run is training headless, or
+for reviewing runs/checkpoints/benchmarks after the fact:
+
+```bash
+sandboxai control-center-desktop
+# or, pointing it at a different project/output directory:
+sandboxai control-center-desktop --project-path /path/to/SandboxAI --output-root training
+```
+
+On Windows, `tools\windows\start_control_center.bat` launches it from the
+project's Python environment (activates `.venv` if present, checks that
+`sandboxai` and Tkinter are importable first, and reports a clear message
+instead of a stack trace if not).
+
+It is built entirely on `sandboxai.adapter.SandboxAIAdapter` - the same
+`train`/`benchmark`/`evaluate` CLI commands and on-disk run artifacts, never
+a parallel implementation - and covers: a live Dashboard (progress, FPS,
+ETA, device, PPO optimizer diagnostics, checkpoints, warnings); bounded
+live telemetry charts; validated Training launch/stop with basic/advanced
+config sections; an Evaluation page with win/loss/timeout, combat, accuracy
+and action-head/zero-shot diagnostics plus multi-run comparison; a Benchmark
+page with real sweeps and scaling-summary comparison across result
+history; a Runs/Checkpoints browser; an Agents page listing every
+training/evaluation/benchmark process this session launched (safe stop/force
+-stop only, no arbitrary process execution); and a System/Telemetry page
+with real CPU/RAM/Godot/dependency status - unavailable metrics are shown as
+such, never estimated. See
+[docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
+
 ## Automated tests
 
 Godot tests:
@@ -174,6 +206,18 @@ python -m pytest -q
 # or, without pytest:
 PYTHONPATH=python python -m unittest discover -s python/tests -v
 ```
+
+Static lint (pyflakes-equivalent checks only, via `ruff`, install with
+`pip install -e ".[lint]"`):
+
+```bash
+ruff check .
+```
+
+Both GitHub Actions workflows run on every push/PR:
+`.github/workflows/godot-tests.yml` (Godot 4.7.2 headless suite on Windows
+and Linux) and `.github/workflows/python-tests.yml` (`ruff`, a numpy-only
+"core" job, and a "full" job with the training extras on Windows and Linux).
 
 The Python suite also statically analyses and lints the GDScript half of the
 repository (`python/tests/test_gdscript_static.py`). It parses every `.gd`
@@ -252,6 +296,18 @@ sandboxai control-center --scenario overwhelmed --env-count 8
 
 This opens the graphical Godot scene `scenes/control_center.tscn` (never
 headless). See [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
+
+### Open the desktop Control Center
+
+```bash
+sandboxai control-center-desktop
+```
+
+This opens the Python/Tkinter desktop application described above, not the
+Godot scene - it never launches Godot itself; it launches the existing
+`train`/`benchmark`/`evaluate` CLI commands as separate processes when you
+start one from the GUI. See
+[docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
 
 ### Behavior Cloning
 

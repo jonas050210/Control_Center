@@ -360,6 +360,44 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             train_ppo(self._config(), resume_checkpoint=Path(self._tmp.name) / "does_not_exist.zip")
 
+    def test_train_ppo_emits_ppo_update_telemetry_for_the_control_center(self):
+        """PPOStatsCallback must relay SB3's own optimizer diagnostics into
+        logs/training.jsonl (see adapter.SERIES_KEYS / the Dashboard's PPO
+        diagnostics card) - real numbers SB3 already computed every
+        `model.train()` call, never estimated by this project."""
+        import json
+
+        from sandboxai.ppo import train_ppo
+
+        result = train_ppo(
+            self._config(
+                total_training_steps=64,
+                checkpoint_frequency=10_000,
+                evaluation_frequency=10_000,
+                curriculum_mode="fixed",
+            )
+        )
+        run_dir = Path(result["run_dir"])
+        rows = [
+            json.loads(line)
+            for line in (run_dir / "logs" / "training.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        ppo_updates = [row for row in rows if row.get("event") == "ppo_update"]
+        self.assertTrue(ppo_updates, "expected at least one ppo_update telemetry row")
+        first_update = ppo_updates[0]
+        for key in (
+            "n_updates", "approx_kl", "clip_fraction", "explained_variance",
+            "entropy", "value_loss", "policy_gradient_loss", "loss",
+        ):
+            self.assertIn(key, first_update, f"ppo_update row is missing {key!r}")
+            self.assertIsInstance(first_update[key], float)
+        # n_updates is SB3's own optimizer step counter: it must actually
+        # increase, proving this reads live diagnostics rather than a
+        # constant placeholder.
+        if len(ppo_updates) > 1:
+            self.assertGreater(ppo_updates[-1]["n_updates"], ppo_updates[0]["n_updates"])
+
 
 if __name__ == "__main__":
     unittest.main()

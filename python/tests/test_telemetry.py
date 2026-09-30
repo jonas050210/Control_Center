@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from sandboxai.telemetry import (
+    IncrementalJsonlTailer,
     JsonlTelemetry,
     ResourceMonitor,
     _nvidia_smi_snapshot,
@@ -72,6 +73,61 @@ class TelemetryTests(unittest.TestCase):
             finally:
                 release_probe.set()
                 monitor.close()
+
+    def test_incremental_tailer_only_returns_rows_appended_since_the_last_read(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "training.jsonl"
+            with JsonlTelemetry(path) as telem:
+                telem.write({"timesteps": 100})
+                telem.write({"timesteps": 200})
+                tailer = IncrementalJsonlTailer(path)
+                first = tailer.read_new()
+                self.assertEqual([row["timesteps"] for row in first], [100, 200])
+                # Nothing new has been written: a second read must be empty,
+                # not a re-delivery of the same rows (that is the whole
+                # point of a GUI polling this incrementally).
+                self.assertEqual(tailer.read_new(), [])
+                telem.write({"timesteps": 300})
+                second = tailer.read_new()
+                self.assertEqual([row["timesteps"] for row in second], [300])
+
+    def test_incremental_tailer_withholds_an_unterminated_final_line(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "training.jsonl"
+            path.write_bytes(b'{"timesteps": 1}\n{"timesteps": 2')  # no trailing newline yet
+            tailer = IncrementalJsonlTailer(path)
+            rows = tailer.read_new()
+            self.assertEqual([row["timesteps"] for row in rows], [1])
+            # Completing the line on a later write must produce it exactly
+            # once, not corrupt/duplicate/drop it.
+            with path.open("ab") as handle:
+                handle.write(b'}\n')
+            rows = tailer.read_new()
+            self.assertEqual([row["timesteps"] for row in rows], [2])
+
+    def test_incremental_tailer_skips_malformed_lines_without_raising(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "training.jsonl"
+            path.write_bytes(b'{"timesteps": 1}\nnot json at all\n["also", "not", "a", "row"]\n{"timesteps": 2}\n')
+            tailer = IncrementalJsonlTailer(path)
+            rows = tailer.read_new()
+            self.assertEqual([row["timesteps"] for row in rows], [1, 2])
+
+    def test_incremental_tailer_restarts_cleanly_after_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "training.jsonl"
+            path.write_text('{"timesteps": 1}\n{"timesteps": 2}\n', encoding="utf-8")
+            tailer = IncrementalJsonlTailer(path)
+            tailer.read_new()
+            # A new run reusing the same path (or any truncation) must not
+            # crash or silently mix old and new bytes.
+            path.write_text('{"timesteps": 10}\n', encoding="utf-8")
+            rows = tailer.read_new()
+            self.assertEqual([row["timesteps"] for row in rows], [10])
+
+    def test_incremental_tailer_missing_file_returns_empty_without_raising(self):
+        tailer = IncrementalJsonlTailer(Path(tempfile.gettempdir()) / "does-not-exist-12345.jsonl")
+        self.assertEqual(tailer.read_new(), [])
 
     def test_jsonl_telemetry_write(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

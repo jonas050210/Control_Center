@@ -199,7 +199,12 @@ class GodotExecutableResolutionTests(unittest.TestCase):
         home = self.executable.parent
         (home / "bin").mkdir()
         (home / "bin" / "godot").touch()
-        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+        # os.path.expanduser (what find_godot_executable relies on) reads
+        # HOME on POSIX but USERPROFILE on native Windows; HOME alone is
+        # ignored there and "~/bin/godot" comes back unexpanded. Setting
+        # both makes this test host-OS-independent instead of only
+        # exercising the POSIX branch.
+        with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
             resolved = find_godot_executable("~/bin/godot")
         self.assertEqual(resolved, str(home / "bin" / "godot"))
 

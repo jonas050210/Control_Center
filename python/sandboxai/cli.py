@@ -390,6 +390,18 @@ def build_parser() -> argparse.ArgumentParser:
         "control-center-desktop",
         help="open the real Python desktop Control Center backed by SandboxAIAdapter",
     )
+    desktop.add_argument(
+        "--project-path",
+        default=None,
+        help="project root the adapter reads/launches training from (default: this "
+        "editable install's repository root)",
+    )
+    desktop.add_argument(
+        "--output-root",
+        default="training",
+        help="run/benchmark/evaluation output directory, relative to --project-path unless absolute "
+        "(default: training)",
+    )
 
     bc = sub.add_parser("bc-train", help="train a PyTorch behavior-cloning policy")
     bc.add_argument("--dataset", required=True)
@@ -674,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "control-center-desktop":
         from .control_center_desktop import main as desktop_main
-        return desktop_main()
+        return desktop_main(project_root=args.project_path or None, output_root=args.output_root)
     if args.command == "smoke-test":
         res = run_smoke_test(args.device)
         print(json.dumps(res, indent=2, default=str))

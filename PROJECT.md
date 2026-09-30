@@ -363,6 +363,7 @@ The protocol the schema encodes:
 - **CURRENT benchmark:** environment-count sweeps and five comparable suites—early curriculum, advanced curriculum, perception combat, map analyzer, weapon handling—at `1/4/8/16/32/64` environments. It reports measured throughput, p50/p95 vector-step latency, and resources only. The default wire mode matches PPO's compact non-terminal infos; `benchmark --full-infos` explicitly measures diagnostic serialization instead.
 - **CURRENT Control Center:** watch/training-throughput/human modes, exact pause/step/speed controls, one lazily rendered environment, perception and observation inspectors, result/metric/replay tabs, and a background system monitor. It does not train or run a neural checkpoint inside Godot.
 - **CURRENT run inspection:** `python/sandboxai/run_inspection.py` + `sandboxai inspect-runs` are a strictly read-only backend over the run directory layout (state with the evidence it came from, progress, checkpoint/evaluation inventory, log sizes, manifest provenance, `problems` vs `warnings`). Documents are versioned (`sandboxai.run_report/v1`, `sandboxai.run_index/v1`); the Control Center consumes them instead of re-implementing the layout in GDScript.
+- **CURRENT desktop Control Center:** `sandboxai control-center-desktop` is a separate, local Tkinter application (`python/sandboxai/control_center_desktop.py`) for operating training without opening Godot. It is a thin view over `sandboxai.adapter.SandboxAIAdapter`, which only launches the existing `train`/`benchmark`/`evaluate` CLI commands and reads their existing artifacts (`run_inspection.py`, `logs/training.jsonl`, `status.json`, `evaluations/*`, `benchmark.json`); it owns no RL logic and duplicates no CLI/business logic. Dashboard, Training, Agents, Benchmarks, Evaluations, Runs/Checkpoints, System/Telemetry, and Settings pages; bounded incremental telemetry/log polling; non-blocking cooperative stop plus a scoped force-stop; unavailable metrics (e.g. no Godot binary, no CUDA) are shown as such, never estimated. See [`docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md`](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
 - **CURRENT replay:** light deterministic replays for routine capture; detailed observations for debugging contract or nondeterminism. `interesting` mode is default and capped at 64/run.
 
 ## 11. CLI, configuration, testing, and reproducibility
@@ -383,9 +384,10 @@ Public subcommands are exactly:
 
 ```text
 install  train  resume  evaluate  record  control-center
-bc-train  inspect-dataset  inspect-runs  benchmark  benchmark-suites
-replay  curriculum  weapon-table  ttk-report  adapter-contract
-validate-runtime  compare-experiments  summarize-experiment  smoke-test
+control-center-desktop  bc-train  inspect-dataset  inspect-runs  benchmark
+benchmark-suites  replay  curriculum  weapon-table  ttk-report
+adapter-contract  validate-runtime  compare-experiments  summarize-experiment
+smoke-test
 ```
 
 Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` commands.
@@ -397,7 +399,8 @@ Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` co
 - **CURRENT:** episode seeds feed local Godot RNGs; episode-plan generation is a pure deterministic function with disjoint streams.
 - **CURRENT:** simulation uses explicit `1/60` dt and analytic state/collision; deterministic recoil and bloom consume no RNG.
 - **CURRENT:** replay setup stores seed, map/scenario/lighting, enemy count, curriculum, policy/checkpoint identity, actions, and optional observations.
-- **CURRENT:** CI executes Godot tests on Windows and Linux, which is important cross-platform evidence.
+- **CURRENT:** CI executes Godot tests on Windows and Linux (`.github/workflows/godot-tests.yml`), which is important cross-platform evidence.
+- **CURRENT:** CI also runs the Python suite (`.github/workflows/python-tests.yml`): a `ruff`/pyflakes-equivalent lint pass, a numpy-only "core" job that guards the deliberately tiny hard dependency set, and a "full" job with the training extras installed on both Windows and Linux.
 - **CONSTRAINT:** Godot's general physics engine is officially nondeterministic; this project avoids it for canonical state. Floating-point/compiler/platform differences can still exist.
 - **CONSTRAINT:** PyTorch does not promise complete reproducibility across releases/platforms/devices. Record seeds, commit, Godot build, Python package versions, device, CPU thread settings, and hardware. Compare deterministic replay hashes/metrics within a declared boundary.
 - **CONSTRAINT:** any future parallel reduction must preserve per-environment RNG ownership and deterministic result ordering. Never share one mutable RNG across workers.
@@ -445,6 +448,8 @@ sandboxai benchmark-suites --godot-executable <Godot-4.7.2>
 
 Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 11 plus Ubuntu/WSL, Godot 4.7.2**.
 
+Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu with a Linux Godot build, project files under Windows/OneDrive), not a hypothetical target - `tools/wsl/run_full_validation.sh` / `docs/RUN_LOCAL_VALIDATION.md` exist to turn the PLANNED items below into real, measured, timestamped files from that exact machine instead of estimates.
+
 1. **CURRENT expectation:** structured simulation is CPU/IPC-bound; the tiny 84→128→128 MLP often makes per-step CPU inference more sensible than CUDA. The RTX is most useful for PPO update minibatches, BC, and future CNNs—not Godot's headless analytic state.
 2. **PLANNED baseline matrix:** measure native Windows Python+Godot, WSL Python+Linux Godot, and (if needed) WSL Python+Windows Godot. WSL interop is supported but must not be assumed free.
 3. **PLANNED sweep:** first run existing `1,2,4,8,16,24,32,48,64` single-process benchmarks. Record steps/s, episodes/s, p50/p95 step latency, JSON bytes, CPU/RAM, and profile buckets.
@@ -464,7 +469,7 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 - **CURRENT limitation:** the *default* checkpoint-selection rule is still mean shaped reward, so reward hacking/generalization regressions can win selection unless the rule is configured otherwise.
 - **CURRENT limitation:** scripted enemies do not use the same complete handling layer as the agent.
 - **CURRENT limitation:** only three contacts have individual state; overflow contacts are aggregates.
-- **CURRENT limitation:** normal dependencies are not fully pinned/locked; repeatable experiments need an environment snapshot.
+- **CURRENT limitation:** normal dependencies are not fully pinned/locked across platforms. `requirements-lock-linux-py311-cpu.txt` is a real, generated-and-installed reference snapshot for Linux/CPU (the one platform this environment could actually produce and verify), but Windows/macOS/CUDA installs legitimately resolve different wheels (torch especially) and have no equivalent lock file yet; repeatable cross-platform experiments still need their own environment snapshot.
 - **CURRENT limitation:** bridge and replay formats have weak evolution/negotiation compared with the observation contract.
 - **CURRENT limitation:** self-play is match/league/evaluation infrastructure, not end-to-end population training. (Same-tick lethal fire is no longer slot-order-biased: fire resolves simultaneously.)
 - **CURRENT limitation:** Godot must be installed separately. Neither this nor the previous audit could run local live validation or a benchmark; the GDScript suite and all live-bridge/throughput claims rest on CI (exact 4.7.2, Windows + Linux). GDScript changes in this pass were checked with `gdscript_analysis`, gdlint and the real GDScript grammar parser, and their numeric claims re-derived in Python against the real `SandboxConfig` constants.
@@ -547,7 +552,7 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 | Self-play/league | `scripts/self_play/`, `python/sandboxai/{self_play,league,policies}.py` |
 | Replay/metrics/profile | `python/sandboxai/{replay,metrics,telemetry,training_profile}.py` |
 | Public commands | `python/sandboxai/cli.py` |
-| Real behavior tests | `python/tests/`, `tests/`, `.github/workflows/godot-tests.yml` |
+| Real behavior tests | `python/tests/`, `tests/`, `.github/workflows/{godot-tests,python-tests}.yml` |
 
 ## 17. Research evidence translated into engineering decisions
 

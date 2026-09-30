@@ -735,6 +735,75 @@ def train_ppo(
                 profiler.record("callback.checkpoint_save", time.perf_counter() - started)
             return keep_going
 
+    class PPOStatsCallback(BaseCallback):
+        """Relays SB3's own PPO optimizer diagnostics into real telemetry.
+
+        Every ``train()`` call already computes explained variance,
+        approximate KL, clip fraction and entropy loss and stores them in
+        ``model.logger.name_to_value`` - but nothing outside a TensorBoard
+        event file ever sees them. This callback reads that same
+        dictionary (never recomputes it) at the first opportunity after a
+        ``train()`` call has finished - ``_on_rollout_start`` of the next
+        iteration, or ``_on_training_end`` for the final update - and
+        writes it to the same bounded ``training.jsonl`` the rest of the
+        Control Center already tails. ``train/n_updates`` is SB3's own
+        optimizer step counter, so "PPO updates completed" is an exact
+        count, never an estimate.
+        """
+
+        _KEYS: tuple[str, ...] = (
+            "train/n_updates",
+            "train/loss",
+            "train/entropy_loss",
+            "train/policy_gradient_loss",
+            "train/value_loss",
+            "train/approx_kl",
+            "train/clip_fraction",
+            "train/clip_range",
+            "train/explained_variance",
+            "train/learning_rate",
+        )
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._last_n_updates: float | None = None
+
+        def _flush(self) -> None:
+            values = getattr(self.model.logger, "name_to_value", None)
+            if not values:
+                return
+            n_updates = values.get("train/n_updates")
+            if n_updates is not None and n_updates == self._last_n_updates:
+                return  # train() has not run again since the last flush.
+            payload: dict[str, Any] = {"event": "ppo_update", "timesteps": self.num_timesteps}
+            for key in self._KEYS:
+                if key in values:
+                    payload[key.split("/", 1)[1]] = float(values[key])
+            if "entropy_loss" in payload:
+                # SB3 logs the negated mean policy entropy; the sign flip
+                # here is the only arithmetic this callback performs, and
+                # it stays traceable to the exact same measured value.
+                payload["entropy"] = -payload["entropy_loss"]
+            telemetry.write(payload)
+            if run_control is not None:
+                run_control.update(
+                    **{
+                        f"ppo_{key}": value
+                        for key, value in payload.items()
+                        if key not in ("event", "timesteps")
+                    }
+                )
+            self._last_n_updates = n_updates
+
+        def _on_rollout_start(self) -> None:
+            self._flush()
+
+        def _on_training_end(self) -> None:
+            self._flush()
+
+        def _on_step(self) -> bool:
+            return True
+
     class ProfilingCallback(BaseCallback):
         def __init__(self) -> None:
             super().__init__()
@@ -813,7 +882,12 @@ def train_ppo(
     )
     metrics_callback = MetricsCallback()
     evaluation_callback = EvaluationCallback()
-    callback_items: list[Any] = [checkpoint_callback, metrics_callback, evaluation_callback]
+    callback_items: list[Any] = [
+        checkpoint_callback,
+        metrics_callback,
+        evaluation_callback,
+        PPOStatsCallback(),
+    ]
     if profiler is not None:
         callback_items.insert(0, ProfilingCallback())
     inference_scheduler: InferenceDeviceScheduler | None = None

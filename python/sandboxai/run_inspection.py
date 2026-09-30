@@ -389,11 +389,15 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
             if key in summary
         }
     if isinstance(control, dict):
-        report["control"] = {
-            key: control.get(key)
-            for key in ("state", "pid", "updated_at", "stop_requested")
-            if key in control
-        }
+        # status.json is a small, atomically-written flat document (see
+        # run_control.RunControl): every key the running process publishes
+        # is relayed verbatim rather than whitelisted, so a live Dashboard
+        # can show training FPS, ETA, device, resource gauges and PPO
+        # optimizer diagnostics without this module growing a parallel
+        # whitelist every time the trainer starts publishing one more
+        # field. It is still exactly what was on disk - nothing computed
+        # or guessed is added here.
+        report["control"] = dict(control)
     stat = _file_stat(path)
     if stat is not None:
         report["modified_utc"] = stat["modified_utc"]
