@@ -586,6 +586,13 @@ class TrainingPipeline:
             self.episodes_log = log_path.open("a", encoding="utf-8")
         self._env = None
         self._checkpoint_path: str = ""
+        # `manifest()` is called at least twice per run (once at training
+        # start, once when the final manifest is written): see train_ppo.
+        # The Godot binary cannot change mid-run, so the first real probe
+        # (which launches the executable just to read its version) is
+        # cached and reused instead of launching Godot again for every
+        # subsequent manifest rebuild.
+        self._godot_snapshot: dict[str, Any] | None = None
 
     # -- attach / hooks ----------------------------------------------------
 
@@ -721,7 +728,21 @@ class TrainingPipeline:
         self._checkpoint_path = str(path)
 
     def manifest(self) -> dict[str, Any]:
-        return build_manifest(self.config, self.run_dir, self.device, self.driver)
+        # See _godot_snapshot's docstring in __init__: only probe the live
+        # Godot executable once per run and reuse that snapshot (including
+        # its version string) for every later manifest rebuild.
+        report = build_manifest(
+            self.config,
+            self.run_dir,
+            self.device,
+            self.driver,
+            probe_godot=self._godot_snapshot is None,
+        )
+        if self._godot_snapshot is None:
+            self._godot_snapshot = report["godot"]
+        else:
+            report["godot"] = self._godot_snapshot
+        return report
 
     def close(self) -> None:
         self.detach()

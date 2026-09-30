@@ -388,9 +388,14 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
         boundaries = self._boundaries(run_dir)
         self.assertGreaterEqual(boundaries, 3, "test needs several evaluation boundaries")
         spawns = self.spawn_log.read_text().splitlines()
-        # 1 training bridge + 1 normal-eval bridge + 1 battery bridge, once.
-        # Before process reuse this was 1 + 2 * boundaries.
-        self.assertEqual(len(spawns), 3, f"expected 3 bridge spawns, got {len(spawns)}")
+        # 1 training bridge + 1 normal-eval bridge + 1 battery bridge, once,
+        # plus one live Godot version probe for the run manifest (also
+        # once: TrainingPipeline.manifest() caches the first probe and
+        # reuses it for the final manifest rebuild instead of launching
+        # Godot again just to re-read the same version string).
+        # Before process reuse this was 1 + 2 * boundaries (+ 2 probes,
+        # one per manifest rebuild, before the probe was cached).
+        self.assertEqual(len(spawns), 4, f"expected 4 bridge spawns, got {len(spawns)}")
         profile = json.loads(Path(result["training_profile"]).read_text(encoding="utf-8"))
         self.assertEqual(profile["counters"]["eval.bridge_spawns"], 2)
         self.assertEqual(profile["timings"]["eval.env_startup"]["count"], 2)
@@ -429,11 +434,12 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
         first = train_ppo(self._config(evaluation_environment_count=2))
         second = train_ppo(self._config(evaluation_environment_count=2, run_id="perf_regression_vec2"))
         spawns = self.spawn_log.read_text().splitlines()
-        # Two runs x (1 training + 1 normal-eval + 1 battery) bridges; the
-        # vectorised normal evaluation must reuse its process across the 6
-        # boundaries of each run rather than respawning per boundary.
+        # Two runs x (1 training + 1 version probe + 1 normal-eval + 1
+        # battery) bridges; the vectorised normal evaluation must reuse its
+        # process across the 6 boundaries of each run rather than
+        # respawning per boundary. See the version-probe comment above.
         self.assertEqual(
-            len(spawns), 6, f"expected 6 bridge spawns (2 runs x 3), got {len(spawns)}"
+            len(spawns), 8, f"expected 8 bridge spawns (2 runs x 4), got {len(spawns)}"
         )
         for key in ("episodes", "mean_episode_reward", "mean_win", "win_rate"):
             a = json.loads((Path(first["run_dir"]) / "evaluations/latest.json").read_text(encoding="utf-8"))
