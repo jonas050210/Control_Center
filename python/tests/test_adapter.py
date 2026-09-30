@@ -387,3 +387,26 @@ def test_list_processes_and_process_log_round_trip(tmp_path):
 
     rows = process_table_rows(processes)
     assert any(row["id"] == record.id and isinstance(row["pid"], int) for row in rows)
+
+
+def test_hardware_candidates_and_profile_passthrough(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    candidates = adapter.hardware_candidates()
+    assert candidates, "at least the CPU candidate must always be offered"
+    assert all("label" in c and "description" in c for c in candidates)
+    # No wizard has run in this fresh checkout view, so nothing is persisted.
+    assert adapter.hardware_profile() is None
+
+
+def test_run_hardware_wizard_falls_back_without_engine(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    progress: list[str] = []
+    result = adapter.run_hardware_wizard(
+        godot_executable="definitely-not-a-real-godot-binary",
+        steps=10,
+        on_progress=lambda m: progress.append(m["status"]),
+        save=False,
+    )
+    assert result["fallback"] is True
+    assert result["selected_device"] == "cpu"
+    assert result["godot_available"] is False
