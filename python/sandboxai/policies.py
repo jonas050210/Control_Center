@@ -31,7 +31,7 @@ import random
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .contract import ACTION_NVEC, observation_value
 
@@ -119,7 +119,8 @@ class ScriptedBaseline:
         # Batched input (a vector env hands over a 2-D array): act per row.
         first = observation[0] if len(observation) and hasattr(observation[0], "__len__") else None
         if first is not None:
-            return [self.predict(row, deterministic)[0] for row in observation], None
+            rows = cast("Sequence[Sequence[float]]", observation)
+            return [self.predict(row, deterministic)[0] for row in rows], None
 
         visible = observation_value(observation, "primary_enemy_visible") > 0.5
         bearing = observation_value(observation, "primary_enemy_bearing_norm")

@@ -330,9 +330,9 @@ class DemonstrationDataset:
             if not dones[-1]:
                 problems.append(f"episode {key}: truncated (last transition is not terminal)")
             steps = [
-                self.transitions[index].get("step")
+                int(step)
                 for index in indices
-                if isinstance(self.transitions[index].get("step"), int)
+                if isinstance(step := self.transitions[index].get("step"), int)
             ]
             if steps and steps != sorted(steps):
                 problems.append(f"episode {key}: step numbers are not monotonic")

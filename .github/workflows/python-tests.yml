@@ -45,6 +45,31 @@ jobs:
       - name: Run ruff (formatting)
         run: ruff format --check --diff .
 
+  typecheck:
+    name: mypy (package, training extras installed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The training extras are installed on purpose: the package ships
+      # py.typed, and checking it against `Any` stand-ins for torch,
+      # gymnasium and stable-baselines3 would not verify the annotations
+      # downstream code actually consumes.
+      - name: Install the package with the typecheck and training extras
+        run: |
+          pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[typecheck,training]"
+
+      - name: Run mypy
+        run: mypy
+
   core-tests:
     name: pytest (core, numpy-only)
     runs-on: ubuntu-latest

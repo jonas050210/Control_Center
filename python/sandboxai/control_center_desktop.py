@@ -270,7 +270,7 @@ class ControlCenter(tk.Tk):
                 nav,
                 text=page_class.title,
                 style="Nav.TButton",
-                command=lambda name=page_class.title: self.show_page(name),
+                command=lambda name=page_class.title: self.show_page(name),  # type: ignore[misc]
             )
             button.pack(fill="x", pady=2)
             ToolTip(button, f"Open {page_class.title}")

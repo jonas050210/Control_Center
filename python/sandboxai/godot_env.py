@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import subprocess
@@ -12,9 +13,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .training_profile import TrainingProfiler
+    from .training_profile import PrefixedProfiler, TrainingProfiler
 
-import contextlib
+    ## Either the run-wide profiler or one of its prefixed views: the
+    ## sharded client hands each worker its own view so worker transport
+    ## timings do not collapse into one bucket.
+    ProfilerLike = TrainingProfiler | PrefixedProfiler
 
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -23,14 +27,14 @@ from .wsl import WindowsInterop, normalize_host_path
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover
-    np = None
+    np = None  # type: ignore[assignment]
 
 try:
     import gymnasium as gym  # type: ignore
     from gymnasium import spaces  # type: ignore
 except ImportError:  # pragma: no cover
-    gym = None
-    spaces = None
+    gym = None  # type: ignore[assignment]
+    spaces = None  # type: ignore[assignment]
 
 
 class PendingRequest:
@@ -66,7 +70,7 @@ class GodotProcessTransport:
         curriculum_level: int = 3,
         request_timeout: float = 30.0,
         self_play: bool = False,
-        profiler: TrainingProfiler | None = None,
+        profiler: ProfilerLike | None = None,
     ) -> None:
         project = Path(normalize_host_path(project_path)).expanduser().resolve()
         if not project.exists():
@@ -271,7 +275,7 @@ class GodotBatchClient:
     def __init__(
         self,
         compact_infos: bool = False,
-        profiler: TrainingProfiler | None = None,
+        profiler: ProfilerLike | None = None,
         **kwargs: Any,
     ) -> None:
         self.profiler = profiler
@@ -465,7 +469,7 @@ if gym is not None:
 
 else:
 
-    class GodotGymEnv:  # pragma: no cover
+    class GodotGymEnv:  # type: ignore[no-redef] # pragma: no cover
         def __init__(self, **_kwargs: Any) -> None:
             raise RuntimeError("gymnasium is required; install the training dependencies")
 
@@ -473,7 +477,7 @@ else:
 try:
     from stable_baselines3.common.vec_env import VecEnv  # type: ignore
 except ImportError:  # pragma: no cover
-    VecEnv = None
+    VecEnv = None  # type: ignore[assignment,misc]
 
 
 if VecEnv is not None:
@@ -641,6 +645,6 @@ if VecEnv is not None:
 
 else:
 
-    class GodotVecEnv:  # pragma: no cover
+    class GodotVecEnv:  # type: ignore[no-redef] # pragma: no cover
         def __init__(self, **_kwargs: Any) -> None:
             raise RuntimeError("stable-baselines3 is required for PPO")

@@ -605,6 +605,12 @@ class TrainingPipeline:
 
     # -- attach / hooks ----------------------------------------------------
 
+    def _require_env(self) -> Any:
+        """The attached vector env, or a clear error instead of AttributeError."""
+        if self._env is None:
+            raise RuntimeError("TrainingPipeline.attach(vec_env) has not been called")
+        return self._env
+
     def attach(self, vec_env: Any) -> None:
         """Registers the hooks and stages the first plan per environment."""
         self._env = vec_env
@@ -628,7 +634,7 @@ class TrainingPipeline:
         # Stage the NEXT plan per environment right away: the auto-reset at
         # episode end consumes it, and episodes are always >= 1 step long,
         # so the pending slot is never empty when it is needed.
-        self._env.client.set_episode_plans(
+        self._require_env().client.set_episode_plans(
             [self.driver.stage_next(index) for index in range(self.driver.environment_count)]
         )
 
@@ -675,7 +681,7 @@ class TrainingPipeline:
                 self.replays.begin(env_index, current, checkpoint=self._checkpoint_path)
             stage.append(driver.stage_next(env_index))
         if stage:
-            self._env.client.set_episode_plans(stage)
+            self._require_env().client.set_episode_plans(stage)
 
     # -- logging -----------------------------------------------------------
 
@@ -739,7 +745,7 @@ class TrainingPipeline:
 
     def reattach_after_load(self) -> None:
         """Re-stages the exact plans a loaded state had pending."""
-        self._env.client.set_episode_plans(self.driver.staged_payloads())
+        self._require_env().client.set_episode_plans(self.driver.staged_payloads())
 
     def note_checkpoint(self, path: str | Path) -> None:
         """Stamps subsequently saved replay files with the checkpoint they

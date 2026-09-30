@@ -407,10 +407,12 @@ def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) 
     }
     for key, title, width in columns:
         anchor = "e" if key in numeric_columns else "w"
-        tree.heading(
+        # typeshed types anchor as a literal enum; "e"/"w" are valid tk
+        # anchors and are what the rest of this module already uses.
+        tree.heading(  # type: ignore[call-overload]
             key, text=title, anchor=anchor, command=lambda k=key: _sort_tree(tree, k, False)
         )
-        tree.column(key, width=width, anchor=anchor, stretch=True)
+        tree.column(key, width=width, anchor=anchor, stretch=True)  # type: ignore[call-overload]
     return tree
 
 

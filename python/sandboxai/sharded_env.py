@@ -64,7 +64,7 @@ from .training_profile import PrefixedProfiler
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover - numpy is a hard dependency of the adapter
-    np = None
+    np = None  # type: ignore[assignment]
 
 
 class ShardFailure(RuntimeError):

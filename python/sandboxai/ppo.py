@@ -169,7 +169,7 @@ class _SelectionState:
 
 
 def _make_profiled_ppo(ppo_class: Any, profiler: Any) -> Any:
-    class ProfiledPPO(ppo_class):  # type: ignore[misc,valid-type]
+    class ProfiledPPO(ppo_class):
         """PPO with an exact timer around SB3's optimizer update."""
 
         def train(self) -> None:
@@ -692,10 +692,12 @@ class _EvaluationDriver:
         )
         self.pipeline.save_state()
         frozen_model = SynchronizedModel(model)
+        eval_env_kwargs = self.eval_env_kwargs
+        assert eval_env_kwargs is not None, "on_training_start has not run"
         summary, checkpoint_report, parallel_timing = run_parallel_evaluations(
             lambda: evaluate_model(
                 frozen_model,
-                self.eval_env_kwargs,
+                eval_env_kwargs,
                 episodes=self.config.evaluation_episodes,
                 seed=self.config.seed + timesteps,
                 # Written after both workers join. The generalization
@@ -750,6 +752,7 @@ class _EvaluationDriver:
         self, model: Any, timesteps: int, env: Any, step_directory: Path
     ) -> dict[str, Any]:
         """Single-bridge evaluation used when the research pipeline is off."""
+        assert self.eval_env_kwargs is not None, "on_training_start has not run"
         summary = evaluate_model(
             model,
             self.eval_env_kwargs,
@@ -877,7 +880,7 @@ def _make_checkpoint_callback(
 ) -> Any:
     """SB3's periodic checkpointer, with save timing and device pinning."""
 
-    class TimedCheckpointCallback(CheckpointCallback):  # type: ignore[misc,valid-type]
+    class TimedCheckpointCallback(CheckpointCallback):
         def _on_step(self) -> bool:
             should_save = self.n_calls % self.save_freq == 0
             started = time.perf_counter() if profiler is not None and should_save else 0.0
@@ -1287,7 +1290,7 @@ def train_ppo(
     if profiler is not None:
         profiler.set_metadata(
             observation_floats=env.client.observation_dim,
-            action_components=len(env.action_space.nvec),
+            action_components=len(env.action_space.nvec),  # type: ignore[attr-defined]
             env_workers=env_workers,
         )
     resource_monitor = ResourceMonitor()

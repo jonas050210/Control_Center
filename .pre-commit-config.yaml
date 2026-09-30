@@ -30,6 +30,11 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
+  # mypy is intentionally NOT a pre-commit hook: it needs the training
+  # extras installed to check anything meaningful, which is too heavy for
+  # a per-commit gate. The CI "typecheck" job owns it; run `mypy` by hand
+  # before pushing a change to the package's public surface.
+
   # gdtoolkit publishes no pre-commit hook repository, so these run from the
   # environment the contributor already needs (`pip install -e ".[dev]"`).
   - repo: local

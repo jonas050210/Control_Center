@@ -56,7 +56,7 @@ class DashboardSnapshot(TypedDict):
     output_root: str
     run_count: int
     latest_run: dict[str, Any] | None
-    active_processes: list[dict[str, Any]]
+    active_processes: list[ProcessSnapshot]
 
 
 class RunEvent(TypedDict, total=False):

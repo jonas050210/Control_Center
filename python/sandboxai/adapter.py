@@ -34,12 +34,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from importlib.util import find_spec
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .artifact_repository import ArtifactRepository
 from .benchmark import summarize_scaling
 from .config import TrainingConfig, find_godot_executable
-from .control_center_schema import DashboardSnapshot, ProcessSnapshot
+from .control_center_schema import DashboardSnapshot, ProcessSnapshot, RunStatus
 from .run_inspection import read_json, tail_jsonl
 from .telemetry import IncrementalJsonlTailer, resource_snapshot
 
@@ -270,7 +270,7 @@ class ProcessManager:
                 "error": "process not found",
             }
         with self._lock:
-            result = {
+            result: ProcessSnapshot = {
                 "id": record.id,
                 "kind": record.kind,
                 "state": record.state,
@@ -283,7 +283,7 @@ class ProcessManager:
                 "pid": record.process.pid,
                 "stdout": [text for _, text in record.stdout[-100:]],
                 "stderr": [text for _, text in record.stderr[-100:]],
-                "error": record.error,
+                "error": record.error or "",
                 "run_dir": str(record.run_dir),
                 "meta": dict(record.meta),
                 "command": list(record.command),
@@ -294,7 +294,7 @@ class ProcessManager:
         try:
             status = json.loads(status_path.read_text(encoding="utf-8"))
             if isinstance(status, dict):
-                result["backend"] = status
+                result["backend"] = cast("RunStatus", status)
         except FileNotFoundError:
             pass
         except (OSError, json.JSONDecodeError) as exc:
@@ -338,7 +338,7 @@ class ProcessManager:
             "stderr_truncated": stderr_gap,
         }
 
-    def cancel(self, process_id: str) -> dict[str, Any]:
+    def cancel(self, process_id: str) -> ProcessSnapshot:
         """Requests a safe stop without blocking the caller.
 
         Training uses the existing cooperative command-file protocol (see
@@ -370,7 +370,7 @@ class ProcessManager:
                 _stop_process_tree(record.process, hard=False)
         return self.snapshot(process_id)
 
-    def force_stop(self, process_id: str) -> dict[str, Any]:
+    def force_stop(self, process_id: str) -> ProcessSnapshot:
         """Immediately kills a process and its discoverable children.
 
         Skips cooperative shutdown: for a training process this means no
@@ -390,7 +390,7 @@ class ProcessManager:
 
     # Backward-compatible blocking variant, used only at application
     # shutdown where a bounded wait is acceptable.
-    def terminate(self, process_id: str, timeout: float = 5.0) -> dict[str, Any]:
+    def terminate(self, process_id: str, timeout: float = 5.0) -> ProcessSnapshot:
         record = self.get(process_id)
         if record is None:
             return {
@@ -726,7 +726,7 @@ class SandboxAIAdapter:
     # Process registry
     # ------------------------------------------------------------------
 
-    def list_processes(self, active_only: bool = False) -> list[dict[str, Any]]:
+    def list_processes(self, active_only: bool = False) -> list[ProcessSnapshot]:
         records = self.processes.list()
         if active_only:
             records = [r for r in records if r.returncode is None]
@@ -868,13 +868,13 @@ class SandboxAIAdapter:
         )
         return self.processes.snapshot(record.id) | {"process_id": record.id}
 
-    def process_status(self, process_id: str) -> dict[str, Any]:
+    def process_status(self, process_id: str) -> ProcessSnapshot:
         return self.processes.snapshot(process_id)
 
-    def cancel(self, process_id: str) -> dict[str, Any]:
+    def cancel(self, process_id: str) -> ProcessSnapshot:
         return self.processes.cancel(process_id)
 
-    def force_stop(self, process_id: str) -> dict[str, Any]:
+    def force_stop(self, process_id: str) -> ProcessSnapshot:
         return self.processes.force_stop(process_id)
 
     def close(self) -> None:

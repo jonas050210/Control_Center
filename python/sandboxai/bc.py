@@ -19,8 +19,8 @@ try:
     import torch  # type: ignore
     from torch import nn  # type: ignore
 except ImportError:  # pragma: no cover
-    torch = None
-    nn = None
+    torch = None  # type: ignore[assignment]
+    nn = None  # type: ignore[assignment]
 
 
 if nn is not None:
@@ -65,7 +65,7 @@ if nn is not None:
 
 else:
 
-    class BehaviorCloningPolicy:  # pragma: no cover
+    class BehaviorCloningPolicy:  # type: ignore[no-redef] # pragma: no cover
         def __init__(self, *_args, **_kwargs):
             raise RuntimeError(
                 "PyTorch is required for behavior cloning; install the training dependencies"
@@ -103,9 +103,13 @@ def _atomic_torch_save(value: dict[str, Any], path: Path) -> None:
 def load_bc_checkpoint(path: str | Path, device: str = "cpu") -> BehaviorCloningPolicy:
     _require_torch()
     checkpoint = torch.load(Path(path), map_location=device, weights_only=False)
+    hidden_sizes = tuple(int(value) for value in checkpoint["hidden_sizes"])
+    if len(hidden_sizes) != 2:
+        raise ValueError(
+            f"BC checkpoint declares {len(hidden_sizes)} hidden layers; the policy has exactly two"
+        )
     model = BehaviorCloningPolicy(
-        int(checkpoint["observation_dim"]),
-        tuple(int(value) for value in checkpoint["hidden_sizes"]),
+        int(checkpoint["observation_dim"]), (hidden_sizes[0], hidden_sizes[1])
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
@@ -342,7 +346,7 @@ def train_behavior_cloning(
             completed_epochs = epoch + 1
             train_loss = train_loss_total / max(train_batches, 1)
             validation_value = float(validation_loss.item())
-            row = {
+            row: dict[str, Any] = {
                 "epoch": epoch + 1,
                 "train_loss": train_loss,
                 "validation_loss": validation_value,
@@ -453,7 +457,7 @@ def load_bc_into_sb3_policy(
             target.bias.copy_(source.bias)
         offset = 0
         for head in model.heads:
-            rows = head.out_features
+            rows = int(head.out_features)  # type: ignore[arg-type]
             action_net.weight[offset : offset + rows].copy_(head.weight)
             action_net.bias[offset : offset + rows].copy_(head.bias)
             offset += rows

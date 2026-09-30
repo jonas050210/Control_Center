@@ -116,6 +116,19 @@ class ReplayRecordingTests(unittest.TestCase):
         self.assertIn("combat", kinds)
         self.assertIn("episode_end", kinds)
 
+    def test_parsed_episode_reports_the_tick_a_new_event_would_describe(self):
+        """Regression: ReplayEpisode.event_tick raised AttributeError.
+
+        It was a copy of the recorder's property and read ``self._tick``,
+        a cursor only the recorder has. Any caller asking a parsed episode
+        where to anchor an event crashed as soon as the episode had ticks.
+        """
+        episode = _record().episode()
+        self.assertEqual(episode.event_tick, len(episode.ticks) - 1)
+        # And an episode with no ticks answers 0 rather than -1.
+        empty = ReplayEpisode(header=episode.header)
+        self.assertEqual(empty.event_tick, 0)
+
     def test_events_are_anchored_to_the_tick_they_describe(self):
         """Regression: events were filed one tick after the step they belong to.
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .control_center_schema import DashboardSnapshot
+from .control_center_schema import DashboardSnapshot, ProcessSnapshot
 from .run_inspection import discover_run_directories, inspect_run, inspect_runs
 
 
@@ -37,7 +37,7 @@ class ArtifactRepository:
     def inspect_run(self, run: str | Path, event_limit: int = 50) -> dict[str, Any]:
         return inspect_run(run, event_limit=event_limit)
 
-    def dashboard(self, active_processes: Callable[[], list[dict[str, Any]]]) -> DashboardSnapshot:
+    def dashboard(self, active_processes: Callable[[], list[ProcessSnapshot]]) -> DashboardSnapshot:
         run_dirs = self.run_directories()
         latest = inspect_run(run_dirs[-1], event_limit=5) if run_dirs else None
         return {

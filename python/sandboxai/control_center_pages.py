@@ -296,7 +296,7 @@ class TrainingPage(Page):
         self.process_id: str | None = None
 
     def _build_fields(
-        self, parent: ttk.Frame, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]
+        self, parent: tk.Misc, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]
     ) -> None:
         parent.columnconfigure(1, weight=1)
         parent.columnconfigure(2, weight=2)
@@ -316,7 +316,10 @@ class TrainingPage(Page):
                 widget = ttk.Frame(parent)
                 ttk.Entry(widget, textvariable=var, width=30).pack(side="left")
                 ttk.Button(
-                    widget, text="Browse", width=8, command=lambda v=var: self._browse_file(v)
+                    widget,
+                    text="Browse",
+                    width=8,
+                    command=lambda v=var: self._browse_file(v),  # type: ignore[misc]
                 ).pack(side="left", padx=(4, 0))
             else:
                 widget = ttk.Entry(parent, textvariable=var, width=30)
@@ -667,7 +670,7 @@ class BenchmarkPage(Page):
             return
         self.state_label.configure(
             text=status.get("state", "unknown"),
-            foreground=STATE_COLORS.get(status.get("state"), COLOR_MUTED),
+            foreground=STATE_COLORS.get(str(status.get("state", "")), COLOR_MUTED),
         )
         if status.get("state") in ("finished", "failed"):
             self.process_id = None
@@ -898,7 +901,7 @@ class EvaluationPage(Page):
             return
         self.state_label.configure(
             text=f"evaluation process: {status.get('state')}",
-            foreground=STATE_COLORS.get(status.get("state"), COLOR_MUTED),
+            foreground=STATE_COLORS.get(str(status.get("state", "")), COLOR_MUTED),
         )
         if status.get("state") in ("finished", "failed"):
             self.process_id = None

@@ -520,6 +520,74 @@ class PlanExecutorTest(unittest.TestCase):
         self.assertEqual(strip(rows_a), strip(rows_b))
         self.assertEqual([row["labels"]["_position"] for row in rows_a], list(range(10)))
 
+    def test_replay_recording_writes_one_replay_per_plan(self):
+        """Regression: the battery could not record replays at all.
+
+        ``_advance_environment`` called ``recorder.record_step(action,
+        reward, events=events)``, but ReplayRecorder.record_step takes no
+        ``events`` argument - so every run with ``replay_dir`` set died
+        with TypeError on the first step. Events are a separate call, as
+        TrainingPipeline has always done it.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            replay_dir = Path(raw)
+            plans = [
+                PlannedEpisode(
+                    condition=plan.condition,
+                    layout_seed=plan.layout_seed,
+                    labels=plan.labels,
+                    record_replay=True,
+                )
+                for plan in self._plans(4)
+            ]
+            rows = self._executor(2).run(
+                self._model(), plans, policy_id="pol", replay_dir=replay_dir
+            )
+            self.assertEqual(len(rows), 4)
+            written = sorted(replay_dir.glob("*.jsonl"))
+            self.assertEqual(len(written), 4, f"expected one replay per plan, got {written}")
+            for path in written:
+                with self.subTest(replay=path.name):
+                    lines = path.read_text(encoding="utf-8").strip().splitlines()
+                    # header + at least one tick + footer
+                    self.assertGreaterEqual(len(lines), 3)
+
+    def test_recorded_events_land_on_the_tick_they_describe(self):
+        class _EventfulClient(_FakeBatchClient):
+            def step(self, actions):
+                observations, rewards, dones, infos = super().step(actions)
+                for info in infos:
+                    info["events"] = {"shot_fired": True, "hit": True, "damage_dealt": 25.0}
+                return observations, rewards, dones, infos
+
+        with tempfile.TemporaryDirectory() as raw:
+            replay_dir = Path(raw)
+            executor = PlanExecutor.__new__(PlanExecutor)
+            executor.client = _EventfulClient(1)
+            executor.environment_count = 1
+            executor.skill_metrics_enabled = True
+            executor.profiler = None
+            plan = self._plans(1)[0]
+            plans = [
+                PlannedEpisode(
+                    condition=plan.condition,
+                    layout_seed=plan.layout_seed,
+                    labels=plan.labels,
+                    record_replay=True,
+                )
+            ]
+            executor.run(self._model(), plans, policy_id="pol", replay_dir=replay_dir)
+
+            from sandboxai.replay import parse_replay
+
+            written = next(iter(replay_dir.glob("*.jsonl")))
+            episode = parse_replay(written.read_text(encoding="utf-8").splitlines())
+            self.assertTrue(episode.events)
+            last_tick = len(episode.ticks) - 1
+            for event in episode.events:
+                with self.subTest(event=event.kind):
+                    self.assertLessEqual(event.tick, last_tick)
+
     def test_next_plans_use_terminal_auto_reset_without_explicit_reset(self):
         executor = self._executor(3)
         rows = executor.run(self._model(), self._plans(12), policy_id="pol")

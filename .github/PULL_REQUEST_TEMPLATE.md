@@ -24,6 +24,7 @@ Thanks for contributing. Keep the diff focused; see CONTRIBUTING.md.
 
 - [ ] `ruff check .`
 - [ ] `ruff format --check .`
+- [ ] `mypy`
 - [ ] `python -m pytest -q`
 - [ ] `gdlint scripts tests` and `gdformat --check scripts tests`
 - [ ] `godot --headless --path . --script res://tests/run_tests.gd`

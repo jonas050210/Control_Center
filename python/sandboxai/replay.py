@@ -255,8 +255,13 @@ class ReplayEpisode:
 
     @property
     def event_tick(self) -> int:
-        """Tick index an event recorded right now belongs to."""
-        return max(0, self._tick - 1) if self.ticks else 0
+        """Index of the last recorded tick, i.e. the one a new event describes.
+
+        The recorder's namesake reads its own cursor, which points at the
+        *next* tick; a parsed episode has no cursor, so the same answer is
+        the last index in `ticks`. Before the first tick the answer is 0.
+        """
+        return max(0, len(self.ticks) - 1)
 
     @property
     def detailed(self) -> bool:

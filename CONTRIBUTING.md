@@ -52,9 +52,10 @@ Everything CI runs, in the order CI runs it:
 ```bash
 ruff check .                                  # lint
 ruff format --check .                         # Python formatting
+mypy                                          # types (config in pyproject)
 gdformat --check scripts tests                # GDScript formatting
 gdlint scripts tests                          # GDScript style
-python -m pytest -q                           # Python suite (793+ tests)
+python -m pytest -q                           # Python suite (900+ tests)
 godot --headless --path . --script res://tests/run_tests.gd   # Godot suite
 ```
 
@@ -71,7 +72,12 @@ install the `gdscript` extra rather than letting those tests skip.
 - Formatted with `ruff format`, line length 100, target `py311`.
 - Ruff lint rules: `E`, `W`, `F`, `I`, `UP`, `B`, `SIM`, `C901`
   (`max-complexity = 15`). New code must not need a `noqa`.
-- Fully type-annotated; the package ships `py.typed`.
+- Fully type-annotated; the package ships `py.typed`, and `mypy` (config
+  in `pyproject.toml`) has to stay clean. It is not `--strict`: the torch /
+  stable-baselines3 boundary is `Any` by necessity. It still earns its keep
+  - it found `ReplayEpisode.event_tick` reading a cursor that object never
+  had, and the checkpoint battery passing an argument `record_step` does
+  not take.
 - Prefer narrow exception types. A bare `except Exception` needs a comment
   explaining why swallowing is correct — a silently swallowed `ImportError`
   once made every run manifest record `godot.version: null`.

@@ -131,7 +131,11 @@ class EpisodePlan:
     index: int
     condition: Condition
     layout_seed: int
-    spawn: EnemySpawnPlan
+    ## None for a "stub" plan: the checkpoint battery and the skill-metrics
+    ## sink only need condition + seed, and the engine derives the spawn
+    ## layout from that seed itself, so inventing one here would be a
+    ## second, disagreeing source of truth.
+    spawn: EnemySpawnPlan | None = None
 
     @property
     def key(self) -> str:
@@ -142,7 +146,7 @@ class EpisodePlan:
             "index": self.index,
             "condition": self.condition.to_dict(),
             "layout_seed": self.layout_seed,
-            "spawn": self.spawn.to_dict(),
+            "spawn": self.spawn.to_dict() if self.spawn is not None else None,
         }
 
     def replay_header_fields(self) -> dict[str, Any]:

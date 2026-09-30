@@ -65,8 +65,14 @@ gdscript = [
 lint = [
   "ruff>=0.6",
 ]
+# Static type checking of the package the `py.typed` marker advertises
+# (CI "typecheck" job). Separate from `lint` because mypy pulls in stub
+# packages that ruff does not need.
+typecheck = [
+  "mypy>=1.11",
+]
 dev = [
-  "sandboxai[test,lint,gdscript,training]",
+  "sandboxai[test,lint,typecheck,gdscript,training]",
   "coverage>=7.4",
   "pre-commit>=3.7",
 ]
@@ -120,6 +126,31 @@ known-first-party = ["sandboxai"]
 
 [tool.ruff.format]
 docstring-code-format = true
+
+[tool.mypy]
+# The package ships py.typed, so downstream code type-checks against these
+# annotations; this is the gate that keeps them honest. The settings are
+# deliberately the "clean today" set rather than --strict: the training
+# stack is mostly `Any` at the torch/SB3 boundary, and turning on
+# disallow_untyped_defs would produce hundreds of findings that say
+# nothing about correctness. It has already paid for itself twice - see
+# ReplayEpisode.event_tick and the battery's replay recording, both of
+# which were AttributeError/TypeError at runtime.
+python_version = "3.11"
+files = ["python/sandboxai"]
+mypy_path = "python"
+# torch, stable-baselines3, gymnasium and gdtoolkit either ship no stubs or
+# are optional extras that may be absent in the checking environment.
+ignore_missing_imports = true
+# Deliberately off: nearly every `# type: ignore` in the package sits on an
+# optional import (`import torch  # type: ignore`). Whether it is "unused"
+# depends on which extras happen to be installed, so enabling this would
+# make the gate fail differently on a contributor's machine than in CI.
+warn_unused_ignores = false
+warn_redundant_casts = true
+warn_unused_configs = true
+no_implicit_optional = true
+show_error_codes = true
 
 [tool.pytest.ini_options]
 minversion = "7.4"

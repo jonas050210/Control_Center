@@ -269,10 +269,10 @@ class PlanExecutor:
         # One batched reset consumes every initial plan; idle environments
         # get a plain reset and remain ignored.
         observations, _infos = self.client.reset(None)
-        for env_index, item in enumerate(in_flight):
-            if item is not None:
+        for env_index, started in enumerate(in_flight):
+            if started is not None:
                 self._begin(
-                    env_index, item[1], sink, recorders, action_audits, policy_id, checkpoint
+                    env_index, started[1], sink, recorders, action_audits, policy_id, checkpoint
                 )
 
         # Fill the bridge's one-plan pending slot immediately. When the
@@ -356,7 +356,12 @@ class PlanExecutor:
             sink.record_step(env_index, observation, action, events)
         recorder = recorders[env_index]
         if recorder is not None:
-            recorder.record_step(action, reward, events=events)
+            # Two calls, exactly as TrainingPipeline does it: record_step
+            # takes no `events` argument, and passing one raised TypeError
+            # the moment the battery was asked to write replays.
+            recorder.record_step(action, reward, done=done)
+            if events:
+                recorder.record_events(events)
         if not done:
             return None
 
@@ -433,14 +438,12 @@ class PlanExecutor:
                 checkpoint=checkpoint,
                 environment_index=env_index,
                 notes=dict(plan.labels),
-                **{
-                    "seed": plan.condition.seed,
-                    "map_id": plan.condition.map_id,
-                    "scenario": plan.condition.scenario,
-                    "lighting": plan.condition.lighting,
-                    "enemy_count": plan.condition.enemy_count,
-                    "curriculum_level": plan.condition.level,
-                },
+                seed=plan.condition.seed,
+                map_id=plan.condition.map_id,
+                scenario=plan.condition.scenario,
+                lighting=plan.condition.lighting,
+                enemy_count=plan.condition.enemy_count,
+                curriculum_level=plan.condition.level,
             )
             header.detail = "light"
             recorder = ReplayRecorder(header=header)
