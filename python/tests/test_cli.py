@@ -1,3 +1,4 @@
+import contextlib
 import json
 import os
 import subprocess
@@ -245,10 +246,8 @@ class TrainGodotExecutablePropagationTests(_FakeCheckoutTestCase):
                 raise _StopTraining()
 
         with mock.patch("sandboxai.godot_env.GodotProcessTransport", FakeTransport):
-            try:
+            with contextlib.suppress(_StopTraining):
                 main(argv)
-            except _StopTraining:
-                pass
         return captured
 
     def test_explicit_godot_executable_reaches_the_training_transport(self):

@@ -13,6 +13,7 @@ It NEVER invents latency numbers, throughput, or validation passes.
 
 from __future__ import annotations
 
+import contextlib
 import platform
 import shutil
 import time
@@ -375,10 +376,8 @@ class RuntimeValidator:
         checks.append(check_health)
 
         # Close single-agent transport
-        try:
+        with contextlib.suppress(Exception):
             transport.close()
-        except Exception:
-            pass
 
         # --- Check 7: Self-Play Mode Handshake & Stepping ---
         if test_self_play:
@@ -448,10 +447,8 @@ class RuntimeValidator:
                 check_self_play.error = error_text
             finally:
                 if sp_transport is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         sp_transport.close()
-                    except Exception:
-                        pass
             checks.append(check_self_play)
 
         report.checks = checks

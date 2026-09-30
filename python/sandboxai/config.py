@@ -409,9 +409,9 @@ class TrainingConfig:
             return "cpu"
         try:
             import torch  # type: ignore
-        except ImportError:
+        except ImportError as exc:
             if requested == "cuda":
-                raise RuntimeError("CUDA was requested but PyTorch is not installed")
+                raise RuntimeError("CUDA was requested but PyTorch is not installed") from exc
             return "cpu"
         available = bool(torch.cuda.is_available())
         if requested == "cuda" and not available:
@@ -430,9 +430,11 @@ class TrainingConfig:
             return self.resolved_device()
         try:
             import torch  # type: ignore
-        except ImportError:
+        except ImportError as exc:
             if self.inference_device == "cuda":
-                raise RuntimeError("CUDA inference was requested but PyTorch is not installed")
+                raise RuntimeError(
+                    "CUDA inference was requested but PyTorch is not installed"
+                ) from exc
             return "cpu"
         if self.inference_device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError(
@@ -617,9 +619,9 @@ class BCConfig:
             return "cpu"
         try:
             import torch  # type: ignore
-        except ImportError:
+        except ImportError as exc:
             if self.device == "cuda":
-                raise RuntimeError("CUDA was requested but PyTorch is not installed")
+                raise RuntimeError("CUDA was requested but PyTorch is not installed") from exc
             return "cpu"
         if self.device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
@@ -663,7 +665,8 @@ class SelfPlayConfig:
             raise ValueError("learning and frozen self-play slots must differ")
         if self.opponent_strategy not in OPPONENT_STRATEGIES:
             raise ValueError(
-                "unknown opponent_strategy %r; expected one of %s"
-                % (self.opponent_strategy, ", ".join(OPPONENT_STRATEGIES))
+                "unknown opponent_strategy {!r}; expected one of {}".format(
+                    self.opponent_strategy, ", ".join(OPPONENT_STRATEGIES)
+                )
             )
         return self

@@ -20,6 +20,7 @@ modules already own:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -242,17 +243,15 @@ class ProcessManager:
                     if len(target) > self.max_lines:
                         del target[: len(target) - self.max_lines]
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 stream.close()
-            except OSError:
-                pass
 
     def _wait(self, record: ProcessRecord) -> None:
         code = record.process.wait()
         with self._lock:
             record.returncode = code
             if code and not record.error:
-                record.error = "process exited with code %d" % code
+                record.error = f"process exited with code {code}"
 
     def get(self, process_id: str) -> ProcessRecord | None:
         with self._lock:
@@ -405,10 +404,8 @@ class ProcessManager:
                 record.process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 self.force_stop(process_id)
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     record.process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    pass
         return self.snapshot(process_id)
 
     def close(self, timeout: float = 5.0) -> None:

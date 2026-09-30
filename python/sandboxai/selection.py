@@ -69,8 +69,9 @@ class CheckpointSelectionRule:
             raise ValueError("checkpoint selection metric must be a non-empty key")
         if self.goal not in SELECTION_GOALS:
             raise ValueError(
-                "unknown checkpoint selection goal %r; expected one of %s"
-                % (self.goal, ", ".join(SELECTION_GOALS))
+                "unknown checkpoint selection goal {!r}; expected one of {}".format(
+                    self.goal, ", ".join(SELECTION_GOALS)
+                )
             )
         if self.min_delta < 0.0 or not math.isfinite(self.min_delta):
             raise ValueError("checkpoint selection min_delta must be finite and >= 0")

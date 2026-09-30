@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import threading
@@ -50,10 +51,8 @@ def _nvidia_smi_snapshot(timeout: float = 0.75) -> dict[str, Any]:
         ("gpu_vram_total_mb", total),
         ("gpu_temperature_c", temp),
     ):
-        try:
+        with contextlib.suppress(ValueError):
             snapshot[key] = float(value)
-        except ValueError:
-            pass
     return snapshot
 
 

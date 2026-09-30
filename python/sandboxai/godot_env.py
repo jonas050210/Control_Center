@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .training_profile import TrainingProfiler
 
+import contextlib
+
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from .wsl import WindowsInterop, normalize_host_path
@@ -241,10 +243,8 @@ class GodotProcessTransport:
                 self.process.wait(timeout=3.0)
             except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
                 self.process.kill()
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     self.process.wait(timeout=3.0)
-                except subprocess.TimeoutExpired:
-                    pass
         # The process has exited (or been killed), so the pump threads see
         # EOF and finish; join briefly before closing their streams.
         for worker in (
@@ -255,10 +255,8 @@ class GodotProcessTransport:
                 worker.join(timeout=2.0)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream:
-                try:
+                with contextlib.suppress(OSError):
                     stream.close()
-                except OSError:
-                    pass
 
     def __enter__(self) -> GodotProcessTransport:
         return self
@@ -290,11 +288,11 @@ class GodotBatchClient:
         if self.observation_dim != OBSERVATION_FIELD_COUNT:
             self.close()
             raise RuntimeError(
-                "Godot bridge reports a %d-float observation space, but the Python "
-                "contract (python/sandboxai/contract.py) defines %d floats. The two "
-                "halves of the observation contract are out of sync; update "
-                "contract.py (and the docs) to match scripts/core/observation.gd."
-                % (self.observation_dim, OBSERVATION_FIELD_COUNT)
+                f"Godot bridge reports a {self.observation_dim}-float observation "
+                f"space, but the Python contract (python/sandboxai/contract.py) "
+                f"defines {OBSERVATION_FIELD_COUNT} floats. The two halves of the "
+                "observation contract are out of sync; update contract.py (and the "
+                "docs) to match scripts/core/observation.gd."
             )
 
     def reset_send(self, seed: int | None = None) -> PendingRequest:

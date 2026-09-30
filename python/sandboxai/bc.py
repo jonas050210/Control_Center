@@ -300,7 +300,7 @@ def train_behavior_cloning(
                     device=device,
                     **resource_snapshot(),
                 )
-                run_control.event("metric", "epoch %d completed" % (epoch + 1), row)
+                run_control.event("metric", f"epoch {epoch + 1} completed", row)
             checkpoint = {
                 "format": "sandboxai.bc.v1",
                 "epoch": epoch + 1,

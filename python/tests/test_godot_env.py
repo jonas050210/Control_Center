@@ -407,7 +407,10 @@ class SelfPlayBridgeTest(FakeBridgeTestCase):
 
         with self.make_self_play_client() as client:
             self.assertEqual(client.transport.spaces.get("policy_slots"), 2)
-            predictor = lambda obs: [0, 0, 0, 0, 0, 0]
+
+            def predictor(_obs):
+                return [0, 0, 0, 0, 0, 0]
+
             first = play_self_play_match(client, predictor, predictor, seed=1234)
             second = play_self_play_match(client, predictor, predictor, seed=1234)
         self.assertEqual(first, second, "self-play matches must be bit-for-bit deterministic")

@@ -29,6 +29,7 @@ static analysis, NOT a substitute for running the engine test-suite
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -370,7 +371,7 @@ def project_root(start: Path | None = None) -> Path:
     for candidate in [here, *here.parents]:
         if (candidate / "project.godot").is_file():
             return candidate
-    raise RuntimeError("could not locate project.godot above %s" % here)
+    raise RuntimeError(f"could not locate project.godot above {here}")
 
 
 def iter_gd_files(root: Path | str) -> list[Path]:
@@ -544,10 +545,11 @@ def parse_script(path: Path, root: Path) -> ScriptInfo:
                 extra = _strip_strings_and_comments(lines[cursor])
                 signature += " " + extra.strip()
                 depth += extra.count("(") - extra.count(")")
-            try:
+            # A signature the regex matched but the arity parser cannot make
+            # sense of is left unrecorded rather than guessed: a wrong arity
+            # would produce false "wrong argument count" findings.
+            with contextlib.suppress(IndexError, ValueError):
                 info.functions[name] = _function_arity(signature)
-            except (IndexError, ValueError):  # pragma: no cover - defensive
-                pass
             continue
         for pattern in (_CONST_RE, _VAR_RE, _SIGNAL_RE, _INNER_CLASS_RE):
             member_match = pattern.match(cleaned)

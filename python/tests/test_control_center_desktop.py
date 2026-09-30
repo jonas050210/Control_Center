@@ -12,6 +12,7 @@ server is available to open a Tk window (headless CI without Xvfb); both are
 environment facts, not regressions, per the project's testing rules.
 """
 
+import contextlib
 import json
 import time
 import unittest
@@ -62,10 +63,8 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.addCleanup(self._safe_destroy)
 
     def _safe_destroy(self):
-        try:
+        with contextlib.suppress(tk.TclError):
             self.app._on_close()
-        except tk.TclError:
-            pass
 
     def test_every_required_page_is_registered(self):
         titles = {page_class.title for page_class in PAGE_CLASSES}
@@ -123,7 +122,6 @@ class ControlCenterConstructionTests(unittest.TestCase):
         page.field_vars["environment_count"].set("not-a-number")
         # _start() shows a messagebox on invalid input; patch it out so the
         # test does not block on a real dialog.
-        page.__class__.__module__  # sanity: page is the real class
         from unittest import mock
 
         with mock.patch("sandboxai.control_center_desktop.messagebox.showerror") as mocked:

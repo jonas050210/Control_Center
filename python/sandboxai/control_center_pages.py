@@ -1110,9 +1110,10 @@ class RunsPage(Page):
             self._row_to_dir[item_id] = row["run_dir"]
             if row["run_dir"] == selected:
                 self.tree.selection_set(item_id)
-        if self._pending_run_selection is not None:
-            if self._select_existing_row(self._pending_run_selection):
-                self._pending_run_selection = None
+        if self._pending_run_selection is not None and self._select_existing_row(
+            self._pending_run_selection
+        ):
+            self._pending_run_selection = None
 
     def _on_select(self, _event: object) -> None:
         selection = self.tree.selection()

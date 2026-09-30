@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -229,19 +230,20 @@ def train_ppo(
         # be a race (rollout collection runs in this thread, so sequencing
         # here is strict happens-before every step).
         pipeline.attach(env)
-        if checkpoint_path is not None:
-            # Resume continues the curriculum exactly where the saved
-            # checkpoint left it: same stage, same staged plans, same
-            # per-environment seed ordinals.
-            if pipeline.load_state(checkpoints / "curriculum_state.json"):
-                pipeline.reattach_after_load()
-                telemetry.write(
-                    {
-                        "event": "curriculum_resumed",
-                        "level": pipeline.driver.level,
-                        "episodes_completed": pipeline.driver.episodes_completed,
-                    }
-                )
+        # Resume continues the curriculum exactly where the saved checkpoint
+        # left it: same stage, same staged plans, same per-environment seed
+        # ordinals.
+        if checkpoint_path is not None and pipeline.load_state(
+            checkpoints / "curriculum_state.json"
+        ):
+            pipeline.reattach_after_load()
+            telemetry.write(
+                {
+                    "event": "curriculum_resumed",
+                    "level": pipeline.driver.level,
+                    "episodes_completed": pipeline.driver.episodes_completed,
+                }
+            )
         write_manifest(run_dir, pipeline.manifest())
     # Checkpoint selection is an explicit, recorded rule (see
     # sandboxai/selection.py). The default is identical to the historical
@@ -612,10 +614,10 @@ def train_ppo(
             # the whole run and die exactly once.
             for resource in (self.eval_env, self.battery_executor):
                 if resource is not None:
-                    try:
+                    # Shutdown is best effort: a bridge that already died
+                    # must not mask the real training result.
+                    with contextlib.suppress(Exception):
                         resource.close()
-                    except Exception:  # pragma: no cover - shutdown best effort
-                        pass
             self.eval_env = None
             self.battery_executor = None
 

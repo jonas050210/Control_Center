@@ -24,6 +24,7 @@ never freezes the window.
 
 from __future__ import annotations
 
+import contextlib
 import tkinter as tk
 from tkinter import (  # messagebox re-export keeps the public test/embedding seam stable
     messagebox,
@@ -75,10 +76,8 @@ class ControlCenter(tk.Tk):
 
     def _configure_style(self) -> None:
         style = ttk.Style(self)
-        try:
+        with contextlib.suppress(tk.TclError):
             style.theme_use("clam")
-        except tk.TclError:
-            pass
         self.configure(background=COLOR_BG)
         self.option_add("*TCombobox*Listbox.background", COLOR_SURFACE_RAISED)
         self.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)

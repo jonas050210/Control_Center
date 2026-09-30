@@ -247,9 +247,10 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
             different_seed = evaluate_model(model, self.env_kwargs, episodes=3, seed=1234, env=env)
         finally:
             env.close()
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k != "episode_index"} for row in rows
-        ]
+
+        def strip(rows):
+            return [{k: v for k, v in row.items() if k != "episode_index"} for row in rows]
+
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused_first["episodes_detail"]))
         self.assertEqual(
             strip(fresh_again["episodes_detail"]), strip(reused_again["episodes_detail"])
@@ -272,10 +273,13 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
             reused_again = evaluate_model(model, kwargs, episodes=5, seed=900, env=env)
         finally:
             env.close()
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k not in ("episode_index", "environment_index")}
-            for row in rows
-        ]
+
+        def strip(rows):
+            return [
+                {k: v for k, v in row.items() if k not in ("episode_index", "environment_index")}
+                for row in rows
+            ]
+
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused["episodes_detail"]))
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused_again["episodes_detail"]))
         self.assertEqual(
@@ -962,9 +966,10 @@ class CompactBatteryInfosTest(unittest.TestCase):
 
         full = PlanExecutor(kwargs(False)).run(model, plans(4), policy_id="p")
         compact = PlanExecutor(kwargs(True)).run(model, plans(4), policy_id="p")
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k != "environment_index"} for row in rows
-        ]
+
+        def strip(rows):
+            return [{k: v for k, v in row.items() if k != "environment_index"} for row in rows]
+
         self.assertEqual(strip(full), strip(compact))
 
 

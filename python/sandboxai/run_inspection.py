@@ -256,8 +256,8 @@ def _warnings(
 
             if contract.get("observation_dim") not in (None, OBSERVATION_FIELD_COUNT):
                 warnings.append(
-                    "run used a %s-float observation; the current contract is %d"
-                    % (contract.get("observation_dim"), OBSERVATION_FIELD_COUNT)
+                    f"run used a {contract.get('observation_dim')}-float observation; "
+                    f"the current contract is {OBSERVATION_FIELD_COUNT}"
                 )
             if contract.get("action_nvec") not in (None, list(ACTION_NVEC)):
                 warnings.append("run used a different action space than the current contract")
@@ -450,8 +450,7 @@ def format_run_index(index: dict[str, Any]) -> str:
         progress = report.get("progress", {})
         steps = progress.get("timesteps")
         lines.append(
-            "%-34s %-11s %12s %6d %5d %9s"
-            % (
+            "{:<34} {:<11} {:>12} {:>6} {:>5} {:>9}".format(
                 report["run_id"][:34],
                 report["status"]["state"][:11],
                 "n/a" if steps is None else f"{steps:,}",
@@ -496,8 +495,9 @@ def format_run_report(report: dict[str, Any]) -> str:
         host = manifest.get("host") or {}
         if host:
             lines.append(
-                "  host           python %s, %s, %s CPUs"
-                % (host.get("python", "?"), host.get("system", "?"), host.get("logical_cpus", "?"))
+                "  host           python {}, {}, {} CPUs".format(
+                    host.get("python", "?"), host.get("system", "?"), host.get("logical_cpus", "?")
+                )
             )
         godot = manifest.get("godot") or {}
         if godot.get("version"):
@@ -505,13 +505,13 @@ def format_run_report(report: dict[str, Any]) -> str:
         selection = manifest.get("checkpoint_selection") or {}
         if selection:
             lines.append(
-                "  selection      %s %s (min_delta %s)"
-                % (selection.get("goal"), selection.get("metric"), selection.get("min_delta"))
+                "  selection      {} {} (min_delta {})".format(
+                    selection.get("goal"), selection.get("metric"), selection.get("min_delta")
+                )
             )
     checkpoints = report.get("checkpoints", {})
     lines.append(
-        "  checkpoints    %d (latest=%s best=%s final=%s)"
-        % (
+        "  checkpoints    {} (latest={} best={} final={})".format(
             checkpoints.get("count", 0),
             checkpoints.get("has_latest"),
             checkpoints.get("has_best"),
@@ -520,14 +520,16 @@ def format_run_report(report: dict[str, Any]) -> str:
     )
     evaluation = report.get("evaluation", {})
     lines.append(
-        "  evaluations    %d (latest mean reward %s)"
-        % (evaluation.get("evaluation_count", 0), _reward(report))
+        "  evaluations    {} (latest mean reward {})".format(
+            evaluation.get("evaluation_count", 0), _reward(report)
+        )
     )
     best = evaluation.get("best")
     if isinstance(best, dict):
         lines.append(
-            "  best           score %s at %s timesteps"
-            % (best.get("score", best.get("mean_reward")), best.get("timesteps"))
+            "  best           score {} at {} timesteps".format(
+                best.get("score", best.get("mean_reward")), best.get("timesteps")
+            )
         )
     missing = [name for name, present in report.get("artifacts", {}).items() if not present]
     if missing:

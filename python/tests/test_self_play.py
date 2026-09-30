@@ -91,8 +91,11 @@ class SelfPlayTests(unittest.TestCase):
         client.reset.return_value = [[obs_a, obs_b]]
         client.step.return_value = ([[obs_a, obs_b]], [[0.0, 0.0]], [False], [[{}, {}]])
 
-        predict_a = lambda obs: [1, 1, 1, 1, 0, 0]
-        predict_b = lambda obs: [1, 1, 1, 1, 0, 0]
+        def predict_a(_obs):
+            return [1, 1, 1, 1, 0, 0]
+
+        def predict_b(_obs):
+            return [1, 1, 1, 1, 0, 0]
 
         result = play_self_play_match(client, predict_a, predict_b, seed=99, max_steps=5)
         self.assertEqual(result["score_a"], 0.5)

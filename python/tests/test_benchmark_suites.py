@@ -9,6 +9,7 @@ absent.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from sandboxai.benchmark import DEFAULT_ENVIRONMENT_COUNTS
@@ -164,7 +165,7 @@ class ContractDriftTests(unittest.TestCase):
         source = (
             __import__("sandboxai.benchmark", fromlist=["benchmark"]).__file__  # type: ignore[attr-defined]
         )
-        text = open(source, encoding="utf-8").read()
+        text = Path(source).read_text(encoding="utf-8")
         self.assertIn("ACTION_NVEC", text)
         self.assertNotIn("[1, 1, 1, 1, 0]", text)
         self.assertEqual(len(ACTION_NVEC), 6)

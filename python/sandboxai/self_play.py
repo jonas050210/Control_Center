@@ -85,8 +85,9 @@ class SelfPlayCoordinator:
             raise ValueError("self-play slots need distinct names")
         if strategy not in OPPONENT_STRATEGIES:
             raise ValueError(
-                "unknown opponent strategy %r; expected one of %s"
-                % (strategy, ", ".join(OPPONENT_STRATEGIES))
+                "unknown opponent strategy {!r}; expected one of {}".format(
+                    strategy, ", ".join(OPPONENT_STRATEGIES)
+                )
             )
         self.learning_slot = learning_slot
         self.opponent_slot = opponent_slot
@@ -270,8 +271,8 @@ class SelfPlayBatchClient:
         if dim != OBSERVATION_FIELD_COUNT:
             self.transport.close()
             raise RuntimeError(
-                "self-play bridge reports a %d-float observation space, but the "
-                "contract defines %d floats" % (dim, OBSERVATION_FIELD_COUNT)
+                f"self-play bridge reports a {dim}-float observation space, but "
+                f"the contract defines {OBSERVATION_FIELD_COUNT} floats"
             )
 
     def reset(self, seed: int):

@@ -512,10 +512,11 @@ class PlanExecutorTest(unittest.TestCase):
         rows_a = self._executor(3).run(self._model(), plans, policy_id="pol")
         rows_b = self._executor(2).run(self._model(), plans, policy_id="pol")
         self.assertEqual(len(rows_a), 10)
+
         # Scheduling independence: N=3 and N=2 must produce the same rows.
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k != "environment_index"} for row in rows
-        ]
+        def strip(rows):
+            return [{k: v for k, v in row.items() if k != "environment_index"} for row in rows]
+
         self.assertEqual(strip(rows_a), strip(rows_b))
         self.assertEqual([row["labels"]["_position"] for row in rows_a], list(range(10)))
 

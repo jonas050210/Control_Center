@@ -505,9 +505,9 @@ class DemonstrationDataset:
             else:
                 effective = "transition"
                 degraded_reason = (
-                    "dataset exposes %d episode group(s); a leakage-free episode split "
-                    "needs at least 2, so the transition shuffle was used. Record "
-                    "episode_id/environment_id to remove this fallback." % len(groups)
+                    f"dataset exposes {len(groups)} episode group(s); a leakage-free "
+                    "episode split needs at least 2, so the transition shuffle was "
+                    "used. Record episode_id/environment_id to remove this fallback."
                 )
         if effective == "episode" and len(groups) < 2:
             raise ValueError(

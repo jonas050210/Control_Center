@@ -220,7 +220,7 @@ class ConditionTrackerTests(unittest.TestCase):
 class ReportTests(unittest.TestCase):
     def test_report_flags_a_condition_dependent_policy(self):
         tracker = ConditionTracker()
-        for index in range(20):
+        for _index in range(20):
             tracker.record(Condition(map_id="open_field"), 1.0, True, 50)
             tracker.record(Condition(map_id="echo_maze"), 0.0, False, 50)
         report = generalization_report(tracker)

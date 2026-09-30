@@ -10,6 +10,7 @@ boundaries.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -191,7 +192,5 @@ def _atomic_json_write(path: Path, values: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         temporary.replace(path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass

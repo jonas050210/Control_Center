@@ -49,6 +49,7 @@ batches are never returned.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import Iterable, Sequence
@@ -266,10 +267,10 @@ class ShardedBatchClient:
         for worker, request in enumerate(pending):
             if request is None:
                 continue
-            try:
+            # Draining in-flight requests is best effort; a worker that
+            # already exited simply has nothing left to drain.
+            with contextlib.suppress(Exception):
                 self.clients[worker].transport.receive(request)
-            except Exception:  # pragma: no cover - shutdown best effort
-                pass
 
     # -- GodotBatchClient surface --------------------------------------
 
@@ -294,10 +295,7 @@ class ShardedBatchClient:
     def step(self, actions):
         profiler = self.profiler
         started = time.perf_counter() if profiler is not None else 0.0
-        if hasattr(actions, "tolist"):
-            actions = actions.tolist()
-        else:
-            actions = list(actions)
+        actions = actions.tolist() if hasattr(actions, "tolist") else list(actions)
         if len(actions) != self.environment_count:
             raise ValueError(f"expected {self.environment_count} actions, got {len(actions)}")
 
@@ -430,10 +428,10 @@ class ShardedBatchClient:
 
     def close(self) -> None:
         for client in getattr(self, "clients", []):
-            try:
+            # Every client gets a close attempt even if an earlier one
+            # raised, so one dead bridge cannot leak the others.
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:  # pragma: no cover - shutdown best effort
-                pass
         self.clients = []
 
     # -- introspection --------------------------------------------------
