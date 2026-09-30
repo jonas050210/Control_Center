@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import find_godot_executable
-from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+from .contract import ACTION_NVEC, GODOT_VERSION, OBSERVATION_FIELD_COUNT
 from .wsl import WindowsInterop, normalize_host_path
 
 
@@ -104,59 +104,126 @@ class RuntimeValidator:
         except Exception:
             return None
 
+    # --- orchestration ---------------------------------------------------
+
     def validate(
         self,
         env_count: int = 2,
         test_self_play: bool = True,
     ) -> RuntimeValidationReport:
+        """Runs the live-engine check battery and returns the report.
+
+        Each `_check_*` helper below owns exactly one check, catches its own
+        failures and returns a populated ValidationCheck. This function only
+        sequences them, which is what makes the battery extendable: adding a
+        check is a new method plus one line here, not another branch in what
+        used to be a 350-line method with a cyclomatic complexity of 34.
+        """
         system = platform.system()
-        try:
-            executable = find_godot_executable(self.godot_executable_raw)
-            available = bool(shutil.which(executable) or Path(executable).is_file())
-        except Exception:
-            executable = self.godot_executable_raw
-            available = False
-
+        executable, available = self._resolve_executable()
         if not available:
-            report = RuntimeValidationReport(
-                godot_executable=self.godot_executable_raw,
-                godot_available=False,
-                godot_version=None,
-                platform_system=system,
-                status="unavailable",
-                total_checks=0,
-                passed_checks=0,
-                failed_checks=0,
-                skipped_checks=10,
-                measured_throughput={"measured": False},
-                checks=[],
-                notes=[
-                    f"Godot executable {self.godot_executable_raw!r} was not found on PATH.",
-                    "Live engine validation was not executed.",
-                    "Install Godot 4.7.2 and make it available as 'godot' or pass --godot-executable.",
-                ],
-            )
-            return report
+            return self._unavailable_report(system)
 
-        version = self.probe_version(executable)
         report = RuntimeValidationReport(
             godot_executable=executable,
             godot_available=True,
-            godot_version=version,
+            godot_version=self.probe_version(executable),
             platform_system=system,
             status="passed",
             measured_throughput={"measured": True},
         )
 
         checks: list[ValidationCheck] = []
+        check_spaces, transport = self._check_bridge_spaces(executable, env_count)
+        checks.append(check_spaces)
+        if not check_spaces.passed or transport is None:
+            # Nothing downstream can run without a verified bridge, and
+            # reporting six cascading failures would bury the real cause.
+            if transport is not None:
+                transport.close()
+            return self._finalize(report, checks)
 
-        # --- Check 1: Bridge Handshake & Contract Verification ---
-        check_spaces = ValidationCheck(
+        try:
+            checks.append(self._check_ping(transport))
+            checks.append(self._check_reset_determinism(transport, env_count))
+            checks.append(self._check_plan_staging(transport, env_count))
+            check_step = self._check_stepping(transport, env_count)
+            checks.append(check_step)
+            if check_step.passed:
+                report.measured_throughput["steps_per_second"] = check_step.details[
+                    "measured_steps_per_second"
+                ]
+            checks.append(self._check_health(transport, env_count))
+        finally:
+            with contextlib.suppress(Exception):
+                transport.close()
+
+        # Self-play needs its own engine process (--self-play 1), so it runs
+        # after the single-agent transport is gone rather than alongside it.
+        if test_self_play:
+            checks.append(self._check_self_play(executable))
+
+        return self._finalize(report, checks)
+
+    def _resolve_executable(self) -> tuple[str, bool]:
+        try:
+            executable = find_godot_executable(self.godot_executable_raw)
+        except Exception:
+            return self.godot_executable_raw, False
+        return executable, bool(shutil.which(executable) or Path(executable).is_file())
+
+    def _unavailable_report(self, system: str) -> RuntimeValidationReport:
+        """The "no engine installed" outcome, which is not a failure.
+
+        `unavailable` is deliberately distinct from `failed`: CI machines and
+        fresh checkouts have no Godot, and the CLI treats both `passed` and
+        `unavailable` as exit code 0.
+        """
+        return RuntimeValidationReport(
+            godot_executable=self.godot_executable_raw,
+            godot_available=False,
+            godot_version=None,
+            platform_system=system,
+            status="unavailable",
+            total_checks=0,
+            passed_checks=0,
+            failed_checks=0,
+            skipped_checks=10,
+            measured_throughput={"measured": False},
+            checks=[],
+            notes=[
+                f"Godot executable {self.godot_executable_raw!r} was not found on PATH.",
+                "Live engine validation was not executed.",
+                f"Install Godot {GODOT_VERSION} and make it available as 'godot' or pass "
+                "--godot-executable.",
+            ],
+        )
+
+    @staticmethod
+    def _finalize(
+        report: RuntimeValidationReport, checks: list[ValidationCheck]
+    ) -> RuntimeValidationReport:
+        report.checks = checks
+        report.total_checks = len(checks)
+        report.passed_checks = sum(1 for check in checks if check.passed)
+        report.failed_checks = sum(1 for check in checks if not check.passed)
+        report.status = "passed" if report.failed_checks == 0 else "failed"
+        return report
+
+    # --- individual checks -------------------------------------------------
+
+    def _check_bridge_spaces(self, executable: str, env_count: int) -> tuple[ValidationCheck, Any]:
+        """Check 1: handshake, and that the engine's spaces match contract.py.
+
+        Returns the live transport alongside the check so the remaining
+        checks can reuse the process - engine startup costs seconds.
+        """
+        check = ValidationCheck(
             check_id="bridge_spaces",
             name="JSON-Lines Bridge Spaces & Contract Verification",
             category="contract",
         )
-        t0 = time.perf_counter()
+        started = time.perf_counter()
         transport = None
         try:
             from .godot_env import GodotProcessTransport
@@ -168,7 +235,7 @@ class RuntimeValidator:
                 request_timeout=self.timeout,
             )
             spaces = transport.spaces
-            check_spaces.latency_ms = (time.perf_counter() - t0) * 1000.0
+            check.latency_ms = (time.perf_counter() - started) * 1000.0
             obs_space = spaces.get("observation_space", {})
             act_space = spaces.get("action_space", {})
             obs_size = int(obs_space.get("size", 0))
@@ -176,288 +243,268 @@ class RuntimeValidator:
 
             if obs_size != OBSERVATION_FIELD_COUNT:
                 raise ValueError(
-                    f"Observation size mismatch: engine returned {obs_size}, expected {OBSERVATION_FIELD_COUNT}"
+                    f"Observation size mismatch: engine returned {obs_size}, "
+                    f"expected {OBSERVATION_FIELD_COUNT}"
                 )
             if act_nvec != list(ACTION_NVEC):
                 raise ValueError(
-                    f"Action nvec mismatch: engine returned {act_nvec}, expected {list(ACTION_NVEC)}"
+                    f"Action nvec mismatch: engine returned {act_nvec}, "
+                    f"expected {list(ACTION_NVEC)}"
                 )
 
-            check_spaces.passed = True
-            check_spaces.details = {
+            check.passed = True
+            check.details = {
                 "observation_size": obs_size,
                 "action_nvec": act_nvec,
                 "action_type": act_space.get("type"),
             }
         except Exception as exc:
-            check_spaces.passed = False
-            check_spaces.error = str(exc)
-        checks.append(check_spaces)
+            check.passed = False
+            check.error = str(exc)
+        return check, transport
 
-        if not check_spaces.passed or transport is None:
-            if transport is not None:
-                transport.close()
-            report.checks = checks
-            report.status = "failed"
-            report.total_checks = len(checks)
-            report.passed_checks = sum(1 for c in checks if c.passed)
-            report.failed_checks = sum(1 for c in checks if not c.passed)
-            return report
-
-        # --- Check 2: Stdio Ping Roundtrip Latency ---
-        check_ping = ValidationCheck(
+    @staticmethod
+    def _check_ping(transport: Any) -> ValidationCheck:
+        """Check 2: stdio ping/pong roundtrip."""
+        check = ValidationCheck(
             check_id="bridge_ping",
             name="Stdio Protocol Ping/Pong Latency",
             category="transport",
         )
         try:
-            t0 = time.perf_counter()
-            ping_res = transport.request({"cmd": "ping"})
-            ping_latency = (time.perf_counter() - t0) * 1000.0
-            if ping_res.get("ok") and ping_res.get("pong"):
-                check_ping.passed = True
-                check_ping.latency_ms = ping_latency
-                check_ping.details = {"round_trip_ms": round(ping_latency, 3)}
+            started = time.perf_counter()
+            response = transport.request({"cmd": "ping"})
+            latency = (time.perf_counter() - started) * 1000.0
+            if response.get("ok") and response.get("pong"):
+                check.passed = True
+                check.latency_ms = latency
+                check.details = {"round_trip_ms": round(latency, 3)}
             else:
-                check_ping.passed = False
-                check_ping.error = f"Malformed ping response: {ping_res}"
+                check.passed = False
+                check.error = f"Malformed ping response: {response}"
         except Exception as exc:
-            check_ping.passed = False
-            check_ping.error = str(exc)
-        checks.append(check_ping)
+            check.passed = False
+            check.error = str(exc)
+        return check
 
-        # --- Check 3: Deterministic Seeding Reset ---
-        check_reset = ValidationCheck(
+    @staticmethod
+    def _check_reset_determinism(transport: Any, env_count: int) -> ValidationCheck:
+        """Check 3: the same seed must produce bit-comparable observations."""
+        check = ValidationCheck(
             check_id="reset_determinism",
             name="Synchronous Reset & Seeding Determinism",
             category="determinism",
         )
         try:
-            t0 = time.perf_counter()
-            res1 = transport.request({"cmd": "reset", "seed": 42})
-            obs1 = res1.get("observations", [])
-            res2 = transport.request({"cmd": "reset", "seed": 42})
-            obs2 = res2.get("observations", [])
-            check_reset.latency_ms = (time.perf_counter() - t0) * 1000.0
+            started = time.perf_counter()
+            first = transport.request({"cmd": "reset", "seed": 42}).get("observations", [])
+            second = transport.request({"cmd": "reset", "seed": 42}).get("observations", [])
+            check.latency_ms = (time.perf_counter() - started) * 1000.0
 
-            if len(obs1) != env_count or len(obs2) != env_count:
-                raise ValueError(f"Reset returned wrong env count: {len(obs1)} vs {env_count}")
+            if len(first) != env_count or len(second) != env_count:
+                raise ValueError(f"Reset returned wrong env count: {len(first)} vs {env_count}")
 
-            # Check exact match
-            diff = 0.0
-            for i in range(env_count):
-                for v1, v2 in zip(obs1[i], obs2[i]):
-                    diff = max(diff, abs(float(v1) - float(v2)))
+            difference = 0.0
+            for index in range(env_count):
+                for left, right in zip(first[index], second[index]):
+                    difference = max(difference, abs(float(left) - float(right)))
+            if difference > 1e-6:
+                raise ValueError(f"Reset determinism violation: max float difference {difference}")
 
-            if diff > 1e-6:
-                raise ValueError(f"Reset determinism violation: max float difference {diff}")
-
-            check_reset.passed = True
-            check_reset.details = {
-                "env_count": env_count,
-                "max_seed_difference": diff,
-            }
+            check.passed = True
+            check.details = {"env_count": env_count, "max_seed_difference": difference}
         except Exception as exc:
-            check_reset.passed = False
-            check_reset.error = str(exc)
-        checks.append(check_reset)
+            check.passed = False
+            check.error = str(exc)
+        return check
 
-        # --- Check 4: Episode Plan Staging & Conditions ---
-        check_plans = ValidationCheck(
+    @staticmethod
+    def _check_plan_staging(transport: Any, env_count: int) -> ValidationCheck:
+        """Check 4: staged episode plans must survive the next reset intact."""
+        check = ValidationCheck(
             check_id="plan_staging",
             name="Atomic Episode Plan Staging & Ground-Truth Propagation",
             category="curriculum",
         )
         try:
-            t0 = time.perf_counter()
-            plans_payload = [
+            started = time.perf_counter()
+            plans = [
                 {
-                    "index": i,
-                    "seed": 100 + i,
+                    "index": index,
+                    "seed": 100 + index,
                     "map_id": "two_rooms",
                     "scenario": "corner_fight",
                     "lighting": "low_light",
                     "enemy_count": 3,
                     "curriculum_level": 6,
                 }
-                for i in range(env_count)
+                for index in range(env_count)
             ]
-            stage_res = transport.request({"cmd": "set_episode_plans", "plans": plans_payload})
-            check_plans.latency_ms = (time.perf_counter() - t0) * 1000.0
+            staged = transport.request({"cmd": "set_episode_plans", "plans": plans})
+            check.latency_ms = (time.perf_counter() - started) * 1000.0
+            if not staged.get("ok"):
+                raise ValueError(f"Plan staging failed: {staged.get('error')}")
 
-            if not stage_res.get("ok"):
-                raise ValueError(f"Plan staging failed: {stage_res.get('error')}")
-
-            # Trigger reset to consume staged plan
+            # seed -1 means "consume the staged plan" rather than reseed.
             transport.request({"cmd": "reset", "seed": -1})
-            cond_res = transport.request({"cmd": "episode_conditions"})
-            conditions = cond_res.get("conditions", [])
-
+            conditions = transport.request({"cmd": "episode_conditions"}).get("conditions", [])
             if len(conditions) != env_count:
                 raise ValueError(f"Expected {env_count} conditions, got {len(conditions)}")
-
-            for i, cond in enumerate(conditions):
-                if cond.get("map_id") != "two_rooms":
+            for index, condition in enumerate(conditions):
+                if condition.get("map_id") != "two_rooms":
                     raise ValueError(
-                        f"Env {i} map_id was {cond.get('map_id')}, expected 'two_rooms'"
+                        f"Env {index} map_id was {condition.get('map_id')}, expected 'two_rooms'"
                     )
-                if cond.get("curriculum_level") != 6:
+                if condition.get("curriculum_level") != 6:
                     raise ValueError(
-                        f"Env {i} level was {cond.get('curriculum_level')}, expected 6"
+                        f"Env {index} level was {condition.get('curriculum_level')}, expected 6"
                     )
 
-            check_plans.passed = True
-            check_plans.details = {
-                "staged_count": len(plans_payload),
+            check.passed = True
+            check.details = {
+                "staged_count": len(plans),
                 "conditions_verified": len(conditions),
             }
         except Exception as exc:
-            check_plans.passed = False
-            check_plans.error = str(exc)
-        checks.append(check_plans)
+            check.passed = False
+            check.error = str(exc)
+        return check
 
-        # --- Check 5: Stepping & Auto-Reset Gym Semantics ---
-        check_step = ValidationCheck(
+    @staticmethod
+    def _check_stepping(transport: Any, env_count: int) -> ValidationCheck:
+        """Check 5: vector stepping shape, plus the run's throughput measurement."""
+        check = ValidationCheck(
             check_id="step_auto_reset",
             name="Vector Step Stepping & Gym Auto-Reset Semantics",
             category="simulation",
         )
         try:
-            t0 = time.perf_counter()
+            started = time.perf_counter()
             step_count = 0
             idle_action = [1, 1, 1, 1, 0, 0]  # canonical idle action
             actions = [idle_action for _ in range(env_count)]
 
             for _ in range(25):
-                step_res = transport.request({"cmd": "step", "actions": actions})
+                response = transport.request({"cmd": "step", "actions": actions})
                 step_count += env_count
-                obs = step_res.get("observations", [])
-                rewards = step_res.get("rewards", [])
-                dones = step_res.get("dones", [])
-                infos = step_res.get("infos", [])
-                if any(len(values) != env_count for values in (obs, rewards, dones, infos)):
+                lengths = (
+                    response.get("observations", []),
+                    response.get("rewards", []),
+                    response.get("dones", []),
+                    response.get("infos", []),
+                )
+                if any(len(values) != env_count for values in lengths):
                     raise ValueError("Step response length mismatch")
 
-            elapsed = max(time.perf_counter() - t0, 1e-6)
-            sps = step_count / elapsed
-            check_step.latency_ms = elapsed * 1000.0
-            check_step.passed = True
-            check_step.details = {
+            elapsed = max(time.perf_counter() - started, 1e-6)
+            check.latency_ms = elapsed * 1000.0
+            check.passed = True
+            check.details = {
                 "total_steps_executed": step_count,
-                "measured_steps_per_second": round(sps, 1),
+                "measured_steps_per_second": round(step_count / elapsed, 1),
             }
-            report.measured_throughput["steps_per_second"] = round(sps, 1)
         except Exception as exc:
-            check_step.passed = False
-            check_step.error = str(exc)
-        checks.append(check_step)
+            check.passed = False
+            check.error = str(exc)
+        return check
 
-        # --- Check 6: Health Check Command ---
-        check_health = ValidationCheck(
+    @staticmethod
+    def _check_health(transport: Any, env_count: int) -> ValidationCheck:
+        """Check 6: every environment reports itself healthy."""
+        check = ValidationCheck(
             check_id="health_check",
             name="Simulation Health Check Introspection",
             category="stability",
         )
         try:
-            t0 = time.perf_counter()
-            health_res = transport.request({"cmd": "health_check"})
-            check_health.latency_ms = (time.perf_counter() - t0) * 1000.0
-            health_list = health_res.get("health", [])
-            all_healthy = all(bool(item.get("healthy", False)) for item in health_list)
-            if all_healthy and len(health_list) == env_count:
-                check_health.passed = True
-                check_health.details = {"environments_healthy": len(health_list)}
+            started = time.perf_counter()
+            health = transport.request({"cmd": "health_check"}).get("health", [])
+            check.latency_ms = (time.perf_counter() - started) * 1000.0
+            all_healthy = all(bool(item.get("healthy", False)) for item in health)
+            if all_healthy and len(health) == env_count:
+                check.passed = True
+                check.details = {"environments_healthy": len(health)}
             else:
-                check_health.passed = False
-                check_health.error = f"Unhealthy environments detected: {health_list}"
+                check.passed = False
+                check.error = f"Unhealthy environments detected: {health}"
         except Exception as exc:
-            check_health.passed = False
-            check_health.error = str(exc)
-        checks.append(check_health)
+            check.passed = False
+            check.error = str(exc)
+        return check
 
-        # Close single-agent transport
-        with contextlib.suppress(Exception):
-            transport.close()
+    def _check_self_play(self, executable: str) -> ValidationCheck:
+        """Check 7: the two-agent headless channel (--self-play 1)."""
+        check = ValidationCheck(
+            check_id="self_play_channel",
+            name="Two-Agent Headless Self-Play Channel (--self-play 1)",
+            category="self_play",
+        )
+        transport = None
+        try:
+            started = time.perf_counter()
+            from .godot_env import GodotProcessTransport
 
-        # --- Check 7: Self-Play Mode Handshake & Stepping ---
-        if test_self_play:
-            check_self_play = ValidationCheck(
-                check_id="self_play_channel",
-                name="Two-Agent Headless Self-Play Channel (--self-play 1)",
-                category="self_play",
+            transport = GodotProcessTransport(
+                project_path=self.project_path,
+                godot_executable=executable,
+                environment_count=1,
+                self_play=True,
+                request_timeout=self.timeout,
             )
-            sp_transport = None
-            try:
-                t0 = time.perf_counter()
-                from .godot_env import GodotProcessTransport
-
-                sp_transport = GodotProcessTransport(
-                    project_path=self.project_path,
-                    godot_executable=executable,
-                    environment_count=1,
-                    self_play=True,
-                    request_timeout=self.timeout,
+            spaces = transport.spaces
+            if spaces.get("policy_slots") != 2:
+                raise ValueError(
+                    f"Self play policy slots was {spaces.get('policy_slots')}, expected 2"
                 )
-                sp_spaces = sp_transport.spaces
-                if sp_spaces.get("policy_slots") != 2:
-                    raise ValueError(
-                        f"Self play policy slots was {sp_spaces.get('policy_slots')}, expected 2"
-                    )
 
-                sp_reset = sp_transport.request({"cmd": "reset", "seed": 777})
-                sp_obs = sp_reset.get("observations", [])
-                if len(sp_obs) != 1 or len(sp_obs[0]) != 2:
-                    raise ValueError(f"Self play reset observation shape invalid: {sp_obs}")
+            observations = transport.request({"cmd": "reset", "seed": 777}).get("observations", [])
+            if len(observations) != 1 or len(observations[0]) != 2:
+                raise ValueError(f"Self play reset observation shape invalid: {observations}")
 
-                sp_actions = [[[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]]]
-                sp_step = sp_transport.request({"cmd": "step", "actions": sp_actions})
-                sp_obs_step = sp_step.get("observations", [])
-                sp_rewards = sp_step.get("rewards", [])
-                if len(sp_obs_step[0]) != 2 or len(sp_rewards[0]) != 2:
-                    raise ValueError(
-                        f"Self play step shape invalid: obs={sp_obs_step}, rew={sp_rewards}"
-                    )
+            actions = [[[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]]]
+            stepped = transport.request({"cmd": "step", "actions": actions})
+            stepped_obs = stepped.get("observations", [])
+            rewards = stepped.get("rewards", [])
+            if len(stepped_obs[0]) != 2 or len(rewards[0]) != 2:
+                raise ValueError(f"Self play step shape invalid: obs={stepped_obs}, rew={rewards}")
 
-                check_self_play.latency_ms = (time.perf_counter() - t0) * 1000.0
-                check_self_play.passed = True
-                check_self_play.details = {
-                    "policy_slots": 2,
-                    "slot_0_obs_dim": len(sp_obs[0][0]),
-                    "slot_1_obs_dim": len(sp_obs[0][1]),
-                }
-            except Exception as exc:
-                check_self_play.passed = False
-                error_text = str(exc)
-                # Self-play failures are usually caused inside the Godot
-                # process (e.g. a script that failed to compile makes
-                # SelfPlayEnvironmentCore.new() return null, the adapter then
-                # holds zero environments and reset answers a silent
-                # `observations: []`). The engine's SCRIPT ERROR for that is
-                # on stderr only, so attach the tail to the report; without it
-                # the check can only show the downstream shape mismatch.
-                if sp_transport is not None:
-                    # stderr is pumped on a background thread. Close joins
-                    # that pump before reading the tail; reading immediately
-                    # after the malformed response raced the pump and made
-                    # this diagnostic intermittently disappear.
-                    sp_transport.close()
-                    stderr_tail = sp_transport.stderr_tail().strip()
-                    if stderr_tail:
-                        error_text = f"{error_text} | Godot stderr tail: {stderr_tail}"
-                check_self_play.error = error_text
-            finally:
-                if sp_transport is not None:
-                    with contextlib.suppress(Exception):
-                        sp_transport.close()
-            checks.append(check_self_play)
+            check.latency_ms = (time.perf_counter() - started) * 1000.0
+            check.passed = True
+            check.details = {
+                "policy_slots": 2,
+                "slot_0_obs_dim": len(observations[0][0]),
+                "slot_1_obs_dim": len(observations[0][1]),
+            }
+        except Exception as exc:
+            check.passed = False
+            check.error = self._self_play_error_text(exc, transport)
+        finally:
+            if transport is not None:
+                with contextlib.suppress(Exception):
+                    transport.close()
+        return check
 
-        report.checks = checks
-        report.total_checks = len(checks)
-        report.passed_checks = sum(1 for c in checks if c.passed)
-        report.failed_checks = sum(1 for c in checks if not c.passed)
-        report.status = "passed" if report.failed_checks == 0 else "failed"
+    @staticmethod
+    def _self_play_error_text(exc: Exception, transport: Any) -> str:
+        """Attaches the engine's stderr tail to a self-play failure.
 
-        return report
+        Self-play failures are usually caused inside the Godot process (e.g.
+        a script that failed to compile makes SelfPlayEnvironmentCore.new()
+        return null, the adapter then holds zero environments and reset
+        answers a silent `observations: []`). The engine's SCRIPT ERROR for
+        that is on stderr only; without this the check can only show the
+        downstream shape mismatch.
+        """
+        text = str(exc)
+        if transport is None:
+            return text
+        # stderr is pumped on a background thread. Close joins that pump
+        # before reading the tail; reading immediately after the malformed
+        # response raced the pump and made this diagnostic intermittently
+        # disappear.
+        transport.close()
+        tail = transport.stderr_tail().strip()
+        return f"{text} | Godot stderr tail: {tail}" if tail else text
 
 
 def format_validation_report(report: RuntimeValidationReport | dict[str, Any]) -> str:
