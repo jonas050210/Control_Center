@@ -448,6 +448,8 @@ sandboxai benchmark-suites --godot-executable <Godot-4.7.2>
 
 Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 11 plus Ubuntu/WSL, Godot 4.7.2**.
 
+Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu with a Linux Godot build, project files under Windows/OneDrive), not a hypothetical target - `tools/wsl/run_full_validation.sh` / `docs/RUN_LOCAL_VALIDATION.md` exist to turn the PLANNED items below into real, measured, timestamped files from that exact machine instead of estimates.
+
 1. **CURRENT expectation:** structured simulation is CPU/IPC-bound; the tiny 84→128→128 MLP often makes per-step CPU inference more sensible than CUDA. The RTX is most useful for PPO update minibatches, BC, and future CNNs—not Godot's headless analytic state.
 2. **PLANNED baseline matrix:** measure native Windows Python+Godot, WSL Python+Linux Godot, and (if needed) WSL Python+Windows Godot. WSL interop is supported but must not be assumed free.
 3. **PLANNED sweep:** first run existing `1,2,4,8,16,24,32,48,64` single-process benchmarks. Record steps/s, episodes/s, p50/p95 step latency, JSON bytes, CPU/RAM, and profile buckets.
