@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -181,6 +182,146 @@ def _make_profiled_ppo(ppo_class: Any, profiler: Any) -> Any:
     return ProfiledPPO
 
 
+# Episode metrics averaged into every progress row: payload key -> info key.
+_EPISODE_MEAN_KEYS: tuple[tuple[str, str], ...] = (
+    ("mean_episode_reward", "episode_reward"),
+    ("mean_kills", "kills"),
+    ("mean_deaths", "deaths"),
+    ("mean_damage_dealt", "damage_dealt"),
+    ("mean_damage_received", "damage_received"),
+    ("mean_shots_fired", "shots_fired"),
+    ("mean_shots_hit", "shots_hit"),
+    ("mean_trigger_pulls", "trigger_pulls"),
+    ("mean_near_miss_shots", "near_miss_shots"),
+    ("mean_useless_shots", "useless_shots"),
+    ("mean_cooldown_shots", "cooldown_shots"),
+    ("mean_survival_time", "survival_time"),
+    ("mean_accuracy", "accuracy"),
+    ("win_rate", "win"),
+    ("loss_rate", "loss"),
+)
+
+# Reward-shaping terms, reported separately so a run can be read as "what
+# is actually paying out". The last two are the shot economy: how much
+# reward was lost to real near-misses vs to trigger pulls that could not
+# plausibly connect - the fastest way to tell whether shooting is being
+# explored and becoming profitable.
+_REWARD_BREAKDOWN_KEYS: tuple[tuple[str, str], ...] = (
+    ("hits", "reward_hits"),
+    ("kills", "reward_kills"),
+    ("damage_reward", "reward_damage"),
+    ("survive", "reward_survive"),
+    ("positioning", "reward_positioning"),
+    ("aiming", "reward_aiming"),
+    ("passivity_penalty", "penalty_passivity"),
+    ("combat_time_penalty", "penalty_combat_time"),
+    ("damage_penalty", "penalty_damage"),
+    ("death_penalty", "penalty_death"),
+    ("missed_shot_penalty", "penalty_missed_shot"),
+    ("useless_shot_penalty", "penalty_useless_shot"),
+)
+
+
+def _count_shoot_requests(actions: Any) -> tuple[int, int]:
+    """Returns (action decisions, shoot requests) in one batch of policy actions.
+
+    Counted on the raw policy output, before it crosses JSON, the bridge
+    and weapon handling, so an engine-side drop cannot be mistaken for the
+    policy never asking to shoot. Component 4 is the fire bit; shorter
+    action vectors predate it and are counted as no decision at all.
+    """
+    if hasattr(actions, "tolist"):
+        actions = actions.tolist()
+    decisions = 0
+    shoot_requests = 0
+    for action in actions:
+        values = action.tolist() if hasattr(action, "tolist") else list(action)
+        if len(values) > 4:
+            decisions += 1
+            shoot_requests += int(int(values[4]) == 1)
+    return decisions, shoot_requests
+
+
+def _finished_episode_metrics(infos: Any) -> list[dict[str, Any]]:
+    """Metrics dicts of the episodes that ended in this vector step."""
+    finished = []
+    for info in infos:
+        if not isinstance(info, dict):
+            continue
+        if info.get("done_reason") or info.get("terminal_observation") is not None:
+            finished.append(info.get("metrics", {}))
+    return finished
+
+
+def _mean(buffer: Sequence[dict[str, Any]], key: str, source: str | None = None) -> float:
+    """Mean of `key` over `buffer`, reading it out of `source` when nested."""
+    total = 0.0
+    for item in buffer:
+        container = item if source is None else item.get(source, {})
+        total += float(container.get(key, 0.0))
+    return total / len(buffer)
+
+
+def _episode_means(buffer: Sequence[dict[str, Any]]) -> dict[str, float]:
+    """Per-episode averages for one telemetry interval."""
+    return {payload_key: _mean(buffer, key) for payload_key, key in _EPISODE_MEAN_KEYS}
+
+
+def _reward_breakdown_means(buffer: Sequence[dict[str, Any]]) -> dict[str, float]:
+    """Per-episode averages of the individual reward-shaping terms."""
+    return {
+        payload_key: _mean(buffer, key, "reward_breakdown")
+        for payload_key, key in _REWARD_BREAKDOWN_KEYS
+    }
+
+
+def _progress_payload(
+    config: TrainingConfig,
+    *,
+    device: str,
+    checkpoints: Path,
+    elapsed: float,
+    num_timesteps: int,
+    start_timesteps: int,
+    target_timesteps: int,
+    episode_count: int,
+    interval_decisions: int,
+    interval_shoot_requests: int,
+    episode_metrics: Sequence[dict[str, Any]],
+    resources: dict[str, Any],
+) -> dict[str, Any]:
+    """Builds one `progress` telemetry row. Pure: it does not touch the buffer."""
+    completed_steps = max(0, num_timesteps - start_timesteps)
+    steps_per_second = completed_steps / elapsed
+    remaining_steps = max(0, target_timesteps - num_timesteps)
+    payload: dict[str, Any] = {
+        "event": "progress",
+        "timesteps": num_timesteps,
+        "run_start_timesteps": start_timesteps,
+        "total_training_steps": target_timesteps,
+        "progress": min(1.0, completed_steps / config.total_training_steps),
+        "steps_per_second": steps_per_second,
+        # Based on the measured run-average throughput. It is omitted
+        # until a positive rate exists rather than faked.
+        "eta_seconds": remaining_steps / steps_per_second if steps_per_second > 0 else None,
+        "episodes": episode_count,
+        "environment_count": config.environment_count,
+        "device": device,
+        "current_checkpoint": str(checkpoints),
+        "policy_action_decisions": interval_decisions,
+        "policy_shoot_requests": interval_shoot_requests,
+        "policy_shoot_request_rate": (
+            interval_shoot_requests / interval_decisions if interval_decisions else 0.0
+        ),
+        **resources,
+    }
+    if episode_metrics:
+        payload.update(_episode_means(episode_metrics))
+        if config.reward_breakdown_logging:
+            payload["reward_breakdown"] = _reward_breakdown_means(episode_metrics)
+    return payload
+
+
 def _make_metrics_callback(
     BaseCallback: Any,
     *,
@@ -249,199 +390,48 @@ def _make_metrics_callback(
             # handling. This is the missing diagnostic for a zero-shot run:
             # stochastic PPO exploration can now be distinguished from a
             # deterministic eval argmax and from an engine-side drop.
-            actions = self.locals.get("actions", [])
-            if hasattr(actions, "tolist"):
-                actions = actions.tolist()
-            for action in actions:
-                values = action.tolist() if hasattr(action, "tolist") else list(action)
-                if len(values) > 4:
-                    self.action_decisions += 1
-                    self.interval_action_decisions += 1
-                    if int(values[4]) == 1:
-                        self.shoot_requests += 1
-                        self.interval_shoot_requests += 1
-            infos = self.locals.get("infos", [])
-            for info in infos:
-                if not isinstance(info, dict):
-                    continue
-                metrics = info.get("metrics", {})
-                if info.get("done_reason") or info.get("terminal_observation") is not None:
-                    self.episode_count += 1
-                    self.episode_metrics_buffer.append(metrics)
-            if (
-                self.num_timesteps - self.last_telemetry_step
-                >= max(config.environment_count, 1) * 100
-            ):
-                elapsed = max(time.perf_counter() - self.started, 1e-9)
-                completed_steps = max(0, self.num_timesteps - self.start_timesteps)
-                steps_per_second = completed_steps / elapsed
-                remaining_steps = max(0, self.target_timesteps - self.num_timesteps)
-                resource_started = time.perf_counter() if profiler is not None else 0.0
-                resources = resource_monitor.snapshot()
-                if profiler is not None:
-                    profiler.record(
-                        "callback.resource_snapshot", time.perf_counter() - resource_started
-                    )
-                payload: dict[str, Any] = {
-                    "event": "progress",
-                    "timesteps": self.num_timesteps,
-                    "run_start_timesteps": self.start_timesteps,
-                    "total_training_steps": self.target_timesteps,
-                    "progress": min(1.0, completed_steps / config.total_training_steps),
-                    "steps_per_second": steps_per_second,
-                    # Based on the measured run-average throughput. It is
-                    # omitted until a positive rate exists rather than faked.
-                    "eta_seconds": remaining_steps / steps_per_second
-                    if steps_per_second > 0
-                    else None,
-                    "episodes": self.episode_count,
-                    "environment_count": config.environment_count,
-                    "device": device,
-                    "current_checkpoint": str(checkpoints),
-                    "policy_action_decisions": self.interval_action_decisions,
-                    "policy_shoot_requests": self.interval_shoot_requests,
-                    "policy_shoot_request_rate": (
-                        self.interval_shoot_requests / self.interval_action_decisions
-                        if self.interval_action_decisions
-                        else 0.0
-                    ),
-                    **resources,
-                }
-                if self.episode_metrics_buffer:
-                    buf = self.episode_metrics_buffer
-                    payload["mean_episode_reward"] = sum(
-                        float(item.get("episode_reward", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_kills"] = sum(
-                        float(item.get("kills", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_deaths"] = sum(
-                        float(item.get("deaths", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_damage_dealt"] = sum(
-                        float(item.get("damage_dealt", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_damage_received"] = sum(
-                        float(item.get("damage_received", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_shots_fired"] = sum(
-                        float(item.get("shots_fired", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_shots_hit"] = sum(
-                        float(item.get("shots_hit", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_trigger_pulls"] = sum(
-                        float(item.get("trigger_pulls", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_near_miss_shots"] = sum(
-                        float(item.get("near_miss_shots", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_useless_shots"] = sum(
-                        float(item.get("useless_shots", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_cooldown_shots"] = sum(
-                        float(item.get("cooldown_shots", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_survival_time"] = sum(
-                        float(item.get("survival_time", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["mean_accuracy"] = sum(
-                        float(item.get("accuracy", 0.0)) for item in buf
-                    ) / len(buf)
-                    payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in buf) / len(
-                        buf
-                    )
-                    payload["loss_rate"] = sum(float(item.get("loss", 0.0)) for item in buf) / len(
-                        buf
-                    )
-                    if config.reward_breakdown_logging:
-                        payload["reward_breakdown"] = {
-                            "hits": sum(
-                                float(item.get("reward_breakdown", {}).get("reward_hits", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            "kills": sum(
-                                float(item.get("reward_breakdown", {}).get("reward_kills", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            "damage_reward": sum(
-                                float(item.get("reward_breakdown", {}).get("reward_damage", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            "survive": sum(
-                                float(item.get("reward_breakdown", {}).get("reward_survive", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            "positioning": sum(
-                                float(
-                                    item.get("reward_breakdown", {}).get("reward_positioning", 0.0)
-                                )
-                                for item in buf
-                            )
-                            / len(buf),
-                            "aiming": sum(
-                                float(item.get("reward_breakdown", {}).get("reward_aiming", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            "passivity_penalty": sum(
-                                float(
-                                    item.get("reward_breakdown", {}).get("penalty_passivity", 0.0)
-                                )
-                                for item in buf
-                            )
-                            / len(buf),
-                            "combat_time_penalty": sum(
-                                float(
-                                    item.get("reward_breakdown", {}).get("penalty_combat_time", 0.0)
-                                )
-                                for item in buf
-                            )
-                            / len(buf),
-                            "damage_penalty": sum(
-                                float(item.get("reward_breakdown", {}).get("penalty_damage", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            "death_penalty": sum(
-                                float(item.get("reward_breakdown", {}).get("penalty_death", 0.0))
-                                for item in buf
-                            )
-                            / len(buf),
-                            # Shot economy: how much reward was lost to real
-                            # near-misses vs to trigger pulls that could not
-                            # plausibly connect. Watching these two columns
-                            # is the fastest way to tell whether shooting is
-                            # being explored and becoming profitable.
-                            "missed_shot_penalty": sum(
-                                float(
-                                    item.get("reward_breakdown", {}).get("penalty_missed_shot", 0.0)
-                                )
-                                for item in buf
-                            )
-                            / len(buf),
-                            "useless_shot_penalty": sum(
-                                float(
-                                    item.get("reward_breakdown", {}).get(
-                                        "penalty_useless_shot", 0.0
-                                    )
-                                )
-                                for item in buf
-                            )
-                            / len(buf),
-                        }
-                    self.episode_metrics_buffer.clear()
-                telemetry.write(payload)
-                if run_control is not None:
-                    run_control.update(**payload)
-                self.interval_action_decisions = 0
-                self.interval_shoot_requests = 0
-                self.last_telemetry_step = self.num_timesteps
+            decisions, shoot_requests = _count_shoot_requests(self.locals.get("actions", []))
+            self.action_decisions += decisions
+            self.interval_action_decisions += decisions
+            self.shoot_requests += shoot_requests
+            self.interval_shoot_requests += shoot_requests
+            for metrics in _finished_episode_metrics(self.locals.get("infos", [])):
+                self.episode_count += 1
+                self.episode_metrics_buffer.append(metrics)
+            due = max(config.environment_count, 1) * 100
+            if self.num_timesteps - self.last_telemetry_step >= due:
+                self._emit_progress()
             return not state.stop_training
+
+        def _emit_progress(self) -> None:
+            """Writes one throughput/episode row and resets the interval counters."""
+            resource_started = time.perf_counter() if profiler is not None else 0.0
+            resources = resource_monitor.snapshot()
+            if profiler is not None:
+                profiler.record(
+                    "callback.resource_snapshot", time.perf_counter() - resource_started
+                )
+            payload = _progress_payload(
+                config,
+                device=device,
+                checkpoints=checkpoints,
+                elapsed=max(time.perf_counter() - self.started, 1e-9),
+                num_timesteps=self.num_timesteps,
+                start_timesteps=self.start_timesteps,
+                target_timesteps=self.target_timesteps,
+                episode_count=self.episode_count,
+                interval_decisions=self.interval_action_decisions,
+                interval_shoot_requests=self.interval_shoot_requests,
+                episode_metrics=self.episode_metrics_buffer,
+                resources=resources,
+            )
+            self.episode_metrics_buffer.clear()
+            telemetry.write(payload)
+            if run_control is not None:
+                run_control.update(**payload)
+            self.interval_action_decisions = 0
+            self.interval_shoot_requests = 0
+            self.last_telemetry_step = self.num_timesteps
 
         def _on_training_end(self) -> None:
             values = {
@@ -468,11 +458,368 @@ def _make_metrics_callback(
     return MetricsCallback()
 
 
+def _evaluation_env_kwargs(config: TrainingConfig, profiler_view: Any) -> dict[str, Any]:
+    """Bridge kwargs for the persistent normal-evaluation environment.
+
+    More slots than requested episodes can only simulate ignored work, so
+    the persistent bridge is capped at the episode count without changing
+    the configured maximum or any episode in the evaluation set.
+    """
+    kwargs = _env_kwargs(config)
+    kwargs["environment_count"] = min(
+        config.evaluation_episodes, max(1, config.evaluation_environment_count)
+    )
+    if profiler_view is not None:
+        kwargs["profiler"] = profiler_view
+    return kwargs
+
+
+def _battery_env_kwargs(config: TrainingConfig, profiler_view: Any) -> dict[str, Any]:
+    """Bridge kwargs for the persistent checkpoint-battery environment.
+
+    The battery's planned episodes are result-invariant under parallelism
+    (PlanExecutor contract), so its bridge runs
+    ``checkpoint_eval_environment_count`` environments to amortise
+    per-step inference and transport across the batch. The transport seed
+    matches run_checkpoint_evaluation's own construction exactly (the
+    staged plans carry the seeds that matter); compact infos are safe
+    because the battery reads only terminal metrics and per-step events,
+    both of which compact mode keeps.
+    """
+    from .pipeline import EVAL_MASTER_SEED_SALT
+
+    kwargs: dict[str, Any] = {
+        "project_path": str(config.project),
+        "godot_executable": config.godot_executable,
+        "environment_count": int(config.checkpoint_eval_environment_count),
+        "enemy_count": config.enemy_count,
+        "seed": config.seed + EVAL_MASTER_SEED_SALT,
+        "curriculum_level": config.curriculum_level,
+        "compact_infos": True,
+    }
+    if profiler_view is not None:
+        kwargs["profiler"] = profiler_view
+    return kwargs
+
+
+class _EvaluationDriver:
+    """Everything the evaluation callback does, with no stable-baselines3 in sight.
+
+    The SB3 callback below is a five-line shim over this object. Keeping
+    the logic here means periodic evaluation, the checkpoint battery and
+    best-checkpoint selection can be driven - and tested - with a plain
+    object that exposes `predict`, instead of a live PPO run.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: TrainingConfig,
+        telemetry: Any,
+        run_control: RunControl | None,
+        pipeline: Any,
+        profiler: Any,
+        device: str,
+        checkpoints: Path,
+        evaluations: Path,
+        best_path: Path,
+        best_record_path: Path,
+        selection_rule: Any,
+        inference_scheduler: InferenceDeviceScheduler | None,
+        state: _SelectionState,
+    ) -> None:
+        self.config = config
+        self.telemetry = telemetry
+        self.run_control = run_control
+        self.pipeline = pipeline
+        self.profiler = profiler
+        self.device = device
+        self.checkpoints = checkpoints
+        self.evaluations = evaluations
+        self.best_path = best_path
+        self.best_record_path = best_record_path
+        self.selection_rule = selection_rule
+        self.inference_scheduler = inference_scheduler
+        self.state = state
+
+        # Anchored in _on_training_start, not here: `num_timesteps` is
+        # restored from the checkpoint when resuming, so an absolute
+        # threshold of `evaluation_frequency` was already in the past
+        # and the callback evaluated on EVERY step for the rest of the
+        # run. Anchoring to the current step makes the schedule
+        # relative to wherever training actually starts.
+        self.next_evaluation = self.config.evaluation_frequency
+        # Persistent evaluation bridge processes. Each boundary used
+        # to spawn a fresh Godot process for the normal evaluation AND
+        # one for the checkpoint battery (three with the league
+        # enabled) - engine + project startup paid per boundary, and
+        # two of the three FPS cliffs in the profiled runs were
+        # exactly these boundaries. Reuse is exact: every evaluation
+        # episode is re-seeded over the bridge (reset(seed) / staged
+        # plans), and the engine derives the world deterministically
+        # from that seed, so a reused process produces bit-identical
+        # episodes. Created lazily at the first boundary; closed by
+        # train_ppo's finally block.
+        self.eval_env: Any = None
+        self.eval_env_kwargs: dict[str, Any] | None = None
+        self.battery_env_kwargs: dict[str, Any] | None = None
+        self.battery_executor: Any = None
+        self.normal_profiler: Any = None
+        self.battery_profiler: Any = None
+
+    def ensure_eval_env(self) -> Any:
+        if self.eval_env is not None:
+            return self.eval_env
+        assert self.eval_env_kwargs is not None, (
+            "evaluation env kwargs missing (training start not fired?)"
+        )
+        from .godot_env import GodotGymEnv, GodotVecEnv
+
+        started = time.perf_counter() if self.profiler is not None else 0.0
+        eval_kwargs = dict(self.eval_env_kwargs)
+        if int(eval_kwargs.get("environment_count", 1) or 1) > 1:
+            env: Any = GodotVecEnv(**eval_kwargs)
+        else:
+            eval_kwargs["environment_count"] = 1
+            env = GodotGymEnv(**eval_kwargs)
+        if self.profiler is not None:
+            self.profiler.record("eval.env_startup", time.perf_counter() - started)
+            self.profiler.add("eval.bridge_spawns", 1)
+        self.eval_env = env
+        return env
+
+    def ensure_battery_executor(self) -> Any:
+        if self.battery_executor is not None:
+            return self.battery_executor
+        assert self.battery_env_kwargs is not None, (
+            "battery env kwargs missing (training start not fired?)"
+        )
+        from .checkpoint_eval import PlanExecutor
+
+        started = time.perf_counter() if self.profiler is not None else 0.0
+        self.battery_executor = PlanExecutor(
+            self.battery_env_kwargs, skill_metrics=True, profiler=self.battery_profiler
+        )
+        if self.profiler is not None:
+            self.profiler.record("eval.env_startup", time.perf_counter() - started)
+            self.profiler.add("eval.bridge_spawns", 1)
+        return self.battery_executor
+
+    def close(self) -> None:
+        # Called from train_ppo's finally block: bridge processes are
+        # precious (seconds of engine startup each), so they live for
+        # the whole run and die exactly once.
+        for resource in (self.eval_env, self.battery_executor):
+            if resource is not None:
+                # Shutdown is best effort: a bridge that already died
+                # must not mask the real training result.
+                with contextlib.suppress(Exception):
+                    resource.close()
+        self.eval_env = None
+        self.battery_executor = None
+
+    def on_training_start(self, timesteps: int) -> None:
+        self.next_evaluation = timesteps + self.config.evaluation_frequency
+        # Profiling views keep the evaluation bridges' transport
+        # timings out of the training bridge's buckets (see
+        # training_profile.PrefixedProfiler).
+        if self.profiler is not None:
+            normal_view: Any = PrefixedProfiler(self.profiler, "eval.normal.")
+            battery_view: Any = PrefixedProfiler(self.profiler, "eval.battery.")
+        else:
+            normal_view = None
+            battery_view = None
+        self.normal_profiler = normal_view
+        self.battery_profiler = battery_view
+        if self.profiler is not None:
+            self.profiler.set_metadata(
+                evaluation_execution=(
+                    "parallel_roles" if self.pipeline is not None else "normal_only"
+                )
+            )
+        self.eval_env_kwargs = _evaluation_env_kwargs(self.config, normal_view)
+        self.battery_env_kwargs = _battery_env_kwargs(self.config, battery_view)
+
+    def on_step(self, model: Any, timesteps: int) -> bool:
+        if self.state.stop_training:
+            return False
+        if timesteps < self.next_evaluation:
+            return True
+        evaluation_started = time.perf_counter() if self.profiler is not None else 0.0
+        step_directory = self.evaluations / f"step_{timesteps:09d}"
+        # Both bridges are persistent. In auto-curriculum mode their
+        # independent simulations run concurrently, while
+        # SynchronizedModel serializes the tiny shared-policy calls.
+        # The callback joins both jobs before looking at reward, so best
+        # checkpoint and early-stop ordering is exactly unchanged.
+        env = self.ensure_eval_env()
+        if self.pipeline is not None:
+            summary = self._pipeline_evaluation(model, timesteps, env, step_directory)
+        else:
+            summary = self._plain_evaluation(model, timesteps, env, step_directory)
+        reward = float(summary.get("mean_episode_reward", 0.0))
+        (self.evaluations / "latest.json").write_text(
+            json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
+        )
+        best_started = time.perf_counter() if self.profiler is not None else 0.0
+        self._apply_selection(model, timesteps, summary, reward)
+        if self.profiler is not None:
+            self.profiler.record("eval.best_checkpoint_save", time.perf_counter() - best_started)
+        # Advance past the current step rather than by a fixed stride:
+        # with N parallel environments `num_timesteps` jumps by N per
+        # rollout and can overshoot the threshold by more than one
+        # frequency, which would otherwise queue up back-to-back
+        # evaluations.
+        while self.next_evaluation <= timesteps:
+            self.next_evaluation += self.config.evaluation_frequency
+        if self.profiler is not None:
+            self.profiler.record("callback.evaluation", time.perf_counter() - evaluation_started)
+        return not self.state.stop_training
+
+    def _pipeline_evaluation(
+        self, model: Any, timesteps: int, env: Any, step_directory: Path
+    ) -> dict[str, Any]:
+        """Normal evaluation and the checkpoint battery, run concurrently."""
+        from .checkpoint_eval import (
+            run_checkpoint_evaluation,
+            write_checkpoint_report,
+        )
+
+        battery_executor = self.ensure_battery_executor()
+        self.pipeline.timesteps = timesteps
+        self.pipeline.note_checkpoint(
+            self.best_path if self.best_path.exists() else self.checkpoints / "latest.zip"
+        )
+        self.pipeline.save_state()
+        frozen_model = SynchronizedModel(model)
+        summary, checkpoint_report, parallel_timing = run_parallel_evaluations(
+            lambda: evaluate_model(
+                frozen_model,
+                self.eval_env_kwargs,
+                episodes=self.config.evaluation_episodes,
+                seed=self.config.seed + timesteps,
+                # Written after both workers join. The generalization
+                # exporter owns episodes.csv in this shared directory;
+                # normal rows use normal_episodes.csv instead.
+                output_dir=None,
+                env=env,
+                profiler=self.profiler,
+            ),
+            lambda: run_checkpoint_evaluation(
+                frozen_model,
+                step=timesteps,
+                config=self.config,
+                pipeline=self.pipeline,
+                output_dir=step_directory,
+                device=self.device,
+                normal_summary=None,
+                executor=battery_executor,
+                profiler=self.profiler,
+                write_report=False,
+            ),
+        )
+        summary["timesteps"] = timesteps
+        write_evaluation_artifacts(summary, step_directory, episodes_name="normal_episodes.csv")
+        checkpoint_report["normal_evaluation"] = dict(summary)
+        write_checkpoint_report(checkpoint_report, step_directory)
+        if self.profiler is not None:
+            self.profiler.record("eval.parallel.wall", parallel_timing["wall_seconds"])
+            self.profiler.record("eval.parallel.overlap", parallel_timing["overlap_seconds"])
+        summary["curriculum"] = self.pipeline.driver.curriculum_snapshot()
+        for section in ("condition_evaluation", "generalization", "league"):
+            body = checkpoint_report.get(section)
+            if body is None:
+                continue
+            # Terse mirror in latest.json; the full row-level
+            # evidence lives in step_NNNNNNNNN/report.json.
+            summary[section] = {
+                key: value for key, value in body.items() if not key.endswith("_detail")
+            }
+        checkpoint_event = {
+            "event": "checkpoint_evaluation",
+            "timesteps": timesteps,
+            "curriculum_level": self.pipeline.driver.level,
+            "report": str(step_directory / "report.json"),
+        }
+        self.telemetry.write(checkpoint_event)
+        if self.run_control is not None:
+            self.run_control.event("system", "checkpoint evaluation completed", checkpoint_event)
+        return summary
+
+    def _plain_evaluation(
+        self, model: Any, timesteps: int, env: Any, step_directory: Path
+    ) -> dict[str, Any]:
+        """Single-bridge evaluation used when the research pipeline is off."""
+        summary = evaluate_model(
+            model,
+            self.eval_env_kwargs,
+            episodes=self.config.evaluation_episodes,
+            seed=self.config.seed + timesteps,
+            output_dir=step_directory,
+            env=env,
+            # Raw profiler: evaluate_model records fully-qualified
+            # eval.normal.* buckets; the prefixed view above is only
+            # for the bridge transport's bridge.* names.
+            profiler=self.profiler,
+        )
+        summary["timesteps"] = timesteps
+        return summary
+
+    def _apply_selection(
+        self, model: Any, timesteps: int, summary: dict[str, Any], reward: float
+    ) -> None:
+        """Saves a new best checkpoint or advances the early-stop counter."""
+        score = self.selection_rule.score(summary)
+        if score is None:
+            # A rule pointed at a metric this run does not produce must
+            # not silently select on something else; it counts as "no
+            # improvement" and is reported once per evaluation.
+            self.telemetry.write(
+                {
+                    "event": "checkpoint_selection_metric_missing",
+                    "metric": self.selection_rule.metric,
+                    "timesteps": timesteps,
+                }
+            )
+        if score is not None and self.selection_rule.is_improvement(score, self.state.best_score):
+            self.state.best_score = score
+            self.state.eval_patience_counter = 0
+            if self.inference_scheduler is not None:
+                with self.inference_scheduler.training_device_context():
+                    model.save(self.best_path)
+            else:
+                model.save(self.best_path)
+            self.best_record_path.write_text(
+                json.dumps(
+                    {
+                        # Legacy field, kept so existing readers and
+                        # resume paths keep working.
+                        "mean_reward": reward,
+                        "score": score,
+                        "timesteps": timesteps,
+                        "checkpoint": str(self.best_path),
+                        "selection_rule": self.selection_rule.as_dict(),
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            self.state.eval_patience_counter += 1
+            if (
+                self.config.early_stopping_patience > 0
+                and self.state.eval_patience_counter >= self.config.early_stopping_patience
+            ):
+                self.state.stop_training = True
+        if self.config.min_eval_reward is not None and reward >= self.config.min_eval_reward:
+            self.state.stop_training = True
+
+
 def _make_evaluation_callback(
     BaseCallback: Any,
     *,
     config: TrainingConfig,
-    env: Any,
     telemetry: Any,
     run_control: RunControl | None,
     pipeline: Any,
@@ -487,295 +834,35 @@ def _make_evaluation_callback(
     state: _SelectionState,
 ) -> Any:
     """Periodic evaluation, the checkpoint battery and best-checkpoint selection."""
+    driver = _EvaluationDriver(
+        config=config,
+        telemetry=telemetry,
+        run_control=run_control,
+        pipeline=pipeline,
+        profiler=profiler,
+        device=device,
+        checkpoints=checkpoints,
+        evaluations=evaluations,
+        best_path=best_path,
+        best_record_path=best_record_path,
+        selection_rule=selection_rule,
+        inference_scheduler=inference_scheduler,
+        state=state,
+    )
 
     class EvaluationCallback(BaseCallback):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
-            # Anchored in _on_training_start, not here: `num_timesteps` is
-            # restored from the checkpoint when resuming, so an absolute
-            # threshold of `evaluation_frequency` was already in the past
-            # and the callback evaluated on EVERY step for the rest of the
-            # run. Anchoring to the current step makes the schedule
-            # relative to wherever training actually starts.
-            self.next_evaluation = config.evaluation_frequency
-            # Persistent evaluation bridge processes. Each boundary used
-            # to spawn a fresh Godot process for the normal evaluation AND
-            # one for the checkpoint battery (three with the league
-            # enabled) - engine + project startup paid per boundary, and
-            # two of the three FPS cliffs in the profiled runs were
-            # exactly these boundaries. Reuse is exact: every evaluation
-            # episode is re-seeded over the bridge (reset(seed) / staged
-            # plans), and the engine derives the world deterministically
-            # from that seed, so a reused process produces bit-identical
-            # episodes. Created lazily at the first boundary; closed by
-            # train_ppo's finally block.
-            self.eval_env: Any = None
-            self.eval_env_kwargs: dict[str, Any] | None = None
-            self.battery_env_kwargs: dict[str, Any] | None = None
-            self.battery_executor: Any = None
-            self.normal_profiler: Any = None
-            self.battery_profiler: Any = None
-
-        def _ensure_eval_env(self) -> Any:
-            if self.eval_env is not None:
-                return self.eval_env
-            assert self.eval_env_kwargs is not None, (
-                "evaluation env kwargs missing (training start not fired?)"
-            )
-            from .godot_env import GodotGymEnv, GodotVecEnv
-
-            started = time.perf_counter() if profiler is not None else 0.0
-            eval_kwargs = dict(self.eval_env_kwargs)
-            if int(eval_kwargs.get("environment_count", 1) or 1) > 1:
-                env: Any = GodotVecEnv(**eval_kwargs)
-            else:
-                eval_kwargs["environment_count"] = 1
-                env = GodotGymEnv(**eval_kwargs)
-            if profiler is not None:
-                profiler.record("eval.env_startup", time.perf_counter() - started)
-                profiler.add("eval.bridge_spawns", 1)
-            self.eval_env = env
-            return env
-
-        def _ensure_battery_executor(self) -> Any:
-            if self.battery_executor is not None:
-                return self.battery_executor
-            assert self.battery_env_kwargs is not None, (
-                "battery env kwargs missing (training start not fired?)"
-            )
-            from .checkpoint_eval import PlanExecutor
-
-            started = time.perf_counter() if profiler is not None else 0.0
-            self.battery_executor = PlanExecutor(
-                self.battery_env_kwargs, skill_metrics=True, profiler=self.battery_profiler
-            )
-            if profiler is not None:
-                profiler.record("eval.env_startup", time.perf_counter() - started)
-                profiler.add("eval.bridge_spawns", 1)
-            return self.battery_executor
+            self.driver = driver
 
         def close(self) -> None:
-            # Called from train_ppo's finally block: bridge processes are
-            # precious (seconds of engine startup each), so they live for
-            # the whole run and die exactly once.
-            for resource in (self.eval_env, self.battery_executor):
-                if resource is not None:
-                    # Shutdown is best effort: a bridge that already died
-                    # must not mask the real training result.
-                    with contextlib.suppress(Exception):
-                        resource.close()
-            self.eval_env = None
-            self.battery_executor = None
+            driver.close()
 
         def _on_training_start(self) -> None:
-            self.next_evaluation = self.num_timesteps + config.evaluation_frequency
-            # Profiling views keep the evaluation bridges' transport
-            # timings out of the training bridge's buckets (see
-            # training_profile.PrefixedProfiler).
-            if profiler is not None:
-                normal_view: Any = PrefixedProfiler(profiler, "eval.normal.")
-                battery_view: Any = PrefixedProfiler(profiler, "eval.battery.")
-            else:
-                normal_view = None
-                battery_view = None
-            self.normal_profiler = normal_view
-            self.battery_profiler = battery_view
-            if profiler is not None:
-                profiler.set_metadata(
-                    evaluation_execution=(
-                        "parallel_roles" if pipeline is not None else "normal_only"
-                    )
-                )
-            eval_kwargs = _env_kwargs(config)
-            # More slots than requested episodes can only simulate ignored
-            # work. Cap the persistent normal bridge without changing the
-            # configured maximum or any episode in the evaluation set.
-            eval_kwargs["environment_count"] = min(
-                config.evaluation_episodes,
-                max(1, config.evaluation_environment_count),
-            )
-            if normal_view is not None:
-                eval_kwargs["profiler"] = normal_view
-            self.eval_env_kwargs = eval_kwargs
-            # The battery's planned episodes are result-invariant under
-            # parallelism (PlanExecutor contract), so its bridge runs
-            # `checkpoint_eval_environment_count` environments to amortise
-            # per-step inference and transport across the batch. The
-            # transport seed matches run_checkpoint_evaluation's own
-            # construction exactly (the staged plans carry the seeds that
-            # matter); compact infos are safe here because the battery
-            # reads only terminal metrics and per-step events, both of
-            # which compact mode keeps.
-            from .pipeline import EVAL_MASTER_SEED_SALT
-
-            self.battery_env_kwargs = {
-                "project_path": str(config.project),
-                "godot_executable": config.godot_executable,
-                "environment_count": int(config.checkpoint_eval_environment_count),
-                "enemy_count": config.enemy_count,
-                "seed": config.seed + EVAL_MASTER_SEED_SALT,
-                "curriculum_level": config.curriculum_level,
-                "compact_infos": True,
-            }
-            if battery_view is not None:
-                self.battery_env_kwargs["profiler"] = battery_view
+            driver.on_training_start(self.num_timesteps)
 
         def _on_step(self) -> bool:
-            if state.stop_training:
-                return False
-            if self.num_timesteps < self.next_evaluation:
-                return True
-            evaluation_started = time.perf_counter() if profiler is not None else 0.0
-            step_directory = evaluations / f"step_{self.num_timesteps:09d}"
-            # Both bridges are persistent. In auto-curriculum mode their
-            # independent simulations run concurrently, while
-            # SynchronizedModel serializes the tiny shared-policy calls.
-            # The callback joins both jobs before looking at reward, so best
-            # checkpoint and early-stop ordering is exactly unchanged.
-            env = self._ensure_eval_env()
-            if pipeline is not None:
-                from .checkpoint_eval import (
-                    run_checkpoint_evaluation,
-                    write_checkpoint_report,
-                )
-
-                battery_executor = self._ensure_battery_executor()
-                pipeline.timesteps = self.num_timesteps
-                pipeline.note_checkpoint(
-                    best_path if best_path.exists() else checkpoints / "latest.zip"
-                )
-                pipeline.save_state()
-                frozen_model = SynchronizedModel(self.model)
-                summary, checkpoint_report, parallel_timing = run_parallel_evaluations(
-                    lambda: evaluate_model(
-                        frozen_model,
-                        self.eval_env_kwargs,
-                        episodes=config.evaluation_episodes,
-                        seed=config.seed + self.num_timesteps,
-                        # Written after both workers join. The generalization
-                        # exporter owns episodes.csv in this shared directory;
-                        # normal rows use normal_episodes.csv instead.
-                        output_dir=None,
-                        env=env,
-                        profiler=profiler,
-                    ),
-                    lambda: run_checkpoint_evaluation(
-                        frozen_model,
-                        step=self.num_timesteps,
-                        config=config,
-                        pipeline=pipeline,
-                        output_dir=step_directory,
-                        device=device,
-                        normal_summary=None,
-                        executor=battery_executor,
-                        profiler=profiler,
-                        write_report=False,
-                    ),
-                )
-                summary["timesteps"] = self.num_timesteps
-                write_evaluation_artifacts(
-                    summary, step_directory, episodes_name="normal_episodes.csv"
-                )
-                checkpoint_report["normal_evaluation"] = dict(summary)
-                write_checkpoint_report(checkpoint_report, step_directory)
-                if profiler is not None:
-                    profiler.record("eval.parallel.wall", parallel_timing["wall_seconds"])
-                    profiler.record("eval.parallel.overlap", parallel_timing["overlap_seconds"])
-                summary["curriculum"] = pipeline.driver.curriculum_snapshot()
-                for section in ("condition_evaluation", "generalization", "league"):
-                    body = checkpoint_report.get(section)
-                    if body is None:
-                        continue
-                    # Terse mirror in latest.json; the full row-level
-                    # evidence lives in step_NNNNNNNNN/report.json.
-                    summary[section] = {
-                        key: value for key, value in body.items() if not key.endswith("_detail")
-                    }
-                checkpoint_event = {
-                    "event": "checkpoint_evaluation",
-                    "timesteps": self.num_timesteps,
-                    "curriculum_level": pipeline.driver.level,
-                    "report": str(step_directory / "report.json"),
-                }
-                telemetry.write(checkpoint_event)
-                if run_control is not None:
-                    run_control.event("system", "checkpoint evaluation completed", checkpoint_event)
-            else:
-                summary = evaluate_model(
-                    self.model,
-                    self.eval_env_kwargs,
-                    episodes=config.evaluation_episodes,
-                    seed=config.seed + self.num_timesteps,
-                    output_dir=step_directory,
-                    env=env,
-                    # Raw profiler: evaluate_model records fully-qualified
-                    # eval.normal.* buckets; the prefixed view above is only
-                    # for the bridge transport's bridge.* names.
-                    profiler=profiler,
-                )
-                summary["timesteps"] = self.num_timesteps
-            reward = float(summary.get("mean_episode_reward", 0.0))
-            (evaluations / "latest.json").write_text(
-                json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
-            )
-            best_started = time.perf_counter() if profiler is not None else 0.0
-            score = selection_rule.score(summary)
-            if score is None:
-                # A rule pointed at a metric this run does not produce must
-                # not silently select on something else; it counts as "no
-                # improvement" and is reported once per evaluation.
-                telemetry.write(
-                    {
-                        "event": "checkpoint_selection_metric_missing",
-                        "metric": selection_rule.metric,
-                        "timesteps": self.num_timesteps,
-                    }
-                )
-            if score is not None and selection_rule.is_improvement(score, state.best_score):
-                state.best_score = score
-                state.eval_patience_counter = 0
-                if inference_scheduler is not None:
-                    with inference_scheduler.training_device_context():
-                        self.model.save(best_path)
-                else:
-                    self.model.save(best_path)
-                best_record_path.write_text(
-                    json.dumps(
-                        {
-                            # Legacy field, kept so existing readers and
-                            # resume paths keep working.
-                            "mean_reward": reward,
-                            "score": score,
-                            "timesteps": self.num_timesteps,
-                            "checkpoint": str(best_path),
-                            "selection_rule": selection_rule.as_dict(),
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
-            else:
-                state.eval_patience_counter += 1
-                if (
-                    config.early_stopping_patience > 0
-                    and state.eval_patience_counter >= config.early_stopping_patience
-                ):
-                    state.stop_training = True
-            if config.min_eval_reward is not None and reward >= config.min_eval_reward:
-                state.stop_training = True
-            if profiler is not None:
-                profiler.record("eval.best_checkpoint_save", time.perf_counter() - best_started)
-            # Advance past the current step rather than by a fixed stride:
-            # with N parallel environments `num_timesteps` jumps by N per
-            # rollout and can overshoot the threshold by more than one
-            # frequency, which would otherwise queue up back-to-back
-            # evaluations.
-            while self.next_evaluation <= self.num_timesteps:
-                self.next_evaluation += config.evaluation_frequency
-            if profiler is not None:
-                profiler.record("callback.evaluation", time.perf_counter() - evaluation_started)
-            return not state.stop_training
+            return driver.on_step(self.model, self.num_timesteps)
 
     return EvaluationCallback()
 
@@ -1266,7 +1353,6 @@ def train_ppo(
     evaluation_callback = _make_evaluation_callback(
         BaseCallback,
         config=config,
-        env=env,
         telemetry=telemetry,
         run_control=run_control,
         pipeline=pipeline,
