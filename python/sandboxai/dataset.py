@@ -155,6 +155,59 @@ class SplitReport:
         }
 
 
+def _is_finite_number(value: Any) -> bool:
+    """True for a finite int/float.
+
+    JSONL demonstrations can contain ``null``, strings or NaN when a recorder
+    was interrupted mid-write; training on those silently poisons the loss,
+    so they are rejected at load time rather than discovered as a NaN policy.
+    """
+    return isinstance(value, (int, float)) and not math.isnan(value) and not math.isinf(value)
+
+
+def _validate_transition(transition: dict[str, Any], index: int, expected_dim: int | None) -> int:
+    """Validates one transition and returns the observation width to expect.
+
+    Split out of ``DemonstrationDataset.validate`` so the per-record rules
+    are readable on their own; the caller keeps the cross-record state (the
+    agreed observation width) and the contract-width decision.
+    """
+    for field_name in ("observation", "action", "next_observation", "reward", "done"):
+        if field_name not in transition:
+            raise ValueError(f"transition {index} is missing field {field_name!r}")
+
+    obs = transition["observation"]
+    next_obs = transition["next_observation"]
+    if not obs or not next_obs:
+        raise ValueError(f"transition {index} has an empty observation")
+    if expected_dim is None:
+        expected_dim = len(obs)
+    if len(obs) != expected_dim or len(next_obs) != expected_dim:
+        raise ValueError(
+            f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})"
+        )
+
+    for field_name, values in (("observation", obs), ("next_observation", next_obs)):
+        for value in values:
+            if not _is_finite_number(value):
+                raise ValueError(
+                    f"transition {index} {field_name} contains invalid number: {value}"
+                )
+
+    reward = transition["reward"]
+    if not _is_finite_number(reward):
+        raise ValueError(f"transition {index} reward contains invalid number: {reward}")
+
+    encoded = action_to_multidiscrete(transition["action"])
+    for component, (value, size) in enumerate(zip(encoded, ACTION_NVEC)):
+        if not 0 <= value < size:
+            raise ValueError(
+                f"transition {index} action component {component} is {value}, "
+                f"outside the contract range [0, {size - 1}]"
+            )
+    return expected_dim
+
+
 @dataclass
 class DemonstrationDataset:
     transitions: list[dict[str, Any]]
@@ -214,43 +267,7 @@ class DemonstrationDataset:
 
         expected_dim: int | None = None
         for index, transition in enumerate(self.transitions):
-            for field in ("observation", "action", "next_observation", "reward", "done"):
-                if field not in transition:
-                    raise ValueError(f"transition {index} is missing field {field!r}")
-            obs = transition["observation"]
-            next_obs = transition["next_observation"]
-            if not obs or not next_obs:
-                raise ValueError(f"transition {index} has an empty observation")
-            if expected_dim is None:
-                expected_dim = len(obs)
-            if len(obs) != expected_dim or len(next_obs) != expected_dim:
-                raise ValueError(
-                    f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})"
-                )
-
-            # Check for non-finite values
-            for val in obs:
-                if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
-                    raise ValueError(
-                        f"transition {index} observation contains invalid number: {val}"
-                    )
-            for val in next_obs:
-                if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
-                    raise ValueError(
-                        f"transition {index} next_observation contains invalid number: {val}"
-                    )
-
-            rew = transition["reward"]
-            if not isinstance(rew, (int, float)) or math.isnan(rew) or math.isinf(rew):
-                raise ValueError(f"transition {index} reward contains invalid number: {rew}")
-
-            encoded = action_to_multidiscrete(transition["action"])
-            for component, (value, size) in enumerate(zip(encoded, ACTION_NVEC)):
-                if not 0 <= value < size:
-                    raise ValueError(
-                        f"transition {index} action component {component} is {value}, "
-                        f"outside the contract range [0, {size - 1}]"
-                    )
+            expected_dim = _validate_transition(transition, index, expected_dim)
         if require_contract_width and expected_dim != OBSERVATION_FIELD_COUNT:
             raise ValueError(
                 f"dataset observations are {expected_dim} floats but the observation "
