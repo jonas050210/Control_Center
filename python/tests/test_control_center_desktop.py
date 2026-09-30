@@ -92,7 +92,13 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.show_page("Dashboard")
         _drain_background(self.app)
         page = self.app.pages["Dashboard"]
-        assert page._last_run_dir == str(run_dir)
+        # SandboxAIAdapter resolves project_root/output_root (see
+        # adapter.py), so discovered run directories come back canonicalized
+        # too; run_dir here is built from the raw self.project_root, which on
+        # Windows can be an 8.3 short name (RUNNER~1) that resolves to a
+        # different-looking but identical directory (runneradmin). Compare
+        # against the resolved form the adapter actually reports.
+        assert page._last_run_dir == str(run_dir.resolve())
 
     def test_training_form_rejects_invalid_input_without_starting_a_process(self):
         self.app.show_page("Training")
