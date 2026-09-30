@@ -73,6 +73,35 @@ Desktop Control Center (Tk, control_center_desktop.py)
   attach a small `meta` summary (env/worker counts, device, checkpoint, ...)
   so the Agents/Dashboard pages never need to re-parse a command line.
 
+## Hardware wizard (first-start device comparison)
+
+`sandboxai.hardware_profile` is the **single** implementation of the
+device-comparison measurement the first-start wizard needs; neither the
+Godot operator scene nor the Tk desktop Control Center may grow a second
+one. It compares three candidates — **CPU** (updates and inference on the
+CPU), **Hybrid** (`device="cuda"`, `inference_device="cpu"`: GPU updates,
+CPU inference, no per-step host↔device transfer) and **CUDA** (both on the
+GPU) — but only offers Hybrid and CUDA when a CUDA device is actually
+present, so a CPU-only host never sees a permanently-unavailable row.
+
+Each candidate is measured by timing a short real PPO training slice
+through `ppo.train_ppo` (default ~5,000 steps), so it needs a working
+Godot bridge and **never invents a throughput**: a device that cannot be
+measured is recorded with an explicit status (`unavailable` / `failed` /
+`cancelled`) and no number. Measurement honours cancellation between
+candidates (an in-flight slice always finishes), and the selected profile
+is persisted to `.sandboxai/hardware_profile.json`. When nothing can be
+measured (no engine, or every slice failed) the profile falls back to CPU
+defaults and records `fallback: true` with a human-readable note.
+
+The adapter exposes this through `hardware_candidates()`,
+`hardware_profile()` and `run_hardware_wizard(...)` (with optional
+`cancel`/`on_progress`/`steps` hooks); `control_center_viewmodel`
+provides the Tk-free presentation (`hardware_profile_view`,
+`hardware_measurement_rows`), which hides accelerator fields the host
+cannot fill. `HardwareProfile.config_overrides()` yields the
+`{device, inference_device}` pair a training launch should adopt.
+
 ## Data ownership (unchanged)
 
 * live state: `status.json`, `events.jsonl`, `logs/training.jsonl`, and

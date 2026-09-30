@@ -9,6 +9,20 @@ records what changed and why.
 ## Unreleased
 
 ### Added
+- `sandboxai.hardware_profile`: the single device-comparison
+  implementation behind the first-start hardware wizard. It compares CPU,
+  Hybrid (GPU updates + CPU inference) and CUDA — offering the GPU
+  candidates only when a CUDA device is present — by timing short real PPO
+  training slices, never invents a throughput, honours cancellation
+  between candidates, persists the selected profile to
+  `.sandboxai/hardware_profile.json`, and falls back to CPU defaults when
+  nothing can be measured. Exposed through the adapter
+  (`hardware_candidates`, `hardware_profile`, `run_hardware_wizard`) and
+  the Tk-free view model (`hardware_profile_view`) so no GUI grows a second
+  benchmark. Orchestration is unit-tested with injected measurement
+  functions; the engine-backed CPU measurement is verified end to end
+  against a scripted fake Godot bridge.
+
 - `LICENSE` (MIT). The repository had none, which made every "open
   source" claim in the README legally meaningless: without a license,
   default copyright applies and nobody may fork, vendor or redistribute
@@ -109,6 +123,11 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- The checkpoint-evaluation battery perf-regression tests raised
+  `AttributeError` on `config.run_id`: the evaluation report gained
+  `run_id`/`experiment_id` and the normal-evaluation episode/environment
+  counts, but their hand-rolled config mock was not updated alongside the
+  producer. The mock now carries the fields the report reads.
 - The desktop Control Center no longer tears down its Tk window while a
   background worker is still running. `BackgroundRunner.close()` waited on
   nothing, so a worker in flight when the window closed could drop the last
