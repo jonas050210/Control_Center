@@ -529,6 +529,15 @@ class SandboxAIAdapter:
     # Hardware profile / first-start wizard
     # ------------------------------------------------------------------
 
+    def _hardware_profile_path(self) -> Path:
+        """Where this adapter's project keeps its hardware profile.
+
+        Anchored to ``project_root`` rather than the installed package, so an
+        adapter pointed at a specific checkout reads and writes that
+        checkout's profile — and tests are hermetic under a temp root.
+        """
+        return self.project_root / ".sandboxai" / "hardware_profile.json"
+
     def hardware_profile(self) -> dict[str, Any] | None:
         """The persisted hardware profile, or ``None`` if the wizard has not run.
 
@@ -537,7 +546,7 @@ class SandboxAIAdapter:
         """
         from .hardware_profile import load_profile
 
-        profile = load_profile()
+        profile = load_profile(self._hardware_profile_path())
         return profile.to_dict() if profile is not None else None
 
     def hardware_candidates(self) -> list[dict[str, str]]:
@@ -589,6 +598,7 @@ class SandboxAIAdapter:
             cancel=cancel,
             on_progress=progress_adapter,
             save=save,
+            save_path=self._hardware_profile_path() if save else None,
         )
         return profile.to_dict()
 
