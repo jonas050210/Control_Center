@@ -287,6 +287,12 @@ class CheckpointEvaluationTest(unittest.TestCase):
             self.assertTrue((destination / name).is_file(), name)
         roundtrip = json.loads((destination / "report.json").read_text(encoding="utf-8"))
         self.assertEqual(roundtrip["timesteps"], 50000)
+        self.assertEqual(roundtrip["run_id"], "eval_test")
+        self.assertEqual(roundtrip["evaluation_id"], "eval_test@step50000")
+        self.assertEqual(roundtrip["checkpoint"], roundtrip["policy"])
+        self.assertEqual(roundtrip["status"], "completed")
+        self.assertEqual(roundtrip["contract"]["version"], 3)
+        self.assertTrue(roundtrip["evaluation_config"]["deterministic_policy"])
 
     def test_condition_evaluation_uses_frozen_eval_set(self):
         report = self._run()

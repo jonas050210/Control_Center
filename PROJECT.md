@@ -337,7 +337,7 @@ The protocol the schema encodes:
 | BC checkpoints | PyTorch `.pt`, format tag `sandboxai.bc.v1`, model + optimizer, carrying the split report + dataset fingerprint |
 | BC data provenance | `dataset_report.json` (split/leakage report, fingerprint, statistics) next to the BC run's `config.json` |
 | Human TTK evidence | JSONL `sandboxai.ttk_trials` v1 trial files (optional leading metadata object); `sandboxai.ttk_simulator_comparison/v1` comparison documents |
-| Config/provenance | `config.json`, `run_summary.json`, `warm_start.json`, `run_manifest.json` (`sandboxai.run_manifest/v2`: + host/Godot/code-dirty/parallelism/selection-rule provenance), curriculum state |
+| Config/provenance | `config.json`, `run_summary.json`, `warm_start.json`, `run_manifest.json` (`sandboxai.run_manifest/v3`: host/Godot/code-dirty/parallelism/selection-rule provenance plus run status and checkpoint inventory), curriculum state |
 | Evaluation | per-evaluation-step `summary.json`/episode CSV; atomic battery `report.json`; rolling `latest.json`/`best.json` |
 | Telemetry/profile | JSONL, TensorBoard events, optional `training_profile.json` |
 | Replay | JSONL format v1; light stores deterministic setup/actions/reward/done, detailed also stores observations |

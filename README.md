@@ -495,7 +495,7 @@ By default `sandboxai train` runs the integrated physics-of-learning loop
   measured results never promote/demote; every decision is logged to
   `logs/curriculum.jsonl` with its evidence window. Adaptive feedback only
   ever changes *what* is trained next, never rewards.
-- **A run manifest** (`run_manifest.json`, `sandboxai.run_manifest/v2`)
+- **A run manifest** (`run_manifest.json`, `sandboxai.run_manifest/v3`)
   records the experiment id, seed, contract fingerprint, curriculum
   config + current level, hyperparameters, parallelism
   (`environment_count`/`env_workers`/resolved workers/torch threads),

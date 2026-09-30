@@ -1452,7 +1452,14 @@ def train_ppo(
             pipeline.save_state()
             # The manifest reflects the final curriculum state so a resume
             # (or an outside analysis) starts from the true end state.
-            write_manifest(run_dir, pipeline.manifest())
+            write_manifest(
+                run_dir,
+                pipeline.manifest(
+                    "stopped"
+                    if run_control is not None and run_control.stop_requested
+                    else "completed"
+                ),
+            )
             result["curriculum"] = pipeline.driver.curriculum_snapshot()
             result["manifest"] = str(run_dir / "run_manifest.json")
         (run_dir / "run_summary.json").write_text(

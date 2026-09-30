@@ -754,7 +754,7 @@ class TrainingPipeline:
         checkpoint was nearest when it was recorded."""
         self._checkpoint_path = str(path)
 
-    def manifest(self) -> dict[str, Any]:
+    def manifest(self, status: str = "running") -> dict[str, Any]:
         # See _godot_snapshot's docstring in __init__: only probe the live
         # Godot executable once per run and reuse that snapshot (including
         # its version string) for every later manifest rebuild.
@@ -764,6 +764,7 @@ class TrainingPipeline:
             self.device,
             self.driver,
             probe_godot=self._godot_snapshot is None,
+            status=status,
         )
         if self._godot_snapshot is None:
             self._godot_snapshot = report["godot"]

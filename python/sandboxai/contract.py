@@ -31,6 +31,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+# Semantic compatibility boundary shared by training, datasets, checkpoints,
+# evaluation, and replay provenance. Shape checks alone cannot detect reordered
+# or reinterpreted fields.
+CONTRACT_VERSION: int = 3
+
 
 @dataclass(frozen=True)
 class ObservationField:

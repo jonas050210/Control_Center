@@ -1022,10 +1022,32 @@ def run_checkpoint_evaluation(
     }
     policy_id = f"{pipeline.policy_id if pipeline else 'policy'}@step{step}"
 
+    from .manifest import contract_fingerprint
+
+    run_id = str(config.run_id or config.experiment_id or destination.parent.name)
     report: dict[str, Any] = {
+        "format": "sandboxai.checkpoint_evaluation/v1",
+        "evaluation_id": f"{run_id}@step{step}",
+        "run_id": run_id,
+        "checkpoint": str(policy_path),
         "timesteps": step,
         "policy": str(policy_path),
         "policy_id": policy_id,
+        "seed": eval_seed,
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": "completed",
+        "contract": contract_fingerprint(),
+        "evaluation_config": {
+            "normal_episodes": config.evaluation_episodes,
+            "normal_environment_count": config.evaluation_environment_count,
+            "checkpoint_environment_count": battery_env_count,
+            "condition_evaluation": config.checkpoint_condition_eval,
+            "generalization_evaluation": config.checkpoint_generalization_eval,
+            "league_evaluation": config.checkpoint_league_eval,
+            "generalization_episodes_per_cell": config.generalization_episodes_per_cell,
+            "league_matches": config.league_matches_per_checkpoint,
+            "deterministic_policy": True,
+        },
         "normal_evaluation": normal_summary,
     }
     record_eval_replays = config.replay_mode == "all"

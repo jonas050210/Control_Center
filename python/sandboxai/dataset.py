@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+from .contract import ACTION_NVEC, CONTRACT_VERSION, OBSERVATION_FIELD_COUNT
 
 # Kept as a module-level name for backwards compatibility with existing
 # imports; the single source of truth is contract.ACTION_NVEC.
@@ -268,6 +268,16 @@ class DemonstrationDataset:
         expected_dim: int | None = None
         for index, transition in enumerate(self.transitions):
             expected_dim = _validate_transition(transition, index, expected_dim)
+        recorded_contract = self.metadata.get("contract_version") if self.metadata else None
+        if (
+            require_contract_width
+            and recorded_contract is not None
+            and recorded_contract != CONTRACT_VERSION
+        ):
+            raise ValueError(
+                f"dataset contract version {recorded_contract} is incompatible with the current "
+                f"contract version {CONTRACT_VERSION}"
+            )
         if require_contract_width and expected_dim != OBSERVATION_FIELD_COUNT:
             raise ValueError(
                 f"dataset observations are {expected_dim} floats but the observation "
@@ -440,6 +450,7 @@ class DemonstrationDataset:
         metadata = {
             "schema": SCHEMA,
             "schema_version": 1,
+            "contract_version": CONTRACT_VERSION,
             "observation_dim": len(self.transitions[0]["observation"])
             if self.transitions
             else OBSERVATION_FIELD_COUNT,
