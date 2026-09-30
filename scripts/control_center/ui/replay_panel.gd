@@ -44,7 +44,7 @@ func setup(p_session = null) -> void:
 
 	add_child(
 		ControlCenterTheme.make_label(
-			"REPLAY", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Replay", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	add_child(
@@ -108,7 +108,7 @@ func setup(p_session = null) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"EVENTS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Events", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_event_list = ItemList.new()

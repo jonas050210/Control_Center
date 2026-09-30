@@ -113,6 +113,25 @@ static func make_button(text: String, tooltip: String = "") -> Button:
 
 ## A base Theme catches controls created directly by specialist panels, while
 ## the factory helpers below can still add component-specific refinements.
+static func make_primary_button(text: String, tooltip: String = "") -> Button:
+	var button := make_button(text, tooltip)
+	button.add_theme_color_override("font_color", Color("#06131d"))
+	button.add_theme_color_override("font_hover_color", Color("#06131d"))
+	button.add_theme_stylebox_override("normal", control_style(COLOR_ACCENT, COLOR_ACCENT))
+	button.add_theme_stylebox_override("hover", control_style(Color("#7dd3fc"), Color("#7dd3fc")))
+	button.add_theme_stylebox_override("pressed", control_style(Color("#0ea5e9"), Color("#0ea5e9")))
+	return button
+
+
+static func make_danger_button(text: String, tooltip: String = "") -> Button:
+	var button := make_button(text, tooltip)
+	button.add_theme_color_override("font_color", COLOR_BAD)
+	button.add_theme_color_override("font_hover_color", Color("#fff1f2"))
+	button.add_theme_stylebox_override("hover", control_style(Color("#4c1d2a"), COLOR_BAD))
+	button.add_theme_stylebox_override("pressed", control_style(Color("#881337"), COLOR_BAD))
+	return button
+
+
 static func build_theme() -> Theme:
 	var theme := Theme.new()
 	for type_name in ["Button", "OptionButton"]:

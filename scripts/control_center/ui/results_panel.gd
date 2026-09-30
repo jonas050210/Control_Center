@@ -31,7 +31,7 @@ func setup(p_session) -> void:
 
 	add_child(
 		ControlCenterTheme.make_label(
-			"CURRENT EPISODE", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Current episode", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_current_label = ControlCenterTheme.make_value_label("-")
@@ -41,7 +41,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"ACCUMULATED", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Accumulated", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_aggregate_label = ControlCenterTheme.make_value_label("-")
@@ -62,7 +62,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"EPISODE HISTORY", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+			"Episode history", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
 		)
 	)
 	_episode_list = ItemList.new()

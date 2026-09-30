@@ -34,7 +34,7 @@ func setup(p_session) -> void:
 	root.add_child(header)
 	header.add_child(
 		ControlCenterTheme.make_label(
-			"HEADLESS AGENTS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Headless agents", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_selector_row = ControlCenterTheme.make_row()

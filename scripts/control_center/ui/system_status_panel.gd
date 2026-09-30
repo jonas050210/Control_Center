@@ -26,7 +26,7 @@ func setup(p_session) -> void:
 	root.add_child(header)
 	header.add_child(
 		ControlCenterTheme.make_label(
-			"SYSTEM", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"System", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_sampled_label = ControlCenterTheme.make_label(

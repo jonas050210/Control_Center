@@ -143,16 +143,24 @@ func _build_layout() -> void:
 	status_bar.setup(session)
 	column.add_child(status_bar)
 
-	column.add_child(_build_navigation())
-
 	training_controls_panel = ControlCenterTrainingControlsPanel.new()
 	training_controls_panel.setup(session)
 	column.add_child(training_controls_panel)
 
+	# Keep navigation visually separate from the working area. A persistent
+	# rail is easier to scan than a dense row of eight equally weighted tabs.
+	var workspace := HBoxContainer.new()
+	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	workspace.add_theme_constant_override("separation", 12)
+	workspace.mouse_filter = Control.MOUSE_FILTER_PASS
+	column.add_child(workspace)
+	workspace.add_child(_build_navigation())
+
 	_page_container = Control.new()
+	_page_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_page_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(_page_container)
+	workspace.add_child(_page_container)
 
 	_build_simulation_page()
 	_build_dashboard_pages()
@@ -168,21 +176,48 @@ func _build_layout() -> void:
 
 
 func _build_navigation() -> Control:
-	var bar := PanelContainer.new()
-	bar.add_theme_stylebox_override(
+	var rail := PanelContainer.new()
+	rail.custom_minimum_size = Vector2(176.0, 0.0)
+	rail.add_theme_stylebox_override(
 		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
 	)
-	var row := ControlCenterTheme.make_row()
-	bar.add_child(row)
-	for page_value in PAGES:
+	var items := VBoxContainer.new()
+	items.add_theme_constant_override("separation", 5)
+	rail.add_child(items)
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"Workspace", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
+	for index in range(PAGES.size()):
+		if index == 5:
+			items.add_child(ControlCenterTheme.make_separator())
+			items.add_child(
+				ControlCenterTheme.make_label(
+					"Insights", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+				)
+			)
+		elif index == 7:
+			items.add_child(ControlCenterTheme.make_separator())
+		var page_value: Array = PAGES[index]
 		var page_id: String = str(page_value[0])
 		var button := ControlCenterTheme.make_toggle(
 			str(page_value[1]), false, "Open the %s page" % str(page_value[1])
 		)
+		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.pressed.connect(_on_nav_pressed.bind(page_id))
-		row.add_child(button)
+		items.add_child(button)
 		_nav_buttons[page_id] = button
-	return bar
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	items.add_child(spacer)
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"F1–F3 toggle panels", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
+	return rail
 
 
 ## The classic simulation operator view (3D view + docks) as one page.

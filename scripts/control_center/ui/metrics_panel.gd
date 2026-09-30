@@ -28,7 +28,7 @@ func setup(p_session = null) -> void:
 
 	add_child(
 		ControlCenterTheme.make_label(
-			"RESEARCH METRICS (AI-AVAILABLE)",
+			"Research metrics · available to AI",
 			ControlCenterTheme.FONT_SIZE_TITLE,
 			ControlCenterTheme.COLOR_AI
 		)
@@ -47,7 +47,7 @@ func setup(p_session = null) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"GROUND TRUTH (DEBUG ONLY - NOT VISIBLE TO THE POLICY)",
+			"Ground truth · debug only, hidden from policy",
 			ControlCenterTheme.FONT_SIZE_TITLE,
 			ControlCenterTheme.COLOR_HIDDEN
 		)

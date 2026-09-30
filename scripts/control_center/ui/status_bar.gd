@@ -33,7 +33,7 @@ func setup(p_session) -> void:
 
 	row.add_child(
 		ControlCenterTheme.make_label(
-			"SANDBOXAI CONTROL CENTER",
+			"SandboxAI Control Center",
 			ControlCenterTheme.FONT_SIZE_TITLE,
 			ControlCenterTheme.COLOR_TITLE
 		)

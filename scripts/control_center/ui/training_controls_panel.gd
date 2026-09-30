@@ -26,7 +26,7 @@ func setup(p_session) -> void:
 	add_child(row)
 	row.add_child(
 		ControlCenterTheme.make_label(
-			"TRAINING", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Training", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_start = _button(row, "Start", _on_start, "Launch the configured real Python backend")

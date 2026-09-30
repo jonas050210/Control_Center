@@ -23,7 +23,7 @@ func setup(p_session) -> void:
 	root.add_theme_constant_override("separation", 8)
 	add_child(root)
 	_title = ControlCenterTheme.make_label(
-		"TRAINING PROGRESS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		"Training progress", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	root.add_child(_title)
 	_progress = ProgressBar.new()
@@ -39,21 +39,21 @@ func setup(p_session) -> void:
 	columns.add_theme_constant_override("separation", 12)
 	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(columns)
-	var metrics_panel := ControlCenterTheme.make_panel("AGENT / RL METRICS")
+	var metrics_panel := ControlCenterTheme.make_panel("Agent / RL metrics")
 	metrics_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	columns.add_child(metrics_panel)
 	_metrics = ControlCenterTheme.make_value_label("n/a")
 	_metrics.clip_text = false
 	ControlCenterTheme.content_container(metrics_panel).add_child(_metrics)
 
-	var resources_panel := ControlCenterTheme.make_panel("DEVICE / ENVIRONMENT")
+	var resources_panel := ControlCenterTheme.make_panel("Device / environment")
 	resources_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	columns.add_child(resources_panel)
 	_resources = ControlCenterTheme.make_value_label("n/a")
 	_resources.clip_text = false
 	ControlCenterTheme.content_container(resources_panel).add_child(_resources)
 
-	_log_panel = ControlCenterTheme.make_panel("TRAINING LOG")
+	_log_panel = ControlCenterTheme.make_panel("Training log")
 	_log_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(_log_panel)
 	_logs = RichTextLabel.new()

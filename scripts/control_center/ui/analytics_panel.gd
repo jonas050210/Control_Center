@@ -35,7 +35,7 @@ func setup(p_session) -> void:
 	scroll.add_child(root)
 	root.add_child(
 		ControlCenterTheme.make_label(
-			"ANALYTICS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"Analytics", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	root.add_child(

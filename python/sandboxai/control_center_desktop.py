@@ -540,11 +540,11 @@ class TrainingPage(Page):
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(10, 4))
-        self.start_button = ttk.Button(actions, text="Start training", command=self._start)
+        self.start_button = ttk.Button(actions, text="Start training", command=self._start, style="Primary.TButton")
         self.start_button.pack(side="left")
         self.stop_button = ttk.Button(actions, text="Stop safely", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=(8, 0))
-        self.force_stop_button = ttk.Button(actions, text="Force stop", command=self._force_stop, state="disabled")
+        self.force_stop_button = ttk.Button(actions, text="Force stop", command=self._force_stop, state="disabled", style="Danger.TButton")
         self.force_stop_button.pack(side="left", padx=(8, 0))
         self.state_label = ttk.Label(actions, text="idle", foreground=COLOR_MUTED)
         self.state_label.pack(side="left", padx=(16, 0))
@@ -690,7 +690,7 @@ class AgentsPage(Page):
         actions.pack(fill="x")
         self.stop_button = ttk.Button(actions, text="Stop safely", command=self._stop, state="disabled")
         self.stop_button.pack(side="left")
-        self.force_stop_button = ttk.Button(actions, text="Force stop", command=self._force_stop, state="disabled")
+        self.force_stop_button = ttk.Button(actions, text="Force stop", command=self._force_stop, state="disabled", style="Danger.TButton")
         self.force_stop_button.pack(side="left", padx=(8, 0))
         self.log_panel = LogPanel(bottom)
         self.log_panel.pack(fill="both", expand=True, pady=(6, 0))
@@ -790,7 +790,7 @@ class BenchmarkPage(Page):
                          variable=self.compact_var).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=8)
-        self.run_button = ttk.Button(actions, text="Run benchmark", command=self._start)
+        self.run_button = ttk.Button(actions, text="Run benchmark", command=self._start, style="Primary.TButton")
         self.run_button.pack(side="left")
         self.state_label = ttk.Label(actions, text="idle", foreground=COLOR_MUTED)
         self.state_label.pack(side="left", padx=(12, 0))
@@ -917,7 +917,7 @@ class EvaluationPage(Page):
                              width=16).grid(row=row, column=1, sticky="w")
             else:
                 ttk.Entry(form, textvariable=var, width=18).grid(row=row, column=1, sticky="w")
-        self.run_button = ttk.Button(form, text="Start evaluation", command=self._start)
+        self.run_button = ttk.Button(form, text="Start evaluation", command=self._start, style="Primary.TButton")
         self.run_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.selected_checkpoint_label = ttk.Label(left, text="selected checkpoint: none", foreground=COLOR_MUTED,
                                                     wraplength=380)
@@ -1387,6 +1387,17 @@ class ControlCenter(tk.Tk):
                         borderwidth=0, padding=(12, 8))
         style.map("TButton", background=[("active", COLOR_HOVER), ("pressed", "#243b53")],
                   foreground=[("disabled", COLOR_MUTED)])
+        style.configure("Primary.TButton", background=COLOR_ACCENT, foreground="#06131d",
+                        borderwidth=0, padding=(14, 9), font=(_FONT_FAMILY, 10, "bold"))
+        style.map("Primary.TButton", background=[("active", "#7dd3fc"),
+                                                 ("pressed", "#0ea5e9"),
+                                                 ("disabled", COLOR_BORDER)])
+        style.configure("Danger.TButton", background=COLOR_SURFACE_RAISED, foreground=COLOR_ERROR,
+                        borderwidth=0, padding=(12, 8))
+        style.map("Danger.TButton", background=[("active", "#4c1d2a"),
+                                                ("pressed", "#881337")])
+        style.configure("NavGroup.TLabel", background=COLOR_BG, foreground=COLOR_MUTED,
+                        font=(_FONT_FAMILY, 9, "bold"))
         style.configure("Nav.TButton", anchor="w", padding=(14, 10), background=COLOR_BG)
         style.map("Nav.TButton", background=[("active", COLOR_HOVER)])
         style.configure("NavSelected.TButton", anchor="w", padding=(14, 10),
@@ -1430,7 +1441,14 @@ class ControlCenter(tk.Tk):
         self.content = ttk.Frame(body, padding=(8, 14, 18, 18))
         self.content.pack(side="left", fill="both", expand=True)
 
-        for page_class in PAGE_CLASSES:
+        nav_groups = {0: "Overview", 1: "Operations", 3: "Analysis", 6: "System"}
+        for index, page_class in enumerate(PAGE_CLASSES):
+            if index in nav_groups:
+                if index:
+                    ttk.Separator(nav).pack(fill="x", pady=(12, 8))
+                ttk.Label(nav, text=nav_groups[index], style="NavGroup.TLabel").pack(
+                    fill="x", padx=8, pady=(0, 4)
+                )
             button = ttk.Button(nav, text=page_class.title, style="Nav.TButton",
                                  command=lambda name=page_class.title: self.show_page(name))
             button.pack(fill="x", pady=2)

@@ -78,7 +78,7 @@ func setup(p_session, p_agent_id: int, compact: bool = false) -> void:
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(body)
 
-	var status_panel := ControlCenterTheme.make_panel("LIVE STATUS")
+	var status_panel := ControlCenterTheme.make_panel("Live status")
 	status_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_panel.size_flags_stretch_ratio = 0.42
 	body.add_child(status_panel)
@@ -89,7 +89,7 @@ func setup(p_session, p_agent_id: int, compact: bool = false) -> void:
 	_status_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_scroll.add_child(_status_text)
 
-	var log_panel := ControlCenterTheme.make_panel("LIVE LOG")
+	var log_panel := ControlCenterTheme.make_panel("Live log")
 	log_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	log_panel.size_flags_stretch_ratio = 0.58
 	body.add_child(log_panel)

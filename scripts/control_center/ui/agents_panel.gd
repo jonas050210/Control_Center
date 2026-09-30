@@ -35,7 +35,7 @@ func setup(p_session) -> void:
 	root.add_theme_constant_override("separation", 10)
 	scroll.add_child(root)
 
-	var launcher := ControlCenterTheme.make_panel("START A NEW AGENT")
+	var launcher := ControlCenterTheme.make_panel("Start a new agent")
 	root.add_child(launcher)
 	var launcher_box := ControlCenterTheme.content_container(launcher)
 	var row := ControlCenterTheme.make_row()
@@ -53,7 +53,7 @@ func setup(p_session) -> void:
 	_algorithm.add_item("Self-Play", ControlCenterConfig.TrainingType.SELF_PLAY)
 	_algorithm.item_selected.connect(_on_algorithm_selected)
 	row.add_child(_algorithm)
-	_start_button = ControlCenterTheme.make_button(
+	_start_button = ControlCenterTheme.make_primary_button(
 		"Start agent", "Launch a managed trainer with the current configuration"
 	)
 	_start_button.pressed.connect(_on_start_pressed)
@@ -76,7 +76,7 @@ func setup(p_session) -> void:
 
 	root.add_child(
 		ControlCenterTheme.make_label(
-			"ALL AGENTS", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+			"All agents", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	_grid = GridContainer.new()
