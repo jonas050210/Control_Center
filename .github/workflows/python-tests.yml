@@ -143,8 +143,54 @@ jobs:
           /usr/bin/python3 -m venv --system-site-packages .ui-venv
           .ui-venv/bin/python -m pip install -e ".[test]"
 
+      # tee'd and reported on failure for the same reason as full-tests:
+      # the raw Actions log lives behind a blob store that is not always
+      # reachable, and "exit code 1" is not a diagnosis.
       - name: Build every desktop page on a real Tk interpreter
-        run: xvfb-run -a .ui-venv/bin/python -m pytest python/tests/test_control_center_desktop.py -q
+        run: |
+          set -o pipefail
+          xvfb-run -a .ui-venv/bin/python -m pytest \
+            python/tests/test_control_center_desktop.py -q -rf 2>&1 | tee pytest-output.txt
+
+      - name: Publish the failures to the job summary
+        if: failure()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+
+          path = "pytest-output.txt"
+          raw = (
+              open(path, encoding="utf-8", errors="replace").read()
+              if os.path.exists(path)
+              else "(no output captured)"
+          )
+          print("### Desktop UI tests failed\n")
+          print("```text")
+          print(raw[-40000:])
+          print("```")
+          PY
+
+      - name: Comment on the commit when the suite fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          path = "pytest-output.txt"
+          raw = (
+              open(path, encoding="utf-8", errors="replace").read()
+              if os.path.exists(path)
+              else "(no output captured)"
+          )
+          body = f"### :x: Desktop UI tests failed\n```text\n{raw[-40000:]}\n```"
+          with open("payload.json", "w", encoding="utf-8") as handle:
+              json.dump({"body": body}, handle)
+          PY
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            --method POST --input payload.json
 
   full-tests:
     name: pytest (full training extras, ${{ matrix.os }})

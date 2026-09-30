@@ -28,6 +28,7 @@ __pycache__/
 /training/evaluations/
 /training/benchmarks/
 /training/local-validation/
+/training/device-comparison/
 
 # Machine-local tool settings (remembered --godot-executable, etc.)
 /.sandboxai/
