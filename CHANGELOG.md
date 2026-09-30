@@ -109,6 +109,12 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- The desktop Control Center no longer tears down its Tk window while a
+  background worker is still running. `BackgroundRunner.close()` waited on
+  nothing, so a worker in flight when the window closed could drop the last
+  reference to a Tk widget and run its finaliser off the Tk thread. On
+  Windows that is not an exception but a silent interpreter crash
+  (`0x80000003`), which is how CI found it.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

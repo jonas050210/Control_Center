@@ -147,3 +147,86 @@ class ControlCenterConstructionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+class BackgroundRunnerShutdownTests(unittest.TestCase):
+    """``close()`` must not return while a worker is still running.
+
+    Regression for a Windows-only CI crash: the suite died with
+    ``Windows fatal exception: code 0x80000003`` - no traceback, no
+    failing assertion, the interpreter simply stopped - while a worker
+    thread was garbage-collecting inside ``discover_run_directories``
+    and the main thread was reconfiguring a Tk widget.
+
+    The cause was ``shutdown(wait=False)``: ``_on_close`` closed the
+    runner and called ``destroy()`` immediately, so a worker still in
+    flight was left holding the closure that submitted it, and those
+    closures reach Tk widgets. The worker then dropped the last
+    reference and ran a Tk finaliser off the interpreter's own thread.
+
+    No real Tk window is needed to pin this, only something with
+    ``after``; the crash was about thread ownership, not about widgets.
+    """
+
+    class _StubRoot:
+        """Stands in for the Tk root: records timers, never fires them."""
+
+        def __init__(self) -> None:
+            self.scheduled = 0
+
+        def after(self, _delay_ms: int, _callback) -> str:
+            self.scheduled += 1
+            return "timer"
+
+    def _runner(self):
+        from sandboxai.control_center_widgets import BackgroundRunner
+
+        return BackgroundRunner(self._StubRoot())  # type: ignore[arg-type]
+
+    def test_close_waits_for_work_that_already_started(self) -> None:
+        import threading
+
+        runner = self._runner()
+        started = threading.Event()
+        finished = threading.Event()
+
+        def slow() -> str:
+            started.set()
+            time.sleep(0.3)
+            finished.set()
+            return "done"
+
+        runner.submit(slow, lambda _result, _error: None)
+        self.assertTrue(started.wait(5), "the worker never started")
+        runner.close()
+        self.assertTrue(
+            finished.is_set(),
+            "close() returned while a worker was still running - that worker can "
+            "finalise Tk objects off the Tk thread, which kills the process on Windows",
+        )
+
+    def test_close_leaves_no_live_worker_threads(self) -> None:
+        import threading
+
+        runner = self._runner()
+        for _ in range(3):
+            runner.submit(lambda: time.sleep(0.05), lambda _result, _error: None)
+        runner.close()
+        alive = [t.name for t in threading.enumerate() if "control-center-bg" in t.name]
+        self.assertEqual(alive, [], f"worker threads outlived close(): {alive}")
+
+    def test_close_drops_undelivered_results(self) -> None:
+        """Their callbacks hold widgets; they must not sit in the queue."""
+        runner = self._runner()
+        runner.submit(lambda: "value", lambda _result, _error: None)
+        runner.close()
+        self.assertTrue(runner._queue.empty())
+
+    def test_submit_after_close_is_ignored(self) -> None:
+        runner = self._runner()
+        runner.close()
+        calls: list[str] = []
+        runner.submit(lambda: calls.append("ran"), lambda _result, _error: None)
+        time.sleep(0.1)
+        self.assertEqual(calls, [])

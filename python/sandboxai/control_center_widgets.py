@@ -80,8 +80,35 @@ class BackgroundRunner:
             self._root.after(self._poll_ms, self._pump)
 
     def close(self) -> None:
+        """Stop accepting work and wait for what is already running.
+
+        ``wait=True`` is load-bearing, not politeness. Callers close the
+        runner and then immediately tear down the window - ``_on_close``
+        does ``close()``, ``adapter.close()``, ``destroy()`` in a row. A
+        worker still inside an adapter call at that point holds the
+        closure that submitted it, and those closures capture pages,
+        which hold Tk widgets. Whichever thread drops the last reference
+        runs the finaliser, so with ``wait=False`` that is the worker,
+        and Tk objects get finalised off the thread that owns the Tcl
+        interpreter. On Linux that usually gets away with it; on Windows
+        it is a hard interpreter crash with no traceback (exception code
+        0x80000003, observed in CI during an unrelated test).
+
+        ``cancel_futures`` throws away everything that has not started,
+        so the wait is bounded by the single in-flight call rather than
+        by the whole queue.
+        """
         self._closed = True
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._executor.shutdown(wait=True, cancel_futures=True)
+        # Results that arrived while shutting down. Nothing will deliver
+        # them now, and each one holds a callback holding widgets; drain
+        # them here so they are released on the Tk thread instead of
+        # whenever the queue itself is collected.
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
 
 
 # ---------------------------------------------------------------------------
