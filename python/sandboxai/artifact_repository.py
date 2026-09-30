@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from .control_center_schema import DashboardSnapshot
 from .run_inspection import discover_run_directories, inspect_run, inspect_runs
 
 
@@ -22,7 +23,7 @@ class ArtifactRepository:
     def inspect_run(self, run: str | Path, event_limit: int = 50) -> dict[str, Any]:
         return inspect_run(run, event_limit=event_limit)
 
-    def dashboard(self, active_processes: Callable[[], list[dict[str, Any]]]) -> dict[str, Any]:
+    def dashboard(self, active_processes: Callable[[], list[dict[str, Any]]]) -> DashboardSnapshot:
         run_dirs = self.run_directories()
         latest = inspect_run(run_dirs[-1], event_limit=5) if run_dirs else None
         return {
@@ -31,6 +32,27 @@ class ArtifactRepository:
             "latest_run": latest,
             "active_processes": active_processes(),
         }
+
+    def resolve_training_log(self, run: str | Path | None = None) -> Path | None:
+        if run is not None:
+            candidate = Path(run).expanduser()
+            if candidate.is_file():
+                return candidate
+            if candidate.is_dir():
+                return candidate / "logs" / "training.jsonl"
+            return None
+        runs = self.run_directories()
+        return runs[-1] / "logs" / "training.jsonl" if runs else None
+
+    def evaluation_roots(self, run: str | Path | None = None) -> list[Path]:
+        if run is not None:
+            path = Path(run).expanduser()
+            return [path / "evaluations" if (path / "evaluations").is_dir() else path]
+        roots = [path / "evaluations" for path in self.run_directories()]
+        shared = self.output_root / "evaluations"
+        if shared.is_dir():
+            roots.append(shared)
+        return roots
 
     def checkpoints(self, limit: int = 300) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []

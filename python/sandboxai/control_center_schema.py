@@ -32,6 +32,32 @@ class RunStatus(TypedDict, total=False):
     error: str
 
 
+class ProcessSnapshot(TypedDict, total=False):
+    id: str
+    kind: str
+    state: str
+    returncode: int | None
+    started_at: float
+    pid: int
+    stdout: list[str]
+    stderr: list[str]
+    error: str
+    run_dir: str
+    meta: dict[str, Any]
+    command: list[str]
+    backend: RunStatus
+    error_code: str
+    backend_error_code: str
+    backend_error: str
+
+
+class DashboardSnapshot(TypedDict):
+    output_root: str
+    run_count: int
+    latest_run: dict[str, Any] | None
+    active_processes: list[dict[str, Any]]
+
+
 class RunEvent(TypedDict, total=False):
     schema_version: int
     wall_time: float
