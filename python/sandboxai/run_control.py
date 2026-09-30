@@ -16,6 +16,8 @@ import tempfile
 import time
 from typing import Any
 
+from .control_center_schema import EVENT_SCHEMA_VERSION, STATUS_SCHEMA_VERSION
+
 
 TERMINAL_STATES = frozenset({"Finished", "Error"})
 
@@ -45,6 +47,7 @@ class RunControl:
         self.stop_requested = False
         self._last_sequence: int | str | None = None
         self._status: dict[str, Any] = {
+            "schema_version": STATUS_SCHEMA_VERSION,
             "state": self.state,
             "pid": os.getpid(),
             "updated_at": time.time(),
@@ -84,6 +87,7 @@ class RunControl:
         if self.event_path is None:
             return
         row = {
+            "schema_version": EVENT_SCHEMA_VERSION,
             "wall_time": time.time(),
             "category": str(category),
             "message": str(message),
