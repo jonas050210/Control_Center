@@ -6,6 +6,7 @@ import json
 import math
 import os
 import shutil
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,20 @@ _GODOT_CANDIDATES: tuple[str, ...] = (
     "/usr/bin/godot",
     "C:\\Program Files\\Godot\\godot.exe",
 )
+
+
+def _raise_first_violation(invariants: Iterable[tuple[bool, str]]) -> None:
+    """Raises ``ValueError`` for the first ``(holds, message)`` pair that fails.
+
+    Config validation is a long list of independent field invariants. Keeping
+    them as data and checking them here means the checks read as a reviewable
+    table instead of a hundred-line branch chain, while preserving the
+    original behaviour exactly: declaration order decides which violation the
+    user is told about first.
+    """
+    for holds, message in invariants:
+        if not holds:
+            raise ValueError(message)
 
 
 def _settings_path() -> Path:
@@ -312,87 +327,101 @@ class TrainingConfig:
     episode_log: bool = True
 
     def validate(self) -> TrainingConfig:
-        if self.environment_count < 1:
-            raise ValueError("environment_count must be >= 1")
-        if self.enemy_count < 1:
-            raise ValueError("enemy_count must be >= 1")
-        if self.env_workers < 0:
-            raise ValueError("env_workers must be >= 0 (0 = auto, 1 = single process)")
-        if self.rollout_length < 0:
-            raise ValueError("rollout_length must be >= 0 (0 = auto)")
+        """Rejects a configuration PPO could not run, in declaration order.
+
+        The invariants live in ``_invariants()`` as (holds, message) pairs
+        rather than a wall of ``if ... raise``: they are independent field
+        checks, the first violated one is the one reported, and keeping them
+        in one ordered table is what makes that ordering reviewable.
+        """
+        _raise_first_violation(self._invariants())
+        # Not expressible as a (holds, message) pair: the rule object is
+        # built by a factory that raises on an unknown rule name. Done here
+        # rather than at the first evaluation boundary, which can be tens of
+        # minutes into a run.
+        self.checkpoint_selection_rule()
+        return self
+
+    def _invariants(self) -> list[tuple[bool, str]]:
         resolved_rollout = self.resolved_rollout_length()
         rollout_batch = resolved_rollout * self.environment_count
-        if self.batch_size < 1 or self.batch_size > rollout_batch:
-            raise ValueError(
+        return [
+            (self.environment_count >= 1, "environment_count must be >= 1"),
+            (self.enemy_count >= 1, "enemy_count must be >= 1"),
+            (self.env_workers >= 0, "env_workers must be >= 0 (0 = auto, 1 = single process)"),
+            (self.rollout_length >= 0, "rollout_length must be >= 0 (0 = auto)"),
+            (
+                1 <= self.batch_size <= rollout_batch,
                 f"batch_size ({self.batch_size}) must be in [1, resolved_rollout_length * "
                 f"environment_count] ([1, {rollout_batch}]); resolved rollout length is "
-                f"{resolved_rollout}"
-            )
-        if self.ppo_epochs < 1:
-            raise ValueError("ppo_epochs must be >= 1")
-        if not 0.0 < self.gamma <= 1.0:
-            raise ValueError("gamma must be in (0, 1]")
-        if not 0.0 <= self.gae_lambda <= 1.0:
-            raise ValueError("gae_lambda must be in [0, 1]")
-        if self.learning_rate <= 0.0:
-            raise ValueError("learning_rate must be positive")
-        if self.clip_range <= 0.0:
-            raise ValueError("clip_range must be positive")
-        # Negative entropy would actively reward determinism; forbid it so
-        # the mistake surfaces at config load instead of as silent policy
-        # collapse during training.
-        if self.entropy_coefficient < 0.0:
-            raise ValueError("entropy_coefficient must be non-negative")
-        if self.total_training_steps < 1:
-            raise ValueError("total_training_steps must be positive")
-        if self.checkpoint_frequency < 1 or self.evaluation_frequency < 1:
-            raise ValueError("checkpoint/evaluation frequency must be positive")
-        if self.evaluation_episodes < 1:
-            raise ValueError("evaluation_episodes must be >= 1")
-        if len(self.net_arch) < 1 or any(size < 1 for size in self.net_arch):
-            raise ValueError("net_arch must contain at least one positive layer size")
-        if self.torch_threads < 0:
-            raise ValueError("torch_threads must be non-negative (0 = bounded auto)")
-        # 1-10 are the combat levels, 11 is the self-play hook. Mirrors
-        # CurriculumConfig.Level in scripts/core/curriculum_config.gd.
-        if self.curriculum_level not in range(1, CURRICULUM_LEVEL_COUNT + 1):
-            raise ValueError(f"curriculum_level must be between 1 and {CURRICULUM_LEVEL_COUNT}")
-        if self.evaluation_environment_count < 1:
-            raise ValueError("evaluation_environment_count must be >= 1")
-        if self.checkpoint_eval_environment_count < 1:
-            raise ValueError("checkpoint_eval_environment_count must be >= 1")
-        if self.inference_device not in ("auto", "cpu", "cuda"):
-            raise ValueError("inference_device must be one of auto, cpu, cuda")
-        if self.early_stopping_patience < 0:
-            raise ValueError("early_stopping_patience must be non-negative")
-        # Fails fast here rather than at the first evaluation boundary,
-        # which can be tens of minutes into a run.
-        self.checkpoint_selection_rule()
-        # Integrated pipeline fields.
-        if self.curriculum_mode not in ("auto", "fixed"):
-            raise ValueError("curriculum_mode must be 'auto' or 'fixed'")
-        # The director never promotes past level 10 during PPO training:
-        # level 11 is the two-agent self-play hook, which is an
-        # evaluation-time environment, not a single-agent PPO one.
-        if self.curriculum_start_level not in range(1, 11):
-            raise ValueError("curriculum_start_level must be between 1 and 10")
-        if self.replay_mode not in ("off", "interesting", "every_n", "all", "evaluation"):
-            raise ValueError("replay_mode must be one of off/interesting/every_n/all/evaluation")
-        if self.replay_every_n < 1:
-            raise ValueError("replay_every_n must be >= 1")
-        if self.replay_detail not in ("light", "detailed"):
-            raise ValueError("replay_detail must be 'light' or 'detailed'")
-        if self.replay_max_per_run < 0:
-            raise ValueError("replay_max_per_run must be >= 0 (0 = unlimited)")
-        if self.condition_eval_episodes < 1:
-            raise ValueError("condition_eval_episodes must be >= 1")
-        if self.generalization_episodes_per_cell < 1:
-            raise ValueError("generalization_episodes_per_cell must be >= 1")
-        if self.league_matches_per_checkpoint < 0:
-            raise ValueError("league_matches_per_checkpoint must be >= 0")
-        if self.league_max_opponents < 1:
-            raise ValueError("league_max_opponents must be >= 1")
-        return self
+                f"{resolved_rollout}",
+            ),
+            (self.ppo_epochs >= 1, "ppo_epochs must be >= 1"),
+            (0.0 < self.gamma <= 1.0, "gamma must be in (0, 1]"),
+            (0.0 <= self.gae_lambda <= 1.0, "gae_lambda must be in [0, 1]"),
+            (self.learning_rate > 0.0, "learning_rate must be positive"),
+            (self.clip_range > 0.0, "clip_range must be positive"),
+            # Negative entropy would actively reward determinism; forbid it
+            # so the mistake surfaces at config load instead of as silent
+            # policy collapse during training.
+            (self.entropy_coefficient >= 0.0, "entropy_coefficient must be non-negative"),
+            (self.total_training_steps >= 1, "total_training_steps must be positive"),
+            (
+                self.checkpoint_frequency >= 1 and self.evaluation_frequency >= 1,
+                "checkpoint/evaluation frequency must be positive",
+            ),
+            (self.evaluation_episodes >= 1, "evaluation_episodes must be >= 1"),
+            (
+                bool(self.net_arch) and all(size >= 1 for size in self.net_arch),
+                "net_arch must contain at least one positive layer size",
+            ),
+            (self.torch_threads >= 0, "torch_threads must be non-negative (0 = bounded auto)"),
+            # 1-10 are the combat levels, 11 is the self-play hook. Mirrors
+            # CurriculumConfig.Level in scripts/core/curriculum_config.gd.
+            (
+                self.curriculum_level in range(1, CURRICULUM_LEVEL_COUNT + 1),
+                f"curriculum_level must be between 1 and {CURRICULUM_LEVEL_COUNT}",
+            ),
+            (self.evaluation_environment_count >= 1, "evaluation_environment_count must be >= 1"),
+            (
+                self.checkpoint_eval_environment_count >= 1,
+                "checkpoint_eval_environment_count must be >= 1",
+            ),
+            (
+                self.inference_device in ("auto", "cpu", "cuda"),
+                "inference_device must be one of auto, cpu, cuda",
+            ),
+            (self.early_stopping_patience >= 0, "early_stopping_patience must be non-negative"),
+            # Integrated pipeline fields.
+            (
+                self.curriculum_mode in ("auto", "fixed"),
+                "curriculum_mode must be 'auto' or 'fixed'",
+            ),
+            # The director never promotes past level 10 during PPO training:
+            # level 11 is the two-agent self-play hook, which is an
+            # evaluation-time environment, not a single-agent PPO one.
+            (
+                self.curriculum_start_level in range(1, 11),
+                "curriculum_start_level must be between 1 and 10",
+            ),
+            (
+                self.replay_mode in ("off", "interesting", "every_n", "all", "evaluation"),
+                "replay_mode must be one of off/interesting/every_n/all/evaluation",
+            ),
+            (self.replay_every_n >= 1, "replay_every_n must be >= 1"),
+            (
+                self.replay_detail in ("light", "detailed"),
+                "replay_detail must be 'light' or 'detailed'",
+            ),
+            (self.replay_max_per_run >= 0, "replay_max_per_run must be >= 0 (0 = unlimited)"),
+            (self.condition_eval_episodes >= 1, "condition_eval_episodes must be >= 1"),
+            (
+                self.generalization_episodes_per_cell >= 1,
+                "generalization_episodes_per_cell must be >= 1",
+            ),
+            (self.league_matches_per_checkpoint >= 0, "league_matches_per_checkpoint must be >= 0"),
+            (self.league_max_opponents >= 1, "league_max_opponents must be >= 1"),
+        ]
 
     @property
     def project(self) -> Path:

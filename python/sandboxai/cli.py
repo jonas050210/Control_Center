@@ -8,6 +8,7 @@ import shutil
 import subprocess  # noqa: F401  (kept as the documented mock seam for CLI launch tests)
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from .config import (
     load_godot_executable_setting,
     save_godot_executable_setting,
 )
+from .contract import GODOT_VERSION
 from .wsl import GodotLaunchError, WindowsInterop, is_windows_shell, normalize_host_path
 
 
@@ -710,335 +712,417 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     return results
 
 
+# --- subcommand handlers -------------------------------------------------
+#
+# One function per subcommand, dispatched through _COMMANDS below. `main`
+# used to be a 300-line chain of `if args.command == ...` blocks with a
+# cyclomatic complexity of 48, which meant no single command could be read,
+# tested or changed in isolation. Each handler takes the parsed namespace and
+# returns the process exit code. Heavy imports stay inside the handlers so
+# that `sandboxai --help` and the numpy-only commands never pay for torch.
+
+
+def _cmd_install(args: argparse.Namespace) -> int:
+    print("python -m pip install -e '.[training]'")
+    if args.cuda:
+        print(
+            "For CUDA, install the matching PyTorch wheel from "
+            "https://pytorch.org/ before the command above."
+        )
+    print(
+        f"Godot {GODOT_VERSION} must be installed separately and available as "
+        "'godot' (or pass --godot-executable)."
+    )
+    return 0
+
+
+def _cmd_control_center_desktop(args: argparse.Namespace) -> int:
+    from .control_center_desktop import main as desktop_main
+
+    return desktop_main(project_root=args.project_path or None, output_root=args.output_root)
+
+
+def _cmd_smoke_test(args: argparse.Namespace) -> int:
+    res = run_smoke_test(args.device)
+    print(json.dumps(res, indent=2, default=str))
+    return 0 if res.get("all_passed") else 1
+
+
+def _cmd_inspect_dataset(args: argparse.Namespace) -> int:
+    from .dataset import DemonstrationDataset
+
+    dataset = DemonstrationDataset.load(args.dataset)
+    report = dataset.statistics() if args.statistics else dataset.summary()
+    print(json.dumps(report, indent=2, default=str))
+    return 0
+
+
+def _cmd_inspect_runs(args: argparse.Namespace) -> int:
+    from .run_inspection import format_run_index, format_run_report, inspect_run
+    from .run_inspection import inspect_runs as inspect_runs_index
+
+    if args.run:
+        report = inspect_run(args.run, event_limit=max(0, args.events))
+        print(json.dumps(report, indent=2, default=str) if args.json else format_run_report(report))
+        return 0 if report.get("exists") else 1
+    index = inspect_runs_index(args.root, limit=max(0, args.limit), event_limit=max(0, args.events))
+    print(json.dumps(index, indent=2, default=str) if args.json else format_run_index(index))
+    return 0
+
+
+def _cmd_record(args: argparse.Namespace) -> int:
+    try:
+        command = build_record_command(
+            args.godot_executable,
+            args.project_path,
+            args.output,
+            args.duration,
+            args.enemy_count,
+        )
+    except ValueError as exc:
+        print(f"Invalid Godot executable: {exc}", file=sys.stderr)
+        return 1
+    print("Launching Godot demonstration recorder:", " ".join(command))
+    return _call_godot_process(command)
+
+
+def _cmd_control_center(args: argparse.Namespace) -> int:
+    try:
+        command = build_control_center_command(
+            args.godot_executable,
+            args.project_path,
+            args.mode,
+            args.environment_count,
+            args.enemy_count,
+            args.curriculum_level,
+            args.seed,
+            args.scenario,
+        )
+    except ValueError as exc:
+        print(f"Invalid Godot executable: {exc}", file=sys.stderr)
+        return 1
+    print("Launching SandboxAI Control Center:", " ".join(command))
+    return _call_godot_process(command)
+
+
+def _run_under_control(control: Any, work: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """Runs `work`, reporting success or failure to an optional RunControl.
+
+    Both training entry points need the same three-way handshake (start
+    already done by the caller, finish on success, fail on exception) and
+    getting it wrong leaks a run that the Control Center shows as forever
+    "running".
+    """
+    try:
+        result = work()
+    except Exception as exc:
+        if control is not None:
+            control.fail(exc)
+        raise
+    if control is not None:
+        control.finish(**result)
+    return result
+
+
+def _cmd_bc_train(args: argparse.Namespace) -> int:
+    from .bc import train_behavior_cloning
+    from .run_control import from_cli_paths
+
+    control = from_cli_paths(args.control_file, args.status_file, args.event_log_file)
+    config = BCConfig(
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        validation_fraction=args.validation_fraction,
+        seed=args.seed,
+        device=args.device,
+        output_root=str(Path(args.output_dir).parent),
+        split_strategy=args.split_strategy,
+    )
+    if control is not None:
+        control.start(training_type="behavior_cloning", total_epochs=config.epochs)
+    result = _run_under_control(
+        control,
+        lambda: train_behavior_cloning(
+            args.dataset,
+            config,
+            args.output_dir,
+            args.resume_checkpoint,
+            run_control=control,
+        ),
+    )
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+def _cmd_train(args: argparse.Namespace) -> int:
+    """Handles both `train` and `resume`; they differ only in the checkpoint."""
+    from .ppo import train_ppo
+    from .run_control import from_cli_paths
+
+    control = from_cli_paths(args.control_file, args.status_file, args.event_log_file)
+    config = _config_from_args(args)
+    if control is not None:
+        control.start(
+            training_type="ppo",
+            total_training_steps=config.total_training_steps,
+            environment_count=config.environment_count,
+        )
+    result = _run_under_control(
+        control,
+        lambda: train_ppo(
+            config,
+            args.checkpoint if args.command == "resume" else None,
+            run_control=control,
+        ),
+    )
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    from stable_baselines3 import PPO  # type: ignore
+
+    from .config import TrainingConfig
+    from .evaluation import evaluate_model, format_summary
+
+    config = TrainingConfig(
+        environment_count=args.environment_count,
+        enemy_count=args.enemy_count,
+        curriculum_level=args.curriculum_level,
+        seed=args.seed,
+        device=args.device,
+        godot_executable=args.godot_executable,
+        project_path=args.project_path,
+    ).validate()
+    model = PPO.load(args.checkpoint, device=config.resolved_device())
+    result = evaluate_model(
+        model,
+        {
+            "project_path": config.project,
+            "godot_executable": config.godot_executable,
+            "environment_count": max(1, int(args.environment_count or 1)),
+            "enemy_count": config.enemy_count,
+            "seed": config.seed,
+            "curriculum_level": config.curriculum_level,
+        },
+        args.episodes,
+        args.seed,
+        args.output_dir,
+    )
+    print(format_summary(result))
+    print(
+        json.dumps(
+            {key: value for key, value in result.items() if key != "episodes_detail"},
+            indent=2,
+            default=str,
+        )
+    )
+    return 0
+
+
+def _cmd_benchmark(args: argparse.Namespace) -> int:
+    from .benchmark import benchmark_simulation, summarize_scaling
+
+    project = _resolve_project_path(args.project_path)
+    counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
+    workers = [int(value) for value in str(args.worker_counts).split(",") if value.strip()]
+    result = benchmark_simulation(
+        project,
+        args.godot_executable,
+        counts,
+        args.steps,
+        args.enemy_count,
+        args.seed,
+        args.curriculum_level,
+        args.output_dir,
+        args.max_seconds_per_config,
+        worker_counts=workers or (1,),
+        compact_infos=not args.full_infos,
+    )
+    print(json.dumps(result, indent=2, default=str))
+    print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))
+    return 0
+
+
+def _cmd_benchmark_suites(args: argparse.Namespace) -> int:
+    from .benchmark_suites import describe_plan, format_report, run_suites
+
+    if args.plan_only:
+        print(json.dumps(describe_plan(), indent=2, default=str))
+        return 0
+    project = _resolve_project_path(args.project_path)
+    report = run_suites(project, args.godot_executable, output_dir=args.output_dir)
+    print(format_report(report))
+    return 0
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from .replay import load_replay, validate_replay
+
+    episode = load_replay(args.path, strict_contract=not args.allow_contract_mismatch)
+    problems = validate_replay(episode, strict_contract=not args.allow_contract_mismatch)
+    print(json.dumps(episode.summary(), indent=2, default=str))
+    if args.timeline:
+        print(json.dumps(episode.timeline(), indent=2, default=str))
+    if problems:
+        print(json.dumps({"problems": problems}, indent=2), file=sys.stderr)
+        return 1
+    return 0
+
+
+def _cmd_curriculum(args: argparse.Namespace) -> int:
+    from .curriculum_stages import describe_progression, format_progression
+
+    if args.json:
+        print(json.dumps(describe_progression(), indent=2, default=str))
+    else:
+        print(format_progression(), end="")
+    return 0
+
+
+def _cmd_ttk_report(args: argparse.Namespace) -> int:
+    from .ttk import TTKDataset, compare_with_simulator, format_summary
+
+    dataset = TTKDataset.load(args.trials)
+    payload: dict[str, Any] = {"summary": dataset.summary(seed=args.seed)}
+    if args.by_condition:
+        payload["by_condition"] = dataset.by_condition(args.distance_bucket, seed=args.seed)
+    if args.compare_simulator:
+        payload["simulator_comparison"] = compare_with_simulator(dataset, seed=args.seed)
+    if args.json:
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+    print(format_summary(payload["summary"]))
+    for key in ("by_condition", "simulator_comparison"):
+        if key in payload:
+            print(json.dumps(payload[key], indent=2, default=str))
+    return 0
+
+
+def _cmd_weapon_table(args: argparse.Namespace) -> int:
+    from .weapons import format_ttk_table, role_ranking, ttk_table
+
+    distances = [float(v) for v in str(args.distances).split(",") if v.strip()]
+    table = ttk_table(distances, target_health=args.health)
+    ranking = role_ranking(target_health=args.health)
+    if args.json:
+        payload = dict(table)
+        payload["role_ranking"] = {
+            band: [{"profile": name, "ttk": value} for name, value in entries]
+            for band, entries in ranking.items()
+        }
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+    print(format_ttk_table(table))
+    print()
+    print("Best profile per engagement band (by ideal TTK):")
+    for band, entries in ranking.items():
+        ranked = ", ".join(
+            f"{name} {value:.2f}s" for name, value in entries if value != float("inf")
+        )
+        print(f"  {band:<12} {ranked or 'nothing reaches this band'}")
+    return 0
+
+
+def _cmd_adapter_contract(args: argparse.Namespace) -> int:
+    from .external_adapter import (
+        AdapterContractChecker,
+        MockExternalEnvironment,
+        contract_summary,
+    )
+
+    print(json.dumps(contract_summary(), indent=2, default=str))
+    if not args.check_mock:
+        return 0
+    problems = AdapterContractChecker(MockExternalEnvironment()).run()
+    print(json.dumps({"mock_adapter_problems": problems}, indent=2))
+    return 1 if problems else 0
+
+
+def _cmd_validate_runtime(args: argparse.Namespace) -> int:
+    from .runtime_validation import RuntimeValidator, format_validation_report
+
+    validator = RuntimeValidator(
+        project_path=args.project_path,
+        godot_executable=args.godot_executable,
+        timeout=args.timeout,
+    )
+    report = validator.validate(env_count=args.env_count)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, default=str))
+    else:
+        print(format_validation_report(report))
+    return 0 if report.status in {"passed", "unavailable"} else 1
+
+
+def _cmd_compare_experiments(args: argparse.Namespace) -> int:
+    from .experiment import compare_experiments, format_experiment_report
+
+    base_data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+    cand_data = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
+    res = compare_experiments(base_data, cand_data, threshold=args.threshold)
+    if args.json:
+        print(json.dumps(res, indent=2, default=str))
+    else:
+        print(format_experiment_report(cand_data, comparison=res))
+    return 0 if res["status"] != "regression_warning" else 1
+
+
+def _cmd_summarize_experiment(args: argparse.Namespace) -> int:
+    from .experiment import aggregate_seed_runs, format_experiment_report
+
+    target_dir = Path(args.path)
+    summary_files = list(target_dir.glob("**/run_summary.json")) or list(target_dir.glob("*.json"))
+    run_dicts = [json.loads(p.read_text(encoding="utf-8")) for p in summary_files]
+    agg = aggregate_seed_runs(run_dicts)
+    if args.json:
+        print(json.dumps(agg, indent=2, default=str))
+    else:
+        print(format_experiment_report(agg))
+    return 0
+
+
+# Subcommand name -> handler. build_parser() is the only other place that
+# knows these names; test_cli.py asserts the two stay in sync, so a parser
+# entry without a handler fails the suite instead of reaching a user as an
+# "unhandled command" crash.
+_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "install": _cmd_install,
+    "control-center-desktop": _cmd_control_center_desktop,
+    "smoke-test": _cmd_smoke_test,
+    "inspect-dataset": _cmd_inspect_dataset,
+    "inspect-runs": _cmd_inspect_runs,
+    "record": _cmd_record,
+    "control-center": _cmd_control_center,
+    "bc-train": _cmd_bc_train,
+    "train": _cmd_train,
+    "resume": _cmd_train,
+    "evaluate": _cmd_evaluate,
+    "benchmark": _cmd_benchmark,
+    "benchmark-suites": _cmd_benchmark_suites,
+    "replay": _cmd_replay,
+    "curriculum": _cmd_curriculum,
+    "ttk-report": _cmd_ttk_report,
+    "weapon-table": _cmd_weapon_table,
+    "adapter-contract": _cmd_adapter_contract,
+    "validate-runtime": _cmd_validate_runtime,
+    "compare-experiments": _cmd_compare_experiments,
+    "summarize-experiment": _cmd_summarize_experiment,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     # A verified --godot-executable is remembered so later commands (train
     # in particular) can use the configured binary without repeating the
     # flag. Runs before any dispatch: every subcommand accepts the option.
     _remember_godot_executable(args)
-    if args.command == "install":
-        print("python -m pip install -e '.[training]'")
-        if args.cuda:
-            print(
-                "For CUDA, install the matching PyTorch wheel from https://pytorch.org/ before the command above."
-            )
-        print(
-            "Godot 4.7.2 must be installed separately and available as 'godot' (or pass --godot-executable)."
-        )
-        return 0
-    if args.command == "control-center-desktop":
-        from .control_center_desktop import main as desktop_main
-
-        return desktop_main(project_root=args.project_path or None, output_root=args.output_root)
-    if args.command == "smoke-test":
-        res = run_smoke_test(args.device)
-        print(json.dumps(res, indent=2, default=str))
-        return 0 if res.get("all_passed") else 1
-    if args.command == "inspect-dataset":
-        from .dataset import DemonstrationDataset
-
-        dataset = DemonstrationDataset.load(args.dataset)
-        report = dataset.statistics() if args.statistics else dataset.summary()
-        print(json.dumps(report, indent=2, default=str))
-        return 0
-    if args.command == "inspect-runs":
-        from .run_inspection import (
-            format_run_index,
-            format_run_report,
-            inspect_run,
-        )
-        from .run_inspection import (
-            inspect_runs as inspect_runs_index,
-        )
-
-        if args.run:
-            report = inspect_run(args.run, event_limit=max(0, args.events))
-            print(
-                json.dumps(report, indent=2, default=str)
-                if args.json
-                else format_run_report(report)
-            )
-            return 0 if report.get("exists") else 1
-        index = inspect_runs_index(
-            args.root, limit=max(0, args.limit), event_limit=max(0, args.events)
-        )
-        print(json.dumps(index, indent=2, default=str) if args.json else format_run_index(index))
-        return 0
-
-    if args.command == "record":
-        try:
-            command = build_record_command(
-                args.godot_executable,
-                args.project_path,
-                args.output,
-                args.duration,
-                args.enemy_count,
-            )
-        except ValueError as exc:
-            print(f"Invalid Godot executable: {exc}", file=sys.stderr)
-            return 1
-        print("Launching Godot demonstration recorder:", " ".join(command))
-        return _call_godot_process(command)
-    if args.command == "control-center":
-        try:
-            command = build_control_center_command(
-                args.godot_executable,
-                args.project_path,
-                args.mode,
-                args.environment_count,
-                args.enemy_count,
-                args.curriculum_level,
-                args.seed,
-                args.scenario,
-            )
-        except ValueError as exc:
-            print(f"Invalid Godot executable: {exc}", file=sys.stderr)
-            return 1
-        print("Launching SandboxAI Control Center:", " ".join(command))
-        return _call_godot_process(command)
-    if args.command == "bc-train":
-        from .bc import train_behavior_cloning
-        from .run_control import from_cli_paths
-
-        control = from_cli_paths(args.control_file, args.status_file, args.event_log_file)
-        config = BCConfig(
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            validation_fraction=args.validation_fraction,
-            seed=args.seed,
-            device=args.device,
-            output_root=str(Path(args.output_dir).parent),
-            split_strategy=args.split_strategy,
-        )
-        if control is not None:
-            control.start(training_type="behavior_cloning", total_epochs=config.epochs)
-        try:
-            result = train_behavior_cloning(
-                args.dataset,
-                config,
-                args.output_dir,
-                args.resume_checkpoint,
-                run_control=control,
-            )
-        except Exception as exc:
-            if control is not None:
-                control.fail(exc)
-            raise
-        if control is not None:
-            control.finish(**result)
-        print(json.dumps(result, indent=2))
-        return 0
-    if args.command in {"train", "resume"}:
-        from .ppo import train_ppo
-        from .run_control import from_cli_paths
-
-        control = from_cli_paths(args.control_file, args.status_file, args.event_log_file)
-        config = _config_from_args(args)
-        if control is not None:
-            control.start(
-                training_type="ppo",
-                total_training_steps=config.total_training_steps,
-                environment_count=config.environment_count,
-            )
-        try:
-            result = train_ppo(
-                config,
-                args.checkpoint if args.command == "resume" else None,
-                run_control=control,
-            )
-        except Exception as exc:
-            if control is not None:
-                control.fail(exc)
-            raise
-        if control is not None:
-            control.finish(**result)
-        print(json.dumps(result, indent=2, default=str))
-        return 0
-    if args.command == "evaluate":
-        from stable_baselines3 import PPO  # type: ignore
-
-        from .config import TrainingConfig
-        from .evaluation import evaluate_model, format_summary
-
-        config = TrainingConfig(
-            environment_count=args.environment_count,
-            enemy_count=args.enemy_count,
-            curriculum_level=args.curriculum_level,
-            seed=args.seed,
-            device=args.device,
-            godot_executable=args.godot_executable,
-            project_path=args.project_path,
-        ).validate()
-        model = PPO.load(args.checkpoint, device=config.resolved_device())
-        result = evaluate_model(
-            model,
-            {
-                "project_path": config.project,
-                "godot_executable": config.godot_executable,
-                "environment_count": max(1, int(args.environment_count or 1)),
-                "enemy_count": config.enemy_count,
-                "seed": config.seed,
-                "curriculum_level": config.curriculum_level,
-            },
-            args.episodes,
-            args.seed,
-            args.output_dir,
-        )
-        print(format_summary(result))
-        print(
-            json.dumps(
-                {key: value for key, value in result.items() if key != "episodes_detail"},
-                indent=2,
-                default=str,
-            )
-        )
-        return 0
-    if args.command == "benchmark":
-        from .benchmark import benchmark_simulation, summarize_scaling
-
-        project = _resolve_project_path(args.project_path)
-        counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
-        workers = [int(value) for value in str(args.worker_counts).split(",") if value.strip()]
-        result = benchmark_simulation(
-            project,
-            args.godot_executable,
-            counts,
-            args.steps,
-            args.enemy_count,
-            args.seed,
-            args.curriculum_level,
-            args.output_dir,
-            args.max_seconds_per_config,
-            worker_counts=workers or (1,),
-            compact_infos=not args.full_infos,
-        )
-        print(json.dumps(result, indent=2, default=str))
-        print(json.dumps({"scaling_summary": summarize_scaling(result)}, indent=2, default=str))
-        return 0
-    if args.command == "benchmark-suites":
-        from .benchmark_suites import describe_plan, format_report, run_suites
-
-        if args.plan_only:
-            print(json.dumps(describe_plan(), indent=2, default=str))
-            return 0
-        project = _resolve_project_path(args.project_path)
-        report = run_suites(project, args.godot_executable, output_dir=args.output_dir)
-        print(format_report(report))
-        return 0
-    if args.command == "replay":
-        from .replay import load_replay, validate_replay
-
-        episode = load_replay(args.path, strict_contract=not args.allow_contract_mismatch)
-        problems = validate_replay(episode, strict_contract=not args.allow_contract_mismatch)
-        print(json.dumps(episode.summary(), indent=2, default=str))
-        if args.timeline:
-            print(json.dumps(episode.timeline(), indent=2, default=str))
-        if problems:
-            print(json.dumps({"problems": problems}, indent=2), file=sys.stderr)
-            return 1
-        return 0
-    if args.command == "curriculum":
-        from .curriculum_stages import describe_progression, format_progression
-
-        if args.json:
-            print(json.dumps(describe_progression(), indent=2, default=str))
-        else:
-            print(format_progression(), end="")
-        return 0
-    if args.command == "ttk-report":
-        from .ttk import TTKDataset, compare_with_simulator, format_summary
-
-        dataset = TTKDataset.load(args.trials)
-        payload: dict[str, Any] = {"summary": dataset.summary(seed=args.seed)}
-        if args.by_condition:
-            payload["by_condition"] = dataset.by_condition(args.distance_bucket, seed=args.seed)
-        if args.compare_simulator:
-            payload["simulator_comparison"] = compare_with_simulator(dataset, seed=args.seed)
-        if args.json:
-            print(json.dumps(payload, indent=2, default=str))
-        else:
-            print(format_summary(payload["summary"]))
-            if args.by_condition:
-                print(json.dumps(payload["by_condition"], indent=2, default=str))
-            if args.compare_simulator:
-                print(json.dumps(payload["simulator_comparison"], indent=2, default=str))
-        return 0
-    if args.command == "weapon-table":
-        from .weapons import format_ttk_table, role_ranking, ttk_table
-
-        distances = [float(v) for v in str(args.distances).split(",") if v.strip()]
-        table = ttk_table(distances, target_health=args.health)
-        if args.json:
-            payload = dict(table)
-            payload["role_ranking"] = {
-                band: [{"profile": name, "ttk": value} for name, value in entries]
-                for band, entries in role_ranking(target_health=args.health).items()
-            }
-            print(json.dumps(payload, indent=2, default=str))
-            return 0
-        print(format_ttk_table(table))
-        print()
-        print("Best profile per engagement band (by ideal TTK):")
-        for band, entries in role_ranking(target_health=args.health).items():
-            ranked = ", ".join(
-                f"{name} {value:.2f}s" for name, value in entries if value != float("inf")
-            )
-            print(f"  {band:<12} {ranked or 'nothing reaches this band'}")
-        return 0
-    if args.command == "adapter-contract":
-        from .external_adapter import (
-            AdapterContractChecker,
-            MockExternalEnvironment,
-            contract_summary,
-        )
-
-        print(json.dumps(contract_summary(), indent=2, default=str))
-        if args.check_mock:
-            problems = AdapterContractChecker(MockExternalEnvironment()).run()
-            print(json.dumps({"mock_adapter_problems": problems}, indent=2))
-            return 1 if problems else 0
-        return 0
-    if args.command == "validate-runtime":
-        from .runtime_validation import RuntimeValidator, format_validation_report
-
-        validator = RuntimeValidator(
-            project_path=args.project_path,
-            godot_executable=args.godot_executable,
-            timeout=args.timeout,
-        )
-        report = validator.validate(env_count=args.env_count)
-        if args.json:
-            print(json.dumps(report.to_dict(), indent=2, default=str))
-        else:
-            print(format_validation_report(report))
-        return 0 if report.status in {"passed", "unavailable"} else 1
-    if args.command == "compare-experiments":
-        from .experiment import compare_experiments, format_experiment_report
-
-        base_data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
-        cand_data = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
-        res = compare_experiments(base_data, cand_data, threshold=args.threshold)
-        if args.json:
-            print(json.dumps(res, indent=2, default=str))
-        else:
-            print(format_experiment_report(cand_data, comparison=res))
-        return 0 if res["status"] != "regression_warning" else 1
-    if args.command == "summarize-experiment":
-        from .experiment import aggregate_seed_runs, format_experiment_report
-
-        target_dir = Path(args.path)
-        summary_files = list(target_dir.glob("**/run_summary.json")) or list(
-            target_dir.glob("*.json")
-        )
-        run_dicts = [json.loads(p.read_text(encoding="utf-8")) for p in summary_files]
-        agg = aggregate_seed_runs(run_dicts)
-        if args.json:
-            print(json.dumps(agg, indent=2, default=str))
-        else:
-            print(format_experiment_report(agg))
-        return 0
-    raise RuntimeError(f"unhandled command {args.command}")
+    try:
+        handler = _COMMANDS[args.command]
+    except KeyError:
+        raise RuntimeError(f"unhandled command {args.command}") from None
+    return handler(args)
 
 
 if __name__ == "__main__":

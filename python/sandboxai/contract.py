@@ -524,6 +524,15 @@ OBSERVATION_SPEC: tuple[ObservationField, ...] = (
     ),
 )
 
+## The engine build this contract is implemented and tested against.
+##
+## Single source of truth for the version string: project.godot, the CI
+## workflows, the CLI, the README and every doc used to repeat it literally,
+## and `python/tests/test_docs_consistency.py` now fails if any of them
+## disagree with this constant. Bumping the engine is therefore one edit
+## here plus whatever the drift test reports.
+GODOT_VERSION: str = "4.7.2"
+
 OBSERVATION_FIELD_COUNT: int = sum(field.width for field in OBSERVATION_SPEC)
 OBSERVATION_LOW: float = -1.0
 OBSERVATION_HIGH: float = 1.0
