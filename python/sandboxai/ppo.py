@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -136,144 +137,67 @@ class InferenceDeviceScheduler:
         return _Restore(self)
 
 
-def train_ppo(
+@dataclass
+class _SelectionState:
+    """Checkpoint-selection state shared by the metrics and evaluation callbacks.
+
+    `best_score` is in the units of `config.checkpoint_selection_rule()`,
+    not necessarily mean reward; `stop_training` is the single early-stop
+    flag that both callbacks honour so a stop request takes effect at the
+    next step boundary no matter which callback observed it.
+    """
+
+    best_score: float
+    eval_patience_counter: int = 0
+    stop_training: bool = False
+
+
+# --- callback factories --------------------------------------------------
+#
+# Every callback below used to be a class nested inside train_ppo, closing
+# over a dozen of its locals (and mutating three of them through `nonlocal`).
+# That made train_ppo an 880-line function with a cyclomatic complexity of
+# 103 and meant no callback could be constructed - let alone tested -
+# without starting a training run. The classes still capture their
+# dependencies in a closure, but the closure is now an explicit, named
+# parameter list per factory.
+#
+# The SB3 base classes are passed in rather than imported at module level:
+# stable-baselines3 is an optional extra (`pip install -e ".[training]"`)
+# and importing it here would make the numpy-only install fail.
+
+
+def _make_profiled_ppo(ppo_class: Any, profiler: Any) -> Any:
+    class ProfiledPPO(ppo_class):  # type: ignore[misc,valid-type]
+        """PPO with an exact timer around SB3's optimizer update."""
+
+        def train(self) -> None:
+            started = time.perf_counter()
+            try:
+                super().train()
+            finally:
+                profiler.record("ppo.optimizer_update", time.perf_counter() - started)
+
+    return ProfiledPPO
+
+
+def _make_metrics_callback(
+    BaseCallback: Any,
+    *,
     config: TrainingConfig,
-    resume_checkpoint: str | Path | None = None,
-    run_control: RunControl | None = None,
-) -> dict[str, Any]:
-    config.validate()
-    PPO, BaseCallback, CallbackList, CheckpointCallback = _require_sb3()
-    device = config.resolved_device()
-    env_workers = config.resolved_env_workers()
-    rollout_length = config.resolved_rollout_length()
-    torch_threads = config.resolved_torch_threads()
-    checkpoint_path = Path(resume_checkpoint).expanduser().resolve() if resume_checkpoint else None
-    if checkpoint_path is not None and not checkpoint_path.is_file():
-        raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint_path}")
-    # Never inherit an unbounded host-wide Torch pool for this small MLP.
-    # The resolved value is persisted below, so resource scheduling is as
-    # reproducible as the model/optimizer configuration.
-    import torch  # type: ignore
-
-    torch.set_num_threads(torch_threads)
-    # Resume artifacts stay inside the original run directory. A checkpoint
-    # inside <run>/checkpoints/ maps to <run>; a checkpoint stored directly
-    # in the run root (e.g. final.zip) maps to the run root itself, never to
-    # the run's parent (which would scatter checkpoints/logs elsewhere).
-    if checkpoint_path is not None:
-        if checkpoint_path.parent.name == "checkpoints":
-            run_dir = checkpoint_path.parent.parent
-        else:
-            run_dir = checkpoint_path.parent
-    else:
-        run_dir = config.run_directory()
-    checkpoints = run_dir / "checkpoints"
-    logs = run_dir / "logs"
-    evaluations = run_dir / "evaluations"
-    checkpoints.mkdir(parents=True, exist_ok=True)
-    logs.mkdir(parents=True, exist_ok=True)
-    evaluations.mkdir(parents=True, exist_ok=True)
-    config.save(run_dir / "config.json")
-
-    profiler = TrainingProfiler() if config.profile_training else None
-    algorithm_class = PPO
-    if profiler is not None:
-
-        class ProfiledPPO(PPO):
-            """PPO with an exact timer around SB3's optimizer update."""
-
-            def train(self) -> None:
-                started = time.perf_counter()
-                try:
-                    super().train()
-                finally:
-                    profiler.record("ppo.optimizer_update", time.perf_counter() - started)
-
-        algorithm_class = ProfiledPPO
-        schedule = config.rollout_schedule()
-        profiler.set_metadata(
-            device=device,
-            environment_count=config.environment_count,
-            enemy_count=config.enemy_count,
-            rollout_length=rollout_length,
-            rollout_length_requested=config.rollout_length,
-            rollout_auto_sized=config.rollout_length == 0,
-            rollout_batch_size=rollout_length * config.environment_count,
-            minibatch_size=config.batch_size,
-            ppo_epochs=config.ppo_epochs,
-            requested_timesteps=config.total_training_steps,
-            scheduled_timesteps=schedule["scheduled_timesteps"],
-            expected_updates=schedule["expected_updates"],
-            expected_timestep_overshoot=schedule["overshoot_timesteps"],
-            torch_threads=torch_threads,
-            compact_training_infos=config.compact_training_infos,
-        )
-    env = GodotVecEnv(**_env_kwargs(config, profiler=profiler, worker_count=env_workers))
-    if profiler is not None:
-        profiler.set_metadata(
-            observation_floats=env.client.observation_dim,
-            action_components=len(env.action_space.nvec),
-            env_workers=env_workers,
-        )
-    resource_monitor = ResourceMonitor()
-    telemetry = JsonlTelemetry(logs / "training.jsonl")
-    # Integrated research pipeline (curriculum plans at episode boundaries,
-    # skill metrics, replays, per-condition tracking, checkpoint battery).
-    # "fixed" mode keeps the historical single-level behavior exactly: no
-    # hooks are installed and PPO drives the env as it always has.
-    pipeline = None
-    if config.curriculum_mode == "auto":
-        from .pipeline import TrainingPipeline, write_manifest
-
-        pipeline = TrainingPipeline(config, run_dir, telemetry, device=device)
-        # Attach BEFORE any rollout starts: hook changes mid-training would
-        # be a race (rollout collection runs in this thread, so sequencing
-        # here is strict happens-before every step).
-        pipeline.attach(env)
-        # Resume continues the curriculum exactly where the saved checkpoint
-        # left it: same stage, same staged plans, same per-environment seed
-        # ordinals.
-        if checkpoint_path is not None and pipeline.load_state(
-            checkpoints / "curriculum_state.json"
-        ):
-            pipeline.reattach_after_load()
-            telemetry.write(
-                {
-                    "event": "curriculum_resumed",
-                    "level": pipeline.driver.level,
-                    "episodes_completed": pipeline.driver.episodes_completed,
-                }
-            )
-        write_manifest(run_dir, pipeline.manifest())
-    # Checkpoint selection is an explicit, recorded rule (see
-    # sandboxai/selection.py). The default is identical to the historical
-    # behavior: strictly higher mean shaped episode reward.
-    selection_rule = config.checkpoint_selection_rule()
-    best_score = selection_rule.initial_score()
-    best_path = checkpoints / "best_eval.zip"
-    eval_patience_counter = 0
-    stop_training = False
-
-    best_record_path = evaluations / "best.json"
-    if best_record_path.exists():
-        previous_best = json.loads(best_record_path.read_text(encoding="utf-8"))
-        if selection_rule.matches(previous_best.get("selection_rule")):
-            # "score" is the rule's own quantity; "mean_reward" is the
-            # legacy field, which under the default rule is the same number.
-            inherited = previous_best.get("score", previous_best.get("mean_reward"))
-            if isinstance(inherited, (int, float)) and not isinstance(inherited, bool):
-                best_score = float(inherited)
-        else:
-            # Inheriting a score produced by a different metric or
-            # direction would compare two unrelated quantities, so this
-            # run restarts selection - and says so.
-            telemetry.write(
-                {
-                    "event": "checkpoint_selection_rule_changed",
-                    "previous": previous_best.get("selection_rule"),
-                    "current": selection_rule.as_dict(),
-                }
-            )
+    telemetry: Any,
+    run_control: RunControl | None,
+    pipeline: Any,
+    resource_monitor: Any,
+    profiler: Any,
+    device: str,
+    env_workers: int,
+    torch_threads: int,
+    checkpoints: Path,
+    selection_rule: Any,
+    state: _SelectionState,
+) -> Any:
+    """Per-step telemetry, episode accounting and the run's progress record."""
 
     class MetricsCallback(BaseCallback):
         def __init__(self):
@@ -314,9 +238,8 @@ def train_ppo(
                 run_control.event("system", "PPO optimization started", start_values)
 
         def _on_step(self) -> bool:
-            nonlocal stop_training
             if run_control is not None and not run_control.checkpoint():
-                stop_training = True
+                state.stop_training = True
                 return False
             if pipeline is not None:
                 # One attribute write per vector step: the pipeline stamps
@@ -518,7 +441,7 @@ def train_ppo(
                 self.interval_action_decisions = 0
                 self.interval_shoot_requests = 0
                 self.last_telemetry_step = self.num_timesteps
-            return not stop_training
+            return not state.stop_training
 
         def _on_training_end(self) -> None:
             values = {
@@ -541,6 +464,29 @@ def train_ppo(
                 run_control.update(
                     state="Stopping" if run_control.stop_requested else "Running", **values
                 )
+
+    return MetricsCallback()
+
+
+def _make_evaluation_callback(
+    BaseCallback: Any,
+    *,
+    config: TrainingConfig,
+    env: Any,
+    telemetry: Any,
+    run_control: RunControl | None,
+    pipeline: Any,
+    profiler: Any,
+    device: str,
+    checkpoints: Path,
+    evaluations: Path,
+    best_path: Path,
+    best_record_path: Path,
+    selection_rule: Any,
+    inference_scheduler: InferenceDeviceScheduler | None,
+    state: _SelectionState,
+) -> Any:
+    """Periodic evaluation, the checkpoint battery and best-checkpoint selection."""
 
     class EvaluationCallback(BaseCallback):
         def __init__(self):
@@ -675,8 +621,7 @@ def train_ppo(
                 self.battery_env_kwargs["profiler"] = battery_view
 
         def _on_step(self) -> bool:
-            nonlocal best_score, eval_patience_counter, stop_training
-            if stop_training:
+            if state.stop_training:
                 return False
             if self.num_timesteps < self.next_evaluation:
                 return True
@@ -786,9 +731,9 @@ def train_ppo(
                         "timesteps": self.num_timesteps,
                     }
                 )
-            if score is not None and selection_rule.is_improvement(score, best_score):
-                best_score = score
-                eval_patience_counter = 0
+            if score is not None and selection_rule.is_improvement(score, state.best_score):
+                state.best_score = score
+                state.eval_patience_counter = 0
                 if inference_scheduler is not None:
                     with inference_scheduler.training_device_context():
                         self.model.save(best_path)
@@ -811,14 +756,14 @@ def train_ppo(
                     encoding="utf-8",
                 )
             else:
-                eval_patience_counter += 1
+                state.eval_patience_counter += 1
                 if (
                     config.early_stopping_patience > 0
-                    and eval_patience_counter >= config.early_stopping_patience
+                    and state.eval_patience_counter >= config.early_stopping_patience
                 ):
-                    stop_training = True
+                    state.stop_training = True
             if config.min_eval_reward is not None and reward >= config.min_eval_reward:
-                stop_training = True
+                state.stop_training = True
             if profiler is not None:
                 profiler.record("eval.best_checkpoint_save", time.perf_counter() - best_started)
             # Advance past the current step rather than by a fixed stride:
@@ -830,9 +775,22 @@ def train_ppo(
                 self.next_evaluation += config.evaluation_frequency
             if profiler is not None:
                 profiler.record("callback.evaluation", time.perf_counter() - evaluation_started)
-            return not stop_training
+            return not state.stop_training
 
-    class TimedCheckpointCallback(CheckpointCallback):
+    return EvaluationCallback()
+
+
+def _make_checkpoint_callback(
+    CheckpointCallback: Any,
+    *,
+    save_freq: int,
+    save_path: str,
+    profiler: Any,
+    inference_scheduler: InferenceDeviceScheduler | None,
+) -> Any:
+    """SB3's periodic checkpointer, with save timing and device pinning."""
+
+    class TimedCheckpointCallback(CheckpointCallback):  # type: ignore[misc,valid-type]
         def _on_step(self) -> bool:
             should_save = self.n_calls % self.save_freq == 0
             started = time.perf_counter() if profiler is not None and should_save else 0.0
@@ -847,6 +805,18 @@ def train_ppo(
                 profiler.record("callback.checkpoint_save", time.perf_counter() - started)
             return keep_going
 
+    return TimedCheckpointCallback(
+        save_freq=save_freq,
+        save_path=save_path,
+        name_prefix="ppo",
+        save_replay_buffer=False,
+        save_vecnormalize=False,
+    )
+
+
+def _make_ppo_stats_callback(
+    BaseCallback: Any, *, telemetry: Any, run_control: RunControl | None
+) -> Any:
     class PPOStatsCallback(BaseCallback):
         """Relays SB3's own PPO optimizer diagnostics into real telemetry.
 
@@ -916,6 +886,10 @@ def train_ppo(
         def _on_step(self) -> bool:
             return True
 
+    return PPOStatsCallback()
+
+
+def _make_profiling_callback(BaseCallback: Any, *, profiler: Any) -> Any:
     class ProfilingCallback(BaseCallback):
         def __init__(self) -> None:
             super().__init__()
@@ -952,6 +926,10 @@ def train_ppo(
         def _on_step(self) -> bool:
             return True
 
+    return ProfilingCallback()
+
+
+def _make_inference_device_callback(BaseCallback: Any) -> Any:
     class InferenceDeviceCallback(BaseCallback):
         """Switches policy placement at rollout boundaries.
 
@@ -983,84 +961,349 @@ def train_ppo(
         def _on_step(self) -> bool:
             return True
 
-    checkpoint_callback = TimedCheckpointCallback(
-        save_freq=max(1, config.checkpoint_frequency // config.environment_count),
-        save_path=str(checkpoints),
-        name_prefix="ppo",
-        save_replay_buffer=False,
-        save_vecnormalize=False,
+    return InferenceDeviceCallback
+
+
+def _resolve_run_directory(config: TrainingConfig, checkpoint_path: Path | None) -> Path:
+    """Where this run writes its artifacts.
+
+    Resume artifacts stay inside the original run directory: a checkpoint
+    inside ``<run>/checkpoints/`` maps to ``<run>``; one stored directly in
+    the run root (e.g. ``final.zip``) maps to the run root itself, never to
+    the run's parent, which would scatter checkpoints and logs elsewhere.
+    """
+    if checkpoint_path is None:
+        return config.run_directory()
+    if checkpoint_path.parent.name == "checkpoints":
+        return checkpoint_path.parent.parent
+    return checkpoint_path.parent
+
+
+def _prepare_run_layout(run_dir: Path) -> tuple[Path, Path, Path]:
+    """Creates and returns the (checkpoints, logs, evaluations) directories."""
+    directories = tuple(run_dir / name for name in ("checkpoints", "logs", "evaluations"))
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+    return directories  # type: ignore[return-value]
+
+
+def _record_plan_metadata(
+    profiler: TrainingProfiler,
+    config: TrainingConfig,
+    *,
+    device: str,
+    rollout_length: int,
+    torch_threads: int,
+) -> None:
+    """Profiler metadata known before SB3 exists: the run as it was planned."""
+    schedule = config.rollout_schedule()
+    profiler.set_metadata(
+        device=device,
+        environment_count=config.environment_count,
+        enemy_count=config.enemy_count,
+        rollout_length=rollout_length,
+        rollout_length_requested=config.rollout_length,
+        rollout_auto_sized=config.rollout_length == 0,
+        rollout_batch_size=rollout_length * config.environment_count,
+        minibatch_size=config.batch_size,
+        ppo_epochs=config.ppo_epochs,
+        requested_timesteps=config.total_training_steps,
+        scheduled_timesteps=schedule["scheduled_timesteps"],
+        expected_updates=schedule["expected_updates"],
+        expected_timestep_overshoot=schedule["overshoot_timesteps"],
+        torch_threads=torch_threads,
+        compact_training_infos=config.compact_training_infos,
     )
-    metrics_callback = MetricsCallback()
-    evaluation_callback = EvaluationCallback()
-    callback_items: list[Any] = [
-        checkpoint_callback,
-        metrics_callback,
-        evaluation_callback,
-        PPOStatsCallback(),
-    ]
+
+
+def _record_model_metadata(profiler: TrainingProfiler, config: TrainingConfig, model: Any) -> None:
+    """Profiler metadata read back off the constructed model: the run as it is.
+
+    SB3 may round or override what the config asked for, so these values -
+    not the planned ones - are what the profile report compares against.
+    """
+    rollout_samples = int(model.n_steps) * int(model.n_envs)
+    actual_updates = (config.total_training_steps + rollout_samples - 1) // rollout_samples
+    profiler.set_metadata(
+        ppo_epochs=int(model.n_epochs),
+        rollout_length=int(model.n_steps),
+        rollout_batch_size=rollout_samples,
+        expected_updates=actual_updates,
+        scheduled_timesteps=actual_updates * rollout_samples,
+        expected_timestep_overshoot=(
+            actual_updates * rollout_samples - config.total_training_steps
+        ),
+        minibatch_size=int(model.batch_size),
+        minibatches_per_update=(
+            int(model.n_epochs)
+            * ((rollout_samples + int(model.batch_size) - 1) // int(model.batch_size))
+        ),
+    )
+
+
+def _inherit_best_score(
+    best_record_path: Path, selection_rule: Any, state: _SelectionState, telemetry: Any
+) -> None:
+    """Carries the previous run's best score over, but only if it is comparable.
+
+    A score produced by a different metric or a different direction would
+    compare two unrelated quantities, so a changed rule restarts selection
+    from the rule's initial score - and records that it did.
+    """
+    if not best_record_path.exists():
+        return
+    previous_best = json.loads(best_record_path.read_text(encoding="utf-8"))
+    if not selection_rule.matches(previous_best.get("selection_rule")):
+        telemetry.write(
+            {
+                "event": "checkpoint_selection_rule_changed",
+                "previous": previous_best.get("selection_rule"),
+                "current": selection_rule.as_dict(),
+            }
+        )
+        return
+    # "score" is the rule's own quantity; "mean_reward" is the legacy
+    # field, which under the default rule is the same number.
+    inherited = previous_best.get("score", previous_best.get("mean_reward"))
+    if isinstance(inherited, (int, float)) and not isinstance(inherited, bool):
+        state.best_score = float(inherited)
+
+
+def _build_model(
+    algorithm_class: Any,
+    config: TrainingConfig,
+    *,
+    env: Any,
+    device: str,
+    rollout_length: int,
+    logs: Path,
+    run_dir: Path,
+    checkpoint_path: Path | None,
+) -> tuple[Any, dict[str, Any]]:
+    """Loads or constructs the PPO model. Returns (model, warm-start record).
+
+    Only a fresh model can be warm-started from a behavior-cloning
+    checkpoint; a resumed run already carries those weights and writing a
+    new warm_start.json would overwrite the original run's provenance.
+    """
+    if checkpoint_path:
+        model = algorithm_class.load(str(checkpoint_path), env=env, device=device)
+        model.set_env(env)
+        return model, {"transferred": False, "source": "resume checkpoint"}
+
+    model = algorithm_class(
+        "MlpPolicy",
+        env,
+        learning_rate=config.learning_rate,
+        n_steps=rollout_length,
+        batch_size=config.batch_size,
+        n_epochs=config.ppo_epochs,
+        gamma=config.gamma,
+        gae_lambda=config.gae_lambda,
+        ent_coef=config.entropy_coefficient,
+        clip_range=config.clip_range,
+        seed=config.seed,
+        device=device,
+        policy_kwargs={"net_arch": {"pi": list(config.net_arch), "vf": list(config.net_arch)}},
+        tensorboard_log=str(logs / "tensorboard"),
+        verbose=1,
+    )
+    warm_start: dict[str, Any] = {"transferred": False}
+    if config.bc_checkpoint:
+        from .bc import load_bc_into_sb3_policy
+
+        warm_start = load_bc_into_sb3_policy(model.policy, config.bc_checkpoint, device=device)
+        warm_start["source"] = config.bc_checkpoint
+    (run_dir / "warm_start.json").write_text(
+        json.dumps(warm_start, indent=2) + "\n", encoding="utf-8"
+    )
+    return model, warm_start
+
+
+def _attach_pipeline(
+    config: TrainingConfig,
+    *,
+    run_dir: Path,
+    telemetry: Any,
+    device: str,
+    env: Any,
+    checkpoints: Path,
+    resuming: bool,
+) -> Any:
+    """Installs the research pipeline for `curriculum_mode == "auto"`.
+
+    Returns None in "fixed" mode, which keeps the historical single-level
+    behavior exactly: no hooks are installed and PPO drives the env as it
+    always has.
+    """
+    if config.curriculum_mode != "auto":
+        return None
+    from .pipeline import TrainingPipeline, write_manifest
+
+    pipeline = TrainingPipeline(config, run_dir, telemetry, device=device)
+    # Attach BEFORE any rollout starts: hook changes mid-training would be
+    # a race (rollout collection runs in this thread, so sequencing here is
+    # strictly happens-before every step).
+    pipeline.attach(env)
+    # Resume continues the curriculum exactly where the saved checkpoint
+    # left it: same stage, same staged plans, same per-environment seed
+    # ordinals.
+    if resuming and pipeline.load_state(checkpoints / "curriculum_state.json"):
+        pipeline.reattach_after_load()
+        telemetry.write(
+            {
+                "event": "curriculum_resumed",
+                "level": pipeline.driver.level,
+                "episodes_completed": pipeline.driver.episodes_completed,
+            }
+        )
+    write_manifest(run_dir, pipeline.manifest())
+    return pipeline
+
+
+def train_ppo(
+    config: TrainingConfig,
+    resume_checkpoint: str | Path | None = None,
+    run_control: RunControl | None = None,
+) -> dict[str, Any]:
+    config.validate()
+    PPO, BaseCallback, CallbackList, CheckpointCallback = _require_sb3()
+    device = config.resolved_device()
+    env_workers = config.resolved_env_workers()
+    rollout_length = config.resolved_rollout_length()
+    torch_threads = config.resolved_torch_threads()
+    checkpoint_path = Path(resume_checkpoint).expanduser().resolve() if resume_checkpoint else None
+    if checkpoint_path is not None and not checkpoint_path.is_file():
+        raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint_path}")
+    # Never inherit an unbounded host-wide Torch pool for this small MLP.
+    # The resolved value is persisted below, so resource scheduling is as
+    # reproducible as the model/optimizer configuration.
+    import torch  # type: ignore
+
+    torch.set_num_threads(torch_threads)
+    run_dir = _resolve_run_directory(config, checkpoint_path)
+    checkpoints, logs, evaluations = _prepare_run_layout(run_dir)
+    config.save(run_dir / "config.json")
+
+    profiler = TrainingProfiler() if config.profile_training else None
+    algorithm_class = PPO
     if profiler is not None:
-        callback_items.insert(0, ProfilingCallback())
+        algorithm_class = _make_profiled_ppo(PPO, profiler)
+        _record_plan_metadata(
+            profiler,
+            config,
+            device=device,
+            rollout_length=rollout_length,
+            torch_threads=torch_threads,
+        )
+    env = GodotVecEnv(**_env_kwargs(config, profiler=profiler, worker_count=env_workers))
+    if profiler is not None:
+        profiler.set_metadata(
+            observation_floats=env.client.observation_dim,
+            action_components=len(env.action_space.nvec),
+            env_workers=env_workers,
+        )
+    resource_monitor = ResourceMonitor()
+    telemetry = JsonlTelemetry(logs / "training.jsonl")
+    # Integrated research pipeline (curriculum plans at episode boundaries,
+    # skill metrics, replays, per-condition tracking, checkpoint battery).
+    # "fixed" mode keeps the historical single-level behavior exactly: no
+    # hooks are installed and PPO drives the env as it always has.
+    pipeline = _attach_pipeline(
+        config,
+        run_dir=run_dir,
+        telemetry=telemetry,
+        device=device,
+        env=env,
+        checkpoints=checkpoints,
+        resuming=checkpoint_path is not None,
+    )
+    # Checkpoint selection is an explicit, recorded rule (see
+    # sandboxai/selection.py). The default is identical to the historical
+    # behavior: strictly higher mean shaped episode reward.
+    selection_rule = config.checkpoint_selection_rule()
+    best_path = checkpoints / "best_eval.zip"
+    # Mutable state shared between the metrics and evaluation callbacks.
+    # It used to be three `nonlocal` bindings into train_ppo, which is what
+    # forced the callbacks to be defined inside it; an explicit object lets
+    # them live at module scope and be constructed by the factories below.
+    state = _SelectionState(best_score=selection_rule.initial_score())
+
+    best_record_path = evaluations / "best.json"
+    _inherit_best_score(best_record_path, selection_rule, state, telemetry)
+
+    # Built before the callbacks because two of them hold on to it. The
+    # scheduler is inert until a model is attached (`model=None` here), so
+    # constructing it early has no effect on a single-device run.
     inference_scheduler: InferenceDeviceScheduler | None = None
     if config.inference_device != "auto":
         inference_scheduler = InferenceDeviceScheduler(
             model=None, training_device=device, inference_device=config.resolved_inference_device()
         )
-        callback_items.insert(0, InferenceDeviceCallback(inference_scheduler))
+
+    checkpoint_callback = _make_checkpoint_callback(
+        CheckpointCallback,
+        save_freq=max(1, config.checkpoint_frequency // config.environment_count),
+        save_path=str(checkpoints),
+        profiler=profiler,
+        inference_scheduler=inference_scheduler,
+    )
+    metrics_callback = _make_metrics_callback(
+        BaseCallback,
+        config=config,
+        telemetry=telemetry,
+        run_control=run_control,
+        pipeline=pipeline,
+        resource_monitor=resource_monitor,
+        profiler=profiler,
+        device=device,
+        env_workers=env_workers,
+        torch_threads=torch_threads,
+        checkpoints=checkpoints,
+        selection_rule=selection_rule,
+        state=state,
+    )
+    evaluation_callback = _make_evaluation_callback(
+        BaseCallback,
+        config=config,
+        env=env,
+        telemetry=telemetry,
+        run_control=run_control,
+        pipeline=pipeline,
+        profiler=profiler,
+        device=device,
+        checkpoints=checkpoints,
+        evaluations=evaluations,
+        best_path=best_path,
+        best_record_path=best_record_path,
+        selection_rule=selection_rule,
+        inference_scheduler=inference_scheduler,
+        state=state,
+    )
+    callback_items: list[Any] = [
+        checkpoint_callback,
+        metrics_callback,
+        evaluation_callback,
+        _make_ppo_stats_callback(BaseCallback, telemetry=telemetry, run_control=run_control),
+    ]
+    if profiler is not None:
+        callback_items.insert(0, _make_profiling_callback(BaseCallback, profiler=profiler))
+    if inference_scheduler is not None:
+        callback_items.insert(0, _make_inference_device_callback(BaseCallback)(inference_scheduler))
     callbacks = CallbackList(callback_items)
     try:
-        if checkpoint_path:
-            model = algorithm_class.load(str(checkpoint_path), env=env, device=device)
-            model.set_env(env)
-            warm_start = {"transferred": False, "source": "resume checkpoint"}
-        else:
-            model = algorithm_class(
-                "MlpPolicy",
-                env,
-                learning_rate=config.learning_rate,
-                n_steps=rollout_length,
-                batch_size=config.batch_size,
-                n_epochs=config.ppo_epochs,
-                gamma=config.gamma,
-                gae_lambda=config.gae_lambda,
-                ent_coef=config.entropy_coefficient,
-                clip_range=config.clip_range,
-                seed=config.seed,
-                device=device,
-                policy_kwargs={
-                    "net_arch": {"pi": list(config.net_arch), "vf": list(config.net_arch)}
-                },
-                tensorboard_log=str(logs / "tensorboard"),
-                verbose=1,
-            )
-            warm_start = {"transferred": False}
-            if config.bc_checkpoint:
-                from .bc import load_bc_into_sb3_policy
-
-                warm_start = load_bc_into_sb3_policy(
-                    model.policy, config.bc_checkpoint, device=device
-                )
-                warm_start["source"] = config.bc_checkpoint
-            (run_dir / "warm_start.json").write_text(
-                json.dumps(warm_start, indent=2) + "\n", encoding="utf-8"
-            )
+        model, warm_start = _build_model(
+            algorithm_class,
+            config,
+            env=env,
+            device=device,
+            rollout_length=rollout_length,
+            logs=logs,
+            run_dir=run_dir,
+            checkpoint_path=checkpoint_path,
+        )
         if profiler is not None:
-            rollout_samples = int(model.n_steps) * int(model.n_envs)
-            actual_updates = (config.total_training_steps + rollout_samples - 1) // rollout_samples
-            profiler.set_metadata(
-                ppo_epochs=int(model.n_epochs),
-                rollout_length=int(model.n_steps),
-                rollout_batch_size=rollout_samples,
-                expected_updates=actual_updates,
-                scheduled_timesteps=actual_updates * rollout_samples,
-                expected_timestep_overshoot=(
-                    actual_updates * rollout_samples - config.total_training_steps
-                ),
-                minibatch_size=int(model.batch_size),
-                minibatches_per_update=(
-                    int(model.n_epochs)
-                    * ((rollout_samples + int(model.batch_size) - 1) // int(model.batch_size))
-                ),
-            )
+            _record_model_metadata(profiler, config, model)
         if inference_scheduler is not None:
             inference_scheduler.model = model
             if profiler is not None:
