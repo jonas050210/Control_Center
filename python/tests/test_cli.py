@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import json
 import os
@@ -10,6 +11,7 @@ from unittest import mock
 
 from optional_deps import HAS_TKINTER, HAS_TORCH, TKINTER_REASON, TORCH_REASON
 
+from sandboxai import cli
 from sandboxai.cli import build_control_center_command, build_record_command, main
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -383,6 +385,36 @@ class RememberedGodotExecutableTests(_FakeCheckoutTestCase):
         )
         self._run_validate_runtime("godot")
         self.assertEqual(self.read_remembered_executable(), str(self.executable))
+
+
+class DispatchTableTests(unittest.TestCase):
+    """The parser and the dispatch table must describe the same CLI.
+
+    ``main`` looks the parsed ``args.command`` up in ``_COMMANDS``; a
+    subcommand that exists in only one of the two is either a hard
+    RuntimeError at runtime or dead code nobody can reach.
+    """
+
+    def _subparser_names(self) -> set:
+        parser = cli.build_parser()
+        names: set = set()
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                names.update(action.choices)
+        return names
+
+    def test_every_subcommand_has_a_handler(self) -> None:
+        missing = self._subparser_names() - set(cli._COMMANDS)
+        self.assertEqual(missing, set(), f"subcommands without a handler: {sorted(missing)}")
+
+    def test_every_handler_has_a_subcommand(self) -> None:
+        orphaned = set(cli._COMMANDS) - self._subparser_names()
+        self.assertEqual(orphaned, set(), f"handlers no subcommand reaches: {sorted(orphaned)}")
+
+    def test_the_parser_defines_at_least_the_documented_core_commands(self) -> None:
+        # Cheap tripwire against a parser that silently loses a command.
+        expected = {"train", "resume", "evaluate", "bc-train", "record", "validate-runtime"}
+        self.assertLessEqual(expected, self._subparser_names())
 
 
 if __name__ == "__main__":

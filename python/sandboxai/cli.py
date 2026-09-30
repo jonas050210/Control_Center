@@ -12,6 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config import (
     BCConfig,
     TrainingConfig,
@@ -340,6 +341,13 @@ def _remember_godot_executable(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="sandboxai", description="SandboxAI local Godot + PyTorch research workflow"
+    )
+    # Both numbers appear in every bug report worth acting on: the package
+    # version and the engine the observation/action contract is pinned to.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"sandboxai {__version__} (Godot {GODOT_VERSION})",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

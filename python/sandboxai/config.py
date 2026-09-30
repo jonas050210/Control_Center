@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .contract import GODOT_VERSION
 from .schedule import full_rollout_schedule
 from .wsl import is_wsl, looks_like_windows_path, windows_to_wsl_path
 
@@ -43,13 +44,23 @@ _SETTINGS_FILE_NAME: str = "settings.json"
 # Well-known executable names/locations probed when neither an explicit
 # executable, GODOT_PATH/GODOT_EXECUTABLE, nor a remembered setting resolves.
 # A module-level constant so tests can neutralise it for hermetic assertions.
+# The exact-version names are derived from contract.GODOT_VERSION rather
+# than spelled out, so bumping the engine cannot leave a stale filename
+# here that resolves to the wrong build.
+_EXACT_VERSION_CANDIDATES: tuple[str, ...] = (
+    f"Godot_v{GODOT_VERSION}-stable_linux.x86_64",
+    f"Godot_v{GODOT_VERSION}-stable_win64.exe",
+    f"Godot_v{GODOT_VERSION}-stable_win64_console.exe",
+)
+
 _GODOT_CANDIDATES: tuple[str, ...] = (
     "godot4",
     "godot",
     "godot.exe",
-    "Godot_v4.7.2-stable_linux.x86_64",
-    "Godot_v4.7.2-stable_win64.exe",
-    "Godot_v4.7.2-stable_win64_console.exe",
+    *_EXACT_VERSION_CANDIDATES,
+    # Older builds are probed last, purely so a machine that still has one
+    # produces a clear version mismatch from validate-runtime instead of a
+    # bare "Godot not found".
     "Godot_v4.3-stable_linux.x86_64",
     "Godot_v4.2-stable_linux.x86_64",
     "/usr/local/bin/godot",
