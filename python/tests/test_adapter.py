@@ -8,7 +8,8 @@ from sandboxai.telemetry import JsonlTelemetry
 
 
 def test_adapter_discovers_real_run_and_missing_artifacts(tmp_path):
-    run = tmp_path / "training" / "runs" / "r1"; run.mkdir(parents=True)
+    run = tmp_path / "training" / "runs" / "r1"
+    run.mkdir(parents=True)
     (run / "config.json").write_text(json.dumps({"total_training_steps": 10}))
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
     report = adapter.list_runs()
@@ -18,16 +19,19 @@ def test_adapter_discovers_real_run_and_missing_artifacts(tmp_path):
 
 def test_config_translation_is_domain_config(tmp_path):
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
-    cfg = TrainingConfig(total_training_steps=12, output_root=str(tmp_path / "training"), run_id="unit")
+    cfg = TrainingConfig(
+        total_training_steps=12, output_root=str(tmp_path / "training"), run_id="unit"
+    )
     run, command = adapter._managed_training(cfg)
     assert json.loads((run / "config.json").read_text())["total_training_steps"] == 12
     assert "--control-file" in command
 
 
 def test_process_manager_captures(tmp_path):
-    manager = ProcessManager(); record = manager.start("test", [sys.executable, "-c", "print('hello')"], tmp_path, tmp_path)
+    manager = ProcessManager()
+    record = manager.start("test", [sys.executable, "-c", "print('hello')"], tmp_path, tmp_path)
     record.process.wait(timeout=3)
-    time.sleep(.05)
+    time.sleep(0.05)
     assert manager.snapshot(record.id)["state"] == "finished"
     assert "hello" in manager.snapshot(record.id)["stdout"]
     assert isinstance(manager.snapshot(record.id)["pid"], int)
@@ -36,10 +40,13 @@ def test_process_manager_captures(tmp_path):
 def test_process_manager_log_since_is_incremental(tmp_path):
     manager = ProcessManager()
     record = manager.start(
-        "test", [sys.executable, "-c", "print('one'); print('two'); print('three')"], tmp_path, tmp_path
+        "test",
+        [sys.executable, "-c", "print('one'); print('two'); print('three')"],
+        tmp_path,
+        tmp_path,
     )
     record.process.wait(timeout=3)
-    time.sleep(.1)
+    time.sleep(0.1)
     first = manager.log_since(record.id)
     assert first["stdout"] == ["one", "two", "three"]
     assert not first["stdout_truncated"]
@@ -49,12 +56,15 @@ def test_process_manager_log_since_is_incremental(tmp_path):
 
 
 def test_process_manager_cancel_is_non_blocking_for_training(tmp_path):
-    run_dir = tmp_path / "run"; run_dir.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
     manager = ProcessManager()
     # A long-lived placeholder process; cancel() for kind="training" must
     # only write command.json and return immediately, never touch the OS
     # process directly (that is the trainer's own cooperative shutdown).
-    record = manager.start("training", [sys.executable, "-c", "import time; time.sleep(5)"], run_dir, tmp_path)
+    record = manager.start(
+        "training", [sys.executable, "-c", "import time; time.sleep(5)"], run_dir, tmp_path
+    )
     started = time.monotonic()
     result = manager.cancel(record.id)
     elapsed = time.monotonic() - started
@@ -67,7 +77,9 @@ def test_process_manager_cancel_is_non_blocking_for_training(tmp_path):
 
 def test_process_manager_force_stop_kills_non_training_process(tmp_path):
     manager = ProcessManager()
-    record = manager.start("benchmark", [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, tmp_path)
+    record = manager.start(
+        "benchmark", [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, tmp_path
+    )
     manager.force_stop(record.id)
     record.process.wait(timeout=3)
     # `record.process.wait()` above only confirms the OS process exited; the
@@ -91,35 +103,60 @@ def test_finished_process_retention_is_bounded(tmp_path):
     for _ in range(5):
         record = manager.start("test", [sys.executable, "-c", "pass"], tmp_path, tmp_path)
         record.process.wait(timeout=3)
-    time.sleep(.1)
+    time.sleep(0.1)
     with manager._lock:
         manager._prune_finished_locked()
         assert len(manager._records) <= 2
 
 
-def _write_run(base, run_id, *, state="Running", timesteps=1000, target=10000, extra_status=None,
-                extra_config=None, checkpoints=(), best_eval=None):
+def _write_run(
+    base,
+    run_id,
+    *,
+    state="Running",
+    timesteps=1000,
+    target=10000,
+    extra_status=None,
+    extra_config=None,
+    checkpoints=(),
+    best_eval=None,
+):
     run_dir = base / "runs" / run_id
     run_dir.mkdir(parents=True)
     config = TrainingConfig(
-        total_training_steps=target, environment_count=4, env_workers=2,
-        output_root=str(base), run_id=run_id,
+        total_training_steps=target,
+        environment_count=4,
+        env_workers=2,
+        output_root=str(base),
+        run_id=run_id,
     )
     config.save(run_dir / "config.json")
     status = {
-        "state": state, "pid": 4242, "updated_at": time.time(), "timesteps": timesteps,
-        "total_training_steps": target, "steps_per_second": 512.0, "eta_seconds": 30.0,
-        "episodes": 12, "mean_episode_reward": 1.5, "win_rate": 0.6, "loss_rate": 0.3,
-        "ppo_n_updates": 3, "ppo_approx_kl": 0.01, "device": "cpu",
+        "state": state,
+        "pid": 4242,
+        "updated_at": time.time(),
+        "timesteps": timesteps,
+        "total_training_steps": target,
+        "steps_per_second": 512.0,
+        "eta_seconds": 30.0,
+        "episodes": 12,
+        "mean_episode_reward": 1.5,
+        "win_rate": 0.6,
+        "loss_rate": 0.3,
+        "ppo_n_updates": 3,
+        "ppo_approx_kl": 0.01,
+        "device": "cpu",
     }
     if extra_status:
         status.update(extra_status)
     (run_dir / "status.json").write_text(json.dumps(status))
-    checkpoints_dir = run_dir / "checkpoints"; checkpoints_dir.mkdir(exist_ok=True)
+    checkpoints_dir = run_dir / "checkpoints"
+    checkpoints_dir.mkdir(exist_ok=True)
     for name in checkpoints:
         (checkpoints_dir / name).write_bytes(b"0")
     if best_eval is not None:
-        evaluations_dir = run_dir / "evaluations"; evaluations_dir.mkdir(exist_ok=True)
+        evaluations_dir = run_dir / "evaluations"
+        evaluations_dir.mkdir(exist_ok=True)
         (evaluations_dir / "latest.json").write_text(json.dumps(best_eval))
     return run_dir
 
@@ -136,6 +173,7 @@ def test_dashboard_snapshot_reports_latest_run_and_active_process(tmp_path):
     assert snapshot["active_processes"] == []
 
     from sandboxai.control_center_viewmodel import dashboard_view
+
     view = dashboard_view(snapshot)
     assert view["run_id"] == "run-b"
     assert view["timesteps"] == 500
@@ -153,6 +191,7 @@ def test_dashboard_view_flags_stale_status(tmp_path):
     snapshot = adapter.dashboard_snapshot()
 
     from sandboxai.control_center_viewmodel import dashboard_view
+
     view = dashboard_view(snapshot)
     assert view["stale"] is True
     assert any("crashed" in warning or "outside" in warning for warning in view["warnings"])
@@ -172,11 +211,20 @@ def test_discover_checkpoints_across_runs(tmp_path):
 
 def test_discover_and_detail_evaluations(tmp_path):
     output_root = tmp_path / "training"
-    _write_run(output_root, "run-a", best_eval={
-        "timesteps": 1000, "episodes": 20, "mean_episode_reward": 3.2, "win_rate": 0.7,
-        "loss_rate": 0.2, "mean_kills": 1.1, "policy_shoot_request_rate": 0.4,
-        "action_pipeline": {"fire_conversion_rate": 0.8, "localization": "ok"},
-    })
+    _write_run(
+        output_root,
+        "run-a",
+        best_eval={
+            "timesteps": 1000,
+            "episodes": 20,
+            "mean_episode_reward": 3.2,
+            "win_rate": 0.7,
+            "loss_rate": 0.2,
+            "mean_kills": 1.1,
+            "policy_shoot_request_rate": 0.4,
+            "action_pipeline": {"fire_conversion_rate": 0.8, "localization": "ok"},
+        },
+    )
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=output_root)
     entries = adapter.discover_evaluations()
     assert len(entries) == 1
@@ -186,6 +234,7 @@ def test_discover_and_detail_evaluations(tmp_path):
     assert detail["mean_episode_reward"] == 3.2
 
     from sandboxai.control_center_viewmodel import evaluation_view
+
     view = evaluation_view(detail)
     assert view["outcomes"]["win_rate"] == 0.7
     assert view["action_head_diagnostics"]["discharge_rate"] == 0.8
@@ -199,7 +248,8 @@ def test_evaluation_detail_reports_missing_file_without_raising(tmp_path):
 
 
 def test_evaluation_detail_reports_corrupt_json(tmp_path):
-    bad = tmp_path / "bad.json"; bad.write_text("{not json")
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
     detail = adapter.evaluation_detail(bad)
     assert detail["available"] is False
@@ -209,12 +259,26 @@ def test_benchmark_history_and_results(tmp_path):
     directory = tmp_path / "training" / "benchmarks" / "sweep-1"
     directory.mkdir(parents=True)
     rows = [
-        {"environments": 4, "workers": 1, "steps_per_second": 100.0, "total_steps": 2000,
-         "episodes_per_second": 1.0, "vector_step_latency_p50_ms": 2.0, "vector_step_latency_p95_ms": 4.0,
-         "elapsed_seconds": 20.0},
-        {"environments": 8, "workers": 1, "steps_per_second": 180.0, "total_steps": 2000,
-         "episodes_per_second": 1.8, "vector_step_latency_p50_ms": 1.5, "vector_step_latency_p95_ms": 3.0,
-         "elapsed_seconds": 11.0},
+        {
+            "environments": 4,
+            "workers": 1,
+            "steps_per_second": 100.0,
+            "total_steps": 2000,
+            "episodes_per_second": 1.0,
+            "vector_step_latency_p50_ms": 2.0,
+            "vector_step_latency_p95_ms": 4.0,
+            "elapsed_seconds": 20.0,
+        },
+        {
+            "environments": 8,
+            "workers": 1,
+            "steps_per_second": 180.0,
+            "total_steps": 2000,
+            "episodes_per_second": 1.8,
+            "vector_step_latency_p50_ms": 1.5,
+            "vector_step_latency_p95_ms": 3.0,
+            "elapsed_seconds": 11.0,
+        },
     ]
     (directory / "benchmark.json").write_text(json.dumps(rows))
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
@@ -225,6 +289,7 @@ def test_benchmark_history_and_results(tmp_path):
     assert history[0]["directory"] == str(directory)
 
     from sandboxai.control_center_viewmodel import benchmark_history_rows
+
     rows_view = benchmark_history_rows(history)
     assert len(rows_view) == 2
     assert {row["environments"] for row in rows_view} == {4, 8}
@@ -312,12 +377,13 @@ def test_list_processes_and_process_log_round_trip(tmp_path):
         "test", [sys.executable, "-c", "print('a-line')"], tmp_path, tmp_path
     )
     record.process.wait(timeout=3)
-    time.sleep(.1)
+    time.sleep(0.1)
     processes = adapter.list_processes()
     assert any(item["id"] == record.id for item in processes)
     log = adapter.process_log(record.id)
     assert "a-line" in log["stdout"]
 
     from sandboxai.control_center_viewmodel import process_table_rows
+
     rows = process_table_rows(processes)
     assert any(row["id"] == record.id and isinstance(row["pid"], int) for row in rows)

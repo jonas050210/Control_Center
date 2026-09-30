@@ -1,4 +1,5 @@
 """Regression tests for aggregate training-profile accounting."""
+
 from sandboxai.training_profile import TrainingProfiler
 
 

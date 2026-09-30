@@ -27,12 +27,14 @@ through ``EnvironmentCore.set_map`` / ``set_lighting_mode`` /
 ``set_scenario`` / ``set_curriculum_level``; the condition itself is never
 part of an observation.
 """
+
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass, field, asdict
 import random
-from typing import Any, Iterable, Iterator, Sequence
+from collections import deque
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 # Mirrors MapLibrary.MAPS ids in scripts/world/map_library.gd. Kept as a
 # plain list rather than imported, because the Python side must be usable

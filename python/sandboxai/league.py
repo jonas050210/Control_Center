@@ -20,13 +20,15 @@ K-factor, and it is meaningless outside the run that produced it.
 Everything is seeded. Two runs with the same seed sample the same
 opponents and play the same tournament pairings.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import json
-from pathlib import Path
 import random
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 ## Starting rating for a freshly registered policy.
 DEFAULT_ELO: float = 1200.0
@@ -62,7 +64,7 @@ class PolicyRecord:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "PolicyRecord":
+    def from_dict(cls, payload: dict[str, Any]) -> PolicyRecord:
         known = {key: payload[key] for key in payload if key in cls.__annotations__}
         return cls(**known)
 
@@ -151,13 +153,13 @@ class CheckpointRegistry:
 
     def latest(self, parent_id: str = "") -> PolicyRecord | None:
         candidates = [
-            record
-            for record in self.records()
-            if not parent_id or record.parent_id == parent_id
+            record for record in self.records() if not parent_id or record.parent_id == parent_id
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda record: (record.step, self._order.index(record.policy_id)))
+        return max(
+            candidates, key=lambda record: (record.step, self._order.index(record.policy_id))
+        )
 
     def save(self, path: str | Path | None = None) -> Path:
         target = Path(path) if path else self.path
@@ -173,7 +175,7 @@ class CheckpointRegistry:
         source = Path(path) if path else self.path
         if source is None or not source.exists():
             raise FileNotFoundError(f"registry not found: {source}")
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
         self._records = {}
         self._order = []
         for entry in payload.get("policies", []):
@@ -245,9 +247,7 @@ class League:
             return self._rng.choice(pool)
         # prioritized: weight by rating proximity to the learner.
         learner_elo = (
-            self.registry.get(learner_id).elo
-            if learner_id in self.registry
-            else DEFAULT_ELO
+            self.registry.get(learner_id).elo if learner_id in self.registry else DEFAULT_ELO
         )
         weights = [
             1.0 / (1.0 + abs(self.registry.get(policy_id).elo - learner_elo) / 100.0)
@@ -435,7 +435,7 @@ class MatchResult:
         return payload
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "MatchResult":
+    def from_dict(cls, payload: dict[str, Any]) -> MatchResult:
         known = {key: payload[key] for key in payload if key in cls.__annotations__}
         return cls(**known)
 
@@ -579,7 +579,9 @@ class EvaluationLeague(League):
     def policy_summary(self, policy_id: str) -> dict[str, Any]:
         summary = self._tally(self._rows_for(policy_id))
         summary["policy_id"] = policy_id
-        summary["elo"] = self.registry.get(policy_id).elo if policy_id in self.registry else DEFAULT_ELO
+        summary["elo"] = (
+            self.registry.get(policy_id).elo if policy_id in self.registry else DEFAULT_ELO
+        )
         return summary
 
     def by_map(self, policy_id: str) -> dict[str, dict[str, Any]]:
@@ -648,7 +650,7 @@ class EvaluationLeague(League):
         loading a history *alongside* a registry that already contains
         those totals, and applying them twice would double-count.
         """
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         self.results = [MatchResult.from_dict(entry) for entry in payload.get("results", [])]
         if replay_into_registry:
             for result in self.results:
@@ -681,9 +683,7 @@ class EvaluationLeague(League):
         for index, (policy_a, policy_b) in enumerate(plan):
             for condition_index, condition in enumerate(condition_list):
                 setup = dict(condition)
-                setup.setdefault(
-                    "seed", self.seed + index * 7919 + condition_index * 104729
-                )
+                setup.setdefault("seed", self.seed + index * 7919 + condition_index * 104729)
                 result = play_match(policy_a, policy_b, setup)
                 if not isinstance(result, MatchResult):
                     raise TypeError("play_match must return a MatchResult")

@@ -122,14 +122,17 @@ func log_event(
 			return false
 		_last_key_time[throttle_key] = now
 
-	_entries.append(
-		{
-			"time": now,
-			"category": category,
-			"category_name": category_name(category),
-			"message": message,
-			"data": data,
-		}
+	(
+		_entries
+		. append(
+			{
+				"time": now,
+				"category": category,
+				"category_name": category_name(category),
+				"message": message,
+				"data": data,
+			}
+		)
 	)
 	_window_count += 1
 	total_accepted += 1

@@ -5,7 +5,6 @@ extends RefCounted
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -97,8 +96,7 @@ func test_profile_damage_falloff_and_ttk_are_monotonic() -> SandboxTest:
 		t.assert_true(far_damage <= near_damage, "falloff cannot increase damage")
 		t.assert_true(far_damage >= 0.0, "damage cannot become negative")
 		t.assert_true(
-			weapon.ideal_ttk_seconds(100.0, weapon.range_m)
-			>= weapon.ideal_ttk_seconds(100.0, 0.0),
+			weapon.ideal_ttk_seconds(100.0, weapon.range_m) >= weapon.ideal_ttk_seconds(100.0, 0.0),
 			"ideal TTK cannot improve with distance"
 		)
 	return t

@@ -128,35 +128,27 @@ func _draw_perception_state(state: Dictionary, agent_position: Vector3, eye: Vec
 			float(fov.get("range", 20.0))
 		)
 
-	for obstacle_value in (state.get("obstacles", []) as Array):
+	for obstacle_value in state.get("obstacles", []) as Array:
 		_obstacle_footprint(obstacle_value)
 
-	for track_value in (state.get("memory", []) as Array):
+	for track_value in state.get("memory", []) as Array:
 		var track: Dictionary = track_value
 		var remembered: Vector3 = track["position"]
 		var confidence: float = clampf(float(track["confidence"]), 0.0, 1.0)
-		_circle(
-			remembered + Vector3(0.0, 0.05, 0.0),
-			0.35 + confidence * 0.9,
-			COLOR_MEMORY,
-			16
-		)
+		_circle(remembered + Vector3(0.0, 0.05, 0.0), 0.35 + confidence * 0.9, COLOR_MEMORY, 16)
 		_dashed_line(eye, remembered + Vector3(0.0, 1.0, 0.0), COLOR_MEMORY)
 
-	for sound_value in (state.get("sounds", []) as Array):
+	for sound_value in state.get("sounds", []) as Array:
 		var sound: Dictionary = sound_value
 		var origin: Vector3 = (
 			agent_position + (sound["direction"] as Vector3) * float(sound["distance"])
 		)
 		origin.y = agent_position.y
 		_circle(
-			origin + Vector3(0.0, 0.05, 0.0),
-			0.4 + float(sound["loudness"]) * 1.4,
-			COLOR_SOUND,
-			14
+			origin + Vector3(0.0, 0.05, 0.0), 0.4 + float(sound["loudness"]) * 1.4, COLOR_SOUND, 14
 		)
 
-	for corpse_value in (state.get("corpses", []) as Array):
+	for corpse_value in state.get("corpses", []) as Array:
 		var corpse_position: Vector3 = (corpse_value as Dictionary)["position"]
 		var centre: Vector3 = corpse_position + Vector3(0.0, 0.05, 0.0)
 		_line(centre + Vector3(-0.5, 0.0, -0.5), centre + Vector3(0.5, 0.0, 0.5), COLOR_CORPSE)

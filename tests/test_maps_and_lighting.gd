@@ -198,7 +198,9 @@ func test_lighting_mode_ids_round_trip() -> SandboxTest:
 
 func test_new_layouts_are_generated_and_deterministic() -> SandboxTest:
 	var t := SandboxTest.new("new_layouts_are_generated_and_deterministic")
-	for layout_value in ["multi_room", "ambush", "sound_maze", "combat_complex", "crossfire_complex"]:
+	for layout_value in [
+		"multi_room", "ambush", "sound_maze", "combat_complex", "crossfire_complex"
+	]:
 		var layout_id: String = str(layout_value)
 		t.assert_true(WorldGenerator.LAYOUT_IDS.has(layout_id))
 		var a: ArenaWorld = WorldGenerator.build(layout_id, 808)

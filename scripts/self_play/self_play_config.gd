@@ -8,7 +8,6 @@ extends RefCounted
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 var slot_a_checkpoint: String = ""
 var slot_b_checkpoint: String = ""
 var slot_a_seed: int = SandboxConfig.DEFAULT_RANDOM_SEED

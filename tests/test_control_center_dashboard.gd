@@ -100,19 +100,22 @@ func test_agent_cards_split_between_active_and_recent() -> SandboxTest:
 	manager.adopt_agent(running)
 	manager.adopt_agent(finished)
 	manager.adopt_agent(failed)
-	running.apply_status(
-		{
-			"state": "Running",
-			"training_type": "PPO",
-			"timesteps": 1200,
-			"total_training_steps": 10000,
-			"episodes": 12,
-			"mean_episode_reward": 0.5,
-			"mean_kills": 1.0,
-			"mean_deaths": 0.5,
-			"mean_accuracy": 0.25,
-			"steps_per_second": 300.0,
-		}
+	(
+		running
+		. apply_status(
+			{
+				"state": "Running",
+				"training_type": "PPO",
+				"timesteps": 1200,
+				"total_training_steps": 10000,
+				"episodes": 12,
+				"mean_episode_reward": 0.5,
+				"mean_kills": 1.0,
+				"mean_deaths": 0.5,
+				"mean_accuracy": 0.25,
+				"steps_per_second": 300.0,
+			}
+		)
 	)
 	finished.apply_status({"state": "Finished", "timesteps": 10000})
 	failed.apply_status({"state": "Error", "error": "no dataset"})
@@ -159,19 +162,27 @@ func test_headless_monitor_ingests_real_events_with_bounded_log() -> SandboxTest
 	var file := FileAccess.open(event_path, FileAccess.WRITE)
 	var total: int = monitor.MAX_LOG_LINES + 25
 	for index in range(total):
-		file.store_line(JSON.stringify({
-			"wall_time": 1700000000.0 + index,
-			"category": "error" if index == total - 1 else "system",
-			"message": "line %d" % index,
-		}))
+		(
+			file
+			. store_line(
+				(
+					JSON
+					. stringify(
+						{
+							"wall_time": 1700000000.0 + index,
+							"category": "error" if index == total - 1 else "system",
+							"message": "line %d" % index,
+						}
+					)
+				)
+			)
+		)
 	file.close()
 	controller.event_file = event_path
 	controller._poll_events()
 	monitor.refresh()
 	t.assert_eq(
-		monitor.rendered_line_count(),
-		monitor.MAX_LOG_LINES,
-		"the UI log is trimmed to its bound"
+		monitor.rendered_line_count(), monitor.MAX_LOG_LINES, "the UI log is trimmed to its bound"
 	)
 	# A second refresh with no new events must not duplicate lines.
 	monitor.refresh()
@@ -210,8 +221,7 @@ func test_system_status_panel_renders_na_for_unavailable_metrics() -> SandboxTes
 	t.assert_true(str(texts["gpu"]).contains("34%"))
 	t.assert_true(str(texts["gpu"]).contains("2048 MB / 8188 MB"))
 	t.assert_true(
-		str(texts["cpu"]).contains("N/A"),
-		"CPU stays N/A when no CPU sample was measured"
+		str(texts["cpu"]).contains("N/A"), "CPU stays N/A when no CPU sample was measured"
 	)
 	_teardown(instance)
 	return t
@@ -225,26 +235,29 @@ func test_history_panel_renders_rows_without_inventing_values() -> SandboxTest:
 			instance.free()
 		return t
 	var history = instance.ui.history_panel
-	history.render_rows(
-		[
-			{
-				"run_id": "control_center_ppo_1700000000_1",
-				"algorithm": "PPO",
-				"state": "Finished",
-				"started_unix": 1700000000.0,
-				"updated_unix": 1700000300.0,
-				"duration_seconds": 300.0,
-				"duration_final": true,
-				"timesteps": 5000,
-				"episodes": 42,
-				"mean_episode_reward": 0.75,
-			},
-			{
-				"run_id": "control_center_bc_1700001000_2",
-				"algorithm": "BC",
-				"state": "Error",
-			},
-		]
+	(
+		history
+		. render_rows(
+			[
+				{
+					"run_id": "control_center_ppo_1700000000_1",
+					"algorithm": "PPO",
+					"state": "Finished",
+					"started_unix": 1700000000.0,
+					"updated_unix": 1700000300.0,
+					"duration_seconds": 300.0,
+					"duration_final": true,
+					"timesteps": 5000,
+					"episodes": 42,
+					"mean_episode_reward": 0.75,
+				},
+				{
+					"run_id": "control_center_bc_1700001000_2",
+					"algorithm": "BC",
+					"state": "Error",
+				},
+			]
+		)
 	)
 	t.assert_eq(history.row_count(), 2)
 	_teardown(instance)
@@ -324,9 +337,7 @@ func test_headless_focus_drops_when_the_agent_is_removed() -> SandboxTest:
 	ui.set_page("headless", false)
 	ui.headless_panel.focus_agent(agent_id)
 	t.assert_eq(
-		ui.headless_panel.focused_agent_id,
-		agent_id,
-		"a launched agent keeps focus while it exists"
+		ui.headless_panel.focused_agent_id, agent_id, "a launched agent keeps focus while it exists"
 	)
 	t.assert_true(manager.remove(agent_id), "a finished agent can be cleared")
 	ui.headless_panel.refresh()

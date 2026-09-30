@@ -116,28 +116,38 @@ func update_from(snapshot: Dictionary) -> void:
 	_footer.text = _footer_text(snapshot)
 	_pause.disabled = state_id != TrainingRunController.State.RUNNING
 	_resume.disabled = state_id != TrainingRunController.State.PAUSED
-	_stop.disabled = state_id not in [
-		TrainingRunController.State.STARTING,
-		TrainingRunController.State.RUNNING,
-		TrainingRunController.State.PAUSED,
-	]
-	_remove.disabled = state_id not in [
-		TrainingRunController.State.FINISHED,
-		TrainingRunController.State.ERROR,
-	]
+	_stop.disabled = (
+		state_id
+		not in [
+			TrainingRunController.State.STARTING,
+			TrainingRunController.State.RUNNING,
+			TrainingRunController.State.PAUSED,
+		]
+	)
+	_remove.disabled = (
+		state_id
+		not in [
+			TrainingRunController.State.FINISHED,
+			TrainingRunController.State.ERROR,
+		]
+	)
 
 
 static func _metric_rows(snapshot: Dictionary) -> Array:
 	var rows: Array = []
 	if snapshot.has("timesteps") or snapshot.has("total_training_steps"):
 		rows.append(
-			"progress     %d / %d"
-			% [int(snapshot.get("timesteps", 0)), int(snapshot.get("total_training_steps", 0))]
+			(
+				"progress     %d / %d"
+				% [int(snapshot.get("timesteps", 0)), int(snapshot.get("total_training_steps", 0))]
+			)
 		)
 	elif snapshot.has("epoch") or snapshot.has("total_epochs"):
 		rows.append(
-			"progress     %d / %d"
-			% [int(snapshot.get("epoch", 0)), int(snapshot.get("total_epochs", 0))]
+			(
+				"progress     %d / %d"
+				% [int(snapshot.get("epoch", 0)), int(snapshot.get("total_epochs", 0))]
+			)
 		)
 	else:
 		rows.append("progress     n/a")
@@ -145,37 +155,49 @@ static func _metric_rows(snapshot: Dictionary) -> Array:
 	rows.append(
 		"reward       " + ControlCenterTheme.optional_metric(snapshot, "mean_episode_reward", 3)
 	)
-	rows.append(
-		"kills/deaths %s / %s"
-		% [
-			ControlCenterTheme.optional_metric(snapshot, "mean_kills", 2),
-			ControlCenterTheme.optional_metric(snapshot, "mean_deaths", 2),
-		]
+	(
+		rows
+		. append(
+			(
+				"kills/deaths %s / %s"
+				% [
+					ControlCenterTheme.optional_metric(snapshot, "mean_kills", 2),
+					ControlCenterTheme.optional_metric(snapshot, "mean_deaths", 2),
+				]
+			)
+		)
 	)
 	rows.append(
-		"accuracy     "
-		+ ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%")
+		(
+			"accuracy     "
+			+ ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%")
+		)
 	)
 	rows.append(
-		"throughput   "
-		+ ControlCenterTheme.optional_metric(snapshot, "steps_per_second", 1, 1.0, " sps")
+		(
+			"throughput   "
+			+ ControlCenterTheme.optional_metric(snapshot, "steps_per_second", 1, 1.0, " sps")
+		)
 	)
 	if snapshot.has("train_loss") or snapshot.has("validation_loss"):
-		rows.append(
-			"loss         %s / %s"
-			% [
-				ControlCenterTheme.optional_metric(snapshot, "train_loss", 5),
-				ControlCenterTheme.optional_metric(snapshot, "validation_loss", 5),
-			]
+		(
+			rows
+			. append(
+				(
+					"loss         %s / %s"
+					% [
+						ControlCenterTheme.optional_metric(snapshot, "train_loss", 5),
+						ControlCenterTheme.optional_metric(snapshot, "validation_loss", 5),
+					]
+				)
+			)
 		)
 	return rows
 
 
 static func _footer_text(snapshot: Dictionary) -> String:
 	var parts: Array = []
-	parts.append(
-		"runtime %s" % ControlCenterTheme.format_duration(snapshot.get("runtime_seconds"))
-	)
+	parts.append("runtime %s" % ControlCenterTheme.format_duration(snapshot.get("runtime_seconds")))
 	if snapshot.has("current_checkpoint"):
 		parts.append("ckpt %s" % str(snapshot["current_checkpoint"]).get_file())
 	var error_text: String = str(snapshot.get("last_error", ""))

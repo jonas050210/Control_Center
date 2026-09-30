@@ -35,13 +35,16 @@ static func build_rows(observation) -> Array:
 	var names: PackedStringArray = Observation.field_names()
 	var rows: Array = []
 	for index in range(names.size()):
-		rows.append(
-			{
-				"index": index,
-				"name": names[index],
-				"group": Observation.field_group(index),
-				"value": float(values[index]) if index < values.size() else 0.0,
-			}
+		(
+			rows
+			. append(
+				{
+					"index": index,
+					"name": names[index],
+					"group": Observation.field_group(index),
+					"value": float(values[index]) if index < values.size() else 0.0,
+				}
+			)
 		)
 	return rows
 
@@ -75,14 +78,18 @@ static func build_action_rows(action) -> Array:
 	var multidiscrete: Array = action.to_multidiscrete()
 	var canonical: Array = action.to_array()
 	for index in range(fields.size()):
-		rows.append(
-			{
-				"index": index,
-				"name": str(fields[index]),
-				"cardinality": int(nvec[index]) if index < nvec.size() else 0,
-				"multidiscrete": int(multidiscrete[index]) if index < multidiscrete.size() else 0,
-				"canonical": canonical[index] if index < canonical.size() else 0,
-			}
+		(
+			rows
+			. append(
+				{
+					"index": index,
+					"name": str(fields[index]),
+					"cardinality": int(nvec[index]) if index < nvec.size() else 0,
+					"multidiscrete":
+					int(multidiscrete[index]) if index < multidiscrete.size() else 0,
+					"canonical": canonical[index] if index < canonical.size() else 0,
+				}
+			)
 		)
 	return rows
 
@@ -99,12 +106,15 @@ static func build_continuous_action_rows(action) -> Array:
 	var rows: Array = []
 	for offset in range(reserved.size()):
 		var index: int = Action.MULTI_DISCRETE_SIZE + offset
-		rows.append(
-			{
-				"index": index,
-				"name": str(reserved[offset]),
-				"value": float(values[index]) if index < values.size() else 0.0,
-			}
+		(
+			rows
+			. append(
+				{
+					"index": index,
+					"name": str(reserved[offset]),
+					"value": float(values[index]) if index < values.size() else 0.0,
+				}
+			)
 		)
 	return rows
 
@@ -152,14 +162,17 @@ static func format_observation_lines(rows: Array, decimals: int = 3) -> PackedSt
 	var lines := PackedStringArray()
 	for row_value in rows:
 		var row: Dictionary = row_value
-		lines.append(
-			(
-				"%2d  %-38s %s"
-				% [
-					int(row["index"]),
-					str(row["name"]),
-					String.num(float(row["value"]), decimals),
-				]
+		(
+			lines
+			. append(
+				(
+					"%2d  %-38s %s"
+					% [
+						int(row["index"]),
+						str(row["name"]),
+						String.num(float(row["value"]), decimals),
+					]
+				)
 			)
 		)
 	return lines
@@ -169,15 +182,18 @@ static func format_action_lines(rows: Array) -> PackedStringArray:
 	var lines := PackedStringArray()
 	for row_value in rows:
 		var row: Dictionary = row_value
-		lines.append(
-			(
-				"%-16s md=%d/%d  value=%s"
-				% [
-					str(row["name"]),
-					int(row["multidiscrete"]),
-					maxi(1, int(row["cardinality"])) - 1,
-					str(row["canonical"]),
-				]
+		(
+			lines
+			. append(
+				(
+					"%-16s md=%d/%d  value=%s"
+					% [
+						str(row["name"]),
+						int(row["multidiscrete"]),
+						maxi(1, int(row["cardinality"])) - 1,
+						str(row["canonical"]),
+					]
+				)
 			)
 		)
 	return lines

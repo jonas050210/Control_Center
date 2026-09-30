@@ -126,9 +126,7 @@ func reset(seed_a: int = SandboxConfig.DEFAULT_RANDOM_SEED, seed_b: int = -1) ->
 			)
 			arena_half_extent = world.half_extent
 			if lighting_mode_id.is_empty():
-				lighting = LightingProfile.from_id(
-					str(map_def.get("lighting", "normal")), seed_a
-				)
+				lighting = LightingProfile.from_id(str(map_def.get("lighting", "normal")), seed_a)
 			else:
 				lighting = LightingProfile.from_id(lighting_mode_id, seed_a)
 		else:
@@ -199,12 +197,14 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 			"observations": get_observations(),
 			"rewards": [0.0, 0.0],
 			"done": true,
-			"infos": [
+			"infos":
+			[
 				{
 					"already_done": true,
 					"done_reason": done_reason,
 					"TimeLimit.truncated": done_reason == "timeout",
-					"metrics": episode_a.to_metrics(
+					"metrics":
+					episode_a.to_metrics(
 						SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_a_win"
 					),
 				},
@@ -212,7 +212,8 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 					"already_done": true,
 					"done_reason": done_reason,
 					"TimeLimit.truncated": done_reason == "timeout",
-					"metrics": episode_b.to_metrics(
+					"metrics":
+					episode_b.to_metrics(
 						SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_b_win"
 					),
 				},
@@ -443,22 +444,21 @@ func step(actions: Array, dt: float = SandboxConfig.SIMULATION_DT) -> Dictionary
 		"observations": get_observations(),
 		"rewards": [reward_a, reward_b],
 		"done": done,
-		"infos": [
+		"infos":
+		[
 			{
 				"events": events_a,
 				"done_reason": done_reason,
 				"TimeLimit.truncated": done_reason == "timeout",
-				"metrics": episode_a.to_metrics(
-					SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_a_win"
-				),
+				"metrics":
+				episode_a.to_metrics(SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_a_win"),
 			},
 			{
 				"events": events_b,
 				"done_reason": done_reason,
 				"TimeLimit.truncated": done_reason == "timeout",
-				"metrics": episode_b.to_metrics(
-					SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_b_win"
-				),
+				"metrics":
+				episode_b.to_metrics(SandboxConfig.SIMULATION_DT, 1, done_reason == "agent_b_win"),
 			},
 		],
 	}
@@ -497,9 +497,8 @@ func _build_perception_context(perception: AgentPerception, beliefs: Array) -> D
 		"corpse_count": 0,
 		"enemy_slots": 1,
 		"local_illumination": perception.local_illumination,
-		"contact_summary": AgentPerception.summarize_contacts(
-			beliefs, Observation.MAX_TRACKED_ENEMIES
-		),
+		"contact_summary":
+		AgentPerception.summarize_contacts(beliefs, Observation.MAX_TRACKED_ENEMIES),
 		"target_priority_norm": 1.0 if not beliefs.is_empty() else 0.0,
 		"target_switch_recent": false,
 		"exploration": {},
@@ -670,9 +669,7 @@ static func _shot_result(hit: bool, near_miss: bool, attempted: bool, shot_fired
 	return "useless_spam"
 
 
-static func _action_is_meaningful(
-	action: Action, shot_fired: bool, target_hittable: bool
-) -> bool:
+static func _action_is_meaningful(action: Action, shot_fired: bool, target_hittable: bool) -> bool:
 	if shot_fired:
 		return true
 	if action.move_axis != 0 or action.strafe_axis != 0 or action.jump:

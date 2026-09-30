@@ -15,7 +15,6 @@ const ControlCenterConfig = preload("res://scripts/control_center/control_center
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -160,9 +159,7 @@ func test_gui_mode_switch_keeps_panels_alive() -> SandboxTest:
 		instance.session.set_mode(mode)
 		instance.ui.refresh_now()
 		t.assert_eq(instance.session.config.mode, mode)
-	t.assert_true(
-		instance.ui.hud.visible, "the HUD returns when leaving TRAINING mode"
-	)
+	t.assert_true(instance.ui.hud.visible, "the HUD returns when leaving TRAINING mode")
 	t.assert_eq(
 		instance.session.simulation_manager.environments.size(), 2, "no rebuild on mode switch"
 	)

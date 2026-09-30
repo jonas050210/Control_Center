@@ -120,14 +120,14 @@ static func _source_of(path: String) -> String:
 ## literal to the repository's static analyzer.
 static func _literal_resource_paths(source: String) -> Array:
 	var paths: Array = []
-	for needle in ["load(\"", "path=\""]:
+	for needle in ['load("', 'path="']:
 		var cursor := 0
 		while true:
 			var hit: int = source.find(needle, cursor)
 			if hit < 0:
 				break
 			var start: int = hit + needle.length()
-			var end: int = source.find("\"", start)
+			var end: int = source.find('"', start)
 			if end < 0:
 				break
 			var candidate: String = source.substr(start, end - start)

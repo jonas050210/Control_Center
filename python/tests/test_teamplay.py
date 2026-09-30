@@ -1,4 +1,5 @@
 """Tests for the teamplay foundation (Phase 8)."""
+
 from __future__ import annotations
 
 import unittest
@@ -11,9 +12,9 @@ from sandboxai.teamplay import (
     CommsMessage,
     TeamConfig,
     TeamError,
+    TeammateReport,
     TeamOutcome,
     TeamRewardHooks,
-    TeammateReport,
     build_teammate_reports,
     team_summary,
     validate_teammate_report,
@@ -29,8 +30,9 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(config.team_reward_weight, 0.0)
 
     def test_disabling_canonicalizes_every_slot_onto_the_solo_team(self):
-        config = TeamConfig(enabled=False, slot_teams=[0, 1, 2], comms_enabled=True,
-                            team_reward_weight=0.9)
+        config = TeamConfig(
+            enabled=False, slot_teams=[0, 1, 2], comms_enabled=True, team_reward_weight=0.9
+        )
         self.assertEqual(config.slot_teams, [SOLO_TEAM] * 3)
         self.assertFalse(config.comms_enabled)
         self.assertEqual(config.team_reward_weight, 0.0)
@@ -212,9 +214,7 @@ class TeamRewardTests(unittest.TestCase):
 
     def test_weight_zero_leaves_individual_rewards_alone(self):
         hooks = TeamRewardHooks(TeamConfig.versus(2, team_reward_weight=0.0))
-        self.assertEqual(
-            hooks.shaped_rewards(self.outcomes), {0: 1.0, 1: -1.0, 2: 0.5, 3: 0.5}
-        )
+        self.assertEqual(hooks.shaped_rewards(self.outcomes), {0: 1.0, 1: -1.0, 2: 0.5, 3: 0.5})
 
     def test_shaping_blends_individual_and_team_score(self):
         hooks = TeamRewardHooks(TeamConfig.versus(2, team_reward_weight=0.5))

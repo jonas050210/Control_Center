@@ -1,0 +1,73 @@
+name: Bug report
+description: Something in the simulator, the trainer or the tooling behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The simulator is deterministic: a **seed plus the exact command line**
+        is a complete reproduction. Please include both.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Godot simulation (environment, combat, perception, world)
+        - Godot Control Center (in-engine UI)
+        - Python training (PPO / behavior cloning)
+        - Python evaluation / benchmarks / replay
+        - Desktop Control Center (Tkinter)
+        - CLI / bridge / runtime validation
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Observed behaviour, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact command line, seed and curriculum level.
+      render: shell
+      placeholder: |
+        sandboxai train --env-count 2 --steps 2048 --seed 1234 --curriculum-level 5
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Traceback, failing test output, or the engine's stderr.
+      render: text
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Output of `python -m sandboxai validate-runtime` is ideal. Otherwise:
+        OS (native Windows / Linux / WSL), Python version, Godot version,
+        installed extras, and the commit or release.
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I ran `python -m pytest -q` and reported whether it is green.
+          required: true
+        - label: This is not a request for cheat, exploit or live-game-bot functionality (see SECURITY.md).
+          required: true

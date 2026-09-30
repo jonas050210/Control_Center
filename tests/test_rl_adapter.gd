@@ -10,7 +10,6 @@ const Observation = preload("res://scripts/core/observation.gd")
 const RLAdapter = preload("res://scripts/rl/rl_adapter.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -66,9 +65,7 @@ func test_compact_info_omits_only_redundant_nonterminal_diagnostics() -> Sandbox
 	var first: Dictionary = adapter.step(action, true)
 	var full_first: Dictionary = full_adapter.step(action)
 	t.assert_eq(
-		first.observations,
-		full_first.observations,
-		"compact mode must not change observations"
+		first.observations, full_first.observations, "compact mode must not change observations"
 	)
 	t.assert_eq(first.rewards, full_first.rewards, "compact mode must not change rewards")
 	t.assert_eq(first.dones, full_first.dones, "compact mode must not change done flags")

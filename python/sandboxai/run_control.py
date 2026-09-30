@@ -7,17 +7,18 @@ status file plus a bounded-rate JSONL event stream.  The trainer remains the
 owner of training; the GUI only requests pause/resume/stop at safe callback
 boundaries.
 """
+
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-from pathlib import Path
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from .control_center_schema import EVENT_SCHEMA_VERSION, STATUS_SCHEMA_VERSION
-
 
 TERMINAL_STATES = frozenset({"Finished", "Error"})
 
@@ -132,7 +133,9 @@ class RunControl:
 
     def finish(self, **values: Any) -> None:
         values.setdefault("stopped", self.stop_requested)
-        self.event("system", "training stopped" if self.stop_requested else "training finished", values)
+        self.event(
+            "system", "training stopped" if self.stop_requested else "training finished", values
+        )
         # Publish the terminal status last, after its final event is durable.
         self.update(state="Finished", **values)
 
@@ -148,7 +151,7 @@ class RunControl:
         if self.command_path is None or not self.command_path.is_file():
             return {}
         try:
-            value = json.loads(self.command_path.read_text(encoding="utf-8"))
+            value = json.loads(self.command_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             # A malformed/partially replaced command is ignored.  Godot will
             # retry on the next UI action; training must never crash because
@@ -189,7 +192,5 @@ def _atomic_json_write(path: Path, values: dict[str, Any]) -> None:
             os.fsync(stream.fileno())
         temporary.replace(path)
     finally:
-        try:
+        with contextlib.suppress(OSError):
             temporary.unlink(missing_ok=True)
-        except OSError:
-            pass

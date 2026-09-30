@@ -15,7 +15,6 @@ const AgentState = preload("res://scripts/agent/agent_state.gd")
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 
-
 const AIM_TOLERANCE_DEG: float = 5.0
 const APPROACH_DISTANCE_FACTOR: float = 0.6
 

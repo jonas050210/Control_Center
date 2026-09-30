@@ -1,9 +1,10 @@
 """Tests for the integrated curriculum ladder (Phase 12)."""
+
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 from sandboxai.conditions import LIGHTING_IDS, MAP_IDS
 from sandboxai.curriculum_stages import (

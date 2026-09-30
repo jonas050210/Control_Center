@@ -11,7 +11,6 @@ signal environment_done(env_index: int, reason: String)
 ## instead of silently holding references to freed environments.
 signal environments_rebuilt(environment_count: int, enemies_per_environment: int)
 
-
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
@@ -19,7 +18,6 @@ const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const EnvironmentView = preload("res://scripts/env/environment_view.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
-
 
 @export var environment_count: int = SandboxConfig.DEFAULT_ENVIRONMENT_COUNT
 @export var enemy_count_per_environment: int = SandboxConfig.ENEMY_COUNT_DEFAULT
@@ -279,9 +277,7 @@ func all_environments_planned() -> bool:
 ## retains the terminal observation under terminal_observation and returns the
 ## fresh reset observation in observation, matching Gym vector semantics.
 func step_all(
-	actions: Array,
-	dt: float = SandboxConfig.SIMULATION_DT,
-	compact_info: bool = false
+	actions: Array, dt: float = SandboxConfig.SIMULATION_DT, compact_info: bool = false
 ) -> Array:
 	var results: Array = []
 	for i in range(environments.size()):

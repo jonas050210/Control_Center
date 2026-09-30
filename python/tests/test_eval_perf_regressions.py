@@ -12,6 +12,7 @@ No real Godot binary is required: the fakes speak the same JSON-lines
 protocol as scripts/rl/rl_server.gd. Opt-in wall-clock benchmarks live at
 the bottom (SANDBOXAI_PERF_BENCH=1) and are skipped in normal runs.
 """
+
 import json
 import os
 import stat
@@ -34,7 +35,9 @@ def _write_fake_bridge(directory: Path, source: str) -> str:
     bridge_py = directory / "fake_bridge.py"
     bridge_py.write_text(source, encoding="utf-8")
     wrapper = directory / "fake_godot"
-    wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
+    wrapper.write_text(
+        f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8"
+    )
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return str(wrapper)
 
@@ -45,7 +48,7 @@ def _write_fake_bridge(directory: Path, source: str) -> str:
 ## the per-environment step count, and terminal infos carry full metrics.
 ## Determinism of every wire value is what makes the reuse-equivalence
 ## assertions below meaningful.
-DETERMINISTIC_FAKE_BRIDGE = r'''
+DETERMINISTIC_FAKE_BRIDGE = r"""
 import json, sys
 
 OBS_DIM = __OBS_DIM__
@@ -175,7 +178,7 @@ for line in sys.stdin:
         break
     else:
         out({"ok": False, "error": "unknown command"})
-'''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
+""".replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
 
 
 def deterministic_bridge_source(spawn_log: str = "") -> str:
@@ -205,6 +208,7 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
 
     def _model(self):
         from stable_baselines3 import PPO
+
         from sandboxai.godot_env import GodotVecEnv
 
         env = GodotVecEnv(**{**self.env_kwargs, "environment_count": 2})
@@ -243,11 +247,14 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
             different_seed = evaluate_model(model, self.env_kwargs, episodes=3, seed=1234, env=env)
         finally:
             env.close()
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k != "episode_index"} for row in rows
-        ]
+
+        def strip(rows):
+            return [{k: v for k, v in row.items() if k != "episode_index"} for row in rows]
+
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused_first["episodes_detail"]))
-        self.assertEqual(strip(fresh_again["episodes_detail"]), strip(reused_again["episodes_detail"]))
+        self.assertEqual(
+            strip(fresh_again["episodes_detail"]), strip(reused_again["episodes_detail"])
+        )
         seeds = {row["seed"] for row in different_seed["episodes_detail"]}
         self.assertEqual(seeds, {1234, 1235, 1236})
 
@@ -266,10 +273,13 @@ class EvaluationReuseEquivalenceTest(unittest.TestCase):
             reused_again = evaluate_model(model, kwargs, episodes=5, seed=900, env=env)
         finally:
             env.close()
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k not in ("episode_index", "environment_index")}
-            for row in rows
-        ]
+
+        def strip(rows):
+            return [
+                {k: v for k, v in row.items() if k not in ("episode_index", "environment_index")}
+                for row in rows
+            ]
+
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused["episodes_detail"]))
         self.assertEqual(strip(fresh["episodes_detail"]), strip(reused_again["episodes_detail"]))
         self.assertEqual(
@@ -299,7 +309,9 @@ class ParallelEvaluationCoordinatorTest(unittest.TestCase):
         )
         self.assertEqual((normal, battery), ("normal", "battery"))
         self.assertGreater(timing["overlap_seconds"], 0.0)
-        self.assertLess(timing["wall_seconds"], timing["normal_seconds"] + timing["battery_seconds"])
+        self.assertLess(
+            timing["wall_seconds"], timing["normal_seconds"] + timing["battery_seconds"]
+        )
 
     def test_synchronized_model_never_enters_predict_concurrently(self):
         from sandboxai.evaluation import SynchronizedModel, run_parallel_evaluations
@@ -411,9 +423,19 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
         for relative in ("evaluations/latest.json",):
             a = json.loads((Path(first["run_dir"]) / relative).read_text(encoding="utf-8"))
             b = json.loads((Path(second["run_dir"]) / relative).read_text(encoding="utf-8"))
-            for key in ("episodes", "mean_episode_reward", "mean_win", "mean_loss",
-                        "mean_truncated", "mean_kills", "mean_episode_length", "win_rate"):
-                self.assertEqual(a.get(key), b.get(key), f"latest.json[{key}] diverged between runs")
+            for key in (
+                "episodes",
+                "mean_episode_reward",
+                "mean_win",
+                "mean_loss",
+                "mean_truncated",
+                "mean_kills",
+                "mean_episode_length",
+                "win_rate",
+            ):
+                self.assertEqual(
+                    a.get(key), b.get(key), f"latest.json[{key}] diverged between runs"
+                )
         # Identical trained weights: the training path itself is untouched.
         from stable_baselines3 import PPO
 
@@ -432,7 +454,9 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
         # through the vectorised bridge; the reused process must re-seed
         # exactly and produce reproducible artifacts across two runs.
         first = train_ppo(self._config(evaluation_environment_count=2))
-        second = train_ppo(self._config(evaluation_environment_count=2, run_id="perf_regression_vec2"))
+        second = train_ppo(
+            self._config(evaluation_environment_count=2, run_id="perf_regression_vec2")
+        )
         spawns = self.spawn_log.read_text().splitlines()
         # Two runs x (1 training + 1 version probe + 1 normal-eval + 1
         # battery) bridges; the vectorised normal evaluation must reuse its
@@ -442,9 +466,15 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
             len(spawns), 8, f"expected 8 bridge spawns (2 runs x 4), got {len(spawns)}"
         )
         for key in ("episodes", "mean_episode_reward", "mean_win", "win_rate"):
-            a = json.loads((Path(first["run_dir"]) / "evaluations/latest.json").read_text(encoding="utf-8"))
-            b = json.loads((Path(second["run_dir"]) / "evaluations/latest.json").read_text(encoding="utf-8"))
-            self.assertEqual(a.get(key), b.get(key), f"latest.json[{key}] diverged between identical runs")
+            a = json.loads(
+                (Path(first["run_dir"]) / "evaluations/latest.json").read_text(encoding="utf-8")
+            )
+            b = json.loads(
+                (Path(second["run_dir"]) / "evaluations/latest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                a.get(key), b.get(key), f"latest.json[{key}] diverged between identical runs"
+            )
 
     def test_parallel_path_preserves_best_selection_and_reward_stop(self):
         from sandboxai.ppo import train_ppo
@@ -458,8 +488,12 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
             )
         )
         run_dir = Path(result["run_dir"])
-        step_dirs = sorted(path for path in (run_dir / "evaluations").glob("step_*") if path.is_dir())
-        self.assertEqual(len(step_dirs), 1, "reward threshold must stop after the first joined boundary")
+        step_dirs = sorted(
+            path for path in (run_dir / "evaluations").glob("step_*") if path.is_dir()
+        )
+        self.assertEqual(
+            len(step_dirs), 1, "reward threshold must stop after the first joined boundary"
+        )
         best = json.loads((run_dir / "evaluations" / "best.json").read_text(encoding="utf-8"))
         latest = json.loads((run_dir / "evaluations" / "latest.json").read_text(encoding="utf-8"))
         report = json.loads((step_dirs[0] / "report.json").read_text(encoding="utf-8"))
@@ -492,7 +526,9 @@ class TrainingEvaluationProcessReuseTest(unittest.TestCase):
             )
         )
         run_dir = Path(result["run_dir"])
-        step_dirs = sorted(path for path in (run_dir / "evaluations").glob("step_*") if path.is_dir())
+        step_dirs = sorted(
+            path for path in (run_dir / "evaluations").glob("step_*") if path.is_dir()
+        )
         self.assertEqual(len(step_dirs), 2, "first tie must consume one patience check")
         first = json.loads((step_dirs[0] / "summary.json").read_text(encoding="utf-8"))
         second = json.loads((step_dirs[1] / "summary.json").read_text(encoding="utf-8"))
@@ -683,7 +719,9 @@ class CheckpointBatteryBatchingTest(unittest.TestCase):
         self.assertGreater(report["generalization"]["episodes"], 0)
         # Both sections use local _position values starting at zero; scheduler
         # order must still keep the condition row first.
-        self.assertEqual(report["condition_evaluation"]["episodes_detail"][0]["episode_reward"], 0.0)
+        self.assertEqual(
+            report["condition_evaluation"]["episodes_detail"][0]["episode_reward"], 0.0
+        )
 
     def test_provided_executor_is_reused_and_not_closed(self):
         from sandboxai.checkpoint_eval import run_checkpoint_evaluation
@@ -876,8 +914,12 @@ class CompactBatteryInfosTest(unittest.TestCase):
             return [
                 PlannedEpisode(
                     condition=Condition(
-                        map_id="", scenario="", lighting="",
-                        enemy_count=1, level=3, seed=5000 + i * 13,
+                        map_id="",
+                        scenario="",
+                        lighting="",
+                        enemy_count=1,
+                        level=3,
+                        seed=5000 + i * 13,
                     ),
                     labels={"axis": "test", "_position": i},
                 )
@@ -885,16 +927,27 @@ class CompactBatteryInfosTest(unittest.TestCase):
             ]
 
         from stable_baselines3 import PPO
+
         from sandboxai.godot_env import GodotVecEnv
 
         env = GodotVecEnv(
-            project_path=str(PROJECT_ROOT), godot_executable=self.executable,
-            environment_count=2, enemy_count=1, seed=1, curriculum_level=3,
+            project_path=str(PROJECT_ROOT),
+            godot_executable=self.executable,
+            environment_count=2,
+            enemy_count=1,
+            seed=1,
+            curriculum_level=3,
         )
         try:
             model = PPO(
-                "MlpPolicy", env, n_steps=8, batch_size=16, n_epochs=1, seed=3,
-                device="cpu", verbose=0,
+                "MlpPolicy",
+                env,
+                n_steps=8,
+                batch_size=16,
+                n_epochs=1,
+                seed=3,
+                device="cpu",
+                verbose=0,
                 policy_kwargs={"net_arch": {"pi": [16, 16], "vf": [16, 16]}},
             )
         finally:
@@ -913,9 +966,10 @@ class CompactBatteryInfosTest(unittest.TestCase):
 
         full = PlanExecutor(kwargs(False)).run(model, plans(4), policy_id="p")
         compact = PlanExecutor(kwargs(True)).run(model, plans(4), policy_id="p")
-        strip = lambda rows: [
-            {k: v for k, v in row.items() if k != "environment_index"} for row in rows
-        ]
+
+        def strip(rows):
+            return [{k: v for k, v in row.items() if k != "environment_index"} for row in rows]
+
         self.assertEqual(strip(full), strip(compact))
 
 
@@ -978,21 +1032,33 @@ class EvalPathBenchmark(unittest.TestCase):
         result = train_ppo(config)
         total = time.perf_counter() - started
         profile = json.loads(Path(result["training_profile"]).read_text(encoding="utf-8"))
-        boundaries = len([p for p in (Path(result["run_dir"]) / "evaluations").glob("step_*") if p.is_dir()])
+        boundaries = len(
+            [p for p in (Path(result["run_dir"]) / "evaluations").glob("step_*") if p.is_dir()]
+        )
         report = {
             "total_wall_seconds": round(total, 3),
             "boundaries": boundaries,
             "bridge_spawns": len(self.spawn_log.read_text().splitlines()),
-            "callback_evaluation_seconds": round(profile["phase_totals_seconds"]["callback.evaluation"], 3),
-            "eval_env_startup_seconds": round(profile["phase_totals_seconds"]["eval.env_startup"], 3),
+            "callback_evaluation_seconds": round(
+                profile["phase_totals_seconds"]["callback.evaluation"], 3
+            ),
+            "eval_env_startup_seconds": round(
+                profile["phase_totals_seconds"]["eval.env_startup"], 3
+            ),
             "eval_predict_seconds": round(
                 profile["phase_totals_seconds"]["eval.normal.predict"]
-                + profile["phase_totals_seconds"]["eval.battery.predict"], 3),
+                + profile["phase_totals_seconds"]["eval.battery.predict"],
+                3,
+            ),
             "eval_env_step_seconds": round(
                 profile["phase_totals_seconds"]["eval.normal.env_step"]
-                + profile["phase_totals_seconds"]["eval.battery.env_step"], 3),
+                + profile["phase_totals_seconds"]["eval.battery.env_step"],
+                3,
+            ),
         }
-        report["seconds_per_boundary"] = round(report["callback_evaluation_seconds"] / max(1, boundaries), 3)
+        report["seconds_per_boundary"] = round(
+            report["callback_evaluation_seconds"] / max(1, boundaries), 3
+        )
         print(json.dumps({"eval_path_benchmark": report}, indent=2))
 
 

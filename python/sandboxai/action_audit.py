@@ -6,13 +6,14 @@ weapon-path failure. These helpers count the neural policy's MultiDiscrete
 outputs *before* they enter the bridge and, at a sparse interval, inspect the
 categorical head probabilities without sampling or changing RNG state.
 """
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from .contract import ACTION_NVEC, ACTION_SPEC
-
 
 ACTION_NAMES: tuple[str, ...] = tuple(component.name for component in ACTION_SPEC)
 SHOOT_COMPONENT: int = 4
@@ -27,7 +28,11 @@ def _raw_component_probabilities(model: Any, observations: Any) -> list[Any] | N
     not advance PyTorch's RNG stream.
     """
     policy = getattr(model, "policy", None)
-    if policy is None or not hasattr(policy, "obs_to_tensor") or not hasattr(policy, "get_distribution"):
+    if (
+        policy is None
+        or not hasattr(policy, "obs_to_tensor")
+        or not hasattr(policy, "get_distribution")
+    ):
         return None
     try:
         import torch  # type: ignore
@@ -128,9 +133,7 @@ def summarize_action_pipeline(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Localizes policy request -> engine trigger -> weapon discharge."""
     decisions = sum(int(row.get("policy_action_decisions", 0)) for row in rows)
     shoot_requests = sum(int(row.get("policy_shoot_requests", 0)) for row in rows)
-    probability_samples = sum(
-        int(row.get("policy_shoot_probability_samples", 0)) for row in rows
-    )
+    probability_samples = sum(int(row.get("policy_shoot_probability_samples", 0)) for row in rows)
     probability_sum = sum(
         float(row.get("policy_mean_shoot_probability", 0.0))
         * int(row.get("policy_shoot_probability_samples", 0))
@@ -173,9 +176,7 @@ def summarize_action_pipeline(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if probability_samples:
         result["mean_stochastic_shoot_probability"] = probability_sum / probability_samples
     if trigger_reported:
-        result["request_delivery_rate"] = (
-            trigger_pulls / shoot_requests if shoot_requests else None
-        )
+        result["request_delivery_rate"] = trigger_pulls / shoot_requests if shoot_requests else None
         result["request_trigger_difference"] = shoot_requests - trigger_pulls
     result["fire_conversion_rate"] = shots_fired / trigger_pulls if trigger_pulls else None
     return result

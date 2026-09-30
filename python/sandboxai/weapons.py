@@ -26,13 +26,17 @@ and no RNG here. Anything that depends on the actual engine loop (hit
 registration against a moving target, cover, enemy behaviour) is measured
 by running the engine, not by this module.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+import ast
 import math
-from pathlib import Path
+import operator
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 from .gdscript_analysis import project_root
 
@@ -72,6 +76,62 @@ _ENTRY_RE = re.compile(r'"(?P<id>[a-z_]+)"\s*:\s*\{(?P<body>.*?)\n\t\},', re.S)
 _FIELD_RE = re.compile(r'"(?P<key>[a-z_]+)"\s*:\s*(?P<value>[^,\n]+),')
 
 
+# Arithmetic the GDScript config actually uses in `const` initialisers.
+_BINARY_OPERATORS: dict[type[ast.operator], Any] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Pow: operator.pow,
+    # Bit shifts: `const STDIN_BUFFER_SIZE: int = 1 << 20` is a real
+    # initialiser in scripts/rl/rl_server.gd.
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+}
+_UNARY_OPERATORS: dict[type[ast.unaryop], Any] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+class _UnsupportedExpression(Exception):
+    """A `const` initialiser this parser deliberately refuses to evaluate."""
+
+
+def _evaluate_numeric_expression(node: ast.expr, constants: dict[str, float]) -> float:
+    """Evaluates one node of a GDScript numeric constant expression.
+
+    This exists instead of `eval`: the input is a checked-in source file
+    today, but a whitelist walker cannot be turned into code execution by
+    a future caller that feeds it something else. Only numeric literals,
+    names of constants already parsed from the same file, and the six
+    arithmetic operators below are accepted; everything else raises and
+    the caller skips the constant rather than guessing a value.
+    """
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise _UnsupportedExpression(f"non-numeric literal: {node.value!r}")
+        return float(node.value)
+    if isinstance(node, ast.Name):
+        if node.id not in constants:
+            raise _UnsupportedExpression(f"unknown constant: {node.id}")
+        return constants[node.id]
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
+        return float(
+            _UNARY_OPERATORS[type(node.op)](_evaluate_numeric_expression(node.operand, constants))
+        )
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
+        left = _evaluate_numeric_expression(node.left, constants)
+        right = _evaluate_numeric_expression(node.right, constants)
+        if isinstance(node.op, (ast.LShift, ast.RShift)):
+            if left != int(left) or right != int(right):
+                raise _UnsupportedExpression("shift operands must be integers")
+            return float(_BINARY_OPERATORS[type(node.op)](int(left), int(right)))
+        return float(_BINARY_OPERATORS[type(node.op)](left, right))
+    raise _UnsupportedExpression(f"unsupported expression node: {type(node).__name__}")
+
+
 def _parse_scalar_constants(source: str) -> dict[str, float]:
     """Numeric ``const NAME: float|int = <expr>`` values from a GDScript file.
 
@@ -86,8 +146,9 @@ def _parse_scalar_constants(source: str) -> dict[str, float]:
             continue
         name, raw = match.group(1), match.group(2).strip()
         try:
-            values[name] = float(eval(raw, {"__builtins__": {}}, dict(values)))  # noqa: S307
-        except Exception:  # pragma: no cover - defensive, non-numeric consts
+            parsed = ast.parse(raw, mode="eval")
+            values[name] = _evaluate_numeric_expression(parsed.body, values)
+        except (SyntaxError, _UnsupportedExpression, ArithmeticError):
             continue
     return values
 
@@ -215,7 +276,9 @@ class WeaponProfile:
 
     # -- handling ----------------------------------------------------------
 
-    def recoil_kick(self, index: int, constants: dict[str, float] | None = None) -> tuple[float, float]:
+    def recoil_kick(
+        self, index: int, constants: dict[str, float] | None = None
+    ) -> tuple[float, float]:
         """Mirror of ``WeaponState.recoil_kick`` -> ``(pitch_deg, yaw_deg)``."""
         consts = constants or load_handling_constants()
         pattern_length = max(1.0, consts["RECOIL_PATTERN_LENGTH"])
@@ -238,7 +301,9 @@ class WeaponProfile:
         ceiling = max(self.spread_max_deg, self.spread_air_deg + self.spread_move_deg)
         return min(max(total, 0.0), ceiling)
 
-    def spread_radius_m(self, distance_m: float, shots: int = 0, speed_fraction: float = 0.0) -> float:
+    def spread_radius_m(
+        self, distance_m: float, shots: int = 0, speed_fraction: float = 0.0
+    ) -> float:
         """How far off-axis the cone can throw a round at ``distance_m``."""
         return math.tan(math.radians(self.spread_after(shots, speed_fraction))) * distance_m
 
@@ -262,9 +327,7 @@ class WeaponProfile:
         self, distance_m: float, shots: int = 0, speed_fraction: float = 0.0
     ) -> float:
         """``hit_probability_for_cone`` after ``shots`` uninterrupted shots."""
-        return self.hit_probability_for_cone(
-            distance_m, self.spread_after(shots, speed_fraction)
-        )
+        return self.hit_probability_for_cone(distance_m, self.spread_after(shots, speed_fraction))
 
     def _bloom_decay_per_cycle(self, constants: dict[str, float] | None = None) -> float:
         """Bloom recovered in one firing cycle.
@@ -378,7 +441,7 @@ class WeaponProfile:
                 bloom = max(0.0, bloom - decay)
         return math.inf
 
-    def best_band(self, peers: Iterable["WeaponProfile"] = ()) -> str:
+    def best_band(self, peers: Iterable[WeaponProfile] = ()) -> str:
         """The engagement band this profile *owns*.
 
         Absolute TTK always improves as the target gets closer, so "lowest
@@ -398,9 +461,7 @@ class WeaponProfile:
             if not others:
                 score = -mine
             else:
-                rivals = [
-                    math.inf if probe > p.range_m else p.effective_ttk(probe) for p in others
-                ]
+                rivals = [math.inf if probe > p.range_m else p.effective_ttk(probe) for p in others]
                 finite = [r for r in rivals if math.isfinite(r)]
                 # Advantage over the best rival that can reach this band.
                 # A zero TTK is a one-shot kill, i.e. unbeatable here.
@@ -580,9 +641,8 @@ def format_ttk_table(table: dict[str, Any] | None = None) -> str:
         "  actual = bloom, magazine and reload included, target stationary",
         "",
     ]
-    header = (
-        f"{'profile':<9}{'mode':<6}{'rpm':>6}{'mag':>5}{'range':>7}{'role':>13}  "
-        + "".join(f"{d:g}m".rjust(15) for d in distances)
+    header = f"{'profile':<9}{'mode':<6}{'rpm':>6}{'mag':>5}{'range':>7}{'role':>13}  " + "".join(
+        f"{d:g}m".rjust(15) for d in distances
     )
     lines.append(header)
     lines.append("-" * len(header))

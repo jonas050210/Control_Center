@@ -5,12 +5,13 @@ transition-level split of a demonstration recording reports an excellent
 validation loss while the model has effectively seen every validation
 state during training.
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.dataset import DemonstrationDataset
@@ -83,7 +84,9 @@ class SplitLeakageTests(unittest.TestCase):
         train, validation, report = dataset.split_with_report(0.2, seed=7)
         self.assertEqual(report.strategy, "episode")
         self.assertEqual(report.shared_groups, 0)
-        train_keys = {DemonstrationDataset.group_key(row, i) for i, row in enumerate(train.transitions)}
+        train_keys = {
+            DemonstrationDataset.group_key(row, i) for i, row in enumerate(train.transitions)
+        }
         validation_keys = {
             DemonstrationDataset.group_key(row, i) for i, row in enumerate(validation.transitions)
         }
@@ -105,7 +108,8 @@ class SplitLeakageTests(unittest.TestCase):
             DemonstrationDataset.group_key(row, i) for i, row in enumerate(validation.transitions)
         }
         grown = DemonstrationDataset(
-            list(small.transitions) + list(dataset_with_episodes(episodes=3, length=10).transitions),
+            list(small.transitions)
+            + list(dataset_with_episodes(episodes=3, length=10).transitions),
             {},
         )
         # Appending episodes 0..2 of a second "run" must not move the

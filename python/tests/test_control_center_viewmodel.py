@@ -5,13 +5,13 @@ These exercise `control_center_viewmodel` directly against the shapes
 side), without ever constructing a Tk widget - this module has no GUI
 dependency, so it must be importable and testable everywhere.
 """
+
 import math
 
 import pytest
 
 from sandboxai import control_center_viewmodel as vm
 from sandboxai.config import TrainingConfig
-
 
 # ---------------------------------------------------------------------------
 # Formatting
@@ -86,7 +86,12 @@ def test_dashboard_view_prefers_fresher_telemetry_row_when_available():
         "latest_run": {
             "run_id": "run-a",
             "run_dir": "/tmp/run-a",
-            "control": {"state": "Running", "timesteps": 100, "total_training_steps": 1000, "updated_at": 10_000.0},
+            "control": {
+                "state": "Running",
+                "timesteps": 100,
+                "total_training_steps": 1000,
+                "updated_at": 10_000.0,
+            },
             "config": {},
             "checkpoints": {},
             "evaluation": {},
@@ -109,7 +114,11 @@ def test_dashboard_view_marks_stale_when_no_process_and_old_update():
             "run_id": "run-a",
             "run_dir": "/tmp/run-a",
             "control": {"state": "Running", "updated_at": 1000.0},
-            "config": {}, "checkpoints": {}, "evaluation": {}, "warnings": [], "problems": [],
+            "config": {},
+            "checkpoints": {},
+            "evaluation": {},
+            "warnings": [],
+            "problems": [],
         },
         "active_processes": [],
     }
@@ -124,7 +133,11 @@ def test_dashboard_view_never_marks_finished_runs_stale():
             "run_id": "run-a",
             "run_dir": "/tmp/run-a",
             "control": {"state": "Finished", "updated_at": 1000.0},
-            "config": {}, "checkpoints": {}, "evaluation": {}, "warnings": [], "problems": [],
+            "config": {},
+            "checkpoints": {},
+            "evaluation": {},
+            "warnings": [],
+            "problems": [],
         },
         "active_processes": [],
     }
@@ -141,12 +154,15 @@ def test_runs_table_rows_extracts_expected_columns():
     list_runs_result = {
         "runs": [
             {
-                "run_id": "run-a", "status": {"state": "Running"},
+                "run_id": "run-a",
+                "status": {"state": "Running"},
                 "progress": {"timesteps": 50, "target_timesteps": 100, "fraction": 0.5},
                 "config": {"device": "cpu", "environment_count": 4, "env_workers": 2},
                 "checkpoints": {"count": 2, "has_best": True},
                 "evaluation": {"latest": {"mean_episode_reward": 1.1, "win_rate": 0.4}},
-                "modified_utc": "2024-01-01T00:00:00Z", "warnings": ["x"], "run_dir": "/tmp/run-a",
+                "modified_utc": "2024-01-01T00:00:00Z",
+                "warnings": ["x"],
+                "run_dir": "/tmp/run-a",
             }
         ]
     }
@@ -157,12 +173,22 @@ def test_runs_table_rows_extracts_expected_columns():
 
 
 def test_process_table_rows_extracts_pid_and_progress():
-    processes = [{
-        "id": "p1", "kind": "training", "pid": 4242, "started_at": 10.0,
-        "run_dir": "/tmp/run-a",
-        "meta": {"run_id": "run-a", "env_workers": 2, "environment_count": 4},
-        "backend": {"state": "Running", "timesteps": 250, "total_training_steps": 1000, "updated_at": 20.0},
-    }]
+    processes = [
+        {
+            "id": "p1",
+            "kind": "training",
+            "pid": 4242,
+            "started_at": 10.0,
+            "run_dir": "/tmp/run-a",
+            "meta": {"run_id": "run-a", "env_workers": 2, "environment_count": 4},
+            "backend": {
+                "state": "Running",
+                "timesteps": 250,
+                "total_training_steps": 1000,
+                "updated_at": 20.0,
+            },
+        }
+    ]
     rows = vm.process_table_rows(processes)
     assert rows[0]["pid"] == 4242
     assert rows[0]["progress_percent"] == 25.0
@@ -181,9 +207,16 @@ def test_evaluation_view_reports_unavailable_without_crashing():
 
 def test_evaluation_view_structures_action_head_diagnostics():
     summary = {
-        "path": "/tmp/eval.json", "episodes": 20, "timesteps": 1000, "mean_episode_reward": 2.0,
-        "win_rate": 0.6, "loss_rate": 0.3, "timeout_rate": 0.1,
-        "mean_kills": 1.5, "mean_accuracy": 0.4, "policy_shoot_request_rate": 0.7,
+        "path": "/tmp/eval.json",
+        "episodes": 20,
+        "timesteps": 1000,
+        "mean_episode_reward": 2.0,
+        "win_rate": 0.6,
+        "loss_rate": 0.3,
+        "timeout_rate": 0.1,
+        "mean_kills": 1.5,
+        "mean_accuracy": 0.4,
+        "policy_shoot_request_rate": 0.7,
         "action_pipeline": {"fire_conversion_rate": 0.9, "localization": "matched"},
     }
     view = vm.evaluation_view(summary)
@@ -209,8 +242,14 @@ def test_evaluation_comparison_rows_skips_unavailable_entries():
 
 def test_benchmark_history_rows_labels_each_row_with_its_source():
     history = [
-        {"directory": "/tmp/sweep-1", "results": [{"environments": 4, "workers": 1, "steps_per_second": 100.0}]},
-        {"directory": "/tmp/sweep-2", "results": [{"environments": 8, "workers": 1, "steps_per_second": 180.0}]},
+        {
+            "directory": "/tmp/sweep-1",
+            "results": [{"environments": 4, "workers": 1, "steps_per_second": 100.0}],
+        },
+        {
+            "directory": "/tmp/sweep-2",
+            "results": [{"environments": 8, "workers": 1, "steps_per_second": 180.0}],
+        },
     ]
     rows = vm.benchmark_history_rows(history)
     assert {row["source"] for row in rows} == {"/tmp/sweep-1", "/tmp/sweep-2"}

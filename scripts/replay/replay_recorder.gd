@@ -157,10 +157,8 @@ func record_step_events(step_events: Dictionary) -> int:
 		if add_event("combat", "shot", shot_data):
 			emitted += 1
 	if float(step_events.get("damage_taken", 0.0)) > 0.0:
-		if (
-			add_event(
-				"combat", "damage_taken", {"amount": float(step_events.get("damage_taken", 0.0))}
-			)
+		if add_event(
+			"combat", "damage_taken", {"amount": float(step_events.get("damage_taken", 0.0))}
 		):
 			emitted += 1
 	if bool(step_events.get("kill", false)):

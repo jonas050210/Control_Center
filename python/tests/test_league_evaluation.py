@@ -5,13 +5,14 @@ The existing sampling/Elo behaviour is covered by
 rich match results, per-map/per-condition breakdowns, frozen-opponent
 enforcement, persisted history and deterministic tournaments.
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from sandboxai.league import (
     MATCH_STAT_KEYS,
@@ -81,7 +82,9 @@ class BreakdownTests(unittest.TestCase):
             _result("learner", "learner@100", 0.0, map_id="night_yard", lighting="night")
         )
         self.league.record_result(
-            _result("learner", "learner@200", 0.5, map_id="night_yard", lighting="night", truncated=True)
+            _result(
+                "learner", "learner@200", 0.5, map_id="night_yard", lighting="night", truncated=True
+            )
         )
 
     def test_policy_summary_counts_every_outcome_class(self):
@@ -211,9 +214,7 @@ class TournamentTests(unittest.TestCase):
     def test_tournament_plays_every_ordered_pair(self):
         calls: list[tuple[str, str, dict]] = []
         league = EvaluationLeague(_registry(), seed=3)
-        played = league.run_tournament(
-            ["learner", "learner@100", "learner@200"], self._play(calls)
-        )
+        played = league.run_tournament(["learner", "learner@100", "learner@200"], self._play(calls))
         self.assertEqual(len(played), 6)  # 3 * 2 ordered pairs
         self.assertEqual(len({(a, b) for a, b, _c in calls}), 6)
 

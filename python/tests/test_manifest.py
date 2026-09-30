@@ -1,4 +1,5 @@
 """Run-manifest provenance: code, host, simulator and selection rule."""
+
 import json
 import os
 import stat
@@ -60,7 +61,9 @@ class ProvenanceSectionTests(unittest.TestCase):
         self.assertEqual(snapshot["configured"], "definitely-not-installed-godot")
         self.assertIsNone(snapshot["version"])
 
-    @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
+    @unittest.skipUnless(
+        os.name == "posix", "fake bridge executable requires POSIX shebang support"
+    )
     def test_godot_snapshot_reports_the_probed_version_when_available(self):
         # Regression test: godot_snapshot used to import a class named
         # GodotRuntimeValidator that does not exist (the real class is
@@ -72,9 +75,7 @@ class ProvenanceSectionTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             script = Path(tmp) / "fake_godot.py"
             script.write_text(
-                "import sys\n"
-                "if '--version' in sys.argv:\n"
-                "    print('4.7.2.stable.official')\n",
+                "import sys\nif '--version' in sys.argv:\n    print('4.7.2.stable.official')\n",
                 encoding="utf-8",
             )
             wrapper = Path(tmp) / "fake_godot"
@@ -82,9 +83,7 @@ class ProvenanceSectionTests(unittest.TestCase):
                 f"#!/bin/sh\nexec '{sys.executable}' '{script}' \"$@\"\n", encoding="utf-8"
             )
             wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            snapshot = godot_snapshot(
-                TrainingConfig(godot_executable=str(wrapper)), probe=True
-            )
+            snapshot = godot_snapshot(TrainingConfig(godot_executable=str(wrapper)), probe=True)
         self.assertEqual(snapshot["version"], "4.7.2.stable.official")
 
     def test_godot_snapshot_can_skip_the_subprocess_probe(self):

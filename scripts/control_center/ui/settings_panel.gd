@@ -78,9 +78,7 @@ func setup(p_session) -> void:
 	for level in range(
 		CurriculumConfig.Level.STATIONARY_TARGET, CurriculumConfig.Level.AGENT_VS_AGENT + 1
 	):
-		_curriculum_option.add_item(
-			"%d  %s" % [level, CurriculumConfig.level_name(level)], level
-		)
+		_curriculum_option.add_item("%d  %s" % [level, CurriculumConfig.level_name(level)], level)
 	_curriculum_option.item_selected.connect(_on_curriculum_selected)
 	curriculum_row.add_child(_curriculum_option)
 
@@ -219,9 +217,7 @@ func setup(p_session) -> void:
 
 
 func _make_tile_toggle(text: String, tile_id: String) -> Button:
-	var toggle := ControlCenterTheme.make_toggle(
-		text, session.config.is_tile_visible(tile_id)
-	)
+	var toggle := ControlCenterTheme.make_toggle(text, session.config.is_tile_visible(tile_id))
 	toggle.toggled.connect(_on_tile_toggled.bind(tile_id))
 	return toggle
 
@@ -229,9 +225,7 @@ func _make_tile_toggle(text: String, tile_id: String) -> Button:
 func refresh(_snapshot: Dictionary) -> void:
 	var pending: PackedStringArray = session.pending_setting_keys()
 	_pending_label.text = (
-		""
-		if pending.is_empty()
-		else "pending (needs Apply & reset): %s" % ", ".join(pending)
+		"" if pending.is_empty() else "pending (needs Apply & reset): %s" % ", ".join(pending)
 	)
 	_apply_button.disabled = pending.is_empty()
 	_command_label.text = session.training_command_line()

@@ -34,13 +34,15 @@ wants the data without an engine. ``verify_determinism`` is the piece that
 does involve an environment, and it takes an env factory so it can be
 tested against a scripted environment.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import json
 import math
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Sequence
+from typing import Any
 
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
@@ -138,7 +140,7 @@ class ReplayHeader:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ReplayHeader":
+    def from_dict(cls, payload: dict[str, Any]) -> ReplayHeader:
         known = {key: value for key, value in payload.items() if key in cls.__annotations__}
         header = cls(**known)
         header.action_nvec = [int(value) for value in header.action_nvec]
@@ -185,7 +187,11 @@ class ReplayTick:
         raise AttributeError("use ReplayEpisode.time_of(tick) — dt belongs to the header")
 
     def to_record(self) -> dict[str, Any]:
-        record: dict[str, Any] = {"t": self.tick, "a": list(self.action), "r": round(float(self.reward), 6)}
+        record: dict[str, Any] = {
+            "t": self.tick,
+            "a": list(self.action),
+            "r": round(float(self.reward), 6),
+        }
         if self.done:
             record["d"] = True
         if self.observation is not None:
@@ -195,7 +201,7 @@ class ReplayTick:
         return record
 
     @classmethod
-    def from_record(cls, payload: dict[str, Any]) -> "ReplayTick":
+    def from_record(cls, payload: dict[str, Any]) -> ReplayTick:
         return cls(
             tick=int(payload["t"]),
             action=[int(value) for value in payload.get("a", [])],
@@ -226,7 +232,7 @@ class ReplayEvent:
         return record
 
     @classmethod
-    def from_record(cls, payload: dict[str, Any]) -> "ReplayEvent":
+    def from_record(cls, payload: dict[str, Any]) -> ReplayEvent:
         return cls(
             tick=int(payload["t"]),
             kind=str(payload["e"]),
@@ -249,8 +255,13 @@ class ReplayEpisode:
 
     @property
     def event_tick(self) -> int:
-        """Tick index an event recorded right now belongs to."""
-        return max(0, self._tick - 1) if self.ticks else 0
+        """Index of the last recorded tick, i.e. the one a new event describes.
+
+        The recorder's namesake reads its own cursor, which points at the
+        *next* tick; a parsed episode has no cursor, so the same answer is
+        the last index in `ticks`. Before the first tick the answer is 0.
+        """
+        return max(0, len(self.ticks) - 1)
 
     @property
     def detailed(self) -> bool:
@@ -381,7 +392,9 @@ class ReplayRecorder:
             if not hasattr(self.header, key):
                 raise AttributeError(f"ReplayHeader has no field {key!r}")
             setattr(self.header, key, value)
-        self.event("episode_start", label=self.header.map_id or "episode", data={"seed": self.header.seed})
+        self.event(
+            "episode_start", label=self.header.map_id or "episode", data={"seed": self.header.seed}
+        )
 
     def record_step(
         self,
@@ -457,17 +470,21 @@ class ReplayRecorder:
                 )
             )
         if float(events.get("damage_taken", 0.0)) > 0.0:
-            emitted.append(self.event("combat", "damage_taken", {"amount": float(events["damage_taken"])}))
+            emitted.append(
+                self.event("combat", "damage_taken", {"amount": float(events["damage_taken"])})
+            )
         if events.get("kill"):
             emitted.append(self.event("death", "enemy_killed", {}))
         if events.get("died"):
             emitted.append(self.event("death", "agent_died", {}))
         return emitted
 
-    def finish(self, result: dict[str, Any] | None = None) -> "ReplayEpisode":
+    def finish(self, result: dict[str, Any] | None = None) -> ReplayEpisode:
         """Closes the episode and returns it as a loadable object."""
         self.result = dict(result or {})
-        self.event("episode_end", label=str(self.result.get("done_reason", "")), data=dict(self.result))
+        self.event(
+            "episode_end", label=str(self.result.get("done_reason", "")), data=dict(self.result)
+        )
         self._closed = True
         return self.episode()
 
@@ -530,21 +547,48 @@ def load_replay(path: str | Path, strict_contract: bool = True) -> ReplayEpisode
     return parse_replay(text.splitlines(), strict_contract=strict_contract)
 
 
+def _decode_replay_line(raw: str, number: int) -> dict[str, Any] | None:
+    """One JSONL line as a record dict, or None for a blank line."""
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise ReplayError(f"replay line {number} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ReplayError(f"replay line {number} is not a JSON object")
+    return payload
+
+
+def _check_tick_sequence(ticks: list[ReplayTick], expected_action_width: int) -> None:
+    """Ticks must be contiguous from 0 and match the header's action width.
+
+    A gap means the recorder dropped a frame, which silently changes what a
+    replay proves; refusing to load is better than analysing a hole.
+    """
+    for tick in ticks:
+        if len(tick.action) != expected_action_width:
+            raise ReplayError(
+                f"tick {tick.tick} has a {len(tick.action)}-component action, "
+                f"header declares {expected_action_width}"
+            )
+    for index, tick in enumerate(ticks):
+        if tick.tick != index:
+            raise ReplayError(
+                f"replay ticks are not contiguous: expected {index}, found {tick.tick}"
+            )
+
+
 def parse_replay(lines: Iterable[str], strict_contract: bool = True) -> ReplayEpisode:
     header: ReplayHeader | None = None
     ticks: list[ReplayTick] = []
     events: list[ReplayEvent] = []
     result: dict[str, Any] = {}
     for number, raw in enumerate(lines, start=1):
-        line = raw.strip()
-        if not line:
+        payload = _decode_replay_line(raw, number)
+        if payload is None:
             continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ReplayError(f"replay line {number} is not valid JSON: {exc}") from exc
-        if not isinstance(payload, dict):
-            raise ReplayError(f"replay line {number} is not a JSON object")
         if "header" in payload:
             if header is not None:
                 raise ReplayError(f"replay line {number}: a second header")
@@ -563,16 +607,7 @@ def parse_replay(lines: Iterable[str], strict_contract: bool = True) -> ReplayEp
             raise ReplayError(f"replay line {number}: unknown record {sorted(payload)}")
     if header is None:
         raise ReplayError("empty replay: no header")
-    expected_action_width = len(header.action_nvec)
-    for tick in ticks:
-        if len(tick.action) != expected_action_width:
-            raise ReplayError(
-                f"tick {tick.tick} has a {len(tick.action)}-component action, "
-                f"header declares {expected_action_width}"
-            )
-    for index, tick in enumerate(ticks):
-        if tick.tick != index:
-            raise ReplayError(f"replay ticks are not contiguous: expected {index}, found {tick.tick}")
+    _check_tick_sequence(ticks, len(header.action_nvec))
     return ReplayEpisode(header=header, ticks=ticks, events=events, result=result)
 
 
@@ -605,7 +640,9 @@ def validate_replay(episode: ReplayEpisode, strict_contract: bool = True) -> lis
     last_tick = len(episode.ticks) - 1
     for event in episode.events:
         if event.tick < 0 or event.tick > last_tick + 1:
-            problems.append(f"event {event.kind} anchored at tick {event.tick}, outside the episode")
+            problems.append(
+                f"event {event.kind} anchored at tick {event.tick}, outside the episode"
+            )
         if event.kind not in EVENT_KINDS:
             problems.append(f"unknown event kind: {event.kind}")
     return problems
@@ -698,7 +735,9 @@ class ReplayPlayer:
                 return event
         return None
 
-    def previous_event(self, kinds: Sequence[str] | None = IMPORTANT_EVENT_KINDS) -> ReplayEvent | None:
+    def previous_event(
+        self, kinds: Sequence[str] | None = IMPORTANT_EVENT_KINDS
+    ) -> ReplayEvent | None:
         found: ReplayEvent | None = None
         for event in self.episode.events_of(kinds):
             if event.tick < self.cursor:
@@ -707,7 +746,9 @@ class ReplayPlayer:
                 break
         return found
 
-    def jump_to_next_event(self, kinds: Sequence[str] | None = IMPORTANT_EVENT_KINDS) -> ReplayEvent | None:
+    def jump_to_next_event(
+        self, kinds: Sequence[str] | None = IMPORTANT_EVENT_KINDS
+    ) -> ReplayEvent | None:
         event = self.next_event(kinds)
         if event is not None:
             self.seek(event.tick)

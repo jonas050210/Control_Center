@@ -7,7 +7,6 @@ extends RefCounted
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterEventLog = preload("res://scripts/control_center/control_center_event_log.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -133,9 +132,7 @@ func test_filter_options_cover_every_category() -> SandboxTest:
 	]:
 		t.assert_true(options.has(category), "category %d must be filterable" % category)
 		t.assert_eq(
-			ControlCenterEventLog.category_from_name(
-				ControlCenterEventLog.category_name(category)
-			),
+			ControlCenterEventLog.category_from_name(ControlCenterEventLog.category_name(category)),
 			category
 		)
 	return t

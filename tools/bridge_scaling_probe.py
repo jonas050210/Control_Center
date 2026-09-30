@@ -26,21 +26,23 @@ Usage
     python tools/bridge_scaling_probe.py --step-usec 200 \
         --env-counts 4,8,12,16,20 --worker-counts 1,2,4,8 --steps 300
 """
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "python"))
 sys.path.insert(0, str(REPO_ROOT / "python" / "tests"))
 
-from sandboxai.godot_env import make_batch_client  # noqa: E402
 from simulated_bridge import SimulatedBridgeExecutable, supported  # noqa: E402
+
+from sandboxai.godot_env import make_batch_client  # noqa: E402
 
 
 def measure(

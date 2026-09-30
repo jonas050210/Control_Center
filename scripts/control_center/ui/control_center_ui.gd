@@ -25,9 +25,7 @@ extends CanvasLayer
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterAgentPanel = preload("res://scripts/control_center/ui/agent_panel.gd")
 const ControlCenterAgentsPanel = preload("res://scripts/control_center/ui/agents_panel.gd")
-const ControlCenterAnalyticsPanel = preload(
-	"res://scripts/control_center/ui/analytics_panel.gd"
-)
+const ControlCenterAnalyticsPanel = preload("res://scripts/control_center/ui/analytics_panel.gd")
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterControlsPanel = preload("res://scripts/control_center/ui/controls_panel.gd")
 const ControlCenterHeadlessPanel = preload("res://scripts/control_center/ui/headless_panel.gd")
@@ -39,9 +37,7 @@ const ControlCenterMetricsPanel = preload("res://scripts/control_center/ui/metri
 const ControlCenterObservationPanel = preload(
 	"res://scripts/control_center/ui/observation_panel.gd"
 )
-const ControlCenterPerceptionPanel = preload(
-	"res://scripts/control_center/ui/perception_panel.gd"
-)
+const ControlCenterPerceptionPanel = preload("res://scripts/control_center/ui/perception_panel.gd")
 const ControlCenterReplayPanel = preload("res://scripts/control_center/ui/replay_panel.gd")
 const ControlCenterResultsPanel = preload("res://scripts/control_center/ui/results_panel.gd")
 const ControlCenterSettingsPanel = preload("res://scripts/control_center/ui/settings_panel.gd")
@@ -59,9 +55,7 @@ const ControlCenterTrainingDashboardPanel = preload(
 const ControlCenterTrainingLaunchPanel = preload(
 	"res://scripts/control_center/ui/training_launch_panel.gd"
 )
-const TrainingRunController = preload(
-	"res://scripts/control_center/training_run_controller.gd"
-)
+const TrainingRunController = preload("res://scripts/control_center/training_run_controller.gd")
 
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
@@ -217,7 +211,9 @@ func _build_navigation() -> Control:
 	items.add_child(spacer)
 	items.add_child(
 		ControlCenterTheme.make_label(
-			"F1–F3 toggle panels", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+			"F1–F3 toggle panels",
+			ControlCenterTheme.FONT_SIZE_SMALL,
+			ControlCenterTheme.COLOR_MUTED
 		)
 	)
 	return rail
@@ -572,12 +568,15 @@ func _apply_panel_visibility() -> void:
 	var logs_visible: bool = session.config.is_tile_visible("logs")
 	_bottom_container.visible = (controls_visible or logs_visible) and not headless_dashboard
 	var training_state: int = int(session.training_run.state)
-	var training_active: bool = training_state in [
-		TrainingRunController.State.STARTING,
-		TrainingRunController.State.RUNNING,
-		TrainingRunController.State.PAUSED,
-		TrainingRunController.State.STOPPING,
-	]
+	var training_active: bool = (
+		training_state
+		in [
+			TrainingRunController.State.STARTING,
+			TrainingRunController.State.RUNNING,
+			TrainingRunController.State.PAUSED,
+			TrainingRunController.State.STOPPING,
+		]
+	)
 	training_controls_panel.visible = (
 		session.config.is_tile_visible("training")
 		and (active_page() == "training" or training_active)
@@ -623,9 +622,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var gameplay_active: bool = session.is_human_mode() and session.human_input_enabled
 	match key_event.keycode:
 		KEY_F1:
-			session.config.set_tile_visible(
-				"agent", not session.config.is_tile_visible("agent")
-			)
+			session.config.set_tile_visible("agent", not session.config.is_tile_visible("agent"))
 			session.config.save_preferences()
 			_apply_panel_visibility()
 			get_viewport().set_input_as_handled()
@@ -637,9 +634,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_apply_panel_visibility()
 			get_viewport().set_input_as_handled()
 		KEY_F3:
-			session.config.set_tile_visible(
-				"logs", not session.config.is_tile_visible("logs")
-			)
+			session.config.set_tile_visible("logs", not session.config.is_tile_visible("logs"))
 			session.config.save_preferences()
 			_apply_panel_visibility()
 			get_viewport().set_input_as_handled()

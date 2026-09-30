@@ -13,7 +13,6 @@ const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 var simulation_manager: SimulationManager
 
 
@@ -28,9 +27,7 @@ static func action_space_info() -> Dictionary:
 		"dimension": Action.MULTI_DISCRETE_SIZE,
 		# Kept for backwards compatibility with single-discrete API.
 		"discrete_choices": Action.DISCRETE_COUNT,
-		"fields": [
-			"move_axis", "strafe_axis", "look_yaw_axis", "look_pitch_axis", "shoot", "jump"
-		],
+		"fields": ["move_axis", "strafe_axis", "look_yaw_axis", "look_pitch_axis", "shoot", "jump"],
 		"continuous_reserved": ["look_delta.x", "look_delta.y"],
 	}
 

@@ -298,6 +298,8 @@ scripts/
               MapAnalyzer (exploration mode + Control Center payload)
   scenario/   ScenarioLibrary (twelve seedable encounters)
   env/        EnvironmentCore, EnvironmentReset (episode setup),
+              EnvironmentCombat (shot resolution and hit zones),
+              EnvironmentEnemies (per-tick opponent update),
               EnvironmentIntrospection (read-only Control Center views),
               optional EnvironmentView
   agent/      Agent state/view
@@ -316,22 +318,14 @@ scripts/
     ui/       Control Center presentation layer (status bar, agent panel,
               perception/observation/results/settings tabs, controls, log,
               HUD, perception map, shared theme)
-python/sandboxai/
-  config.py       Training/BC/evaluation configuration
-  contract.py     Observation/Action contract description + GameAdapter hook
-  godot_env.py    subprocess, Gymnasium and SB3 adapters
-  ppo.py          PPO, evaluation callbacks, checkpoints
-  dataset.py      demonstrations and action validation
-  bc.py           PyTorch behavior cloning and compatible warm start
-  evaluation.py   frozen evaluation and JSON/CSV summaries
-  benchmark.py    throughput measurements and scaling analysis
-  telemetry.py    structured metrics/resource snapshots
-  self_play.py    policy slots and frozen-opponent lifecycle
-  league.py       checkpoint registry, opponent sampling, internal Elo
-  conditions.py   seeded condition space + per-condition tracking/report
-  auto_curriculum.py  rolling-window promotion/demotion with hysteresis
-  cli.py          complete command line
+python/sandboxai/   46 modules, flat - see PYTHON_MODULE_MAP.md
 ```
+
+The Python side is not listed file-by-file here. It used to be, and the
+list went stale: it named thirteen of the forty-six modules and nothing
+noticed. [PYTHON_MODULE_MAP.md](PYTHON_MODULE_MAP.md) has all of them,
+grouped by theme, with every description taken from the module's own
+docstring and a test that fails when the two disagree.
 
 ## Known limits and next milestone
 

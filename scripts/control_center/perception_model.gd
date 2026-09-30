@@ -44,16 +44,20 @@ const OPTIONAL_FEATURES: Array = [
 		"label": "Field of view gating",
 		"method": "get_agent_field_of_view",
 		"unavailable_note":
-		"This environment exposes no FOV hook, so the policy sees tracked "
-		+ "enemies regardless of facing.",
+		(
+			"This environment exposes no FOV hook, so the policy sees tracked "
+			+ "enemies regardless of facing."
+		),
 	},
 	{
 		"id": "line_of_sight",
 		"label": "Line of sight / occlusion",
 		"method": "has_line_of_sight",
 		"unavailable_note":
-		"This environment exposes no line-of-sight hook, so nothing can be "
-		+ "hidden by geometry.",
+		(
+			"This environment exposes no line-of-sight hook, so nothing can be "
+			+ "hidden by geometry."
+		),
 	},
 	{
 		"id": "sound_events",
@@ -66,16 +70,20 @@ const OPTIONAL_FEATURES: Array = [
 		"label": "Hearing uncertainty / masking",
 		"method": "get_sound_summary",
 		"unavailable_note":
-		"This environment reports individual sounds but no aggregate hearing "
-		+ "state, so masking and bearing uncertainty cannot be shown.",
+		(
+			"This environment reports individual sounds but no aggregate hearing "
+			+ "state, so masking and bearing uncertainty cannot be shown."
+		),
 	},
 	{
 		"id": "exploration",
 		"label": "Map knowledge / exploration",
 		"method": "get_exploration_state",
 		"unavailable_note":
-		"This environment exposes no exploration hook, so the agent's map "
-		+ "knowledge cannot be inspected.",
+		(
+			"This environment exposes no exploration hook, so the agent's map "
+			+ "knowledge cannot be inspected."
+		),
 	},
 	{
 		"id": "environment_conditions",
@@ -88,8 +96,10 @@ const OPTIONAL_FEATURES: Array = [
 		"label": "Target memory / last-known position",
 		"method": "get_target_memory",
 		"unavailable_note":
-		"This environment exposes no memory hook, so the observation is "
-		+ "memoryless: current positions only, no decay or confidence.",
+		(
+			"This environment exposes no memory hook, so the observation is "
+			+ "memoryless: current positions only, no decay or confidence."
+		),
 	},
 	{
 		"id": "obstacles_cover",
@@ -102,16 +112,20 @@ const OPTIONAL_FEATURES: Array = [
 		"label": "Navigation / pathfinding",
 		"method": "get_navigation_state",
 		"unavailable_note":
-		"This environment exposes no navigation hook. Movement is analytic; "
-		+ "there is no navmesh or path planner in any case.",
+		(
+			"This environment exposes no navigation hook. Movement is analytic; "
+			+ "there is no navmesh or path planner in any case."
+		),
 	},
 	{
 		"id": "dead_bodies",
 		"label": "Corpses / dead bodies",
 		"method": "get_dead_bodies",
 		"unavailable_note":
-		"This environment exposes no corpse hook, so dead enemies are only "
-		+ "flagged not-alive and keep no body.",
+		(
+			"This environment exposes no corpse hook, so dead enemies are only "
+			+ "flagged not-alive and keep no body."
+		),
 	},
 ]
 
@@ -150,12 +164,12 @@ static func build(env, observation = null) -> Dictionary:
 
 	var perception_state: Dictionary = _build_perception_state(env, caps)
 	var visible_ids: Array = []
-	for belief_value in (perception_state.get("beliefs", []) as Array):
+	for belief_value in perception_state.get("beliefs", []) as Array:
 		if bool((belief_value as Dictionary).get("visible", false)):
 			visible_ids.append(int((belief_value as Dictionary).get("id", -1)))
 
 	var hidden: Array = []
-	for entry_value in (real_world["enemies"] as Array):
+	for entry_value in real_world["enemies"] as Array:
 		var entry: Dictionary = entry_value
 		if not bool(entry["alive"]):
 			continue
@@ -177,26 +191,32 @@ static func build(env, observation = null) -> Dictionary:
 				"outside the agent's field of view or occluded by geometry; "
 				+ "the observation reports a decaying memory or nothing at all"
 			)
-		hidden.append(
-			{
-				"index": index,
-				"distance_m": float(entry["distance_m"]),
-				"bearing_deg": float(entry["bearing_deg"]),
-				"reason": reason,
-				"detail": detail,
-			}
+		(
+			hidden
+			. append(
+				{
+					"index": index,
+					"distance_m": float(entry["distance_m"]),
+					"bearing_deg": float(entry["bearing_deg"]),
+					"reason": reason,
+					"detail": detail,
+				}
+			)
 		)
 
 	var unavailable: Array = []
 	for feature_id in caps.keys():
 		var capability: Dictionary = caps[feature_id]
 		if not bool(capability["available"]):
-			unavailable.append(
-				{
-					"id": str(feature_id),
-					"label": str(capability["label"]),
-					"note": str(capability["note"]),
-				}
+			(
+				unavailable
+				. append(
+					{
+						"id": str(feature_id),
+						"label": str(capability["label"]),
+						"note": str(capability["note"]),
+					}
+				)
 			)
 
 	return {
@@ -271,18 +291,21 @@ static func _build_real_world(env) -> Dictionary:
 		var enemy: EnemyState = env.enemies[index]
 		var to_enemy: Vector3 = enemy.position - agent.position
 		to_enemy.y = 0.0
-		enemies.append(
-			{
-				"index": index,
-				"position": enemy.position,
-				"distance_m": to_enemy.length(),
-				"bearing_deg": _bearing_deg(agent, enemy.position),
-				"alive": enemy.alive,
-				"health": enemy.health,
-				"max_health": enemy.max_health,
-				"ai_state": EnemyState.ai_state_name(enemy.ai_state),
-				"in_weapon_range": to_enemy.length() <= agent.weapon.range_m,
-			}
+		(
+			enemies
+			. append(
+				{
+					"index": index,
+					"position": enemy.position,
+					"distance_m": to_enemy.length(),
+					"bearing_deg": _bearing_deg(agent, enemy.position),
+					"alive": enemy.alive,
+					"health": enemy.health,
+					"max_health": enemy.max_health,
+					"ai_state": EnemyState.ai_state_name(enemy.ai_state),
+					"in_weapon_range": to_enemy.length() <= agent.weapon.range_m,
+				}
+			)
 		)
 	return {
 		"agent_position": agent.position,
@@ -372,9 +395,8 @@ static func _slot(vector: Dictionary, label: String, prefix: String, alive: bool
 	return {
 		"slot": label,
 		"alive": alive,
-		"distance_m": (
-			float(vector.get("%s_distance_norm" % prefix, 0.0)) * SandboxConfig.ARENA_MAX_DISTANCE
-		),
+		"distance_m":
+		float(vector.get("%s_distance_norm" % prefix, 0.0)) * SandboxConfig.ARENA_MAX_DISTANCE,
 		"bearing_deg": float(vector.get("%s_bearing_norm" % prefix, 0.0)) * 180.0,
 		"health_norm": float(vector.get("%s_health_norm" % prefix, 0.0)),
 		"relative_position_norm": relative,
@@ -441,59 +463,71 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 	var ai_perception: Dictionary = perception["ai_perception"]
 
 	lines.append("REAL WORLD (ground truth, debug only)")
-	lines.append(
-		(
-			"  agent hp %.0f/%.0f   alive enemies %d/%d"
-			% [
-				float(real_world["agent_health"]),
-				float(real_world["agent_max_health"]),
-				int(real_world["alive_enemy_count"]),
-				int(real_world["total_enemy_count"]),
-			]
+	(
+		lines
+		. append(
+			(
+				"  agent hp %.0f/%.0f   alive enemies %d/%d"
+				% [
+					float(real_world["agent_health"]),
+					float(real_world["agent_max_health"]),
+					int(real_world["alive_enemy_count"]),
+					int(real_world["total_enemy_count"]),
+				]
+			)
 		)
 	)
-	for entry_value in (real_world["enemies"] as Array):
+	for entry_value in real_world["enemies"] as Array:
 		var entry: Dictionary = entry_value
-		lines.append(
-			(
-				"  #%d %-6s %5.1fm %+6.1f deg hp %3.0f%s"
-				% [
-					int(entry["index"]),
-					str(entry["ai_state"]),
-					float(entry["distance_m"]),
-					float(entry["bearing_deg"]),
-					float(entry["health"]),
-					"" if bool(entry["alive"]) else "  (dead)",
-				]
+		(
+			lines
+			. append(
+				(
+					"  #%d %-6s %5.1fm %+6.1f deg hp %3.0f%s"
+					% [
+						int(entry["index"]),
+						str(entry["ai_state"]),
+						float(entry["distance_m"]),
+						float(entry["bearing_deg"]),
+						float(entry["health"]),
+						"" if bool(entry["alive"]) else "  (dead)",
+					]
+				)
 			)
 		)
 
 	lines.append("")
 	lines.append("AI PERCEPTION (decoded from the observation vector)")
-	for slot_value in (ai_perception["slots"] as Array):
+	for slot_value in ai_perception["slots"] as Array:
 		var slot: Dictionary = slot_value
 		if bool(slot["alive"]):
-			lines.append(
-				(
-					"  %-9s %5.1fm %+6.1f deg  hp %.0f%%"
-					% [
-						str(slot["slot"]),
-						float(slot["distance_m"]),
-						float(slot["bearing_deg"]),
-						float(slot["health_norm"]) * 100.0,
-					]
+			(
+				lines
+				. append(
+					(
+						"  %-9s %5.1fm %+6.1f deg  hp %.0f%%"
+						% [
+							str(slot["slot"]),
+							float(slot["distance_m"]),
+							float(slot["bearing_deg"]),
+							float(slot["health_norm"]) * 100.0,
+						]
+					)
 				)
 			)
 		else:
 			lines.append("  %-9s (empty slot: no enemy reported)" % str(slot["slot"]))
-	lines.append(
-		(
-			"  weapon_ready %s   in_combat %s   memory: %s"
-			% [
-				str(ai_perception["weapon_ready"]),
-				str(ai_perception["in_combat"]),
-				str(ai_perception["memory"]),
-			]
+	(
+		lines
+		. append(
+			(
+				"  weapon_ready %s   in_combat %s   memory: %s"
+				% [
+					str(ai_perception["weapon_ready"]),
+					str(ai_perception["in_combat"]),
+					str(ai_perception["memory"]),
+				]
+			)
 		)
 	)
 
@@ -506,17 +540,20 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			lines.append("  (no remembered contacts)")
 		for track_value in tracks:
 			var track: Dictionary = track_value
-			lines.append(
-				(
-					"  #%d via %-6s age %4.1fs  confidence %3.0f%%  at (%.1f, %.1f)"
-					% [
-						int(track["id"]),
-						str(track["source_name"]),
-						float(track["age"]),
-						float(track["confidence"]) * 100.0,
-						float((track["position"] as Vector3).x),
-						float((track["position"] as Vector3).z),
-					]
+			(
+				lines
+				. append(
+					(
+						"  #%d via %-6s age %4.1fs  confidence %3.0f%%  at (%.1f, %.1f)"
+						% [
+							int(track["id"]),
+							str(track["source_name"]),
+							float(track["age"]),
+							float(track["confidence"]) * 100.0,
+							float((track["position"] as Vector3).x),
+							float((track["position"] as Vector3).z),
+						]
+					)
 				)
 			)
 		if not str(state.get("target_reason", "")).is_empty():
@@ -529,38 +566,46 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			lines.append("  (silence)")
 		for sound_value in sounds:
 			var sound: Dictionary = sound_value
-			lines.append(
-				(
-					"  %-11s %5.1fm %+6.1f +/-%4.1f deg  loud %3.0f%%  conf %3.0f%%  age %4.2fs  walls %d%s"
-					% [
-						str(sound["category_name"]),
-						float(sound["distance"]),
-						float(sound["bearing_deg"]),
-						float(sound.get("direction_error_deg", 0.0)),
-						float(sound["loudness"]) * 100.0,
-						float(sound.get("confidence", 0.0)) * 100.0,
-						float(sound["age"]),
-						int(sound["occluders"]),
-						"  (masked)" if bool(sound.get("masked", false)) else "",
-					]
+			(
+				lines
+				. append(
+					(
+						"  %-11s %5.1fm %+6.1f +/-%4.1f deg  loud %3.0f%%  conf %3.0f%%  age %4.2fs  walls %d%s"
+						% [
+							str(sound["category_name"]),
+							float(sound["distance"]),
+							float(sound["bearing_deg"]),
+							float(sound.get("direction_error_deg", 0.0)),
+							float(sound["loudness"]) * 100.0,
+							float(sound.get("confidence", 0.0)) * 100.0,
+							float(sound["age"]),
+							int(sound["occluders"]),
+							"  (masked)" if bool(sound.get("masked", false)) else "",
+						]
+					)
 				)
 			)
 		var sound_summary: Dictionary = state.get("sound_summary", {})
 		if not sound_summary.is_empty():
-			lines.append(
-				(
-					"  sources heard: %d in %d direction(s), %d masked, mean confidence %3.0f%%"
-					% [
-						int(sound_summary.get("count", 0)),
-						int(sound_summary.get("distinct_sources", 0)),
-						int(sound_summary.get("masked_count", 0)),
-						float(sound_summary.get("mean_confidence", 0.0)) * 100.0,
-					]
+			(
+				lines
+				. append(
+					(
+						"  sources heard: %d in %d direction(s), %d masked, mean confidence %3.0f%%"
+						% [
+							int(sound_summary.get("count", 0)),
+							int(sound_summary.get("distinct_sources", 0)),
+							int(sound_summary.get("masked_count", 0)),
+							float(sound_summary.get("mean_confidence", 0.0)) * 100.0,
+						]
+					)
 				)
 			)
 			lines.append(
-				"  ambient emitters on this map: %d (environmental, not a contact)"
-				% int(sound_summary.get("ambient_emitters", 0))
+				(
+					"  ambient emitters on this map: %d (environmental, not a contact)"
+					% int(sound_summary.get("ambient_emitters", 0))
+				)
 			)
 
 		var conditions: Dictionary = state.get("conditions", {})
@@ -568,14 +613,17 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			lines.append("")
 			lines.append("CONDITIONS (the policy feels these, it is never told the mode)")
 			var lighting: Dictionary = conditions.get("lighting", {})
-			lines.append(
-				(
-					"  lighting %-13s here %3.0f%% lit   map %s"
-					% [
-						str(lighting.get("mode_id", "?")),
-						float(conditions.get("local_illumination", 1.0)) * 100.0,
-						str((conditions.get("map", {}) as Dictionary).get("label", "-")),
-					]
+			(
+				lines
+				. append(
+					(
+						"  lighting %-13s here %3.0f%% lit   map %s"
+						% [
+							str(lighting.get("mode_id", "?")),
+							float(conditions.get("local_illumination", 1.0)) * 100.0,
+							str((conditions.get("map", {}) as Dictionary).get("label", "-")),
+						]
+					)
 				)
 			)
 
@@ -584,17 +632,20 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			lines.append("")
 			lines.append("MAP KNOWLEDGE (built by looking; unknown really is unknown)")
 			var memory_payload: Dictionary = exploration.get("memory", {})
-			lines.append(
-				(
-					"  coverage %3.0f%%  known %d/%d cells  visited %d  uncertainty %3.0f%%%s"
-					% [
-						float(exploration.get("coverage", 0.0)) * 100.0,
-						int(memory_payload.get("known_cells", 0)),
-						int(memory_payload.get("cell_count", 0)),
-						int(memory_payload.get("visited_cells", 0)),
-						float(memory_payload.get("uncertainty", 0.0)) * 100.0,
-						"  [MAP ANALYZER MODE]" if bool(exploration.get("mode", false)) else "",
-					]
+			(
+				lines
+				. append(
+					(
+						"  coverage %3.0f%%  known %d/%d cells  visited %d  uncertainty %3.0f%%%s"
+						% [
+							float(exploration.get("coverage", 0.0)) * 100.0,
+							int(memory_payload.get("known_cells", 0)),
+							int(memory_payload.get("cell_count", 0)),
+							int(memory_payload.get("visited_cells", 0)),
+							float(memory_payload.get("uncertainty", 0.0)) * 100.0,
+							"  [MAP ANALYZER MODE]" if bool(exploration.get("mode", false)) else "",
+						]
+					)
 				)
 			)
 
@@ -604,14 +655,17 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 			lines.append("CORPSES (environmental information, never targetable)")
 			for corpse_value in corpses:
 				var corpse: Dictionary = corpse_value
-				lines.append(
-					(
-						"  #%d at (%.1f, %.1f)"
-						% [
-							int(corpse["id"]),
-							float((corpse["position"] as Vector3).x),
-							float((corpse["position"] as Vector3).z),
-						]
+				(
+					lines
+					. append(
+						(
+							"  #%d at (%.1f, %.1f)"
+							% [
+								int(corpse["id"]),
+								float((corpse["position"] as Vector3).x),
+								float((corpse["position"] as Vector3).z),
+							]
+						)
 					)
 				)
 
@@ -623,15 +677,18 @@ static func format_lines(perception: Dictionary) -> PackedStringArray:
 		lines.append("HIDDEN FROM AI (exists in world, absent from observation)")
 		for entry_value in hidden:
 			var entry: Dictionary = entry_value
-			lines.append(
-				(
-					"  #%d %5.1fm %+6.1f deg  reason: %s"
-					% [
-						int(entry["index"]),
-						float(entry["distance_m"]),
-						float(entry["bearing_deg"]),
-						str(entry["reason"]),
-					]
+			(
+				lines
+				. append(
+					(
+						"  #%d %5.1fm %+6.1f deg  reason: %s"
+						% [
+							int(entry["index"]),
+							float(entry["distance_m"]),
+							float(entry["bearing_deg"]),
+							str(entry["reason"]),
+						]
+					)
 				)
 			)
 	return lines

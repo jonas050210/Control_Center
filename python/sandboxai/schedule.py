@@ -3,6 +3,7 @@
 Kept small so tests, manifests and future analysis tools can reason about
 requested versus full-rollout timesteps without importing SB3.
 """
+
 from __future__ import annotations
 
 import math
@@ -29,6 +30,5 @@ def full_rollout_schedule(
         "requested_timesteps": int(requested_timesteps),
         "scheduled_timesteps": scheduled,
         "overshoot_timesteps": scheduled - int(requested_timesteps),
-        "overshoot_fraction": (scheduled - int(requested_timesteps))
-        / int(requested_timesteps),
+        "overshoot_fraction": (scheduled - int(requested_timesteps)) / int(requested_timesteps),
     }

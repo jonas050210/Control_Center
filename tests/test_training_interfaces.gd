@@ -8,7 +8,6 @@ const Action = preload("res://scripts/core/action.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

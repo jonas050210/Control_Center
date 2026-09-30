@@ -15,7 +15,6 @@ const Observation = preload("res://scripts/core/observation.gd")
 const PerceptionModel = preload("res://scripts/control_center/perception_model.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -61,9 +60,7 @@ func test_ai_perception_matches_the_observation_not_the_world() -> SandboxTest:
 		0.001,
 		"distance is the de-normalized observation value, not a world measurement"
 	)
-	t.assert_almost_eq(
-		float(primary["bearing_deg"]), observation.enemy_bearing_norm * 180.0, 0.001
-	)
+	t.assert_almost_eq(float(primary["bearing_deg"]), observation.enemy_bearing_norm * 180.0, 0.001)
 	t.assert_almost_eq(float(primary["health_norm"]), observation.enemy_health_norm, 0.001)
 	t.assert_true(
 		bool(primary["alive"]) == (observation.alive_enemy_count_norm > 0.0),
@@ -97,12 +94,10 @@ func test_ai_branch_ignores_members_outside_the_observation_vector() -> SandboxT
 	observation.alive_enemy_count_norm = 1.0
 	observation.enemy_distance_norm = 0.5
 	var second: Dictionary = (
-		(PerceptionModel.build(env, observation)["ai_perception"]["slots"] as Array)[0]
-	)
+		PerceptionModel.build(env, observation)["ai_perception"]["slots"] as Array
+	)[0]
 	t.assert_true(bool(second["alive"]), "the vector is the only source of AI knowledge")
-	t.assert_almost_eq(
-		float(second["distance_m"]), 0.5 * SandboxConfig.ARENA_MAX_DISTANCE, 0.001
-	)
+	t.assert_almost_eq(float(second["distance_m"]), 0.5 * SandboxConfig.ARENA_MAX_DISTANCE, 0.001)
 	return t
 
 

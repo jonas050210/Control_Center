@@ -241,10 +241,7 @@ func _rebuild_event_list() -> void:
 		var event: Dictionary = event_value
 		var label: String = str(event.get("label", ""))
 		_event_list.add_item(
-			(
-				"t%05d  %-14s %s"
-				% [int(event.get("tick", 0)), str(event.get("kind", "")), label]
-			)
+			"t%05d  %-14s %s" % [int(event.get("tick", 0)), str(event.get("kind", "")), label]
 		)
 
 

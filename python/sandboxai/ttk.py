@@ -37,14 +37,16 @@ observation. :class:`TTKDataset` deliberately offers no ``arrays()``.
 Demonstrations for BC come from the local Godot recorder
 (:mod:`sandboxai.dataset`), which logs the real contract.
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import json
 import math
-from pathlib import Path
 import statistics
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 SCHEMA = "sandboxai.ttk_trials"
 SCHEMA_VERSION = 1
@@ -178,65 +180,121 @@ class TTKTrial:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, values: dict[str, Any]) -> "TTKTrial":
+    def from_dict(cls, values: dict[str, Any]) -> TTKTrial:
         known = {key: values[key] for key in cls.__dataclass_fields__ if key in values}
         return cls(**known)
 
 
-def validate_trial(values: dict[str, Any], index: int = 0) -> list[str]:
-    """Problems with one raw trial record; empty list means acceptable."""
-    problems: list[str] = []
-    for name in values:
-        lowered = str(name).lower()
-        for marker in FORBIDDEN_FIELD_MARKERS:
-            if marker in lowered:
-                problems.append(
-                    f"trial {index}: field {name!r} implies non-perceivable or "
-                    "unauthorized data; TTK trials accept player-visible annotation only"
-                )
-    for name in REQUIRED_FIELDS:
-        if name not in values:
-            problems.append(f"trial {index}: missing required field {name!r}")
-    if problems:
-        return problems
+def _admissibility_problems(values: dict[str, Any], index: int) -> list[str]:
+    """Ethics and shape gate: may the record be looked at at all, and is it complete?
 
-    if str(values["source"]) not in SOURCES:
-        problems.append(f"trial {index}: source must be one of {SOURCES}")
-    if str(values["outcome"]) not in OUTCOMES:
-        problems.append(f"trial {index}: outcome must be one of {OUTCOMES}")
-    if str(values.get("movement_state", "stationary")) not in MOVEMENT_STATES:
-        problems.append(f"trial {index}: movement_state must be one of {MOVEMENT_STATES}")
-    if str(values.get("hit_zone", "body")) not in HIT_ZONES:
-        problems.append(f"trial {index}: hit_zone must be one of {HIT_ZONES}")
-    for name in ("distance_m", "target_health"):
-        value = values[name]
-        if not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) <= 0.0:
-            problems.append(f"trial {index}: {name} must be a positive finite number")
-    for name in ("shots_fired", "shots_hit"):
-        value = values.get(name, 0)
-        if not isinstance(value, int) or value < 0:
-            problems.append(f"trial {index}: {name} must be a non-negative integer")
+    Runs before every other check and short-circuits them, so a record that
+    carries non-perceivable data is rejected on that ground alone rather than
+    also being picked apart field by field.
+    """
+    problems = [
+        f"trial {index}: field {name!r} implies non-perceivable or "
+        "unauthorized data; TTK trials accept player-visible annotation only"
+        for name in values
+        for marker in FORBIDDEN_FIELD_MARKERS
+        if marker in str(name).lower()
+    ]
+    problems += [
+        f"trial {index}: missing required field {name!r}"
+        for name in REQUIRED_FIELDS
+        if name not in values
+    ]
+    return problems
+
+
+def _enum_problems(values: dict[str, Any], index: int) -> list[str]:
+    """Categorical fields that must come from a closed vocabulary."""
+    checks = (
+        ("source", str(values["source"]), SOURCES),
+        ("outcome", str(values["outcome"]), OUTCOMES),
+        ("movement_state", str(values.get("movement_state", "stationary")), MOVEMENT_STATES),
+        ("hit_zone", str(values.get("hit_zone", "body")), HIT_ZONES),
+    )
+    return [
+        f"trial {index}: {name} must be one of {allowed}"
+        for name, value, allowed in checks
+        if value not in allowed
+    ]
+
+
+def _numeric_problems(values: dict[str, Any], index: int) -> list[str]:
+    """Magnitudes and counts, including the hits-vs-shots relationship."""
+    problems = [
+        f"trial {index}: {name} must be a positive finite number"
+        for name in ("distance_m", "target_health")
+        if not _is_positive_finite(values[name])
+    ]
+    problems += [
+        f"trial {index}: {name} must be a non-negative integer"
+        for name in ("shots_fired", "shots_hit")
+        if not _is_non_negative_int(values.get(name, 0))
+    ]
     if int(values.get("shots_hit", 0)) > int(values.get("shots_fired", 0)):
         problems.append(f"trial {index}: shots_hit exceeds shots_fired")
+    return problems
 
-    stamps = [
-        (name, values.get(name))
-        for name in ("acquisition_time", "first_trigger_time", "first_damage_time", "lethal_time")
+
+def _is_positive_finite(value: Any) -> bool:
+    return isinstance(value, (int, float)) and math.isfinite(float(value)) and float(value) > 0.0
+
+
+def _is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and value >= 0
+
+
+def _timeline_problems(values: dict[str, Any], index: int) -> list[str]:
+    """The four annotated timestamps: finite, ordered, and consistent with the outcome.
+
+    Only stamps that are present are ordered against each other — an
+    annotator who could not see the acquisition moment leaves it out rather
+    than guessing, and that must not fail the ordering check.
+    """
+    present = [
+        (name, float(values[name]))
+        for name in (
+            "acquisition_time",
+            "first_trigger_time",
+            "first_damage_time",
+            "lethal_time",
+        )
+        if values.get(name) is not None
     ]
-    present = [(name, float(value)) for name, value in stamps if value is not None]
-    for name, value in present:
-        if not math.isfinite(value):
-            problems.append(f"trial {index}: {name} is not finite")
+    problems = [
+        f"trial {index}: {name} is not finite"
+        for name, value in present
+        if not math.isfinite(value)
+    ]
     ordered = [value for _name, value in present if math.isfinite(value)]
     if ordered != sorted(ordered):
         problems.append(
             f"trial {index}: annotated times must be non-decreasing "
             "(acquisition <= first trigger <= first damage <= lethal)"
         )
-    if str(values["outcome"]) == "kill" and values.get("lethal_time") is None:
+    is_kill = str(values["outcome"]) == "kill"
+    has_lethal = values.get("lethal_time") is not None
+    if is_kill and not has_lethal:
         problems.append(f"trial {index}: outcome 'kill' requires a lethal_time")
-    if str(values["outcome"]) != "kill" and values.get("lethal_time") is not None:
+    if not is_kill and has_lethal:
         problems.append(f"trial {index}: lethal_time is only meaningful for outcome 'kill'")
+    return problems
+
+
+def validate_trial(values: dict[str, Any], index: int = 0) -> list[str]:
+    """Problems with one raw trial record; empty list means acceptable."""
+    admissibility = _admissibility_problems(values, index)
+    if admissibility:
+        # Field-level checks below index into `values` unconditionally, which
+        # is only safe once the required fields are known to be present.
+        return admissibility
+
+    problems = _enum_problems(values, index)
+    problems += _numeric_problems(values, index)
+    problems += _timeline_problems(values, index)
     if not bool(values.get("consent", False)):
         problems.append(
             f"trial {index}: consent must be explicitly true; unconsented recordings "
@@ -334,7 +392,7 @@ class TTKDataset:
     # -- io ---------------------------------------------------------------
 
     @classmethod
-    def load(cls, path: str | Path, strict: bool = True) -> "TTKDataset":
+    def load(cls, path: str | Path, strict: bool = True) -> TTKDataset:
         """Reads a JSONL trial file (optional leading metadata object).
 
         ``strict`` (the default) refuses the whole file when any trial is
@@ -346,7 +404,7 @@ class TTKDataset:
             raise FileNotFoundError(source)
         metadata: dict[str, Any] = {}
         raw: list[dict[str, Any]] = []
-        with source.open("r", encoding="utf-8") as stream:
+        with source.open("r", encoding="utf-8-sig") as stream:
             for line_number, line in enumerate(stream, 1):
                 if not line.strip():
                     continue
@@ -422,11 +480,7 @@ class TTKDataset:
             # Reaction time is meaningful for censored trials too: the
             # tester still acquired and fired.
             "reaction_time": summarize_values(
-                [
-                    trial.reaction_time
-                    for trial in self.trials
-                    if trial.reaction_time is not None
-                ],
+                [trial.reaction_time for trial in self.trials if trial.reaction_time is not None],
                 seed,
             ),
             "accuracy": summarize_values(
@@ -461,7 +515,9 @@ class TTKDataset:
             }
         return report
 
-    def holdout_split(self, fraction: float = 0.25, seed: int = 1234) -> tuple["TTKDataset", "TTKDataset"]:
+    def holdout_split(
+        self, fraction: float = 0.25, seed: int = 1234
+    ) -> tuple[TTKDataset, TTKDataset]:
         """Split by *tester* (or session) so calibration keeps a real holdout.
 
         Splitting by trial would let the same person's habits appear on
@@ -473,12 +529,11 @@ class TTKDataset:
         keys = sorted({trial.tester or trial.session_id or trial.trial_id for trial in self.trials})
         if len(keys) < 2:
             raise ValueError(
-                "a holdout split needs at least two testers/sessions; "
-                f"this dataset has {len(keys)}"
+                f"a holdout split needs at least two testers/sessions; this dataset has {len(keys)}"
             )
         ranked = sorted(
             keys,
-            key=lambda key: hashlib.blake2b(f"{seed}:{key}".encode("utf-8"), digest_size=8).hexdigest(),
+            key=lambda key: hashlib.blake2b(f"{seed}:{key}".encode(), digest_size=8).hexdigest(),
         )
         holdout_count = max(1, min(len(keys) - 1, round(len(keys) * fraction)))
         holdout_keys = set(ranked[:holdout_count])
@@ -572,7 +627,13 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"censored={censoring.get('censored', 0)} "
         f"({censoring.get('censored_fraction', 0.0):.0%})"
     )
-    for name in ("reaction_time", "trigger_to_kill", "damage_to_kill", "encounter_time", "accuracy"):
+    for name in (
+        "reaction_time",
+        "trigger_to_kill",
+        "damage_to_kill",
+        "encounter_time",
+        "accuracy",
+    ):
         values = summary.get(name, {})
         if not values.get("n"):
             lines.append(f"  {name:<18} n=0")

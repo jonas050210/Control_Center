@@ -3,6 +3,7 @@
 The schema is intentionally dependency-free so trainers, adapters and desktop
 views can use it without importing a GUI or an ML framework.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,7 +56,7 @@ class DashboardSnapshot(TypedDict):
     output_root: str
     run_count: int
     latest_run: dict[str, Any] | None
-    active_processes: list[dict[str, Any]]
+    active_processes: list[ProcessSnapshot]
 
 
 class RunEvent(TypedDict, total=False):
@@ -79,19 +80,38 @@ class MetricDefinition:
 METRICS: dict[str, MetricDefinition] = {
     metric.key: metric
     for metric in (
-        MetricDefinition("mean_episode_reward", "Mean reward", "", 3, "Mean reward of completed episodes", True),
-        MetricDefinition("steps_per_second", "Throughput", "steps/s", 1, "Environment steps processed per second", True),
+        MetricDefinition(
+            "mean_episode_reward", "Mean reward", "", 3, "Mean reward of completed episodes", True
+        ),
+        MetricDefinition(
+            "steps_per_second",
+            "Throughput",
+            "steps/s",
+            1,
+            "Environment steps processed per second",
+            True,
+        ),
         MetricDefinition("mean_accuracy", "Accuracy", "%", 1, "Share of shots that hit", True),
         MetricDefinition("mean_kills", "Kills", "", 2, "Mean kills per completed episode", True),
-        MetricDefinition("mean_deaths", "Deaths", "", 2, "Mean deaths per completed episode", False),
+        MetricDefinition(
+            "mean_deaths", "Deaths", "", 2, "Mean deaths per completed episode", False
+        ),
         MetricDefinition("win_rate", "Win rate", "%", 1, "Share of evaluated episodes won", True),
-        MetricDefinition("loss_rate", "Loss rate", "%", 1, "Share of evaluated episodes lost", False),
+        MetricDefinition(
+            "loss_rate", "Loss rate", "%", 1, "Share of evaluated episodes lost", False
+        ),
         MetricDefinition("approx_kl", "Approx. KL", "", 4, "Approximate PPO policy divergence"),
-        MetricDefinition("clip_fraction", "Clip fraction", "", 3, "Fraction of PPO updates clipped"),
-        MetricDefinition("explained_variance", "Explained variance", "", 3, "Value-function fit quality", True),
+        MetricDefinition(
+            "clip_fraction", "Clip fraction", "", 3, "Fraction of PPO updates clipped"
+        ),
+        MetricDefinition(
+            "explained_variance", "Explained variance", "", 3, "Value-function fit quality", True
+        ),
         MetricDefinition("cpu_percent", "CPU", "%", 1, "Host CPU utilization"),
         MetricDefinition("gpu_utilization_percent", "GPU", "%", 1, "GPU compute utilization"),
-        MetricDefinition("process_rss_mb", "Process memory", "MB", 1, "Resident memory used by the trainer"),
+        MetricDefinition(
+            "process_rss_mb", "Process memory", "MB", 1, "Resident memory used by the trainer"
+        ),
     )
 }
 
@@ -115,7 +135,9 @@ def validate_status(value: Any) -> list[str]:
         if key in value and (isinstance(value[key], bool) or not isinstance(value[key], int)):
             problems.append(f"{key} must be an integer")
     for key in ("updated_at", "progress", "steps_per_second", "mean_episode_reward"):
-        if key in value and (isinstance(value[key], bool) or not isinstance(value[key], (int, float))):
+        if key in value and (
+            isinstance(value[key], bool) or not isinstance(value[key], (int, float))
+        ):
             problems.append(f"{key} must be numeric")
     return problems
 

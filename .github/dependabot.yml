@@ -1,0 +1,35 @@
+version: 2
+
+updates:
+  # GitHub Actions are pinned to commit SHAs in the workflows (supply-chain
+  # hardening); Dependabot is what keeps those pins from going stale.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies", "ci"]
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies", "python"]
+    # One PR per ecosystem bump rather than per package: the Python suite is
+    # the gate either way, and a single PR is cheaper to review and rerun.
+    groups:
+      training-stack:
+        patterns: ["torch", "gymnasium", "stable-baselines3", "tensorboard"]
+      tooling:
+        patterns: ["ruff", "pytest", "gdtoolkit"]
+    ignore:
+      # torch major bumps change the wheel/CUDA matrix and the lockfile; they
+      # are a deliberate, manually validated migration, not a routine bump.
+      - dependency-name: torch
+        update-types: ["version-update:semver-major"]

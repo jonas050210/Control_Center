@@ -106,7 +106,9 @@ func test_spread_places_shots_inside_the_cone() -> SandboxTest:
 		if angle > 0.01:
 			saw_offset = true
 		# Determinism: the same index always yields the same direction.
-		t.assert_vec_almost_eq(weapon.apply_spread(aim, cone, i), shot, 0.0, "spread must be stable")
+		t.assert_vec_almost_eq(
+			weapon.apply_spread(aim, cone, i), shot, 0.0, "spread must be stable"
+		)
 	t.assert_true(saw_offset, "a non-zero cone must actually displace shots")
 	return t
 
@@ -140,9 +142,7 @@ func test_head_zone_is_a_subset_of_the_body_and_multiplies_damage() -> SandboxTe
 	t.assert_almost_eq(float(body_shot["multiplier"]), 1.0, 0.0001, "body shots are unscaled")
 
 	# A ray that misses the body entirely cannot produce a headshot.
-	var miss: Dictionary = weapon.resolve_hit_zone(
-		origin, Vector3(1.0, 0.0, 0.0), body, head, true
-	)
+	var miss: Dictionary = weapon.resolve_hit_zone(origin, Vector3(1.0, 0.0, 0.0), body, head, true)
 	t.assert_eq(miss["zone"], WeaponState.ZONE_NONE, "a clean miss is not a hit")
 	t.assert_almost_eq(float(miss["multiplier"]), 0.0, 0.0001)
 

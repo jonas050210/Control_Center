@@ -123,14 +123,17 @@ func emit_sound(category: int, position: Vector3, source_id: int, loudness: floa
 	var resolved_loudness: float = loudness if loudness > 0.0 else base_loudness(category)
 	if events.size() >= SandboxConfig.SOUND_MAX_ACTIVE:
 		events.remove_at(0)
-	events.append(
-		{
-			"position": position,
-			"category": category,
-			"loudness": resolved_loudness,
-			"age": 0.0,
-			"source_id": source_id,
-		}
+	(
+		events
+		. append(
+			{
+				"position": position,
+				"category": category,
+				"loudness": resolved_loudness,
+				"age": 0.0,
+				"source_id": source_id,
+			}
+		)
 	)
 
 
@@ -202,8 +205,9 @@ func sample(
 		var occluders: int = 0
 		if world != null:
 			occluders = (world as ArenaWorld).occluder_count(listener_position, source)
-		var radius: float = float(event["loudness"]) * pow(
-			SandboxConfig.SOUND_OCCLUSION_ATTENUATION, float(occluders)
+		var radius: float = (
+			float(event["loudness"])
+			* pow(SandboxConfig.SOUND_OCCLUSION_ATTENUATION, float(occluders))
 		)
 		if distance > radius or radius <= 0.0:
 			continue
@@ -214,20 +218,23 @@ func sample(
 			continue
 		var error_deg: float = _direction_error_deg(occluders, distance, radius)
 		var direction: Vector3 = _perceived_direction(delta, distance, source, error_deg)
-		heard.append(
-			{
-				"category": int(event["category"]),
-				"category_name": category_name(int(event["category"])),
-				"direction": direction,
-				"distance": distance,
-				"loudness": perceived,
-				"age": age,
-				"occluders": occluders,
-				"bearing_deg": _bearing(listener_forward, direction),
-				"direction_error_deg": error_deg,
-				"confidence": _confidence(perceived, error_deg),
-				"masked": false,
-			}
+		(
+			heard
+			. append(
+				{
+					"category": int(event["category"]),
+					"category_name": category_name(int(event["category"])),
+					"direction": direction,
+					"distance": distance,
+					"loudness": perceived,
+					"age": age,
+					"occluders": occluders,
+					"bearing_deg": _bearing(listener_forward, direction),
+					"direction_error_deg": error_deg,
+					"confidence": _confidence(perceived, error_deg),
+					"masked": false,
+				}
+			)
 		)
 	heard.sort_custom(func(a, b): return float(a["loudness"]) > float(b["loudness"]))
 	return _apply_masking(heard)
@@ -376,13 +383,16 @@ func to_dict() -> Array:
 	var out: Array = []
 	for event_value in events:
 		var event: Dictionary = event_value
-		out.append(
-			{
-				"category": int(event["category"]),
-				"category_name": category_name(int(event["category"])),
-				"position": event["position"],
-				"loudness": float(event["loudness"]),
-				"age": float(event["age"]),
-			}
+		(
+			out
+			. append(
+				{
+					"category": int(event["category"]),
+					"category_name": category_name(int(event["category"])),
+					"position": event["position"],
+					"loudness": float(event["loudness"]),
+					"age": float(event["age"]),
+				}
+			)
 		)
 	return out

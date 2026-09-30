@@ -70,15 +70,18 @@ func setup(p_session) -> void:
 func refresh(_snapshot: Dictionary = {}) -> void:
 	var status: Dictionary = session.training_run.snapshot()
 	var state_name: String = str(status.get("state", "Idle"))
-	_title.text = "%s · %s" % [
-		str(
-			status.get(
-				"training_type",
-				ControlCenterConfig.training_type_name(session.config.training_type)
-			)
-		),
-		state_name.to_upper(),
-	]
+	_title.text = (
+		"%s · %s"
+		% [
+			str(
+				status.get(
+					"training_type",
+					ControlCenterConfig.training_type_name(session.config.training_type)
+				)
+			),
+			state_name.to_upper(),
+		]
+	)
 	var progress: float = clampf(float(status.get("progress", 0.0)), 0.0, 1.0)
 	_progress.value = progress * 100.0
 	_progress_text.text = _progress_description(status, state_name, progress)
@@ -92,13 +95,17 @@ func _progress_description(status: Dictionary, state_name: String, progress: flo
 	var lines: Array = ["state              %s" % state_name]
 	if status.has("timesteps") or status.has("total_training_steps"):
 		lines.append(
-			"step               %d / %d"
-			% [int(status.get("timesteps", 0)), int(status.get("total_training_steps", 0))]
+			(
+				"step               %d / %d"
+				% [int(status.get("timesteps", 0)), int(status.get("total_training_steps", 0))]
+			)
 		)
 	elif status.has("epoch") or status.has("total_epochs"):
 		lines.append(
-			"epoch              %d / %d"
-			% [int(status.get("epoch", 0)), int(status.get("total_epochs", 0))]
+			(
+				"epoch              %d / %d"
+				% [int(status.get("epoch", 0)), int(status.get("total_epochs", 0))]
+			)
 		)
 	lines.append("progress           %.1f%%" % (progress * 100.0))
 	if status.has("episodes"):
@@ -169,9 +176,7 @@ func _render_events(events_value) -> void:
 		var entry: Dictionary = event_value
 		var category: String = str(entry.get("category", "system")).to_upper()
 		var color: Color = (
-			ControlCenterTheme.COLOR_BAD
-			if category == "ERROR"
-			else ControlCenterTheme.COLOR_MUTED
+			ControlCenterTheme.COLOR_BAD if category == "ERROR" else ControlCenterTheme.COLOR_MUTED
 		)
 		_logs.push_color(color)
 		_logs.add_text("%-8s " % category)
@@ -191,10 +196,7 @@ static func _append_metric(
 ) -> void:
 	if not status.has(key):
 		return
-	rows.append(
-		"%-20s %s%s"
-		% [label, String.num(float(status[key]) * scale, decimals), suffix]
-	)
+	rows.append("%-20s %s%s" % [label, String.num(float(status[key]) * scale, decimals), suffix])
 
 
 static func _optional_number(status: Dictionary, key: String, decimals: int) -> String:

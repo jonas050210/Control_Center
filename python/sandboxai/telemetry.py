@@ -1,11 +1,13 @@
 """Structured training telemetry with optional CPU/GPU gauges."""
+
 from __future__ import annotations
 
+import contextlib
 import json
-from pathlib import Path
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 
@@ -49,10 +51,8 @@ def _nvidia_smi_snapshot(timeout: float = 0.75) -> dict[str, Any]:
         ("gpu_vram_total_mb", total),
         ("gpu_temperature_c", temp),
     ):
-        try:
+        with contextlib.suppress(ValueError):
             snapshot[key] = float(value)
-        except ValueError:
-            pass
     return snapshot
 
 
@@ -68,6 +68,7 @@ def resource_snapshot() -> dict[str, Any]:
     snapshot: dict[str, Any] = {}
     try:
         import psutil  # type: ignore
+
         snapshot["cpu_percent"] = psutil.cpu_percent(interval=None)
         process = psutil.Process()
         snapshot["process_rss_mb"] = process.memory_info().rss / (1024 * 1024)
@@ -75,6 +76,7 @@ def resource_snapshot() -> dict[str, Any]:
         pass
     try:
         import torch  # type: ignore
+
         snapshot["torch_available"] = True
         snapshot["torch_version"] = torch.__version__
         snapshot["cuda_available"] = bool(torch.cuda.is_available())
@@ -152,7 +154,7 @@ class ResourceMonitor:
             # after this bounded join.
             self._thread.join(timeout=1.0)
 
-    def __enter__(self) -> "ResourceMonitor":
+    def __enter__(self) -> ResourceMonitor:
         self.start()
         return self
 
@@ -236,14 +238,18 @@ class JsonlTelemetry:
         self._stream = self.path.open("a", encoding="utf-8")
 
     def write(self, values: dict[str, Any]) -> None:
-        payload = {"wall_time": time.time(), "elapsed_seconds": time.perf_counter() - self.started, **values}
+        payload = {
+            "wall_time": time.time(),
+            "elapsed_seconds": time.perf_counter() - self.started,
+            **values,
+        }
         self._stream.write(json.dumps(payload, default=str) + "\n")
         self._stream.flush()
 
     def close(self) -> None:
         self._stream.close()
 
-    def __enter__(self) -> "JsonlTelemetry":
+    def __enter__(self) -> JsonlTelemetry:
         return self
 
     def __exit__(self, *_args) -> None:

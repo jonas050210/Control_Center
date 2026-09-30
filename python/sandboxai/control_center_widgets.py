@@ -3,23 +3,71 @@
 Kept separate from page orchestration so widgets, background execution and the
 visual token palette can evolve without growing the application shell module.
 """
+
 from __future__ import annotations
 
+import concurrent.futures
+import gc
 import os
 import queue
 import subprocess
 import sys
+import threading
 import tkinter as tk
-from concurrent.futures import ThreadPoolExecutor
+import weakref
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Any, Callable
+from typing import Any
 
 from . import control_center_viewmodel as vm
 
 # ---------------------------------------------------------------------------
 # Background work: keeps every adapter call off the Tk event loop thread.
 # ---------------------------------------------------------------------------
+
+# Tk objects may only be finalised on the thread that owns the Tcl
+# interpreter, and CPython's cyclic collector honours no such rule: it
+# runs in whichever thread happens to cross an allocation threshold. A
+# background worker walking a directory tree allocates heavily, so it is
+# a prime candidate - and the widget trees this GUI discards (page
+# switches, closed windows) sit in reference cycles, because widgets
+# point at their parent and callbacks point back at their page. Collect
+# such a cycle on a worker and tkinter.Variable.__del__ reaches into Tcl
+# from the wrong thread. On Linux that is usually survivable; on Windows
+# the process dies instantly with exception code 0x80000003, no
+# traceback and no failing test - which is exactly how CI found this.
+#
+# So automatic collection is suspended for as long as a runner is alive
+# and driven explicitly from _pump instead, which runs on the Tk thread.
+# Nothing leaks: the collector still runs, just somewhere it is allowed
+# to. Reference-counted garbage - the overwhelming majority - is freed
+# immediately as always; only cycles wait for the next sweep.
+
+_gc_lock = threading.Lock()
+_gc_suspenders = 0
+_gc_was_enabled = True
+
+
+def _suspend_automatic_gc() -> None:
+    global _gc_suspenders, _gc_was_enabled
+    with _gc_lock:
+        if _gc_suspenders == 0:
+            _gc_was_enabled = gc.isenabled()
+            gc.disable()
+        _gc_suspenders += 1
+
+
+def _resume_automatic_gc() -> None:
+    """Restore the collector once the last runner has gone."""
+    global _gc_suspenders
+    with _gc_lock:
+        if _gc_suspenders == 0:
+            return
+        _gc_suspenders -= 1
+        if _gc_suspenders == 0 and _gc_was_enabled:
+            gc.enable()
 
 
 class BackgroundRunner:
@@ -32,17 +80,41 @@ class BackgroundRunner:
     are being read from disk or a process list is being walked.
     """
 
+    #: How long ``close`` will wait for work already in flight.
+    CLOSE_TIMEOUT_S = 5.0
+
     def __init__(self, root: tk.Misc, workers: int = 3, poll_ms: int = 100) -> None:
         self._root = root
-        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="control-center-bg")
-        self._queue: "queue.Queue[tuple[Callable[[Any, BaseException | None], None], Any, BaseException | None]]" = (
-            queue.Queue()
+        self._executor = ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="control-center-bg"
         )
+        self._queue: queue.Queue[
+            tuple[Callable[[Any, BaseException | None], None], Any, BaseException | None]
+        ] = queue.Queue()
         self._closed = False
         self._poll_ms = poll_ms
+        self._pending: set[Future[None]] = set()
+        self._pending_lock = threading.Lock()
+        # Collect every tenth pump rather than every one: a full sweep of a
+        # live GUI heap costs a few milliseconds, which is fine once a
+        # second and wasteful ten times a second.
+        self._pumps_between_collections = max(1, 1000 // max(poll_ms, 1))
+        self._pumps_since_collection = 0
+        _suspend_automatic_gc()
+        # Tied to the object, not just to close(): a runner that is dropped
+        # without being closed - a constructor that raised half-way, a test
+        # that forgot - must still hand the collector back. Leaving
+        # automatic collection off process-wide because one runner leaked
+        # would slow everything after it to a crawl, which is a worse
+        # failure than the one this guards against, and a silent one.
+        # Calling a finalize object runs it at most once, so close() and
+        # collection cannot both release the same suspension.
+        self._gc_release = weakref.finalize(self, _resume_automatic_gc)
         self._pump()
 
-    def submit(self, fn: Callable[[], Any], callback: Callable[[Any, BaseException | None], None]) -> None:
+    def submit(
+        self, fn: Callable[[], Any], callback: Callable[[Any, BaseException | None], None]
+    ) -> None:
         if self._closed:
             return
 
@@ -54,7 +126,14 @@ class BackgroundRunner:
             else:
                 self._queue.put((callback, result, None))
 
-        self._executor.submit(_run)
+        future = self._executor.submit(_run)
+        with self._pending_lock:
+            self._pending.add(future)
+        future.add_done_callback(self._forget)
+
+    def _forget(self, future: Future[None]) -> None:
+        with self._pending_lock:
+            self._pending.discard(future)
 
     def _pump(self) -> None:
         try:
@@ -70,12 +149,68 @@ class BackgroundRunner:
                     traceback.print_exc()
         except queue.Empty:
             pass
+        self._collect_if_due()
         if not self._closed:
             self._root.after(self._poll_ms, self._pump)
 
+    def _collect_if_due(self) -> None:
+        """Run the cyclic collector here, on the thread that owns Tk."""
+        self._pumps_since_collection += 1
+        if self._pumps_since_collection < self._pumps_between_collections:
+            return
+        self._pumps_since_collection = 0
+        gc.collect()
+
     def close(self) -> None:
+        """Stop accepting work and wait for what is already running.
+
+        ``wait=True`` is load-bearing, not politeness. Callers close the
+        runner and then immediately tear down the window - ``_on_close``
+        does ``close()``, ``adapter.close()``, ``destroy()`` in a row. A
+        worker still inside an adapter call at that point holds the
+        closure that submitted it, and those closures capture pages,
+        which hold Tk widgets. Whichever thread drops the last reference
+        runs the finaliser, so with ``wait=False`` that is the worker,
+        and Tk objects get finalised off the thread that owns the Tcl
+        interpreter. On Linux that usually gets away with it; on Windows
+        it is a hard interpreter crash with no traceback (exception code
+        0x80000003, observed in CI during an unrelated test).
+
+        ``cancel_futures`` throws away everything that has not started,
+        so the wait is bounded by the single in-flight call rather than
+        by the whole queue - and by ``CLOSE_TIMEOUT_S`` on top of that,
+        because a wedged adapter call must not be able to hang the
+        window shut.
+        """
+        if self._closed:
+            return
         self._closed = True
+        with self._pending_lock:
+            pending = set(self._pending)
+        for future in pending:
+            future.cancel()
+        # Bounded, not open-ended. Waiting is what keeps a worker from
+        # outliving the widgets it can reach, but an adapter call that
+        # has wedged - a process listing that will not come back, a
+        # network path that stopped answering - must not take the window
+        # with it. Whatever is still running after this has already lost
+        # the race with the GC suspension above, which is the real guard.
+        concurrent.futures.wait(pending, timeout=self.CLOSE_TIMEOUT_S)
         self._executor.shutdown(wait=False, cancel_futures=True)
+        # Results that arrived while shutting down. Nothing will deliver
+        # them now, and each one holds a callback holding widgets; drain
+        # them here so they are released on the Tk thread instead of
+        # whenever the queue itself is collected.
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        # One last sweep on this thread, so the widget tree the caller is
+        # about to destroy does not become a worker's problem later, then
+        # hand the collector back.
+        gc.collect()
+        self._gc_release()
 
 
 # ---------------------------------------------------------------------------
@@ -124,10 +259,22 @@ class ToolTip:
         self._after_id = None
         tip = tk.Toplevel(self.widget)
         tip.wm_overrideredirect(True)
-        tip.wm_geometry(f"+{self.widget.winfo_rootx() + 14}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 8}")
-        tk.Label(tip, text=self.text, justify="left", background=COLOR_SURFACE_RAISED,
-                 foreground=COLOR_TEXT, relief="solid", borderwidth=1, padx=9, pady=6,
-                 font=(_FONT_FAMILY, 9), wraplength=320).pack()
+        tip.wm_geometry(
+            f"+{self.widget.winfo_rootx() + 14}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 8}"
+        )
+        tk.Label(
+            tip,
+            text=self.text,
+            justify="left",
+            background=COLOR_SURFACE_RAISED,
+            foreground=COLOR_TEXT,
+            relief="solid",
+            borderwidth=1,
+            padx=9,
+            pady=6,
+            font=(_FONT_FAMILY, 9),
+            wraplength=320,
+        ).pack()
         self._window = tip
 
     def _hide(self, _event: object = None) -> None:
@@ -182,8 +329,13 @@ class LineChart(tk.Canvas):
     """
 
     def __init__(self, parent: tk.Misc, title: str, height: int = 140) -> None:
-        super().__init__(parent, height=height, background=COLOR_SURFACE_RAISED, highlightthickness=1,
-                          highlightbackground=COLOR_BORDER)
+        super().__init__(
+            parent,
+            height=height,
+            background=COLOR_SURFACE_RAISED,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+        )
         self._title = title
         self._points: list[tuple[float, float]] = []
         self.bind("<Configure>", lambda _event: self._redraw())
@@ -197,11 +349,20 @@ class LineChart(tk.Canvas):
         width = max(int(self.winfo_width()), 1)
         height = max(int(self.winfo_height()), 1)
         pad_left, pad_right, pad_top, pad_bottom = 46, 10, 16, 18
-        self.create_text(8, 6, anchor="nw", text=self._title, font=(_FONT_FAMILY, 9, "bold"), fill=COLOR_MUTED)
-        points = vm.downsample_series(self._points, max_points=max(width - pad_left - pad_right, 10))
+        self.create_text(
+            8, 6, anchor="nw", text=self._title, font=(_FONT_FAMILY, 9, "bold"), fill=COLOR_MUTED
+        )
+        points = vm.downsample_series(
+            self._points, max_points=max(width - pad_left - pad_right, 10)
+        )
         if len(points) < 2:
-            self.create_text(width / 2, height / 2, text="not enough data yet", fill=COLOR_MUTED,
-                              font=(_FONT_FAMILY, 9))
+            self.create_text(
+                width / 2,
+                height / 2,
+                text="not enough data yet",
+                fill=COLOR_MUTED,
+                font=(_FONT_FAMILY, 9),
+            )
             return
         xs = [p[0] for p in points]
         ys = [p[1] for p in points]
@@ -223,15 +384,27 @@ class LineChart(tk.Canvas):
             gy = pad_top + fraction * plot_h
             self.create_line(pad_left, gy, width - pad_right, gy, fill="#243044")
             value = y_max - fraction * (y_max - y_min)
-            self.create_text(pad_left - 6, gy, anchor="e", text=vm.format_number(value, 2), fill=COLOR_MUTED,
-                              font=(_FONT_FAMILY, 8))
+            self.create_text(
+                pad_left - 6,
+                gy,
+                anchor="e",
+                text=vm.format_number(value, 2),
+                fill=COLOR_MUTED,
+                font=(_FONT_FAMILY, 8),
+            )
         coords: list[float] = []
         for x, y in points:
             cx, cy = to_canvas(x, y)
             coords.extend((cx, cy))
         self.create_line(*coords, fill=COLOR_ACCENT, width=2, smooth=False)
-        self.create_text(width - pad_right, height - 4, anchor="se",
-                          text=f"latest: {vm.format_number(ys[-1], 3)}", fill=COLOR_MUTED, font=(_FONT_FAMILY, 8))
+        self.create_text(
+            width - pad_right,
+            height - 4,
+            anchor="se",
+            text=f"latest: {vm.format_number(ys[-1], 3)}",
+            fill=COLOR_MUTED,
+            font=(_FONT_FAMILY, 8),
+        )
 
 
 class LogPanel(ttk.Frame):
@@ -262,8 +435,16 @@ class LogPanel(ttk.Frame):
         self._truncated_label.pack(side="right")
         text_frame = ttk.Frame(self)
         text_frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.text = tk.Text(text_frame, height=16, wrap="none", state="disabled", background="#0d1117",
-                             foreground="#c9d1d9", insertbackground="#c9d1d9", font=("Consolas", 9))
+        self.text = tk.Text(
+            text_frame,
+            height=16,
+            wrap="none",
+            state="disabled",
+            background="#0d1117",
+            foreground="#c9d1d9",
+            insertbackground="#c9d1d9",
+            font=("Consolas", 9),
+        )
         yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
         self.text.configure(yscrollcommand=yscroll.set)
         self.text.pack(side="left", fill="both", expand=True)
@@ -335,17 +516,32 @@ def _safe_line(line: Any) -> str:
 
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:
     """Builds a Treeview with click-to-sort columns (ascending/descending)."""
-    tree = ttk.Treeview(parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended")
+    tree = ttk.Treeview(
+        parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended"
+    )
     numeric_columns = {
-        "environments", "workers", "total_steps", "steps_per_second", "episodes_per_second",
-        "p50_ms", "p95_ms", "elapsed_seconds", "timesteps", "episodes", "win_rate",
-        "loss_rate", "mean_episode_reward",
+        "environments",
+        "workers",
+        "total_steps",
+        "steps_per_second",
+        "episodes_per_second",
+        "p50_ms",
+        "p95_ms",
+        "elapsed_seconds",
+        "timesteps",
+        "episodes",
+        "win_rate",
+        "loss_rate",
+        "mean_episode_reward",
     }
     for key, title, width in columns:
         anchor = "e" if key in numeric_columns else "w"
-        tree.heading(key, text=title, anchor=anchor,
-                     command=lambda k=key: _sort_tree(tree, k, False))
-        tree.column(key, width=width, anchor=anchor, stretch=True)
+        # typeshed types anchor as a literal enum; "e"/"w" are valid tk
+        # anchors and are what the rest of this module already uses.
+        tree.heading(  # type: ignore[call-overload]
+            key, text=title, anchor=anchor, command=lambda k=key: _sort_tree(tree, k, False)
+        )
+        tree.column(key, width=width, anchor=anchor, stretch=True)  # type: ignore[call-overload]
     return tree
 
 
@@ -373,5 +569,3 @@ def _open_in_file_manager(path: Path) -> None:
             subprocess.Popen(["xdg-open", str(path)])
     except OSError as exc:
         messagebox.showwarning("Could not open folder", f"{path}\n\n{exc}")
-
-

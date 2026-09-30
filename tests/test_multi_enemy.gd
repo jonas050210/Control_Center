@@ -13,9 +13,7 @@ const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
-
 
 ## Small tolerance for float32 comparisons (observation values may sit a few
 ## ulps outside a strict [-1, 1] check after normalization arithmetic).
@@ -46,14 +44,19 @@ func test_observation_values_stay_within_documented_bounds() -> SandboxTest:
 				var result: Dictionary = env.step(action)
 				var values: PackedFloat32Array = (result.observation as Observation).to_array()
 				t.assert_eq(
-					values.size(), Observation.FIELD_COUNT, "observation width is fixed at Observation.FIELD_COUNT"
+					values.size(),
+					Observation.FIELD_COUNT,
+					"observation width is fixed at Observation.FIELD_COUNT"
 				)
 				for i in range(values.size()):
 					if values[i] < -1.0 - BOUNDS_EPSILON or values[i] > 1.0 + BOUNDS_EPSILON:
-						t.fail(
-							(
-								"observation value out of [-1,1] contract: enemies=%d level=%d index=%d value=%f"
-								% [enemy_count, level, i, values[i]]
+						(
+							t
+							. fail(
+								(
+									"observation value out of [-1,1] contract: enemies=%d level=%d index=%d value=%f"
+									% [enemy_count, level, i, values[i]]
+								)
 							)
 						)
 						return t
@@ -127,8 +130,10 @@ func test_dead_enemies_do_not_grant_positioning_reward() -> SandboxTest:
 	t.assert_lte(
 		result.info.events.positioning_delta,
 		0.0,
-		"walking toward a dead enemy must not earn approach reward; "
-		+ "positioning is measured against the nearest ALIVE enemy only"
+		(
+			"walking toward a dead enemy must not earn approach reward; "
+			+ "positioning is measured against the nearest ALIVE enemy only"
+		)
 	)
 	return t
 
@@ -142,9 +147,7 @@ func test_five_enemies_all_counted_but_only_three_tracked() -> SandboxTest:
 	env.reset(7)
 	t.assert_eq(env.enemies.size(), 5, "level 4 must respect an explicit count above the minimum")
 	var obs: Observation = env.get_observations()
-	t.assert_almost_eq(
-		obs.alive_enemy_count_norm, 1.0, 0.0001, "all five enemies must be counted"
-	)
+	t.assert_almost_eq(obs.alive_enemy_count_norm, 1.0, 0.0001, "all five enemies must be counted")
 	t.assert_true(obs.enemy_alive and obs.secondary_enemy_alive and obs.tertiary_enemy_alive)
 	# Kill the two untracked-by-rank enemies is impractical to identify from
 	# the observation; instead verify the structural invariant that killing
@@ -247,13 +250,18 @@ func test_reset_all_seeding_is_index_based_across_enemy_counts() -> SandboxTest:
 	env_a.reset(909)
 	env_b.reset(910)  # base + index offset, as SimulationManager.reset_all does
 	t.assert_true(
-		env_a.enemies[0].position != env_b.enemies[0].position
-			or env_a.enemies[1].position != env_b.enemies[1].position,
+		(
+			env_a.enemies[0].position != env_b.enemies[0].position
+			or env_a.enemies[1].position != env_b.enemies[1].position
+		),
 		"different env-index seeds should generally produce different spawns"
 	)
 	env_b.reset(909)
 	for i in range(env_a.enemies.size()):
 		t.assert_vec_almost_eq(
-			env_a.enemies[i].position, env_b.enemies[i].position, 0.00001, "same seed must reproduce spawns"
+			env_a.enemies[i].position,
+			env_b.enemies[i].position,
+			0.00001,
+			"same seed must reproduce spawns"
 		)
 	return t

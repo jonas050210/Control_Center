@@ -10,19 +10,22 @@ const TrainingRunHistory = preload("res://scripts/control_center/training_run_hi
 
 func test_parse_run_extracts_published_fields_only() -> SandboxTest:
 	var t := SandboxTest.new("run_history_parse_published_fields")
-	var row: Dictionary = TrainingRunHistory.parse_run(
-		"control_center_ppo_1700000000_123",
-		{
-			"state": "Finished",
-			"updated_at": 1700000600.0,
-			"timesteps": 50000,
-			"total_training_steps": 50000,
-			"episodes": 321,
-			"mean_episode_reward": 1.25,
-			"mean_accuracy": 0.4,
-			"current_checkpoint": "training/runs/x/checkpoints",
-			"device": "cpu",
-		}
+	var row: Dictionary = (
+		TrainingRunHistory
+		. parse_run(
+			"control_center_ppo_1700000000_123",
+			{
+				"state": "Finished",
+				"updated_at": 1700000600.0,
+				"timesteps": 50000,
+				"total_training_steps": 50000,
+				"episodes": 321,
+				"mean_episode_reward": 1.25,
+				"mean_accuracy": 0.4,
+				"current_checkpoint": "training/runs/x/checkpoints",
+				"device": "cpu",
+			}
+		)
 	)
 	t.assert_eq(row["run_id"], "control_center_ppo_1700000000_123")
 	t.assert_eq(row["algorithm"], "PPO")
@@ -56,8 +59,7 @@ func test_parse_run_without_status_invents_nothing() -> SandboxTest:
 func test_running_run_duration_is_marked_non_final() -> SandboxTest:
 	var t := SandboxTest.new("run_history_running_duration_non_final")
 	var row: Dictionary = TrainingRunHistory.parse_run(
-		"control_center_ppo_1700000000_1",
-		{"state": "Running", "updated_at": 1700000100.0}
+		"control_center_ppo_1700000000_1", {"state": "Running", "updated_at": 1700000100.0}
 	)
 	t.assert_true(row.has("duration_seconds"))
 	t.assert_false(bool(row["duration_final"]), "a live run's duration is only a last update")

@@ -73,10 +73,9 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 			"rows": ObservationInspector.build_action_rows(action),
 			"continuous_rows": ObservationInspector.build_continuous_action_rows(action),
 			"shooting": action != null and action.shoot,
-			"moving": (
-				action != null and (action.move_axis != 0 or action.strafe_axis != 0)
-			),
-			"turning": action != null and (action.look_yaw_axis != 0 or action.look_pitch_axis != 0),
+			"moving": action != null and (action.move_axis != 0 or action.strafe_axis != 0),
+			"turning":
+			action != null and (action.look_yaw_axis != 0 or action.look_pitch_axis != 0),
 		}
 
 	snapshot["agent"] = {
@@ -112,9 +111,8 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 		"weapon_recoil_pitch_deg": env.agent.weapon.recoil_pitch_deg,
 		"weapon_recoil_yaw_deg": env.agent.weapon.recoil_yaw_deg,
 		"weapon_bloom_deg": env.agent.weapon.bloom_deg,
-		"weapon_current_spread_deg": env.agent.weapon.current_spread_deg(
-			env.agent.speed_fraction, not env.agent.on_ground
-		),
+		"weapon_current_spread_deg":
+		env.agent.weapon.current_spread_deg(env.agent.speed_fraction, not env.agent.on_ground),
 		"weapon_headshot_multiplier": env.agent.weapon.headshot_multiplier,
 	}
 	snapshot["episode"] = {
@@ -136,7 +134,8 @@ static func build(manager, config, status: Dictionary, options: Dictionary = {})
 		"useless_shots": env.episode.useless_shots,
 		"cooldown_shots": env.episode.cooldown_shots,
 		"last_shot_result": env.episode.last_shot_result,
-		"accuracy": (
+		"accuracy":
+		(
 			float(env.episode.shots_hit) / float(env.episode.shots_fired)
 			if env.episode.shots_fired > 0
 			else 0.0

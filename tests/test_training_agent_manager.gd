@@ -7,9 +7,7 @@ extends RefCounted
 
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
-const TrainingAgentManager = preload(
-	"res://scripts/control_center/training_agent_manager.gd"
-)
+const TrainingAgentManager = preload("res://scripts/control_center/training_agent_manager.gd")
 const TrainingRunController = preload("res://scripts/control_center/training_run_controller.gd")
 
 
@@ -114,9 +112,7 @@ func test_primary_remove_resets_instead_of_freeing() -> SandboxTest:
 	t.assert_true(manager.remove(1))
 	t.assert_true(manager.has_agent(1), "the primary card survives as Idle")
 	t.assert_eq(manager.agent_snapshot(1)["state"], "Idle")
-	t.assert_false(
-		manager.agent_snapshot(1).has("timesteps"), "reset removed stale run metrics"
-	)
+	t.assert_false(manager.agent_snapshot(1).has("timesteps"), "reset removed stale run metrics")
 	manager.free()
 	primary.free()
 	return t
@@ -165,20 +161,28 @@ func test_event_relay_and_bounded_event_history() -> SandboxTest:
 	var agent_id: int = manager.agent_ids()[0]
 
 	var relayed: Array = []
-	manager.agent_event.connect(
-		func(id: int, entry: Dictionary): relayed.append([id, entry])
-	)
+	manager.agent_event.connect(func(id: int, entry: Dictionary): relayed.append([id, entry]))
 
 	# Write more events than the ring keeps, through the real JSONL path.
 	var event_path: String = "user://sandboxai_test_agent_events.jsonl"
 	var file := FileAccess.open(event_path, FileAccess.WRITE)
 	var total: int = TrainingRunController.MAX_RECENT_EVENTS + 50
 	for index in range(total):
-		file.store_line(JSON.stringify({
-			"wall_time": 1700000000.0 + index,
-			"category": "system" if index % 2 == 0 else "metric",
-			"message": "event %d" % index,
-		}))
+		(
+			file
+			. store_line(
+				(
+					JSON
+					. stringify(
+						{
+							"wall_time": 1700000000.0 + index,
+							"category": "system" if index % 2 == 0 else "metric",
+							"message": "event %d" % index,
+						}
+					)
+				)
+			)
+		)
 	file.close()
 	controller.event_file = event_path
 	controller._poll_events()

@@ -52,40 +52,67 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 	var state: int = controller.state
 	var validation: String = controller.validation_error(session.config)
 	_start.disabled = (
-		state
-		not in [
-			TrainingRunController.State.IDLE,
-			TrainingRunController.State.FINISHED,
-			TrainingRunController.State.ERROR,
-		]
+		(
+			state
+			not in [
+				TrainingRunController.State.IDLE,
+				TrainingRunController.State.FINISHED,
+				TrainingRunController.State.ERROR,
+			]
+		)
 		or not validation.is_empty()
 	)
-	_stop.disabled = state not in [TrainingRunController.State.STARTING,
-		TrainingRunController.State.RUNNING, TrainingRunController.State.PAUSED]
+	_stop.disabled = (
+		state
+		not in [
+			TrainingRunController.State.STARTING,
+			TrainingRunController.State.RUNNING,
+			TrainingRunController.State.PAUSED
+		]
+	)
 	_pause.disabled = state != TrainingRunController.State.RUNNING
 	_resume.disabled = state != TrainingRunController.State.PAUSED
-	_reset.disabled = state not in [TrainingRunController.State.FINISHED,
-		TrainingRunController.State.ERROR]
+	_reset.disabled = (
+		state not in [TrainingRunController.State.FINISHED, TrainingRunController.State.ERROR]
+	)
 	var color: Color = ControlCenterTheme.COLOR_MUTED
 	if state == TrainingRunController.State.RUNNING:
 		color = ControlCenterTheme.COLOR_OK
-	elif state in [TrainingRunController.State.STARTING, TrainingRunController.State.PAUSED,
-		TrainingRunController.State.STOPPING]:
+	elif (
+		state
+		in [
+			TrainingRunController.State.STARTING,
+			TrainingRunController.State.PAUSED,
+			TrainingRunController.State.STOPPING
+		]
+	):
 		color = ControlCenterTheme.COLOR_WARN
 	elif state == TrainingRunController.State.ERROR:
 		color = ControlCenterTheme.COLOR_BAD
 	ControlCenterTheme.apply_status_badge(_state, TrainingRunController.state_name(state), color)
-	if not validation.is_empty() and state in [TrainingRunController.State.IDLE,
-		TrainingRunController.State.FINISHED, TrainingRunController.State.ERROR]:
+	if (
+		not validation.is_empty()
+		and (
+			state
+			in [
+				TrainingRunController.State.IDLE,
+				TrainingRunController.State.FINISHED,
+				TrainingRunController.State.ERROR
+			]
+		)
+	):
 		_detail.text = validation
 	elif state == TrainingRunController.State.ERROR:
 		_detail.text = controller.last_error
 	else:
-		_detail.text = "%s · %s · %s" % [
-			ControlCenterConfig.training_type_name(session.config.training_type),
-			ControlCenterConfig.training_mode_name(session.config.training_mode),
-			ControlCenterConfig.training_device_argument(session.config.training_device),
-		]
+		_detail.text = (
+			"%s · %s · %s"
+			% [
+				ControlCenterConfig.training_type_name(session.config.training_type),
+				ControlCenterConfig.training_mode_name(session.config.training_mode),
+				ControlCenterConfig.training_device_argument(session.config.training_device),
+			]
+		)
 
 
 func _button(parent: Control, text: String, callback: Callable, tooltip: String) -> Button:

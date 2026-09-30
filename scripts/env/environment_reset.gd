@@ -145,9 +145,7 @@ static func reset_with_world(env) -> void:
 		reset_enemy(env, env.enemies[i], i, spawn, strafing)
 
 
-static func reset_enemy(
-	env, enemy: EnemyState, index: int, spawn: Vector3, strafing: bool
-) -> void:
+static func reset_enemy(env, enemy: EnemyState, index: int, spawn: Vector3, strafing: bool) -> void:
 	enemy.enemy_id = index
 	enemy.reset(spawn)
 	env._apply_enemy_difficulty(enemy)
@@ -190,17 +188,14 @@ static func scenario_for_level(env) -> String:
 ## of the horizontal arc around the agent's forward-facing direction
 ## (0deg = enemy spawn's original -Z direction). Results are clamped inside
 ## the arena walls.
-static func random_spawn_position(
-	env, angle_spread_deg: float, distance_range: Vector2
-) -> Vector3:
+static func random_spawn_position(env, angle_spread_deg: float, distance_range: Vector2) -> Vector3:
 	var angle_deg: float = env.rng.randf_range(-angle_spread_deg, angle_spread_deg)
 	var distance: float = env.rng.randf_range(distance_range.x, distance_range.y)
 	var base_direction := Vector3(0.0, 0.0, -1.0)  # matches AGENT_SPAWN_YAW_DEG == 0 forward
 	var rotated: Vector3 = base_direction.rotated(Vector3.UP, deg_to_rad(angle_deg))
 	var spawn: Vector3 = SandboxConfig.AGENT_SPAWN_POSITION + rotated * distance
 	var limit: float = maxf(
-		0.0,
-		env.arena_half_extent - SandboxConfig.ENEMY_RADIUS - SandboxConfig.ARENA_BOUNDS_EPSILON
+		0.0, env.arena_half_extent - SandboxConfig.ENEMY_RADIUS - SandboxConfig.ARENA_BOUNDS_EPSILON
 	)
 	spawn.x = clampf(spawn.x, -limit, limit)
 	spawn.z = clampf(spawn.z, -limit, limit)

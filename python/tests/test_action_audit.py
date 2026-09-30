@@ -1,9 +1,11 @@
 """Policy-head and shoot-path diagnostics."""
+
 from __future__ import annotations
 
 import unittest
 
 from optional_deps import HAS_SB3, SB3_REASON
+
 from sandboxai.action_audit import (
     EpisodeActionAudit,
     component_probabilities,

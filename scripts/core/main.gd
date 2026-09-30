@@ -16,7 +16,6 @@ const HumanController = preload("res://scripts/input/human_controller.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 @export var environment_count: int = SandboxConfig.DEFAULT_ENVIRONMENT_COUNT
 @export var enemy_count_per_environment: int = SandboxConfig.ENEMY_COUNT_DEFAULT
 @export_range(1, 11) var curriculum_level: int = CurriculumConfig.Level.ENEMY_ATTACKS

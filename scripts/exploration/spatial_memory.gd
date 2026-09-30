@@ -175,7 +175,13 @@ func observe_self(position: Vector3, local_illumination: float) -> void:
 ## the same FOV + LOS test the observation vector uses, so a cell behind a
 ## wall is not learned by walking past the wall.
 func observe_cells(
-	eye: Vector3, feet: Vector3, forward: Vector3, world, lighting, fov_deg: float, base_range: float
+	eye: Vector3,
+	feet: Vector3,
+	forward: Vector3,
+	world,
+	lighting,
+	fov_deg: float,
+	base_range: float
 ) -> int:
 	var learned: int = 0
 	var reach: int = maxi(1, int(ceil(base_range / cell_size)))
@@ -352,9 +358,10 @@ func nearest_unknown(from_position: Vector3) -> Dictionary:
 	for index in range(cell_count):
 		if observed_time[index] != NEVER:
 			continue
-		var distance: float = Vector2(
-			cell_center(index).x - from_position.x, cell_center(index).z - from_position.z
-		).length()
+		var distance: float = (
+			Vector2(cell_center(index).x - from_position.x, cell_center(index).z - from_position.z)
+			. length()
+		)
 		if distance < best_distance - 0.0001:
 			best_distance = distance
 			best = index
@@ -372,9 +379,9 @@ func _nearest_matching(
 		if observed_time[index] == NEVER or column[index] < minimum:
 			continue
 		var center: Vector3 = cell_center(index)
-		var distance: float = Vector2(
-			center.x - from_position.x, center.z - from_position.z
-		).length()
+		var distance: float = (
+			Vector2(center.x - from_position.x, center.z - from_position.z).length()
+		)
 		if distance < best_distance - 0.0001:
 			best_distance = distance
 			best = index
@@ -396,19 +403,22 @@ func to_dict() -> Dictionary:
 	for index in range(cell_count):
 		if observed_time[index] == NEVER:
 			continue
-		cells.append(
-			{
-				"index": index,
-				"position": cell_center(index),
-				"observed_age": time_seconds - observed_time[index],
-				"visited": visited_time[index] != NEVER,
-				"visit_count": visit_count[index],
-				"illumination": illumination[index],
-				"cover": cover_score[index],
-				"openness": openness[index],
-				"danger": danger[index],
-				"confidence": confidence[index],
-			}
+		(
+			cells
+			. append(
+				{
+					"index": index,
+					"position": cell_center(index),
+					"observed_age": time_seconds - observed_time[index],
+					"visited": visited_time[index] != NEVER,
+					"visit_count": visit_count[index],
+					"illumination": illumination[index],
+					"cover": cover_score[index],
+					"openness": openness[index],
+					"danger": danger[index],
+					"confidence": confidence[index],
+				}
+			)
 		)
 	return {
 		"cell_size": cell_size,

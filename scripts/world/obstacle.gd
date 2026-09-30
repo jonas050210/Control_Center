@@ -48,9 +48,7 @@ var obstacle_id: int = -1
 
 
 func _init(
-	p_center: Vector3 = Vector3.ZERO,
-	p_half_extents: Vector3 = Vector3.ONE,
-	p_kind: int = Kind.WALL
+	p_center: Vector3 = Vector3.ZERO, p_half_extents: Vector3 = Vector3.ONE, p_kind: int = Kind.WALL
 ) -> void:
 	center = p_center
 	half_extents = Vector3(

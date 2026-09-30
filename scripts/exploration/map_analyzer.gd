@@ -102,7 +102,9 @@ func update(dt: float, context: Dictionary) -> Dictionary:
 			continue
 		if not sound.has("direction") or not sound.has("distance"):
 			continue
-		var estimate: Vector3 = position + (sound["direction"] as Vector3) * float(sound["distance"])
+		var estimate: Vector3 = (
+			position + (sound["direction"] as Vector3) * float(sound["distance"])
+		)
 		estimate.y = 0.0
 		memory.mark_danger(estimate, 0.35 * float(sound.get("loudness", 1.0)))
 

@@ -1,4 +1,5 @@
 """Contract tests for the external-game adapter boundary (Phase 9)."""
+
 from __future__ import annotations
 
 import unittest
@@ -302,9 +303,7 @@ class ContractSummaryTests(unittest.TestCase):
         for module in package.rglob("*.py"):
             text = module.read_text(encoding="utf-8").lower()
             for pattern in banned:
-                self.assertIsNone(
-                    re.search(pattern, text), f"{module.name} matches {pattern}"
-                )
+                self.assertIsNone(re.search(pattern, text), f"{module.name} matches {pattern}")
 
 
 if __name__ == "__main__":

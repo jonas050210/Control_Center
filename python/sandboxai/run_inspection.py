@@ -19,12 +19,14 @@ Consumers: ``sandboxai inspect-runs`` (text or JSON) and, through it, the
 Control Center HISTORY page. The JSON is a stable contract - documents
 carry a ``format`` field and new fields are additive.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import time
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
 from .control_center_schema import validate_status
 
@@ -68,7 +70,7 @@ def read_json(path: Path) -> tuple[Any, str | None]:
     if not path.is_file():
         return None, None
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
+        return json.loads(path.read_text(encoding="utf-8-sig")), None
     except (OSError, UnicodeDecodeError) as exc:
         return None, f"{path.name}: unreadable ({exc.__class__.__name__})"
     except json.JSONDecodeError as exc:
@@ -166,8 +168,7 @@ def _checkpoint_inventory(run_dir: Path) -> dict[str, Any]:
         "entries": entries,
         "has_latest": (directory / "latest.zip").is_file(),
         "has_best": (directory / "best_eval.zip").is_file(),
-        "has_final": (run_dir / "final.zip").is_file()
-        or (directory / "final.zip").is_file(),
+        "has_final": (run_dir / "final.zip").is_file() or (directory / "final.zip").is_file(),
     }
 
 
@@ -256,8 +257,8 @@ def _warnings(
 
             if contract.get("observation_dim") not in (None, OBSERVATION_FIELD_COUNT):
                 warnings.append(
-                    "run used a %s-float observation; the current contract is %d"
-                    % (contract.get("observation_dim"), OBSERVATION_FIELD_COUNT)
+                    f"run used a {contract.get('observation_dim')}-float observation; "
+                    f"the current contract is {OBSERVATION_FIELD_COUNT}"
                 )
             if contract.get("action_nvec") not in (None, list(ACTION_NVEC)):
                 warnings.append("run used a different action space than the current contract")
@@ -272,30 +273,81 @@ def _warnings(
     return warnings
 
 
-def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
-    """Read-only report for one run directory."""
-    path = Path(run_dir).expanduser()
-    problems: list[str] = []
+# Keys copied verbatim out of each run document, in report order. Kept as
+# module constants so the report's shape is one readable list per source
+# instead of three inline tuples buried in a 140-line function.
+_MANIFEST_KEYS = (
+    "format",
+    "created_utc",
+    "seed",
+    "device",
+    "contract",
+    "code",
+    "code_revision",
+    "host",
+    "godot",
+    "curriculum",
+    "checkpoint_selection",
+    "parallelism",
+    "package_versions",
+)
+_CONFIG_KEYS = (
+    "seed",
+    "device",
+    "environment_count",
+    "env_workers",
+    "enemy_count",
+    "total_training_steps",
+    "learning_rate",
+    "batch_size",
+    "rollout_length",
+    "resolved_rollout_length",
+    "ppo_epochs",
+    "torch_threads",
+    "resolved_torch_threads",
+    "curriculum_mode",
+    "curriculum_level",
+    "curriculum_start_level",
+    "checkpoint_selection_metric",
+    "checkpoint_selection_goal",
+)
+_SUMMARY_KEYS = (
+    "timesteps",
+    "training_steps_completed",
+    "device",
+    "stopped",
+    "best_checkpoint",
+    "latest_checkpoint",
+    "final_checkpoint",
+    "training_profile",
+)
 
-    manifest, problem = read_json(path / "run_manifest.json")
-    if problem:
-        problems.append(problem)
-    config, problem = read_json(path / "config.json")
-    if problem:
-        problems.append(problem)
-    summary, problem = read_json(path / "run_summary.json")
-    if problem:
-        problems.append(problem)
-    control, problem = read_json(path / "status.json")
-    if problem:
-        problems.append(problem)
-    elif control is not None:
+
+def _read_run_documents(path: Path, problems: list[str]) -> dict[str, Any]:
+    """Loads the four JSON documents a run directory is expected to contain.
+
+    Missing files are not an error (a run in progress has no summary yet);
+    unreadable ones append to `problems` so the report stays complete
+    instead of raising halfway through.
+    """
+    documents: dict[str, Any] = {}
+    for key, filename in (
+        ("manifest", "run_manifest.json"),
+        ("config", "config.json"),
+        ("summary", "run_summary.json"),
+        ("control", "status.json"),
+    ):
+        document, problem = read_json(path / filename)
+        if problem:
+            problems.append(problem)
+        documents[key] = document
+    control = documents["control"]
+    if isinstance(control, dict):
         problems.extend(f"status.json: {entry}" for entry in validate_status(control))
+    return documents
 
-    checkpoints = _checkpoint_inventory(path)
-    evaluation = _evaluation_inventory(path, problems)
-    status = _status(summary, control)
 
+def _log_inventory(path: Path) -> dict[str, Any]:
     logs: dict[str, Any] = {}
     for relative in _LOG_FILES:
         stat = _file_stat(path / relative)
@@ -304,6 +356,31 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
         if relative.endswith(".jsonl"):
             stat["lines"] = _count_lines(path / relative)
         logs[relative] = stat
+    return logs
+
+
+def _picked(document: Any, keys: Sequence[str]) -> dict[str, Any]:
+    """The subset of `keys` present in `document`, or {} if it is not a dict."""
+    if not isinstance(document, dict):
+        return {}
+    return {key: document.get(key) for key in keys if key in document}
+
+
+def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
+    """Read-only report for one run directory."""
+    path = Path(run_dir).expanduser()
+    problems: list[str] = []
+
+    documents = _read_run_documents(path, problems)
+    manifest = documents["manifest"]
+    config = documents["config"]
+    summary = documents["summary"]
+    control = documents["control"]
+
+    checkpoints = _checkpoint_inventory(path)
+    evaluation = _evaluation_inventory(path, problems)
+    status = _status(summary, control)
+    logs = _log_inventory(path)
 
     report: dict[str, Any] = {
         "format": RUN_REPORT_FORMAT,
@@ -327,71 +404,17 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
     if isinstance(manifest, dict):
         report["run_id"] = str(manifest.get("run_id", "") or "")
         report["experiment_id"] = str(manifest.get("experiment_id", "") or "")
-        report["manifest"] = {
-            key: manifest.get(key)
-            for key in (
-                "format",
-                "created_utc",
-                "seed",
-                "device",
-                "contract",
-                "code",
-                "code_revision",
-                "host",
-                "godot",
-                "curriculum",
-                "checkpoint_selection",
-                "parallelism",
-                "package_versions",
-            )
-            if key in manifest
-        }
+        report["manifest"] = _picked(manifest, _MANIFEST_KEYS)
     if isinstance(config, dict):
         report["run_id"] = report["run_id"] or str(config.get("run_id", "") or "")
         report["experiment_id"] = report["experiment_id"] or str(
             config.get("experiment_id", "") or ""
         )
-        report["config"] = {
-            key: config.get(key)
-            for key in (
-                "seed",
-                "device",
-                "environment_count",
-                "env_workers",
-                "enemy_count",
-                "total_training_steps",
-                "learning_rate",
-                "batch_size",
-                "rollout_length",
-                "resolved_rollout_length",
-                "ppo_epochs",
-                "torch_threads",
-                "resolved_torch_threads",
-                "curriculum_mode",
-                "curriculum_level",
-                "curriculum_start_level",
-                "checkpoint_selection_metric",
-                "checkpoint_selection_goal",
-            )
-            if key in config
-        }
+        report["config"] = _picked(config, _CONFIG_KEYS)
     if not report["run_id"]:
         report["run_id"] = path.name
     if isinstance(summary, dict):
-        report["summary"] = {
-            key: summary.get(key)
-            for key in (
-                "timesteps",
-                "training_steps_completed",
-                "device",
-                "stopped",
-                "best_checkpoint",
-                "latest_checkpoint",
-                "final_checkpoint",
-                "training_profile",
-            )
-            if key in summary
-        }
+        report["summary"] = _picked(summary, _SUMMARY_KEYS)
     if isinstance(control, dict):
         # status.json is a small, atomically-written flat document (see
         # run_control.RunControl): every key the running process publishes
@@ -413,9 +436,7 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
     return report
 
 
-def inspect_runs(
-    root: str | Path, limit: int = 0, event_limit: int = 0
-) -> dict[str, Any]:
+def inspect_runs(root: str | Path, limit: int = 0, event_limit: int = 0) -> dict[str, Any]:
     """Read-only index of every run under ``root`` (newest last)."""
     directories = discover_run_directories(root)
     if limit > 0:
@@ -452,8 +473,7 @@ def format_run_index(index: dict[str, Any]) -> str:
         progress = report.get("progress", {})
         steps = progress.get("timesteps")
         lines.append(
-            "%-34s %-11s %12s %6d %5d %9s"
-            % (
+            "{:<34} {:<11} {:>12} {:>6} {:>5} {:>9}".format(
                 report["run_id"][:34],
                 report["status"]["state"][:11],
                 "n/a" if steps is None else f"{steps:,}",
@@ -498,8 +518,9 @@ def format_run_report(report: dict[str, Any]) -> str:
         host = manifest.get("host") or {}
         if host:
             lines.append(
-                "  host           python %s, %s, %s CPUs"
-                % (host.get("python", "?"), host.get("system", "?"), host.get("logical_cpus", "?"))
+                "  host           python {}, {}, {} CPUs".format(
+                    host.get("python", "?"), host.get("system", "?"), host.get("logical_cpus", "?")
+                )
             )
         godot = manifest.get("godot") or {}
         if godot.get("version"):
@@ -507,13 +528,13 @@ def format_run_report(report: dict[str, Any]) -> str:
         selection = manifest.get("checkpoint_selection") or {}
         if selection:
             lines.append(
-                "  selection      %s %s (min_delta %s)"
-                % (selection.get("goal"), selection.get("metric"), selection.get("min_delta"))
+                "  selection      {} {} (min_delta {})".format(
+                    selection.get("goal"), selection.get("metric"), selection.get("min_delta")
+                )
             )
     checkpoints = report.get("checkpoints", {})
     lines.append(
-        "  checkpoints    %d (latest=%s best=%s final=%s)"
-        % (
+        "  checkpoints    {} (latest={} best={} final={})".format(
             checkpoints.get("count", 0),
             checkpoints.get("has_latest"),
             checkpoints.get("has_best"),
@@ -522,14 +543,16 @@ def format_run_report(report: dict[str, Any]) -> str:
     )
     evaluation = report.get("evaluation", {})
     lines.append(
-        "  evaluations    %d (latest mean reward %s)"
-        % (evaluation.get("evaluation_count", 0), _reward(report))
+        "  evaluations    {} (latest mean reward {})".format(
+            evaluation.get("evaluation_count", 0), _reward(report)
+        )
     )
     best = evaluation.get("best")
     if isinstance(best, dict):
         lines.append(
-            "  best           score %s at %s timesteps"
-            % (best.get("score", best.get("mean_reward")), best.get("timesteps"))
+            "  best           score {} at {} timesteps".format(
+                best.get("score", best.get("mean_reward")), best.get("timesteps")
+            )
         )
     missing = [name for name, present in report.get("artifacts", {}).items() if not present]
     if missing:

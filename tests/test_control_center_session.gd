@@ -19,7 +19,6 @@ const HumanController = preload("res://scripts/input/human_controller.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -161,9 +160,7 @@ func test_leaving_human_mode_disarms_the_input_pipeline() -> SandboxTest:
 	t.assert_true(session.human_input_enabled, "HUMAN mode can arm the input pipeline")
 
 	session.set_mode(ControlCenterConfig.Mode.WATCH)
-	t.assert_false(
-		session.human_input_enabled, "WATCH must not keep listening to keyboard/mouse"
-	)
+	t.assert_false(session.human_input_enabled, "WATCH must not keep listening to keyboard/mouse")
 	t.assert_false(
 		session.human_controller.is_processing_unhandled_input(),
 		"the human controller stops processing input when it is not driving"
@@ -434,9 +431,7 @@ func test_snapshot_is_a_pure_read_of_simulation_state() -> SandboxTest:
 	t.assert_true(snapshot.has("agent"))
 	t.assert_true(snapshot.has("episode"))
 
-	var after: PackedFloat32Array = (
-		session.get_selected_environment().get_observations().to_array()
-	)
+	var after: PackedFloat32Array = session.get_selected_environment().get_observations().to_array()
 	t.assert_eq(session.get_selected_environment().episode.step_count, step_before)
 	for index in range(before.size()):
 		t.assert_almost_eq(
@@ -501,7 +496,8 @@ func test_episode_results_are_recorded_with_their_action_source() -> SandboxTest
 	t.assert_eq(str(record["source"]), "ai", "WATCH episodes are attributed to the AI")
 	t.assert_eq(int(record["env_index"]), 0)
 	t.assert_eq(
-		int(record["episode"]), 1,
+		int(record["episode"]),
+		1,
 		"the FIRST finished episode is episode 1, not 2 (auto-reset had already bumped the counter)"
 	)
 	for position in range(history.size()):

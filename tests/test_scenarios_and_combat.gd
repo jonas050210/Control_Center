@@ -17,7 +17,6 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
 
-
 # ---------------------------------------------------------------------------
 # Scenarios
 # ---------------------------------------------------------------------------
@@ -316,9 +315,7 @@ func test_environment_is_deterministic_for_a_seed_on_a_world_level() -> SandboxT
 				1, 0, 0, 0, step_index % 7 == 0, Vector2.ZERO, step_index % 31 == 0
 			)
 			var result: Dictionary = env.step(action)
-			trace.append(
-				[env.agent.position, float(result["reward"]), env.enemies[0].position]
-			)
+			trace.append([env.agent.position, float(result["reward"]), env.enemies[0].position])
 		traces.append(trace)
 	var left: Array = traces[0]
 	var right: Array = traces[1]

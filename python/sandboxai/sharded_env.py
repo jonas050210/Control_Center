@@ -46,13 +46,16 @@ global index range and the tail of that process' stderr, and every other
 shard is closed before the error propagates. Partial, silently truncated
 batches are never returned.
 """
+
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+import contextlib
 import os
 import time
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any
 
 from .contract import OBSERVATION_FIELD_COUNT
 from .godot_env import GodotBatchClient, PendingRequest
@@ -61,7 +64,7 @@ from .training_profile import PrefixedProfiler
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover - numpy is a hard dependency of the adapter
-    np = None
+    np = None  # type: ignore[assignment]
 
 
 class ShardFailure(RuntimeError):
@@ -225,7 +228,7 @@ class ShardedBatchClient:
         if client is not None:
             try:
                 tail = client.transport.stderr_tail()
-            except Exception:  # pragma: no cover - diagnostics only
+            except (OSError, AttributeError, ValueError):  # pragma: no cover - diagnostics
                 tail = ""
         failure = ShardFailure(shard.worker, shard.offset, shard.count, cause)
         if tail:
@@ -264,10 +267,10 @@ class ShardedBatchClient:
         for worker, request in enumerate(pending):
             if request is None:
                 continue
-            try:
+            # Draining in-flight requests is best effort; a worker that
+            # already exited simply has nothing left to drain.
+            with contextlib.suppress(Exception):
                 self.clients[worker].transport.receive(request)
-            except Exception:  # pragma: no cover - shutdown best effort
-                pass
 
     # -- GodotBatchClient surface --------------------------------------
 
@@ -292,14 +295,9 @@ class ShardedBatchClient:
     def step(self, actions):
         profiler = self.profiler
         started = time.perf_counter() if profiler is not None else 0.0
-        if hasattr(actions, "tolist"):
-            actions = actions.tolist()
-        else:
-            actions = list(actions)
+        actions = actions.tolist() if hasattr(actions, "tolist") else list(actions)
         if len(actions) != self.environment_count:
-            raise ValueError(
-                f"expected {self.environment_count} actions, got {len(actions)}"
-            )
+            raise ValueError(f"expected {self.environment_count} actions, got {len(actions)}")
 
         def payload(shard: ShardSpec) -> dict[str, Any]:
             return {
@@ -430,10 +428,10 @@ class ShardedBatchClient:
 
     def close(self) -> None:
         for client in getattr(self, "clients", []):
-            try:
+            # Every client gets a close attempt even if an earlier one
+            # raised, so one dead bridge cannot leak the others.
+            with contextlib.suppress(Exception):
                 client.close()
-            except Exception:  # pragma: no cover - shutdown best effort
-                pass
         self.clients = []
 
     # -- introspection --------------------------------------------------
@@ -444,7 +442,7 @@ class ShardedBatchClient:
             for shard in self.shards
         ]
 
-    def __enter__(self) -> "ShardedBatchClient":
+    def __enter__(self) -> ShardedBatchClient:
         return self
 
     def __exit__(self, *_args: Iterable[Any]) -> None:

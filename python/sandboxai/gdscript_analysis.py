@@ -26,12 +26,14 @@ is skipped rather than reported, so a finding is a real finding. This is
 static analysis, NOT a substitute for running the engine test-suite
 (``godot --headless --path . --script res://tests/run_tests.gd``).
 """
+
 from __future__ import annotations
 
+import contextlib
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
-from typing import Iterable
 
 RES_PREFIX = "res://"
 
@@ -62,32 +64,167 @@ _NESTED_ENUM_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Z][A-Za-z0-9_]*)\.([A
 ## Godot built-in globals whose members we intentionally never check.
 BUILTIN_TYPES = frozenset(
     {
-        "Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Color", "Rect2", "Rect2i",
-        "Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB", "Projection",
-        "String", "StringName", "NodePath", "RID", "Callable", "Signal", "Dictionary", "Array",
-        "PackedByteArray", "PackedInt32Array", "PackedInt64Array", "PackedFloat32Array",
-        "PackedFloat64Array", "PackedStringArray", "PackedVector2Array", "PackedVector3Array",
-        "PackedColorArray", "JSON", "OS", "Engine", "Input", "InputEvent", "InputEventKey",
-        "InputEventMouseButton", "InputEventMouseMotion", "Time", "ProjectSettings", "ResourceLoader",
-        "DisplayServer", "ThemeDB", "Control", "Node", "Node3D", "Node2D", "CanvasItem", "Label",
-        "Button", "CheckButton", "CheckBox", "HSlider", "VSlider", "SpinBox", "OptionButton",
-        "LineEdit", "TextEdit", "RichTextLabel", "ItemList", "Tree", "PanelContainer", "VBoxContainer",
-        "HBoxContainer", "GridContainer", "MarginContainer", "ScrollContainer", "TabContainer",
-        "SplitContainer", "HSplitContainer", "VSplitContainer", "Camera3D", "MeshInstance3D",
-        "BoxMesh", "SphereMesh", "CapsuleMesh", "CylinderMesh", "PlaneMesh", "QuadMesh",
-        "StandardMaterial3D", "BaseMaterial3D", "ORMMaterial3D", "Material", "Mesh", "ArrayMesh",
-        "ImmediateMesh", "SurfaceTool", "DirectionalLight3D", "OmniLight3D", "SpotLight3D",
-        "WorldEnvironment", "Environment", "Sky", "Texture2D", "Image", "ImageTexture", "Font",
-        "FontFile", "Theme", "StyleBox", "StyleBoxFlat", "StyleBoxEmpty", "RandomNumberGenerator",
-        "SceneTree", "Window", "Viewport", "SubViewport", "SubViewportContainer", "Timer", "Tween",
-        "FileAccess", "DirAccess", "Resource", "RefCounted", "Object", "Script", "GDScript",
-        "PackedScene", "Performance", "RenderingServer", "PhysicsServer3D", "Geometry3D", "Geometry2D",
-        "TranslationServer", "AudioServer", "EditorInterface", "ClassDB", "Marshalls", "Shader",
-        "ShaderMaterial", "Label3D", "Sprite3D", "Skeleton3D", "AnimationPlayer", "Curve", "Gradient",
-        "MultiMesh", "MultiMeshInstance3D", "TextServer", "Expression", "SceneState", "ConfigFile",
-        "SystemFont", "CanvasLayer", "ColorRect", "TextureRect", "NinePatchRect", "Separator",
-        "HSeparator", "VSeparator", "ProgressBar", "TextureProgressBar", "AcceptDialog",
-        "ConfirmationDialog", "FileDialog", "PopupMenu", "MenuButton", "LinkButton", "TextureButton",
+        "Vector2",
+        "Vector2i",
+        "Vector3",
+        "Vector3i",
+        "Vector4",
+        "Color",
+        "Rect2",
+        "Rect2i",
+        "Transform2D",
+        "Transform3D",
+        "Basis",
+        "Quaternion",
+        "Plane",
+        "AABB",
+        "Projection",
+        "String",
+        "StringName",
+        "NodePath",
+        "RID",
+        "Callable",
+        "Signal",
+        "Dictionary",
+        "Array",
+        "PackedByteArray",
+        "PackedInt32Array",
+        "PackedInt64Array",
+        "PackedFloat32Array",
+        "PackedFloat64Array",
+        "PackedStringArray",
+        "PackedVector2Array",
+        "PackedVector3Array",
+        "PackedColorArray",
+        "JSON",
+        "OS",
+        "Engine",
+        "Input",
+        "InputEvent",
+        "InputEventKey",
+        "InputEventMouseButton",
+        "InputEventMouseMotion",
+        "Time",
+        "ProjectSettings",
+        "ResourceLoader",
+        "DisplayServer",
+        "ThemeDB",
+        "Control",
+        "Node",
+        "Node3D",
+        "Node2D",
+        "CanvasItem",
+        "Label",
+        "Button",
+        "CheckButton",
+        "CheckBox",
+        "HSlider",
+        "VSlider",
+        "SpinBox",
+        "OptionButton",
+        "LineEdit",
+        "TextEdit",
+        "RichTextLabel",
+        "ItemList",
+        "Tree",
+        "PanelContainer",
+        "VBoxContainer",
+        "HBoxContainer",
+        "GridContainer",
+        "MarginContainer",
+        "ScrollContainer",
+        "TabContainer",
+        "SplitContainer",
+        "HSplitContainer",
+        "VSplitContainer",
+        "Camera3D",
+        "MeshInstance3D",
+        "BoxMesh",
+        "SphereMesh",
+        "CapsuleMesh",
+        "CylinderMesh",
+        "PlaneMesh",
+        "QuadMesh",
+        "StandardMaterial3D",
+        "BaseMaterial3D",
+        "ORMMaterial3D",
+        "Material",
+        "Mesh",
+        "ArrayMesh",
+        "ImmediateMesh",
+        "SurfaceTool",
+        "DirectionalLight3D",
+        "OmniLight3D",
+        "SpotLight3D",
+        "WorldEnvironment",
+        "Environment",
+        "Sky",
+        "Texture2D",
+        "Image",
+        "ImageTexture",
+        "Font",
+        "FontFile",
+        "Theme",
+        "StyleBox",
+        "StyleBoxFlat",
+        "StyleBoxEmpty",
+        "RandomNumberGenerator",
+        "SceneTree",
+        "Window",
+        "Viewport",
+        "SubViewport",
+        "SubViewportContainer",
+        "Timer",
+        "Tween",
+        "FileAccess",
+        "DirAccess",
+        "Resource",
+        "RefCounted",
+        "Object",
+        "Script",
+        "GDScript",
+        "PackedScene",
+        "Performance",
+        "RenderingServer",
+        "PhysicsServer3D",
+        "Geometry3D",
+        "Geometry2D",
+        "TranslationServer",
+        "AudioServer",
+        "EditorInterface",
+        "ClassDB",
+        "Marshalls",
+        "Shader",
+        "ShaderMaterial",
+        "Label3D",
+        "Sprite3D",
+        "Skeleton3D",
+        "AnimationPlayer",
+        "Curve",
+        "Gradient",
+        "MultiMesh",
+        "MultiMeshInstance3D",
+        "TextServer",
+        "Expression",
+        "SceneState",
+        "ConfigFile",
+        "SystemFont",
+        "CanvasLayer",
+        "ColorRect",
+        "TextureRect",
+        "NinePatchRect",
+        "Separator",
+        "HSeparator",
+        "VSeparator",
+        "ProgressBar",
+        "TextureProgressBar",
+        "AcceptDialog",
+        "ConfirmationDialog",
+        "FileDialog",
+        "PopupMenu",
+        "MenuButton",
+        "LinkButton",
+        "TextureButton",
     }
 )
 
@@ -95,14 +232,52 @@ BUILTIN_TYPES = frozenset(
 ## a project class may inherit them through a non-project base.
 UNIVERSAL_MEMBERS = frozenset(
     {
-        "new", "duplicate", "get", "set", "call", "call_deferred", "has_method", "get_script",
-        "free", "queue_free", "is_instance_valid", "connect", "disconnect", "emit", "emit_signal",
-        "name", "get_parent", "add_child", "remove_child", "get_children", "get_node",
-        "get_node_or_null", "set_script", "to_string", "get_class", "is_class", "resource_path",
-        "instantiate", "can_instantiate", "get_instance_id", "notification", "set_process",
-        "set_physics_process", "set_process_unhandled_input", "set_process_input", "propagate_call",
-        "get_property_list", "get_method_list", "has_signal", "get_signal_list", "reference",
-        "unreference", "get_reference_count", "set_meta", "get_meta", "has_meta",
+        "new",
+        "duplicate",
+        "get",
+        "set",
+        "call",
+        "call_deferred",
+        "has_method",
+        "get_script",
+        "free",
+        "queue_free",
+        "is_instance_valid",
+        "connect",
+        "disconnect",
+        "emit",
+        "emit_signal",
+        "name",
+        "get_parent",
+        "add_child",
+        "remove_child",
+        "get_children",
+        "get_node",
+        "get_node_or_null",
+        "set_script",
+        "to_string",
+        "get_class",
+        "is_class",
+        "resource_path",
+        "instantiate",
+        "can_instantiate",
+        "get_instance_id",
+        "notification",
+        "set_process",
+        "set_physics_process",
+        "set_process_unhandled_input",
+        "set_process_input",
+        "propagate_call",
+        "get_property_list",
+        "get_method_list",
+        "has_signal",
+        "get_signal_list",
+        "reference",
+        "unreference",
+        "get_reference_count",
+        "set_meta",
+        "get_meta",
+        "has_meta",
     }
 )
 
@@ -114,16 +289,38 @@ UNIVERSAL_MEMBERS = frozenset(
 ENGINE_VIRTUAL_METHODS = frozenset(
     {
         # Object
-        "_init", "_notification", "_to_string", "_get", "_set", "_get_property_list",
-        "_validate_property", "_property_can_revert", "_property_get_revert", "_script_exited",
+        "_init",
+        "_notification",
+        "_to_string",
+        "_get",
+        "_set",
+        "_get_property_list",
+        "_validate_property",
+        "_property_can_revert",
+        "_property_get_revert",
+        "_script_exited",
         # Node / SceneTree main loop
-        "_ready", "_enter_tree", "_exit_tree", "_process", "_physics_process", "_input",
-        "_unhandled_input", "_unhandled_key_input", "_initialize", "_finalize",
+        "_ready",
+        "_enter_tree",
+        "_exit_tree",
+        "_process",
+        "_physics_process",
+        "_input",
+        "_unhandled_input",
+        "_unhandled_key_input",
+        "_initialize",
+        "_finalize",
         # CanvasItem / Control
-        "_draw", "_gui_input", "_has_point", "_clips_input", "_make_custom_tooltip",
-        "_get_minimum_size", "_theme_changed",
+        "_draw",
+        "_gui_input",
+        "_has_point",
+        "_clips_input",
+        "_make_custom_tooltip",
+        "_get_minimum_size",
+        "_theme_changed",
         # BaseButton / Range virtual signal handlers
-        "_pressed", "_toggled",
+        "_pressed",
+        "_toggled",
     }
 )
 
@@ -174,7 +371,7 @@ def project_root(start: Path | None = None) -> Path:
     for candidate in [here, *here.parents]:
         if (candidate / "project.godot").is_file():
             return candidate
-    raise RuntimeError("could not locate project.godot above %s" % here)
+    raise RuntimeError(f"could not locate project.godot above {here}")
 
 
 def iter_gd_files(root: Path | str) -> list[Path]:
@@ -348,10 +545,11 @@ def parse_script(path: Path, root: Path) -> ScriptInfo:
                 extra = _strip_strings_and_comments(lines[cursor])
                 signature += " " + extra.strip()
                 depth += extra.count("(") - extra.count(")")
-            try:
+            # A signature the regex matched but the arity parser cannot make
+            # sense of is left unrecorded rather than guessed: a wrong arity
+            # would produce false "wrong argument count" findings.
+            with contextlib.suppress(IndexError, ValueError):
                 info.functions[name] = _function_arity(signature)
-            except (IndexError, ValueError):  # pragma: no cover - defensive
-                pass
             continue
         for pattern in (_CONST_RE, _VAR_RE, _SIGNAL_RE, _INNER_CLASS_RE):
             member_match = pattern.match(cleaned)
@@ -411,7 +609,9 @@ class ProjectIndex:
             return None
         return members | parent_members
 
-    def all_static_functions(self, info: ScriptInfo, _seen: set[str] | None = None) -> set[str] | None:
+    def all_static_functions(
+        self, info: ScriptInfo, _seen: set[str] | None = None
+    ) -> set[str] | None:
         """Static functions of ``info`` plus its project-local base classes.
 
         Static functions are inherited like any other member, so a call
@@ -444,11 +644,9 @@ def check_resource_paths(index: ProjectIndex) -> list[Finding]:
     findings: list[Finding] = []
     for info in index.by_res.values():
         for res_path in sorted(info.res_references):
-            relative = res_path[len(RES_PREFIX):]
+            relative = res_path[len(RES_PREFIX) :]
             if not (index.root / relative).exists():
-                line = next(
-                    (i + 1 for i, text in enumerate(info.lines) if res_path in text), 1
-                )
+                line = next((i + 1 for i, text in enumerate(info.lines) if res_path in text), 1)
                 findings.append(
                     Finding(
                         info.res_path,
@@ -751,6 +949,119 @@ def _arity_finding(
     )
 
 
+def _update_local_scope(
+    index: ProjectIndex, info: ScriptInfo, cleaned: str, scope: dict[str, ScriptInfo]
+) -> None:
+    """Applies one line's effect on the typed-local scope, in place.
+
+    A rebind drops the local (the new value may be of any type); a typed
+    declaration adds it, but only when the annotation resolves to a project
+    script whose full member set is knowable.
+    """
+    rebind = _LOCAL_REBIND_RE.match(cleaned)
+    if rebind:
+        scope.pop(rebind.group(1), None)
+
+    declaration = _TYPED_LOCAL_RE.match(cleaned)
+    if declaration is None:
+        return
+    local = declaration.group(1)
+    alias = declaration.group(2) or declaration.group(3)
+    scope.pop(local, None)
+    if alias in BUILTIN_TYPES or (alias not in info.preloads and alias not in index.by_class):
+        return
+    target = index.resolve(alias, info)
+    if target is not None and index.all_members(target) is not None:
+        scope[local] = target
+
+
+def _member_call_finding(
+    index: ProjectIndex,
+    info: ScriptInfo,
+    target: ScriptInfo,
+    label: str,
+    method: str,
+    cleaned: str,
+    call_end: int,
+    line_number: int,
+    unknown_message: str,
+) -> Finding | None:
+    """Membership first, then arity, for one resolved `label.method(...)` call."""
+    members = index.all_members(target)
+    if members is None:
+        return None
+    if method not in members:
+        return Finding(info.res_path, line_number, "unknown-member", unknown_message)
+    return _arity_finding(info, target, label, method, cleaned, call_end, line_number)
+
+
+def _chained_call_findings(
+    index: ProjectIndex,
+    info: ScriptInfo,
+    cleaned: str,
+    line_number: int,
+    scope: dict[str, ScriptInfo],
+) -> list[Finding]:
+    """One hop through a typed property: `local.prop.method(...)`."""
+    findings: list[Finding] = []
+    for match in _LOCAL_CHAIN_CALL_RE.finditer(cleaned):
+        local, prop, method = match.groups()
+        holder = scope.get(local)
+        if holder is None or method in UNIVERSAL_MEMBERS:
+            continue
+        prop_type = holder.member_types.get(prop)
+        if prop_type is None or prop_type in BUILTIN_TYPES:
+            continue
+        target = index.resolve(prop_type, holder) or index.by_class.get(prop_type)
+        if target is None:
+            continue
+        label = f"{local}.{prop}"
+        finding = _member_call_finding(
+            index,
+            info,
+            target,
+            label,
+            method,
+            cleaned,
+            match.end(),
+            line_number,
+            f"{label}.{method}() is not declared by {target.res_path}",
+        )
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
+def _direct_call_findings(
+    index: ProjectIndex,
+    info: ScriptInfo,
+    cleaned: str,
+    line_number: int,
+    scope: dict[str, ScriptInfo],
+) -> list[Finding]:
+    """Direct call on the local: `local.method(...)`."""
+    findings: list[Finding] = []
+    for match in _LOCAL_MEMBER_CALL_RE.finditer(cleaned):
+        local, method = match.group(1), match.group(2)
+        target = scope.get(local)
+        if target is None or method in UNIVERSAL_MEMBERS:
+            continue
+        finding = _member_call_finding(
+            index,
+            info,
+            target,
+            local,
+            method,
+            cleaned,
+            match.end(),
+            line_number,
+            f"{local}.{method}() is not declared by the type of {local}",
+        )
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
 def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
     """Checks method calls on locals whose type is a known project script.
 
@@ -794,89 +1105,19 @@ def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
                 scope = {}
                 continue
 
-            rebind = _LOCAL_REBIND_RE.match(cleaned)
-            if rebind:
-                scope.pop(rebind.group(1), None)
-
-            declaration = _TYPED_LOCAL_RE.match(cleaned)
-            if declaration:
-                local = declaration.group(1)
-                alias = declaration.group(2) or declaration.group(3)
-                scope.pop(local, None)
-                # Note: no `continue`. The right-hand side of a declaration
-                # is the most common place to call a method on an existing
-                # local (`var d: Dictionary = env.get_metrics()`), so the
-                # line still has to be scanned for calls below.
-                if alias not in BUILTIN_TYPES and (
-                    alias in info.preloads or alias in index.by_class
-                ):
-                    target = index.resolve(alias, info)
-                    if target is not None and index.all_members(target) is not None:
-                        scope[local] = target
-
+            # Note: the scope update does not `continue`. The right-hand
+            # side of a declaration is the most common place to call a
+            # method on an existing local (`var d: Dictionary =
+            # env.get_metrics()`), so the line is still scanned for calls.
+            _update_local_scope(index, info, cleaned, scope)
             if not scope:
                 continue
-
-            # One hop through a typed property: `local.prop.method(...)`.
-            for match in _LOCAL_CHAIN_CALL_RE.finditer(cleaned):
-                local, prop, method = match.groups()
-                holder = scope.get(local)
-                if holder is None or method in UNIVERSAL_MEMBERS:
-                    continue
-                prop_type = holder.member_types.get(prop)
-                if prop_type is None or prop_type in BUILTIN_TYPES:
-                    continue
-                target = index.resolve(prop_type, holder) or index.by_class.get(prop_type)
-                if target is None:
-                    continue
-                members = index.all_members(target)
-                if members is None:
-                    continue
-                label = f"{local}.{prop}"
-                if method not in members:
-                    findings.append(
-                        Finding(
-                            info.res_path,
-                            line_number,
-                            "unknown-member",
-                            f"{label}.{method}() is not declared by {target.res_path}",
-                        )
-                    )
-                    continue
-                problem = _arity_finding(
-                    info, target, label, method, cleaned, match.end(), line_number
-                )
-                if problem is not None:
-                    findings.append(problem)
-
-            # Direct call on the local: `local.method(...)`.
-            for match in _LOCAL_MEMBER_CALL_RE.finditer(cleaned):
-                local, method = match.group(1), match.group(2)
-                target = scope.get(local)
-                if target is None or method in UNIVERSAL_MEMBERS:
-                    continue
-                members = index.all_members(target)
-                if members is None:
-                    continue
-                if method not in members:
-                    findings.append(
-                        Finding(
-                            info.res_path,
-                            line_number,
-                            "unknown-member",
-                            f"{local}.{method}() is not declared by the type of {local}",
-                        )
-                    )
-                    continue
-                problem = _arity_finding(
-                    info, target, local, method, cleaned, match.end(), line_number
-                )
-                if problem is not None:
-                    findings.append(problem)
+            findings += _chained_call_findings(index, info, cleaned, line_number, scope)
+            findings += _direct_call_findings(index, info, cleaned, line_number, scope)
     return findings
 
 
-def _enum_members(index: "ProjectIndex", info: ScriptInfo, name: str) -> set[str] | None:
+def _enum_members(index: ProjectIndex, info: ScriptInfo, name: str) -> set[str] | None:
     """Members of the named enum ``name`` on ``info`` or a project base."""
     seen: set[str] = set()
     current: ScriptInfo | None = info
@@ -980,8 +1221,10 @@ def lint_all(root: Path | str | None = None) -> list[Finding]:
     """
     root = Path(root) if root else project_root()
     try:
-        from gdtoolkit.linter import lint_code  # type: ignore
-        from gdtoolkit.linter import DEFAULT_CONFIG  # type: ignore
+        from gdtoolkit.linter import (
+            DEFAULT_CONFIG,  # type: ignore
+            lint_code,  # type: ignore
+        )
     except ImportError:
         return [
             Finding(

@@ -75,13 +75,11 @@ func _apply_mode_defaults() -> void:
 	match mode:
 		ControlCenterConfig.CameraMode.TOP_DOWN:
 			camera.global_rotation = Vector3(-PI * 0.5, 0.0, 0.0)
-			camera.global_position = _view_origin + Vector3(
-				0.0, _arena_half_extent * 2.1, 0.01
-			)
+			camera.global_position = _view_origin + Vector3(0.0, _arena_half_extent * 2.1, 0.01)
 		ControlCenterConfig.CameraMode.FREE:
 			if not _initialized_free:
-				_free_position = _view_origin + Vector3(
-					0.0, _arena_half_extent * 0.9, _arena_half_extent * 1.4
+				_free_position = (
+					_view_origin + Vector3(0.0, _arena_half_extent * 0.9, _arena_half_extent * 1.4)
 				)
 				_free_yaw = 0.0
 				_free_pitch = -0.45
@@ -139,9 +137,7 @@ func _update_free(delta: float) -> void:
 		if Input.is_key_pressed(KEY_Q):
 			direction.y -= 1.0
 	if direction != Vector3.ZERO:
-		var speed: float = (
-			FREE_SPEED_FAST if Input.is_key_pressed(KEY_SHIFT) else FREE_SPEED
-		)
+		var speed: float = FREE_SPEED_FAST if Input.is_key_pressed(KEY_SHIFT) else FREE_SPEED
 		# `yaw_basis`, not `basis`: a local named `basis` would shadow the
 		# Node3D property of the same name.
 		var yaw_basis := Basis(Vector3.UP, _free_yaw)
@@ -162,6 +158,4 @@ func handle_input(event: InputEvent) -> void:
 	var motion := event as InputEventMouseMotion
 	if motion != null and _looking:
 		_free_yaw -= motion.relative.x * LOOK_SENSITIVITY * 0.01
-		_free_pitch = clampf(
-			_free_pitch - motion.relative.y * LOOK_SENSITIVITY * 0.01, -1.5, 1.5
-		)
+		_free_pitch = clampf(_free_pitch - motion.relative.y * LOOK_SENSITIVITY * 0.01, -1.5, 1.5)

@@ -21,9 +21,7 @@ func test_bearing_is_signed_and_zero_dead_ahead() -> SandboxTest:
 	t.assert_almost_eq(
 		PerceptionSystem.bearing_deg(FORWARD, Vector3.ZERO, Vector3(0.0, 0.0, -5.0)), 0.0, 0.01
 	)
-	var right: float = PerceptionSystem.bearing_deg(
-		FORWARD, Vector3.ZERO, Vector3(5.0, 0.0, -5.0)
-	)
+	var right: float = PerceptionSystem.bearing_deg(FORWARD, Vector3.ZERO, Vector3(5.0, 0.0, -5.0))
 	var left: float = PerceptionSystem.bearing_deg(FORWARD, Vector3.ZERO, Vector3(-5.0, 0.0, -5.0))
 	t.assert_almost_eq(absf(right), 45.0, 0.01)
 	t.assert_almost_eq(absf(left), 45.0, 0.01)
@@ -76,8 +74,7 @@ func test_line_of_sight_is_blocked_by_high_cover_but_not_by_low_cover() -> Sandb
 	)
 
 	t.assert_true(
-		PerceptionSystem.has_line_of_sight(null, eye, target, 1.8),
-		"an empty world never occludes"
+		PerceptionSystem.has_line_of_sight(null, eye, target, 1.8), "an empty world never occludes"
 	)
 	return t
 

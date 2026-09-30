@@ -9,6 +9,7 @@ They read the numbers straight out of the GDScript via
 ``sandboxai.weapons``, so retuning a profile in the engine either keeps
 these properties or fails here with a specific explanation.
 """
+
 from __future__ import annotations
 
 import math
@@ -94,9 +95,7 @@ class DamageFalloffTests(unittest.TestCase):
                 for step in range(0, 301):
                     distance = step * 0.1
                     scale = weapon.damage_scale_at(distance)
-                    self.assertLessEqual(
-                        scale, previous + 1e-9, f"damage rose at {distance:.1f} m"
-                    )
+                    self.assertLessEqual(scale, previous + 1e-9, f"damage rose at {distance:.1f} m")
                     self.assertGreaterEqual(scale, weapon.minimum_damage_scale - 1e-9)
                     self.assertLessEqual(scale, 1.0 + 1e-9)
                     previous = scale
@@ -149,12 +148,8 @@ class RoleSeparationTests(unittest.TestCase):
         reachable = sorted(
             name for name, weapon in self.profiles.items() if weapon.range_m >= probe
         )
-        self.assertEqual(
-            reachable, ["rifle"], f"only the rifle should reach {probe:.1f} m"
-        )
-        far = sorted(
-            name for name, weapon in self.profiles.items() if weapon.range_m >= high
-        )
+        self.assertEqual(reachable, ["rifle"], f"only the rifle should reach {probe:.1f} m")
+        far = sorted(name for name, weapon in self.profiles.items() if weapon.range_m >= high)
         self.assertEqual(far, ["rifle"], f"only the rifle should reach {high:.1f} m")
 
     def test_no_profile_wins_every_band(self):
@@ -181,9 +176,7 @@ class RoleSeparationTests(unittest.TestCase):
                         < other.effective_ttk(d, ENEMY_HEALTH)
                         for d in distances
                     )
-                    self.assertTrue(
-                        wins, f"{name} never beats {other_name} at any distance"
-                    )
+                    self.assertTrue(wins, f"{name} never beats {other_name} at any distance")
 
     def test_close_range_weapons_cannot_reach_long_range(self):
         for name in ("shotgun", "smg", "pistol"):
@@ -219,9 +212,7 @@ class TimeToKillTests(unittest.TestCase):
                 previous = -1.0
                 for step in range(0, int(weapon.range_m * 2) + 1):
                     value = weapon.ttk(step * 0.5, ENEMY_HEALTH)
-                    self.assertGreaterEqual(
-                        value, previous - 1e-9, "TTK improved with distance"
-                    )
+                    self.assertGreaterEqual(value, previous - 1e-9, "TTK improved with distance")
                     previous = value
 
     def test_in_range_ttk_stays_inside_a_playable_window(self):
@@ -259,9 +250,7 @@ class TimeToKillTests(unittest.TestCase):
                 if weapon.profile_id == "shotgun":
                     continue  # already a one-shot up close by design
                 shots = weapon.shots_to_kill(weapon.range_m, ENEMY_HEALTH, headshot=True)
-                self.assertGreaterEqual(
-                    shots, 2, f"{name} one-shots with a headshot at max range"
-                )
+                self.assertGreaterEqual(shots, 2, f"{name} one-shots with a headshot at max range")
 
     def test_sustained_ttk_never_beats_ideal_ttk(self):
         for name, weapon in self.profiles.items():
@@ -339,9 +328,7 @@ class HandlingTests(unittest.TestCase):
                 first_pitch, _ = weapon.recoil_kick(0, self.constants)
                 late_pitch, _ = weapon.recoil_kick(int(pattern) * 3, self.constants)
                 self.assertAlmostEqual(first_pitch, weapon.recoil_vertical_deg, places=6)
-                self.assertAlmostEqual(
-                    late_pitch, weapon.recoil_vertical_deg * sustain, places=6
-                )
+                self.assertAlmostEqual(late_pitch, weapon.recoil_vertical_deg * sustain, places=6)
                 self.assertLessEqual(
                     late_pitch,
                     first_pitch + 1e-9,

@@ -17,26 +17,29 @@ modules already own:
 * ``runtime_validation``/``config.find_godot_executable`` for Godot
   discovery (the same logic ``sandboxai validate-runtime`` uses).
 """
+
 from __future__ import annotations
 
-from collections import OrderedDict, deque
-from dataclasses import dataclass, field
-from importlib.util import find_spec
+import contextlib
 import json
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
-from typing import Any, Iterable
+from collections import OrderedDict, deque
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from importlib.util import find_spec
+from pathlib import Path
+from typing import Any, cast
 
 from .artifact_repository import ArtifactRepository
 from .benchmark import summarize_scaling
 from .config import TrainingConfig, find_godot_executable
-from .control_center_schema import DashboardSnapshot, ProcessSnapshot
+from .control_center_schema import DashboardSnapshot, ProcessSnapshot, RunStatus
 from .run_inspection import read_json, tail_jsonl
 from .telemetry import IncrementalJsonlTailer, resource_snapshot
 
@@ -102,11 +105,11 @@ def _pid_tree(pid: int) -> list[int]:
     try:
         process = psutil.Process(pid)
         return [pid] + [child.pid for child in process.children(recursive=True)]
-    except Exception:  # pragma: no cover - process may have already exited
+    except (psutil.Error, OSError):  # pragma: no cover - process may have exited
         return [pid]
 
 
-def _stop_process_tree(process: "subprocess.Popen[str]", *, hard: bool) -> None:
+def _stop_process_tree(process: subprocess.Popen[str], *, hard: bool) -> None:
     """Best-effort graceful/hard stop of ``process`` and its children.
 
     ``Popen.terminate()``/``kill()`` only ever signal the direct child. A
@@ -185,19 +188,33 @@ class ProcessManager:
         run_dir.mkdir(parents=True, exist_ok=True)
         try:
             process = subprocess.Popen(
-                command, cwd=str(cwd), stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                bufsize=1, start_new_session=(os.name != "nt"),
-                env={**os.environ, "PYTHONPATH": str(cwd / "python") + os.pathsep + os.environ.get("PYTHONPATH", "")},
+                command,
+                cwd=str(cwd),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                start_new_session=(os.name != "nt"),
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(cwd / "python")
+                    + os.pathsep
+                    + os.environ.get("PYTHONPATH", ""),
+                },
             )
         except OSError as exc:
             raise RuntimeError(f"could not start {kind}: {exc}") from exc
-        record = ProcessRecord(uuid.uuid4().hex, kind, list(command), run_dir, process, meta=dict(meta or {}))
+        record = ProcessRecord(
+            uuid.uuid4().hex, kind, list(command), run_dir, process, meta=dict(meta or {})
+        )
         with self._lock:
             self._records[record.id] = record
             self._prune_finished_locked()
         for stream, is_stdout in ((process.stdout, True), (process.stderr, False)):
-            threading.Thread(target=self._drain, args=(record, stream, is_stdout), daemon=True).start()
+            threading.Thread(
+                target=self._drain, args=(record, stream, is_stdout), daemon=True
+            ).start()
         threading.Thread(target=self._wait, args=(record,), daemon=True).start()
         return record
 
@@ -226,17 +243,15 @@ class ProcessManager:
                     if len(target) > self.max_lines:
                         del target[: len(target) - self.max_lines]
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 stream.close()
-            except OSError:
-                pass
 
     def _wait(self, record: ProcessRecord) -> None:
         code = record.process.wait()
         with self._lock:
             record.returncode = code
             if code and not record.error:
-                record.error = "process exited with code %d" % code
+                record.error = f"process exited with code {code}"
 
     def get(self, process_id: str) -> ProcessRecord | None:
         with self._lock:
@@ -249,11 +264,18 @@ class ProcessManager:
     def snapshot(self, process_id: str) -> ProcessSnapshot:
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
+            return {
+                "state": "unknown",
+                "error_code": "process_not_found",
+                "error": "process not found",
+            }
         with self._lock:
-            result = {
-                "id": record.id, "kind": record.kind, "state": record.state,
-                "returncode": record.returncode, "started_at": record.started_at,
+            result: ProcessSnapshot = {
+                "id": record.id,
+                "kind": record.kind,
+                "state": record.state,
+                "returncode": record.returncode,
+                "started_at": record.started_at,
                 # The OS pid of the process this Control Center itself
                 # launched. Always safe to show (it is not a handle to
                 # anything the GUI did not start) and is what the Agents
@@ -261,16 +283,18 @@ class ProcessManager:
                 "pid": record.process.pid,
                 "stdout": [text for _, text in record.stdout[-100:]],
                 "stderr": [text for _, text in record.stderr[-100:]],
-                "error": record.error, "run_dir": str(record.run_dir),
-                "meta": dict(record.meta), "command": list(record.command),
+                "error": record.error or "",
+                "run_dir": str(record.run_dir),
+                "meta": dict(record.meta),
+                "command": list(record.command),
             }
         # The trainer's atomically published status is authoritative for
         # training state and progress; the OS process state is supplementary.
         status_path = record.run_dir / "status.json"
         try:
-            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status = json.loads(status_path.read_text(encoding="utf-8-sig"))
             if isinstance(status, dict):
-                result["backend"] = status
+                result["backend"] = cast("RunStatus", status)
         except FileNotFoundError:
             pass
         except (OSError, json.JSONDecodeError) as exc:
@@ -292,7 +316,12 @@ class ProcessManager:
         """
         record = self.get(process_id)
         if record is None:
-            return {"error_code": "process_not_found", "error": "process not found", "stdout": [], "stderr": []}
+            return {
+                "error_code": "process_not_found",
+                "error": "process not found",
+                "stdout": [],
+                "stderr": [],
+            }
         with self._lock:
             new_stdout = [(seq, text) for seq, text in record.stdout if seq > stdout_after][-limit:]
             new_stderr = [(seq, text) for seq, text in record.stderr if seq > stderr_after][-limit:]
@@ -309,7 +338,7 @@ class ProcessManager:
             "stderr_truncated": stderr_gap,
         }
 
-    def cancel(self, process_id: str) -> dict[str, Any]:
+    def cancel(self, process_id: str) -> ProcessSnapshot:
         """Requests a safe stop without blocking the caller.
 
         Training uses the existing cooperative command-file protocol (see
@@ -322,13 +351,18 @@ class ProcessManager:
         """
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
+            return {
+                "state": "unknown",
+                "error_code": "process_not_found",
+                "error": "process not found",
+            }
         if record.returncode is None:
             if record.kind == "training":
                 command_file = record.run_dir / "command.json"
                 try:
                     command_file.write_text(
-                        json.dumps({"command": "stop", "sequence": time.time_ns()}) + "\n", encoding="utf-8"
+                        json.dumps({"command": "stop", "sequence": time.time_ns()}) + "\n",
+                        encoding="utf-8",
                     )
                 except OSError as exc:
                     record.error = f"could not write stop command: {exc.__class__.__name__}"
@@ -336,7 +370,7 @@ class ProcessManager:
                 _stop_process_tree(record.process, hard=False)
         return self.snapshot(process_id)
 
-    def force_stop(self, process_id: str) -> dict[str, Any]:
+    def force_stop(self, process_id: str) -> ProcessSnapshot:
         """Immediately kills a process and its discoverable children.
 
         Skips cooperative shutdown: for a training process this means no
@@ -345,27 +379,33 @@ class ProcessManager:
         """
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
+            return {
+                "state": "unknown",
+                "error_code": "process_not_found",
+                "error": "process not found",
+            }
         if record.returncode is None:
             _stop_process_tree(record.process, hard=True)
         return self.snapshot(process_id)
 
     # Backward-compatible blocking variant, used only at application
     # shutdown where a bounded wait is acceptable.
-    def terminate(self, process_id: str, timeout: float = 5.0) -> dict[str, Any]:
+    def terminate(self, process_id: str, timeout: float = 5.0) -> ProcessSnapshot:
         record = self.get(process_id)
         if record is None:
-            return {"state": "unknown", "error_code": "process_not_found", "error": "process not found"}
+            return {
+                "state": "unknown",
+                "error_code": "process_not_found",
+                "error": "process not found",
+            }
         if record.returncode is None:
             self.cancel(process_id)
             try:
                 record.process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 self.force_stop(process_id)
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     record.process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    pass
         return self.snapshot(process_id)
 
     def close(self, timeout: float = 5.0) -> None:
@@ -388,11 +428,11 @@ class _RunSeries:
         self.path = path
         self.max_points = max_points
         self.tailer = IncrementalJsonlTailer(path)
-        self.series: dict[str, "deque[tuple[float, float]]"] = {
+        self.series: dict[str, deque[tuple[float, float]]] = {
             key: deque(maxlen=max_points) for key in SERIES_KEYS
         }
         self.latest: dict[str, Any] = {}
-        self.warnings: "deque[str]" = deque(maxlen=50)
+        self.warnings: deque[str] = deque(maxlen=50)
 
     def poll(self) -> int:
         rows = self.tailer.read_new()
@@ -418,7 +458,9 @@ class _RunSeries:
 class SandboxAIAdapter:
     """Application-facing operations over the real SandboxAI infrastructure."""
 
-    def __init__(self, project_root: str | Path | None = None, output_root: str | Path = "training") -> None:
+    def __init__(
+        self, project_root: str | Path | None = None, output_root: str | Path = "training"
+    ) -> None:
         self.project_root = Path(project_root or Path(__file__).resolve().parents[2]).resolve()
         # Two real bugs fixed here: (1) an already-absolute output_root used
         # to skip .resolve() entirely, so it could disagree (as a plain
@@ -435,7 +477,7 @@ class SandboxAIAdapter:
         )
         self.processes = ProcessManager()
         self.artifacts = ArtifactRepository(self.output_root)
-        self._series_cache: "OrderedDict[str, _RunSeries]" = OrderedDict()
+        self._series_cache: OrderedDict[str, _RunSeries] = OrderedDict()
         self._series_cache_limit = 6
 
     def _python_command(self, *args: str) -> list[str]:
@@ -447,11 +489,13 @@ class SandboxAIAdapter:
 
     def system_status(self) -> dict[str, Any]:
         status = resource_snapshot()
-        status.update({
-            "python": sys.executable,
-            "python_version": sys.version.split()[0],
-            "project_root": str(self.project_root),
-        })
+        status.update(
+            {
+                "python": sys.executable,
+                "python_version": sys.version.split()[0],
+                "project_root": str(self.project_root),
+            }
+        )
         godot_raw = os.environ.get("GODOT_EXECUTABLE") or os.environ.get("GODOT_PATH") or "godot"
         try:
             from .runtime_validation import RuntimeValidator
@@ -470,7 +514,14 @@ class SandboxAIAdapter:
             status["godot_error"] = str(exc)
         status["dependencies"] = {
             name: _module_available(name)
-            for name in ("numpy", "torch", "gymnasium", "stable_baselines3", "tensorboard", "psutil")
+            for name in (
+                "numpy",
+                "torch",
+                "gymnasium",
+                "stable_baselines3",
+                "tensorboard",
+                "psutil",
+            )
         }
         return status
 
@@ -527,7 +578,9 @@ class SandboxAIAdapter:
         path = self._resolve_training_log(run)
         return tail_jsonl(path, limit) if path is not None else []
 
-    def telemetry_series(self, run: str | Path | None = None, max_points: int = 1500) -> dict[str, Any]:
+    def telemetry_series(
+        self, run: str | Path | None = None, max_points: int = 1500
+    ) -> dict[str, Any]:
         """Bounded, incrementally-updated per-metric time series for charts.
 
         Repeated polling only costs what changed since the previous call
@@ -536,7 +589,11 @@ class SandboxAIAdapter:
         """
         path = self._resolve_training_log(run)
         if path is None:
-            return {"available": False, "reason": "no training run with logs/training.jsonl was found", "series": {}}
+            return {
+                "available": False,
+                "reason": "no training run with logs/training.jsonl was found",
+                "series": {},
+            }
         key = f"{path}::{max_points}"
         cached = self._series_cache.get(key)
         if cached is None:
@@ -560,14 +617,16 @@ class SandboxAIAdapter:
     def profiling(self, run: str | Path) -> dict[str, Any]:
         path = Path(run) / "logs" / "training_profile.json"
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
             return value if isinstance(value, dict) else {"error": "profile is not an object"}
         except FileNotFoundError:
             return {"available": False, "reason": "profiling not enabled or run incomplete"}
         except (OSError, json.JSONDecodeError) as exc:
             return {"available": False, "error": str(exc)}
 
-    def discover_evaluations(self, run: str | Path | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    def discover_evaluations(
+        self, run: str | Path | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
         """Lightweight, newest-first index of evaluation summaries.
 
         Looks at a run's ``evaluations/`` tree (``latest.json`` plus every
@@ -582,8 +641,11 @@ class SandboxAIAdapter:
         for root in roots:
             if not root.is_dir():
                 continue
-            candidates = [root / "latest.json", *sorted(root.glob("step_*/summary.json")),
-                          *sorted(root.glob("*/summary.json"))]
+            candidates = [
+                root / "latest.json",
+                *sorted(root.glob("step_*/summary.json")),
+                *sorted(root.glob("*/summary.json")),
+            ]
             for path in candidates:
                 if path in seen or not path.is_file():
                     continue
@@ -596,7 +658,13 @@ class SandboxAIAdapter:
                     "problem": problem,
                 }
                 if isinstance(value, dict):
-                    for key in ("timesteps", "episodes", "mean_episode_reward", "win_rate", "loss_rate"):
+                    for key in (
+                        "timesteps",
+                        "episodes",
+                        "mean_episode_reward",
+                        "win_rate",
+                        "loss_rate",
+                    ):
                         entry[key] = value.get(key)
                 entries.append(entry)
         entries.sort(key=lambda item: item.get("modified_utc") or "", reverse=True)
@@ -609,23 +677,35 @@ class SandboxAIAdapter:
         if problem:
             return {"available": False, "error": problem, "path": str(target)}
         if not isinstance(value, dict):
-            return {"available": False, "error": "evaluation summary is not a JSON object", "path": str(target)}
+            return {
+                "available": False,
+                "error": "evaluation summary is not a JSON object",
+                "path": str(target),
+            }
         result = dict(value)
         result["available"] = True
         result["path"] = str(target)
         return result
 
-    def benchmark_results(self, directory: str | Path = "training/benchmarks/latest") -> dict[str, Any]:
+    def benchmark_results(
+        self, directory: str | Path = "training/benchmarks/latest"
+    ) -> dict[str, Any]:
         path = Path(directory)
         if not path.is_absolute():
             path = self.project_root / path
         try:
-            rows = json.loads((path / "benchmark.json").read_text(encoding="utf-8"))
-            return {"results": rows, "scaling": summarize_scaling(rows) if isinstance(rows, list) else {}, "directory": str(path)}
+            rows = json.loads((path / "benchmark.json").read_text(encoding="utf-8-sig"))
+            return {
+                "results": rows,
+                "scaling": summarize_scaling(rows) if isinstance(rows, list) else {},
+                "directory": str(path),
+            }
         except (OSError, json.JSONDecodeError) as exc:
             return {"results": [], "error": str(exc), "directory": str(path)}
 
-    def benchmark_history(self, root: str | Path = "training/benchmarks", limit: int = 50) -> list[dict[str, Any]]:
+    def benchmark_history(
+        self, root: str | Path = "training/benchmarks", limit: int = 50
+    ) -> list[dict[str, Any]]:
         """Every benchmark result set under ``root``, newest first."""
         base = Path(root)
         if not base.is_absolute():
@@ -636,7 +716,9 @@ class SandboxAIAdapter:
         for path in base.rglob("benchmark.json"):
             directory = path.parent
             result = self.benchmark_results(directory)
-            entries.append({"directory": str(directory), "modified_utc": _modified_utc(path), **result})
+            entries.append(
+                {"directory": str(directory), "modified_utc": _modified_utc(path), **result}
+            )
         entries.sort(key=lambda item: item.get("modified_utc") or "", reverse=True)
         return entries[:limit]
 
@@ -644,14 +726,16 @@ class SandboxAIAdapter:
     # Process registry
     # ------------------------------------------------------------------
 
-    def list_processes(self, active_only: bool = False) -> list[dict[str, Any]]:
+    def list_processes(self, active_only: bool = False) -> list[ProcessSnapshot]:
         records = self.processes.list()
         if active_only:
             records = [r for r in records if r.returncode is None]
         records.sort(key=lambda r: r.started_at, reverse=True)
         return [self.processes.snapshot(r.id) for r in records]
 
-    def process_log(self, process_id: str, stdout_after: int = -1, stderr_after: int = -1) -> dict[str, Any]:
+    def process_log(
+        self, process_id: str, stdout_after: int = -1, stderr_after: int = -1
+    ) -> dict[str, Any]:
         return self.processes.log_since(process_id, stdout_after, stderr_after)
 
     # ------------------------------------------------------------------
@@ -666,10 +750,17 @@ class SandboxAIAdapter:
         run_dir.mkdir(parents=True, exist_ok=True)
         # Persist the exact domain config (the trainer also writes its own copy).
         config.save(run_dir / "config.json")
-        command = self._python_command("train", "--config", str(run_dir / "config.json"),
-                                      "--control-file", str(run_dir / "command.json"),
-                                      "--status-file", str(run_dir / "status.json"),
-                                      "--event-log-file", str(run_dir / "events.jsonl"))
+        command = self._python_command(
+            "train",
+            "--config",
+            str(run_dir / "config.json"),
+            "--control-file",
+            str(run_dir / "command.json"),
+            "--status-file",
+            str(run_dir / "status.json"),
+            "--event-log-file",
+            str(run_dir / "events.jsonl"),
+        )
         return run_dir, command
 
     def start_training(self, config: TrainingConfig | dict[str, Any]) -> dict[str, Any]:
@@ -687,8 +778,16 @@ class SandboxAIAdapter:
         record = self.processes.start("training", command, run_dir, self.project_root, meta=meta)
         return self.processes.snapshot(record.id) | {"process_id": record.id}
 
-    def start_benchmark(self, *, environment_counts: Iterable[int], worker_counts: Iterable[int] = (1,), steps: int = 2000,
-                        enemy_count: int = 1, compact_infos: bool = True, output_dir: str | Path = "training/benchmarks/latest") -> dict[str, Any]:
+    def start_benchmark(
+        self,
+        *,
+        environment_counts: Iterable[int],
+        worker_counts: Iterable[int] = (1,),
+        steps: int = 2000,
+        enemy_count: int = 1,
+        compact_infos: bool = True,
+        output_dir: str | Path = "training/benchmarks/latest",
+    ) -> dict[str, Any]:
         environment_counts = [int(value) for value in environment_counts]
         worker_counts = [int(value) for value in worker_counts]
         if not environment_counts or any(value < 1 for value in environment_counts):
@@ -699,19 +798,41 @@ class SandboxAIAdapter:
             raise ValueError("steps must be positive")
         if enemy_count < 1:
             raise ValueError("enemy_count must be >= 1")
-        directory = Path(output_dir); directory = directory if directory.is_absolute() else self.project_root / directory
-        command = self._python_command("benchmark", "--env-counts", ",".join(map(str, environment_counts)),
-            "--worker-counts", ",".join(map(str, worker_counts)), "--steps", str(steps), "--enemy-count", str(enemy_count),
-            "--output-dir", str(directory), *( [] if compact_infos else ["--full-infos"]))
+        directory = Path(output_dir)
+        directory = directory if directory.is_absolute() else self.project_root / directory
+        command = self._python_command(
+            "benchmark",
+            "--env-counts",
+            ",".join(map(str, environment_counts)),
+            "--worker-counts",
+            ",".join(map(str, worker_counts)),
+            "--steps",
+            str(steps),
+            "--enemy-count",
+            str(enemy_count),
+            "--output-dir",
+            str(directory),
+            *([] if compact_infos else ["--full-infos"]),
+        )
         meta = {
-            "environment_counts": environment_counts, "worker_counts": worker_counts,
-            "steps": steps, "enemy_count": enemy_count, "compact_infos": compact_infos,
+            "environment_counts": environment_counts,
+            "worker_counts": worker_counts,
+            "steps": steps,
+            "enemy_count": enemy_count,
+            "compact_infos": compact_infos,
         }
         record = self.processes.start("benchmark", command, directory, self.project_root, meta=meta)
         return self.processes.snapshot(record.id) | {"process_id": record.id}
 
-    def start_evaluation(self, checkpoint: str | Path, *, episodes: int = 20, environment_count: int = 1,
-                         device: str = "auto", output_dir: str | Path = "training/evaluations/control_center") -> dict[str, Any]:
+    def start_evaluation(
+        self,
+        checkpoint: str | Path,
+        *,
+        episodes: int = 20,
+        environment_count: int = 1,
+        device: str = "auto",
+        output_dir: str | Path = "training/evaluations/control_center",
+    ) -> dict[str, Any]:
         checkpoint_path = Path(checkpoint).expanduser()
         if not checkpoint_path.is_file():
             raise FileNotFoundError(f"checkpoint does not exist: {checkpoint_path}")
@@ -721,14 +842,40 @@ class SandboxAIAdapter:
             raise ValueError("environment_count must be >= 1")
         if device not in ("auto", "cpu", "cuda"):
             raise ValueError("device must be one of auto, cpu, cuda")
-        directory = Path(output_dir); directory = directory if directory.is_absolute() else self.project_root / directory
-        command = self._python_command("evaluate", "--checkpoint", str(checkpoint_path), "--episodes", str(episodes),
-            "--env-count", str(environment_count), "--device", device, "--output-dir", str(directory))
-        meta = {"checkpoint": str(checkpoint_path), "episodes": episodes, "environment_count": environment_count, "device": device}
-        record = self.processes.start("evaluation", command, directory, self.project_root, meta=meta)
+        directory = Path(output_dir)
+        directory = directory if directory.is_absolute() else self.project_root / directory
+        command = self._python_command(
+            "evaluate",
+            "--checkpoint",
+            str(checkpoint_path),
+            "--episodes",
+            str(episodes),
+            "--env-count",
+            str(environment_count),
+            "--device",
+            device,
+            "--output-dir",
+            str(directory),
+        )
+        meta = {
+            "checkpoint": str(checkpoint_path),
+            "episodes": episodes,
+            "environment_count": environment_count,
+            "device": device,
+        }
+        record = self.processes.start(
+            "evaluation", command, directory, self.project_root, meta=meta
+        )
         return self.processes.snapshot(record.id) | {"process_id": record.id}
 
-    def process_status(self, process_id: str) -> dict[str, Any]: return self.processes.snapshot(process_id)
-    def cancel(self, process_id: str) -> dict[str, Any]: return self.processes.cancel(process_id)
-    def force_stop(self, process_id: str) -> dict[str, Any]: return self.processes.force_stop(process_id)
-    def close(self) -> None: self.processes.close()
+    def process_status(self, process_id: str) -> ProcessSnapshot:
+        return self.processes.snapshot(process_id)
+
+    def cancel(self, process_id: str) -> ProcessSnapshot:
+        return self.processes.cancel(process_id)
+
+    def force_stop(self, process_id: str) -> ProcessSnapshot:
+        return self.processes.force_stop(process_id)
+
+    def close(self) -> None:
+        self.processes.close()

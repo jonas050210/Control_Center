@@ -38,9 +38,7 @@ func test_segment_intersection_detects_and_misses() -> SandboxTest:
 	var over: float = wall.segment_intersection(Vector3(-5.0, 4.0, 0.0), Vector3(5.0, 4.0, 0.0))
 	t.assert_lt(over, 0.0, "a segment above the wall must not intersect it")
 	# A segment entirely to one side must not be blocked.
-	var beside: float = wall.segment_intersection(
-		Vector3(-5.0, 1.0, 9.0), Vector3(5.0, 1.0, 9.0)
-	)
+	var beside: float = wall.segment_intersection(Vector3(-5.0, 1.0, 9.0), Vector3(5.0, 1.0, 9.0))
 	t.assert_lt(beside, 0.0)
 	return t
 
@@ -74,9 +72,12 @@ func test_different_seeds_produce_different_randomized_layouts() -> SandboxTest:
 	var identical: bool = a.obstacle_count() == b.obstacle_count()
 	if identical:
 		for index in range(a.obstacle_count()):
-			if (a.obstacles[index] as Obstacle).center.distance_to(
-				(b.obstacles[index] as Obstacle).center
-			) > 0.001:
+			if (
+				(a.obstacles[index] as Obstacle).center.distance_to(
+					(b.obstacles[index] as Obstacle).center
+				)
+				> 0.001
+			):
 				identical = false
 				break
 	t.assert_false(identical, "two different seeds must not generate the same random arena")
@@ -130,9 +131,7 @@ func test_arena_bounds_are_always_enforced() -> SandboxTest:
 	# A clamped position must also be reported as a legal standing position;
 	# float rounding used to push it a hair past the limit, so the arena
 	# clamp and the free-position test disagreed about the same point.
-	t.assert_true(
-		world.is_position_free(resolved, 0.4, 1.8), "the clamped position must be inside"
-	)
+	t.assert_true(world.is_position_free(resolved, 0.4, 1.8), "the clamped position must be inside")
 	var negative: Vector3 = world.resolve_move(
 		Vector3(-9.0, 0.0, -9.0), Vector3(-50.0, 0.0, -50.0), 0.4, 1.8
 	)
@@ -153,9 +152,7 @@ func test_fast_movement_cannot_tunnel_through_geometry() -> SandboxTest:
 		var from := Vector3(-float(distance), 0.0, 0.0)
 		var to := Vector3(float(distance), 0.0, 0.0)
 		var resolved: Vector3 = world.resolve_move(from, to, 0.4, 1.8)
-		t.assert_lt(
-			resolved.x, -0.7, "a %d m step must not cross the wall" % int(distance)
-		)
+		t.assert_lt(resolved.x, -0.7, "a %d m step must not cross the wall" % int(distance))
 		t.assert_false(world.is_blocked(resolved, 0.4, 1.8))
 	return t
 
@@ -183,7 +180,8 @@ func test_sampled_free_positions_are_actually_free_and_seeded() -> SandboxTest:
 		var position_b: Vector3 = world.sample_free_position(rng_b, 0.4, 1.8)
 		t.assert_vec_almost_eq(position_a, position_b, 0.0001, "sampling must be seed-reproducible")
 		t.assert_true(
-			world.is_position_free(position_a, 0.4, 1.8), "sampled position must not be inside a box"
+			world.is_position_free(position_a, 0.4, 1.8),
+			"sampled position must not be inside a box"
 		)
 	return t
 

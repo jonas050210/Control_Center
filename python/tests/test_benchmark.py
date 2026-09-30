@@ -1,4 +1,5 @@
 """Unit tests for the pure (Godot-free) parts of the benchmark module."""
+
 import unittest
 
 from sandboxai.benchmark import DEFAULT_ENVIRONMENT_COUNTS, percentile, summarize_scaling

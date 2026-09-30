@@ -1,17 +1,24 @@
 """Gymnasium/SB3 adapters for the headless Godot JSON-lines bridge."""
+
 from __future__ import annotations
 
-from collections import deque
+import contextlib
 import json
-from pathlib import Path
 import queue
 import subprocess
 import threading
 import time
-from typing import Any, TYPE_CHECKING
+from collections import deque
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .training_profile import TrainingProfiler
+    from .training_profile import PrefixedProfiler, TrainingProfiler
+
+    ## Either the run-wide profiler or one of its prefixed views: the
+    ## sharded client hands each worker its own view so worker transport
+    ## timings do not collapse into one bucket.
+    ProfilerLike = TrainingProfiler | PrefixedProfiler
 
 from .config import find_godot_executable
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -20,14 +27,14 @@ from .wsl import WindowsInterop, normalize_host_path
 try:
     import numpy as np  # type: ignore
 except ImportError:  # pragma: no cover
-    np = None
+    np = None  # type: ignore[assignment]
 
 try:
     import gymnasium as gym  # type: ignore
     from gymnasium import spaces  # type: ignore
 except ImportError:  # pragma: no cover
-    gym = None
-    spaces = None
+    gym = None  # type: ignore[assignment]
+    spaces = None  # type: ignore[assignment]
 
 
 class PendingRequest:
@@ -63,7 +70,7 @@ class GodotProcessTransport:
         curriculum_level: int = 3,
         request_timeout: float = 30.0,
         self_play: bool = False,
-        profiler: "TrainingProfiler | None" = None,
+        profiler: ProfilerLike | None = None,
     ) -> None:
         project = Path(normalize_host_path(project_path)).expanduser().resolve()
         if not project.exists():
@@ -118,6 +125,15 @@ class GodotProcessTransport:
         # otherwise fill the OS pipe buffer and deadlock the whole bridge.
         # Reading stdout through a queue makes request_timeout enforceable
         # portably (select() does not work on pipes on Windows).
+        #
+        # The queue is unbounded on purpose, unlike the stderr tail below.
+        # A maxsize would apply backpressure to the pump thread, which
+        # would let the OS pipe buffer fill, which would block Godot's
+        # next write - reintroducing exactly the deadlock the previous
+        # paragraph exists to prevent. Growth is self-limiting anyway:
+        # stdout carries the request/response protocol, so a shard that
+        # produced faster than the trainer consumed would be one that had
+        # already stopped answering requests.
         self._stdout_lines: queue.Queue[str | None] = queue.Queue()
         self._stderr_tail: deque[str] = deque(maxlen=200)
         self._stdout_thread = threading.Thread(target=self._pump_stdout, daemon=True)
@@ -126,7 +142,9 @@ class GodotProcessTransport:
         self._stderr_thread.start()
         try:
             self.spaces = self.request({"cmd": "spaces"})
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: a Ctrl-C during the handshake
+            # would otherwise leak the Godot process and its pump threads.
             self.close()
             raise
 
@@ -151,7 +169,7 @@ class GodotProcessTransport:
     def stderr_tail(self) -> str:
         return "".join(self._stderr_tail)[-2000:]
 
-    def send(self, payload: dict[str, Any]) -> "PendingRequest":
+    def send(self, payload: dict[str, Any]) -> PendingRequest:
         """Writes one request and returns without waiting for the answer.
 
         Split from :meth:`request` so several bridge processes can be kept
@@ -177,7 +195,9 @@ class GodotProcessTransport:
             self.process.stdin.write(encoded)
             self.process.stdin.flush()
             if profiler is not None:
-                profiler.record(f"bridge.{command}.write_flush", time.perf_counter() - write_started)
+                profiler.record(
+                    f"bridge.{command}.write_flush", time.perf_counter() - write_started
+                )
         except (BrokenPipeError, OSError) as exc:
             raise RuntimeError(f"Godot bridge pipe is broken. {self.stderr_tail()}") from exc
         return PendingRequest(
@@ -187,7 +207,7 @@ class GodotProcessTransport:
             deadline=time.monotonic() + self.request_timeout,
         )
 
-    def receive(self, pending: "PendingRequest") -> dict[str, Any]:
+    def receive(self, pending: PendingRequest) -> dict[str, Any]:
         """Blocks until the response to `pending` arrives (or times out)."""
         profiler = self.profiler
         command = pending.command
@@ -213,7 +233,9 @@ class GodotProcessTransport:
                 continue
             if profiler is not None:
                 now = time.perf_counter()
-                profiler.record(f"bridge.{command}.wait_response", decode_started - pending.wait_started)
+                profiler.record(
+                    f"bridge.{command}.wait_response", decode_started - pending.wait_started
+                )
                 profiler.record(f"bridge.{command}.json_decode", now - decode_started)
                 profiler.record(f"bridge.{command}.total", now - pending.total_started)
                 profiler.add(f"bridge.{command}.response_bytes", len(line.encode("utf-8")))
@@ -236,23 +258,22 @@ class GodotProcessTransport:
                 self.process.wait(timeout=3.0)
             except (BrokenPipeError, OSError, subprocess.TimeoutExpired):
                 self.process.kill()
-                try:
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     self.process.wait(timeout=3.0)
-                except subprocess.TimeoutExpired:
-                    pass
         # The process has exited (or been killed), so the pump threads see
         # EOF and finish; join briefly before closing their streams.
-        for worker in (getattr(self, "_stdout_thread", None), getattr(self, "_stderr_thread", None)):
+        for worker in (
+            getattr(self, "_stdout_thread", None),
+            getattr(self, "_stderr_thread", None),
+        ):
             if worker is not None:
                 worker.join(timeout=2.0)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream:
-                try:
+                with contextlib.suppress(OSError):
                     stream.close()
-                except OSError:
-                    pass
 
-    def __enter__(self) -> "GodotProcessTransport":
+    def __enter__(self) -> GodotProcessTransport:
         return self
 
     def __exit__(self, *_args) -> None:
@@ -263,7 +284,7 @@ class GodotBatchClient:
     def __init__(
         self,
         compact_infos: bool = False,
-        profiler: "TrainingProfiler | None" = None,
+        profiler: ProfilerLike | None = None,
         **kwargs: Any,
     ) -> None:
         self.profiler = profiler
@@ -282,11 +303,11 @@ class GodotBatchClient:
         if self.observation_dim != OBSERVATION_FIELD_COUNT:
             self.close()
             raise RuntimeError(
-                "Godot bridge reports a %d-float observation space, but the Python "
-                "contract (python/sandboxai/contract.py) defines %d floats. The two "
-                "halves of the observation contract are out of sync; update "
-                "contract.py (and the docs) to match scripts/core/observation.gd."
-                % (self.observation_dim, OBSERVATION_FIELD_COUNT)
+                f"Godot bridge reports a {self.observation_dim}-float observation "
+                f"space, but the Python contract (python/sandboxai/contract.py) "
+                f"defines {OBSERVATION_FIELD_COUNT} floats. The two halves of the "
+                "observation contract are out of sync; update contract.py (and the "
+                "docs) to match scripts/core/observation.gd."
             )
 
     def reset_send(self, seed: int | None = None) -> PendingRequest:
@@ -300,11 +321,13 @@ class GodotBatchClient:
         return self.reset_receive(self.reset_send(seed))
 
     def reset_indices(self, indices: list[int], seed: int | None = None):
-        response = self.transport.request({
-            "cmd": "reset_indices",
-            "indices": indices,
-            "seed": -1 if seed is None else int(seed),
-        })
+        response = self.transport.request(
+            {
+                "cmd": "reset_indices",
+                "indices": indices,
+                "seed": -1 if seed is None else int(seed),
+            }
+        )
         return response.get("results", [])
 
     def step_send(self, actions) -> PendingRequest:
@@ -432,7 +455,9 @@ if gym is not None:
             return observations[0], infos[0] if infos else {}
 
         def step(self, action):
-            observations, rewards, dones, infos = self.client.step(np.asarray(action).reshape(1, -1))
+            observations, rewards, dones, infos = self.client.step(
+                np.asarray(action).reshape(1, -1)
+            )
             info = infos[0] if infos else {}
             reason = str(info.get("done_reason", info.get("metrics", {}).get("done_reason", "")))
             done = bool(dones[0])
@@ -453,7 +478,7 @@ if gym is not None:
 
 else:
 
-    class GodotGymEnv:  # pragma: no cover
+    class GodotGymEnv:  # type: ignore[no-redef] # pragma: no cover
         def __init__(self, **_kwargs: Any) -> None:
             raise RuntimeError("gymnasium is required; install the training dependencies")
 
@@ -461,7 +486,7 @@ else:
 try:
     from stable_baselines3.common.vec_env import VecEnv  # type: ignore
 except ImportError:  # pragma: no cover
-    VecEnv = None
+    VecEnv = None  # type: ignore[assignment,misc]
 
 
 if VecEnv is not None:
@@ -529,9 +554,13 @@ if VecEnv is not None:
                 if done:
                     info = infos[index]
                     if "terminal_observation" in info:
-                        info["terminal_observation"] = np.asarray(info["terminal_observation"], dtype=np.float32)
-                    reason = str(info.get("done_reason", info.get("metrics", {}).get("done_reason", "")))
-                    info["TimeLimit.truncated"] = (reason == "timeout")
+                        info["terminal_observation"] = np.asarray(
+                            info["terminal_observation"], dtype=np.float32
+                        )
+                    reason = str(
+                        info.get("done_reason", info.get("metrics", {}).get("done_reason", ""))
+                    )
+                    info["TimeLimit.truncated"] = reason == "timeout"
             if self.step_hook is not None:
                 hook_started = time.perf_counter() if self.profiler is not None else 0.0
                 self.step_hook(self.actions, observations, rewards, dones, infos)
@@ -625,6 +654,6 @@ if VecEnv is not None:
 
 else:
 
-    class GodotVecEnv:  # pragma: no cover
+    class GodotVecEnv:  # type: ignore[no-redef] # pragma: no cover
         def __init__(self, **_kwargs: Any) -> None:
             raise RuntimeError("stable-baselines3 is required for PPO")

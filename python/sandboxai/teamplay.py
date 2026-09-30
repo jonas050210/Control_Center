@@ -30,10 +30,12 @@ Team rewards are *hooks*: ``TeamRewardHooks`` turns per-agent outcomes into
 per-agent reward adjustments under an explicit shaping weight. It does not
 add itself to any reward; the environment decides whether to call it.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 ## Team id used when teamplay is off. Everything lives on team 0, which is
 ## bit-for-bit the current single-agent behaviour.
@@ -139,16 +141,16 @@ class TeamConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "TeamConfig":
+    def from_dict(cls, payload: dict[str, Any]) -> TeamConfig:
         known = {key: value for key, value in payload.items() if key in cls.__annotations__}
         return cls(**known)
 
     @classmethod
-    def solo(cls) -> "TeamConfig":
+    def solo(cls) -> TeamConfig:
         return cls()
 
     @classmethod
-    def versus(cls, per_team: int = 2, **kwargs: Any) -> "TeamConfig":
+    def versus(cls, per_team: int = 2, **kwargs: Any) -> TeamConfig:
         """``TeamConfig.versus(2)`` -> a 2v2 layout (slots 0,1 vs 2,3)."""
         if per_team < 1:
             raise ValueError("per_team must be >= 1")
@@ -185,7 +187,7 @@ class TeammateReport:
 
     ALLOWED_FIELDS: tuple[str, ...] = ()
 
-    def decayed(self, half_life: float) -> "TeammateReport":
+    def decayed(self, half_life: float) -> TeammateReport:
         """Confidence decays with age, exactly like single-agent memory."""
         if half_life <= 0.0 or self.age <= 0.0:
             return self

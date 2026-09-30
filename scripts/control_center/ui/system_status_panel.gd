@@ -79,30 +79,42 @@ func render(sample: Dictionary) -> void:
 	var ram: Dictionary = sample.get("ram", {})
 	var gpu_name: String = str(gpu.get("name", ""))
 	_gpu_name.text = gpu_name if not gpu_name.is_empty() else "N/A"
-	_gpu_values.text = "\n".join(
-		[
-			"utilization   %s" % _metric(gpu, "utilization_percent", 0, "%"),
-			(
-				"VRAM          %s / %s"
-				% [_metric(gpu, "vram_used_mb", 0, " MB"), _metric(gpu, "vram_total_mb", 0, " MB")]
-			),
-			"temperature   %s" % _metric(gpu, "temperature_c", 0, " °C"),
-		]
+	_gpu_values.text = (
+		"\n"
+		. join(
+			[
+				"utilization   %s" % _metric(gpu, "utilization_percent", 0, "%"),
+				(
+					"VRAM          %s / %s"
+					% [
+						_metric(gpu, "vram_used_mb", 0, " MB"),
+						_metric(gpu, "vram_total_mb", 0, " MB")
+					]
+				),
+				"temperature   %s" % _metric(gpu, "temperature_c", 0, " °C"),
+			]
+		)
 	)
-	_cpu_values.text = "\n".join(
-		[
-			"utilization   %s" % _metric(cpu, "utilization_percent", 0, "%"),
-			"temperature   %s" % _metric(cpu, "temperature_c", 0, " °C"),
-		]
+	_cpu_values.text = (
+		"\n"
+		. join(
+			[
+				"utilization   %s" % _metric(cpu, "utilization_percent", 0, "%"),
+				"temperature   %s" % _metric(cpu, "temperature_c", 0, " °C"),
+			]
+		)
 	)
-	_ram_values.text = "\n".join(
-		[
-			(
-				"used          %s / %s"
-				% [_metric(ram, "used_mb", 0, " MB"), _metric(ram, "total_mb", 0, " MB")]
-			),
-			"utilization   %s" % _metric(ram, "utilization_percent", 0, "%"),
-		]
+	_ram_values.text = (
+		"\n"
+		. join(
+			[
+				(
+					"used          %s / %s"
+					% [_metric(ram, "used_mb", 0, " MB"), _metric(ram, "total_mb", 0, " MB")]
+				),
+				"utilization   %s" % _metric(ram, "utilization_percent", 0, "%"),
+			]
+		)
 	)
 	var sampled = sample.get("sampled_at")
 	if sampled == null:

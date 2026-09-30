@@ -108,7 +108,8 @@ func refresh(snapshot: Dictionary) -> void:
 	_set_row("position", _vector_text(agent["position"] as Vector3))
 	_set_row("direction", _vector_text(agent["forward"] as Vector3))
 	_set_row(
-		"orientation", "yaw %.1f° / pitch %.1f°" % [float(agent["yaw_deg"]), float(agent["pitch_deg"])]
+		"orientation",
+		"yaw %.1f° / pitch %.1f°" % [float(agent["yaw_deg"]), float(agent["pitch_deg"])]
 	)
 	var velocity: Vector3 = agent["velocity"]
 	_set_row("velocity", "%s  %.2f m/s" % [_vector_text(velocity), velocity.length()])
@@ -142,38 +143,54 @@ func refresh(snapshot: Dictionary) -> void:
 		weapon_state = "cooldown %.2fs" % float(agent["weapon_cooldown"])
 	_set_row(
 		"weapon",
-		"%s  %s  %.0fdmg %.0fm x%d"
-		% [
-			str(agent.get("weapon_label", agent.get("weapon_profile", "weapon"))),
-			weapon_state,
-			float(agent.get("weapon_damage", 0.0)),
-			float(agent.get("weapon_range", 0.0)),
-			int(agent.get("weapon_projectile_count", 1)),
-		]
+		(
+			"%s  %s  %.0fdmg %.0fm x%d"
+			% [
+				str(agent.get("weapon_label", agent.get("weapon_profile", "weapon"))),
+				weapon_state,
+				float(agent.get("weapon_damage", 0.0)),
+				float(agent.get("weapon_range", 0.0)),
+				int(agent.get("weapon_projectile_count", 1)),
+			]
+		)
 	)
-	_set_row("episode", "#%d  step %d/%d" % [
-		int(episode["episode"]), int(episode["step"]), int(episode["max_steps"])
-	])
+	_set_row(
+		"episode",
+		(
+			"#%d  step %d/%d"
+			% [int(episode["episode"]), int(episode["step"]), int(episode["max_steps"])]
+		)
+	)
 	_set_row("time", "%.2f s" % float(episode["time_seconds"]))
 	_set_row("survival", "%.2f s" % float(episode["survival_time"]))
-	_set_row("reward", "%.2f  (last %+.3f)" % [
-		float(episode["reward"]), float(episode["last_reward"])
-	])
+	_set_row(
+		"reward", "%.2f  (last %+.3f)" % [float(episode["reward"]), float(episode["last_reward"])]
+	)
 	_set_row("kills", str(int(episode["kills"])))
 	_set_row("deaths", str(int(episode["deaths"])))
-	_set_row("damage", "dealt %.0f / taken %.0f" % [
-		float(episode["damage_dealt"]), float(episode["damage_received"])
-	])
-	_set_row("accuracy", "%.0f%%  (%d/%d)" % [
-		float(episode["accuracy"]) * 100.0,
-		int(episode["shots_hit"]),
-		int(episode["shots_fired"]),
-	])
+	_set_row(
+		"damage",
+		(
+			"dealt %.0f / taken %.0f"
+			% [float(episode["damage_dealt"]), float(episode["damage_received"])]
+		)
+	)
+	_set_row(
+		"accuracy",
+		(
+			"%.0f%%  (%d/%d)"
+			% [
+				float(episode["accuracy"]) * 100.0,
+				int(episode["shots_hit"]),
+				int(episode["shots_fired"]),
+			]
+		)
+	)
 
 	if snapshot.has("action"):
 		var action: Dictionary = snapshot["action"]
 		var parts: PackedStringArray = PackedStringArray()
-		for row_value in (action["rows"] as Array):
+		for row_value in action["rows"] as Array:
 			var row: Dictionary = row_value
 			parts.append("%s=%s" % [str(row["name"]), str(row["canonical"])])
 		var flags: PackedStringArray = PackedStringArray()
@@ -191,20 +208,23 @@ func refresh(snapshot: Dictionary) -> void:
 		var perception: Dictionary = snapshot["perception"]
 		_map.set_perception(perception)
 		var lines: PackedStringArray = PackedStringArray()
-		for entry_value in (perception["real_world"]["enemies"] as Array):
+		for entry_value in perception["real_world"]["enemies"] as Array:
 			var entry: Dictionary = entry_value
 			var marker: String = "*" if int(entry["index"]) == int(target.get("index", -1)) else " "
-			lines.append(
-				(
-					"%s#%d %-6s %5.1fm %+6.0f° hp %3.0f"
-					% [
-						marker,
-						int(entry["index"]),
-						str(entry["ai_state"]),
-						float(entry["distance_m"]),
-						float(entry["bearing_deg"]),
-						float(entry["health"]),
-					]
+			(
+				lines
+				. append(
+					(
+						"%s#%d %-6s %5.1fm %+6.0f° hp %3.0f"
+						% [
+							marker,
+							int(entry["index"]),
+							str(entry["ai_state"]),
+							float(entry["distance_m"]),
+							float(entry["bearing_deg"]),
+							float(entry["health"]),
+						]
+					)
 				)
 			)
 		_enemy_list.text = "\n".join(lines)

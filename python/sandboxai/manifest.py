@@ -18,16 +18,17 @@ gracefully: a missing git binary, an absent Godot executable or a torch
 build without CUDA produce ``None``/``false`` entries, never an
 exception. A manifest must never be the reason a run fails to start.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import os
 import platform
 import subprocess
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
 #: Bumped from v1: additive host/godot/code-provenance sections. Readers
 #: that only look up known keys are unaffected.
@@ -159,7 +160,9 @@ def godot_snapshot(config: Any, probe: bool = True) -> dict[str, Any]:
             detected = find_godot_executable(raw)
             if _resolve_executable(detected):
                 snapshot["resolved"] = detected
-        except Exception:
+        except (OSError, ValueError):
+            # No discoverable engine: the manifest keeps the configured
+            # name and records no version, which is the honest answer.
             pass
     if not probe:
         return snapshot
@@ -169,7 +172,7 @@ def godot_snapshot(config: Any, probe: bool = True) -> dict[str, Any]:
         if _resolve_executable(snapshot["resolved"]):
             validator = RuntimeValidator(godot_executable=snapshot["resolved"])
             snapshot["version"] = validator.probe_version(snapshot["resolved"])
-    except Exception:
+    except (OSError, ValueError, ImportError):
         snapshot["version"] = None
     return snapshot
 

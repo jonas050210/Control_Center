@@ -10,6 +10,7 @@ Adding the directory here means the exact same command works whether or
 not ``pip install -e .`` has been run, which keeps the "run the tests"
 instruction in the README a single line.
 """
+
 from __future__ import annotations
 
 import sys

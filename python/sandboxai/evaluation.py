@@ -1,13 +1,15 @@
 """Weight-frozen evaluation and machine-readable summaries."""
+
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
 import csv
 import json
-from pathlib import Path
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
 
 from .action_audit import (
     EpisodeActionAudit,
@@ -17,7 +19,6 @@ from .action_audit import (
     summarize_action_pipeline,
 )
 from .godot_env import GodotGymEnv
-
 
 METRIC_KEYS = (
     "episode_reward",
@@ -104,12 +105,16 @@ def run_parallel_evaluations(
         normal, normal_seconds = normal_future.result()
         battery, battery_seconds = battery_future.result()
     wall_seconds = time.perf_counter() - started
-    return normal, battery, {
-        "normal_seconds": normal_seconds,
-        "battery_seconds": battery_seconds,
-        "wall_seconds": wall_seconds,
-        "overlap_seconds": max(0.0, normal_seconds + battery_seconds - wall_seconds),
-    }
+    return (
+        normal,
+        battery,
+        {
+            "normal_seconds": normal_seconds,
+            "battery_seconds": battery_seconds,
+            "wall_seconds": wall_seconds,
+            "overlap_seconds": max(0.0, normal_seconds + battery_seconds - wall_seconds),
+        },
+    )
 
 
 def evaluate_model(
@@ -155,7 +160,9 @@ def evaluate_model(
         )
     started = time.perf_counter()
     if environment_count > 1:
-        rows = _evaluate_vectorized(model, env_kwargs, episodes, seed, environment_count, env, profiler)
+        rows = _evaluate_vectorized(
+            model, env_kwargs, episodes, seed, environment_count, env, profiler
+        )
     else:
         rows = _evaluate_serial(model, env_kwargs, episodes, seed, env, profiler)
     elapsed = time.perf_counter() - started
@@ -256,9 +263,7 @@ def _evaluate_vectorized(
         executor_profiler: Any = PrefixedProfiler(profiler, "eval.normal.")
     else:
         executor_profiler = None
-    executor = PlanExecutor.from_client(
-        env.client, skill_metrics=False, profiler=executor_profiler
-    )
+    executor = PlanExecutor.from_client(env.client, skill_metrics=False, profiler=executor_profiler)
     plans = [
         PlannedEpisode(
             condition=Condition(

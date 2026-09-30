@@ -6,7 +6,6 @@ extends RefCounted
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

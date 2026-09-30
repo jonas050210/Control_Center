@@ -136,9 +136,7 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
-			"Backend parameters",
-			ControlCenterTheme.FONT_SIZE_TITLE,
-			ControlCenterTheme.COLOR_TITLE
+			"Backend parameters", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
 	var advanced := ControlCenterTheme.make_grid(2)
@@ -198,10 +196,28 @@ func setup(p_session) -> void:
 	add_child(copy)
 
 	_all_editors = [
-		_type, _mode, _device, _steps, _epochs, _environment_count, _curriculum, _seed,
-		_dataset, _checkpoint, _resume, _learning_rate, _rollout, _batch, _gamma,
-		_gae_lambda, _entropy, _clip, _checkpoint_frequency, _evaluation_frequency,
-		_python_executable, _godot_executable,
+		_type,
+		_mode,
+		_device,
+		_steps,
+		_epochs,
+		_environment_count,
+		_curriculum,
+		_seed,
+		_dataset,
+		_checkpoint,
+		_resume,
+		_learning_rate,
+		_rollout,
+		_batch,
+		_gamma,
+		_gae_lambda,
+		_entropy,
+		_clip,
+		_checkpoint_frequency,
+		_evaluation_frequency,
+		_python_executable,
+		_godot_executable,
 	]
 	_sync()
 
@@ -253,9 +269,7 @@ func _sync() -> void:
 	_python_executable.text = config.python_executable
 	_godot_executable.text = config.godot_executable
 	var ppo: bool = config.training_type == ControlCenterConfig.TrainingType.PPO
-	var bc: bool = (
-		config.training_type == ControlCenterConfig.TrainingType.BEHAVIOR_CLONING
-	)
+	var bc: bool = config.training_type == ControlCenterConfig.TrainingType.BEHAVIOR_CLONING
 	for control_value in _ppo_controls:
 		(control_value as Control).visible = ppo
 	for control_value in _bc_controls:
@@ -318,9 +332,7 @@ func _choose_file(title: String, filters: PackedStringArray, callback: Callable)
 
 func _browse_dataset() -> void:
 	_choose_file(
-		"Demonstration dataset",
-		PackedStringArray(["*.jsonl ; JSONL datasets"]),
-		_set_dataset
+		"Demonstration dataset", PackedStringArray(["*.jsonl ; JSONL datasets"]), _set_dataset
 	)
 
 

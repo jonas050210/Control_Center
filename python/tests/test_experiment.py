@@ -1,4 +1,5 @@
 """Tests for multi-seed experiment management, statistics, and regression detection."""
+
 from __future__ import annotations
 
 import math
@@ -86,8 +87,20 @@ class ExperimentStatisticsTests(unittest.TestCase):
         summary = {
             "runs_count": 3,
             "metrics": {
-                "win_rate": {"mean": 0.80, "std": 0.05, "median": 0.80, "ci95_low": 0.74, "ci95_high": 0.86},
-                "mean_accuracy": {"mean": 0.45, "std": 0.02, "median": 0.45, "ci95_low": 0.42, "ci95_high": 0.48},
+                "win_rate": {
+                    "mean": 0.80,
+                    "std": 0.05,
+                    "median": 0.80,
+                    "ci95_low": 0.74,
+                    "ci95_high": 0.86,
+                },
+                "mean_accuracy": {
+                    "mean": 0.45,
+                    "std": 0.02,
+                    "median": 0.45,
+                    "ci95_low": 0.42,
+                    "ci95_high": 0.48,
+                },
             },
         }
         report = format_experiment_report(summary)

@@ -80,7 +80,12 @@ func test_light_recording_stores_no_observations() -> SandboxTest:
 func test_save_and_load_round_trip() -> SandboxTest:
 	var t := SandboxTest.new("replay_save_load_round_trip")
 	var recorder := ReplayRecorder.new(
-		{"map_id": "two_rooms", "scenario": "cover_fight", "lighting": "fog", "policy_id": "brain_a"}
+		{
+			"map_id": "two_rooms",
+			"scenario": "cover_fight",
+			"lighting": "fog",
+			"policy_id": "brain_a"
+		}
 	)
 	recorder.start(11)
 	for index in range(8):
@@ -167,7 +172,8 @@ func test_out_of_order_ticks_and_unknown_events_are_reported() -> SandboxTest:
 	var t := SandboxTest.new("replay_structural_validation")
 	var episode: Dictionary = {
 		"header": ReplayFormat.default_header(),
-		"ticks": [
+		"ticks":
+		[
 			{"tick": 0, "action": [1, 1, 1, 1, 0, 0], "reward": 0.0},
 			{"tick": 5, "action": [1, 1, 1, 1, 0, 0], "reward": 0.0},
 		],

@@ -21,14 +21,16 @@ report covering everything a researcher needs to compare checkpoints:
 Nothing here changes PPO: it reads finished checkpoints, runs frozen
 policies and writes JSON. The reward stream is untouched.
 """
+
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass, field, replace
 import json
-from pathlib import Path
 import time
-from typing import Any, Callable, Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
 
 from .action_audit import (
     EpisodeActionAudit,
@@ -115,7 +117,9 @@ class PlanExecutor:
     environment count — yields bit-identical episodes.
     """
 
-    def __init__(self, env_kwargs: dict[str, Any], skill_metrics: bool = True, profiler: Any = None) -> None:
+    def __init__(
+        self, env_kwargs: dict[str, Any], skill_metrics: bool = True, profiler: Any = None
+    ) -> None:
         from .godot_env import GodotBatchClient
 
         self.profiler = profiler
@@ -129,7 +133,7 @@ class PlanExecutor:
         client: Any,
         skill_metrics: bool = True,
         profiler: Any = None,
-    ) -> "PlanExecutor":
+    ) -> PlanExecutor:
         """Wraps an already-running batch client without taking ownership.
 
         This is used by normal vector evaluation so its persistent bridge
@@ -147,7 +151,7 @@ class PlanExecutor:
     def close(self) -> None:
         self.client.close()
 
-    def __enter__(self) -> "PlanExecutor":
+    def __enter__(self) -> PlanExecutor:
         return self
 
     def __exit__(self, *_args) -> None:
@@ -161,7 +165,15 @@ class PlanExecutor:
         checkpoint: str = "",
         replay_dir: str | Path | None = None,
     ) -> list[dict[str, Any]]:
-        """Runs every planned episode and returns one result row per plan."""
+        """Runs every planned episode and returns one result row per plan.
+
+        The scheduler keeps one episode in flight per environment and one
+        pre-staged behind it, so Godot's own auto-reset consumes the next
+        plan and no throwaway reset is needed between episodes. The loop
+        body is split into `_select_actions` (policy + audit sampling) and
+        `_advance_environment` (per-environment bookkeeping) so that the
+        scheduling itself stays readable.
+        """
         import numpy as np
 
         count = self.environment_count
@@ -186,8 +198,68 @@ class PlanExecutor:
         steps_per_env = [0] * count
         rows: list[tuple[int, dict[str, Any]]] = []
 
+        observations = self._bootstrap(
+            queues, in_flight, pending, sink, recorders, action_audits, policy_id, checkpoint
+        )
+
+        while any(item is not None for item in in_flight):
+            batch = np.asarray(observations, dtype=np.float32)
+            actions = self._select_actions(model, batch, in_flight, steps_per_env, action_audits)
+            if self.profiler is not None:
+                step_started = time.monotonic()
+            observations, rewards, dones, infos = self.client.step(actions)
+            if self.profiler is not None:
+                self.profiler.record("env_step", time.monotonic() - step_started)
+                self.profiler.add("env_steps", self.environment_count)
+
+            restage_indices: list[int] = []
+            for env_index, item in enumerate(in_flight):
+                if item is None:
+                    continue
+                row = self._advance_environment(
+                    env_index=env_index,
+                    item=item,
+                    observation=observations[env_index],
+                    action=actions[env_index],
+                    reward=float(rewards[env_index]),
+                    done=bool(dones[env_index]),
+                    info=infos[env_index] if env_index < len(infos) else {},
+                    sink=sink,
+                    recorders=recorders,
+                    action_audits=action_audits,
+                    rewards_per_env=rewards_per_env,
+                    steps_per_env=steps_per_env,
+                    in_flight=in_flight,
+                    pending=pending,
+                    policy_id=policy_id,
+                    checkpoint=checkpoint,
+                    replay_dir=replay_dir,
+                )
+                if row is not None:
+                    rows.append(row)
+                if in_flight[env_index] is not None and item is not in_flight[env_index]:
+                    restage_indices.append(env_index)
+            if restage_indices:
+                staged = self._stage_pending(queues, pending, restage_indices)
+                if staged:
+                    self.client.set_episode_plans(staged)
+        rows.sort(key=lambda pair: pair[0])
+        return [row for _position, row in rows]
+
+    def _bootstrap(
+        self,
+        queues: list[deque[tuple[int, PlannedEpisode]]],
+        in_flight: list[tuple[int, PlannedEpisode] | None],
+        pending: list[tuple[int, PlannedEpisode] | None],
+        sink: SkillMetricsSink | None,
+        recorders: list[ReplayRecorder | None],
+        action_audits: list[EpisodeActionAudit],
+        policy_id: str,
+        checkpoint: str,
+    ) -> list[Any]:
+        """Stages the first plan per environment plus one look-ahead, then resets."""
         initial: list[dict[str, Any]] = []
-        for env_index in range(count):
+        for env_index in range(self.environment_count):
             if queues[env_index]:
                 item = queues[env_index].popleft()
                 in_flight[env_index] = item
@@ -197,10 +269,10 @@ class PlanExecutor:
         # One batched reset consumes every initial plan; idle environments
         # get a plain reset and remain ignored.
         observations, _infos = self.client.reset(None)
-        for env_index, item in enumerate(in_flight):
-            if item is not None:
+        for env_index, started in enumerate(in_flight):
+            if started is not None:
                 self._begin(
-                    env_index, item[1], sink, recorders, action_audits, policy_id, checkpoint
+                    env_index, started[1], sink, recorders, action_audits, policy_id, checkpoint
                 )
 
         # Fill the bridge's one-plan pending slot immediately. When the
@@ -211,94 +283,115 @@ class PlanExecutor:
         staged = self._stage_pending(queues, pending)
         if staged:
             self.client.set_episode_plans(staged)
+        return observations
 
-        while any(item is not None for item in in_flight):
-            batch = np.asarray(observations, dtype=np.float32)
-            predict_started = time.monotonic() if self.profiler is not None else 0.0
-            prediction = model.predict(batch, deterministic=True)
-            actions = prediction[0] if isinstance(prediction, tuple) else prediction
-            if hasattr(actions, "cpu"):
-                actions = actions.cpu().numpy()
-            audit_probability = any(
-                item is not None and steps_per_env[env_index] % 64 == 0
-                for env_index, item in enumerate(in_flight)
-            )
-            probabilities = component_probabilities(model, batch) if audit_probability else None
-            for env_index, item in enumerate(in_flight):
-                if item is not None:
-                    shoot_probability = (
-                        shoot_probability_at(probabilities, env_index)
-                        if steps_per_env[env_index] % 64 == 0
-                        else None
-                    )
-                    action_audits[env_index].record(actions[env_index], shoot_probability)
-            if self.profiler is not None:
-                self.profiler.record("predict", time.monotonic() - predict_started)
-                step_started = time.monotonic()
-            observations, rewards, dones, infos = self.client.step(actions)
-            if self.profiler is not None:
-                self.profiler.record("env_step", time.monotonic() - step_started)
-                self.profiler.add("env_steps", self.environment_count)
-            restage_indices: list[int] = []
-            for env_index, item in enumerate(in_flight):
-                if item is None:
-                    continue
-                position, plan = item
-                steps_per_env[env_index] += 1
-                rewards_per_env[env_index] += float(rewards[env_index])
-                info = infos[env_index] if env_index < len(infos) else {}
-                events = info.get("events", {})
-                if sink is not None:
-                    sink.record_step(env_index, observations[env_index], actions[env_index], events)
-                recorder = recorders[env_index]
-                if recorder is not None:
-                    recorder.record_step(actions[env_index], float(rewards[env_index]), events=events)
-                if not bool(dones[env_index]):
-                    continue
-                metrics = dict(info.get("metrics", {}))
-                metrics.setdefault("episode_reward", rewards_per_env[env_index])
-                metrics.setdefault("episode_length", steps_per_env[env_index])
-                rows.append(
-                    (
-                        position,
-                        self._harvest(
-                            env_index,
-                            plan,
-                            metrics,
-                            sink,
-                            recorders,
-                            action_audits,
-                            policy_id,
-                            checkpoint,
-                            replay_dir,
-                        ),
-                    )
+    def _select_actions(
+        self,
+        model: Any,
+        batch: Any,
+        in_flight: list[tuple[int, PlannedEpisode] | None],
+        steps_per_env: list[int],
+        action_audits: list[EpisodeActionAudit],
+    ) -> Any:
+        """Deterministic policy actions, with a 1-in-64 shoot-probability sample.
+
+        Computing component probabilities costs an extra forward pass, so it
+        is only done on the ticks where at least one live environment is due
+        for an audit sample.
+        """
+        predict_started = time.monotonic() if self.profiler is not None else 0.0
+        prediction = model.predict(batch, deterministic=True)
+        actions = prediction[0] if isinstance(prediction, tuple) else prediction
+        if hasattr(actions, "cpu"):
+            actions = actions.cpu().numpy()
+        due = [
+            env_index
+            for env_index, item in enumerate(in_flight)
+            if item is not None and steps_per_env[env_index] % 64 == 0
+        ]
+        probabilities = component_probabilities(model, batch) if due else None
+        for env_index, item in enumerate(in_flight):
+            if item is not None:
+                shoot_probability = (
+                    shoot_probability_at(probabilities, env_index) if env_index in due else None
                 )
-                rewards_per_env[env_index] = 0.0
-                steps_per_env[env_index] = 0
-                # The returned observation is already the first observation
-                # of this pre-staged plan. Start its Python-side diagnostics
-                # now, before its first action is selected.
-                next_item = pending[env_index]
-                pending[env_index] = None
-                in_flight[env_index] = next_item
-                if next_item is not None:
-                    self._begin(
-                        env_index,
-                        next_item[1],
-                        sink,
-                        recorders,
-                        action_audits,
-                        policy_id,
-                        checkpoint,
-                    )
-                    restage_indices.append(env_index)
-            if restage_indices:
-                staged = self._stage_pending(queues, pending, restage_indices)
-                if staged:
-                    self.client.set_episode_plans(staged)
-        rows.sort(key=lambda pair: pair[0])
-        return [row for _position, row in rows]
+                action_audits[env_index].record(actions[env_index], shoot_probability)
+        if self.profiler is not None:
+            self.profiler.record("predict", time.monotonic() - predict_started)
+        return actions
+
+    def _advance_environment(
+        self,
+        *,
+        env_index: int,
+        item: tuple[int, PlannedEpisode],
+        observation: Any,
+        action: Any,
+        reward: float,
+        done: bool,
+        info: dict[str, Any],
+        sink: SkillMetricsSink | None,
+        recorders: list[ReplayRecorder | None],
+        action_audits: list[EpisodeActionAudit],
+        rewards_per_env: list[float],
+        steps_per_env: list[int],
+        in_flight: list[tuple[int, PlannedEpisode] | None],
+        pending: list[tuple[int, PlannedEpisode] | None],
+        policy_id: str,
+        checkpoint: str,
+        replay_dir: str | Path | None,
+    ) -> tuple[int, dict[str, Any]] | None:
+        """Bookkeeping for one environment after one step.
+
+        Returns the finished episode's (position, row) pair, or None while
+        the episode is still running. On completion it also promotes the
+        pre-staged plan into flight; the caller detects that by comparing
+        `in_flight[env_index]` against the item it passed in.
+        """
+        position, plan = item
+        steps_per_env[env_index] += 1
+        rewards_per_env[env_index] += reward
+        events = info.get("events", {})
+        if sink is not None:
+            sink.record_step(env_index, observation, action, events)
+        recorder = recorders[env_index]
+        if recorder is not None:
+            # Two calls, exactly as TrainingPipeline does it: record_step
+            # takes no `events` argument, and passing one raised TypeError
+            # the moment the battery was asked to write replays.
+            recorder.record_step(action, reward, done=done)
+            if events:
+                recorder.record_events(events)
+        if not done:
+            return None
+
+        metrics = dict(info.get("metrics", {}))
+        metrics.setdefault("episode_reward", rewards_per_env[env_index])
+        metrics.setdefault("episode_length", steps_per_env[env_index])
+        row = self._harvest(
+            env_index,
+            plan,
+            metrics,
+            sink,
+            recorders,
+            action_audits,
+            policy_id,
+            checkpoint,
+            replay_dir,
+        )
+        rewards_per_env[env_index] = 0.0
+        steps_per_env[env_index] = 0
+        # The returned observation is already the first observation of the
+        # pre-staged plan. Start its Python-side diagnostics now, before its
+        # first action is selected.
+        next_item = pending[env_index]
+        pending[env_index] = None
+        in_flight[env_index] = next_item
+        if next_item is not None:
+            self._begin(
+                env_index, next_item[1], sink, recorders, action_audits, policy_id, checkpoint
+            )
+        return position, row
 
     @staticmethod
     def _stage_pending(
@@ -345,14 +438,12 @@ class PlanExecutor:
                 checkpoint=checkpoint,
                 environment_index=env_index,
                 notes=dict(plan.labels),
-                **{
-                    "seed": plan.condition.seed,
-                    "map_id": plan.condition.map_id,
-                    "scenario": plan.condition.scenario,
-                    "lighting": plan.condition.lighting,
-                    "enemy_count": plan.condition.enemy_count,
-                    "curriculum_level": plan.condition.level,
-                },
+                seed=plan.condition.seed,
+                map_id=plan.condition.map_id,
+                scenario=plan.condition.scenario,
+                lighting=plan.condition.lighting,
+                enemy_count=plan.condition.enemy_count,
+                curriculum_level=plan.condition.level,
             )
             header.detail = "light"
             recorder = ReplayRecorder(header=header)
@@ -392,13 +483,17 @@ class PlanExecutor:
         row.setdefault("episode_reward", 0.0)
         row.setdefault("episode_length", 0)
         row.update(action_audits[env_index].summary())
-        summary = sink.finish(env_index, result={"win": bool(row.get("win", False))}) if sink else None
+        summary = (
+            sink.finish(env_index, result={"win": bool(row.get("win", False))}) if sink else None
+        )
         if summary is not None:
             row["skill"] = summary.get("categories", {})
         recorder = recorders[env_index]
         recorders[env_index] = None
         if recorder is not None and replay_dir is not None:
-            recorder.finish({"win": bool(row.get("win", False)), "done_reason": str(row.get("done_reason", ""))})
+            recorder.finish(
+                {"win": bool(row.get("win", False)), "done_reason": str(row.get("done_reason", ""))}
+            )
             tag = labels.get("bucket") or labels.get("axis") or "eval"
             name = f"{tag}_{condition.map_id or 'arena'}_L{condition.level}_s{condition.seed}.jsonl"
             row["replay"] = str(recorder.save(Path(replay_dir) / name))
@@ -421,11 +516,17 @@ def build_map_split(used_conditions: Sequence[dict[str, Any]]) -> MapSplit:
       the caller bumps the suite base seed until the streams are disjoint.
     """
     train_maps = sorted({str(c.get("map_id", "")) for c in used_conditions if c.get("map_id")})
-    train_scenarios = sorted({str(c.get("scenario", "")) for c in used_conditions if c.get("scenario")})
-    train_seeds = sorted({int(c.get("seed", -1)) for c in used_conditions if int(c.get("seed", -1)) >= 0})
+    train_scenarios = sorted(
+        {str(c.get("scenario", "")) for c in used_conditions if c.get("scenario")}
+    )
+    train_seeds = sorted(
+        {int(c.get("seed", -1)) for c in used_conditions if int(c.get("seed", -1)) >= 0}
+    )
     holdout_maps = [map_id for map_id in MAP_IDS if map_id not in set(train_maps)]
     unseen_scenarios = [
-        scenario_id for scenario_id in SCENARIO_FAMILIES.values() if scenario_id not in set(train_scenarios)
+        scenario_id
+        for scenario_id in SCENARIO_FAMILIES.values()
+        if scenario_id not in set(train_scenarios)
     ]
     return MapSplit(
         train_maps=train_maps or ["open_field"],
@@ -490,13 +591,17 @@ class LeagueRunner:
         self.device = device
         self.seed = int(seed)
         self.registry = CheckpointRegistry(self.directory / "registry.json")
-        self.league = EvaluationLeague(self.registry, strategy=strategy, seed=self.seed, enable_elo=True)
+        self.league = EvaluationLeague(
+            self.registry, strategy=strategy, seed=self.seed, enable_elo=True
+        )
         history = self.directory / "history.json"
         if history.is_file():
             self.league.load_history(history, replay_into_registry=False)
         # The scripted baseline is a permanent, labelled control condition.
         if "scripted_baseline" not in self.registry:
-            self.registry.register("scripted_baseline", checkpoint="", frozen=True, tags=["baseline"])
+            self.registry.register(
+                "scripted_baseline", checkpoint="", frozen=True, tags=["baseline"]
+            )
 
     # -- snapshots ----------------------------------------------------------
 
@@ -546,7 +651,9 @@ class LeagueRunner:
         nvec = tuple(int(v) for v in nvec_raw) if nvec_raw is not None else ()
         problems = []
         if obs_shape != (OBSERVATION_FIELD_COUNT,):
-            problems.append(f"observation space {obs_shape} != contract ({OBSERVATION_FIELD_COUNT},)")
+            problems.append(
+                f"observation space {obs_shape} != contract ({OBSERVATION_FIELD_COUNT},)"
+            )
         if nvec != tuple(ACTION_NVEC):
             problems.append(f"action space {nvec} != contract {tuple(ACTION_NVEC)}")
         if problems:
@@ -753,6 +860,115 @@ def write_checkpoint_report(report: dict[str, Any], output_dir: str | Path) -> P
     return path
 
 
+@dataclass
+class _BatteryPlans:
+    """Everything the battery needs to execute and then report its two sections."""
+
+    condition: list[PlannedEpisode] = field(default_factory=list)
+    generalization: list[PlannedEpisode] = field(default_factory=list)
+    suite: GeneralizationSuite | None = None
+    suite_episodes: list[Any] = field(default_factory=list)
+    note: str = ""
+    trained_level: int = 0
+
+    @property
+    def all(self) -> list[PlannedEpisode]:
+        return [*self.condition, *self.generalization]
+
+
+def _build_battery_plans(
+    config: Any,
+    pipeline: Any,
+    record_eval_replays: bool,
+    record_gen_replays: bool,
+) -> _BatteryPlans:
+    """Builds both sections up front so they share one continuous plan batch.
+
+    Besides one fewer reset, this lets condition and generalization episodes
+    share the final partially-filled vector wave instead of paying two
+    separate tails. Their local labels and report ordering are unchanged.
+    """
+    plans = _BatteryPlans()
+    if config.checkpoint_condition_eval:
+        plans.condition = _condition_eval_plans(config, config.condition_eval_episodes)
+        if record_eval_replays:
+            plans.condition = [replace(plan, record_replay=True) for plan in plans.condition]
+    if not config.checkpoint_generalization_eval:
+        return plans
+
+    plans.suite, plans.note, plans.trained_level = _generalization_plans(
+        config, pipeline, record_gen_replays
+    )
+    if plans.suite is None:
+        return plans
+    plans.suite_episodes = plans.suite.plan()
+    for position, episode in enumerate(plans.suite_episodes):
+        # The suite level is a real world level by construction
+        # (>= WORLD_MIN_LEVEL), so applied_condition is the identity here
+        # except for the multi-enemy clamp.
+        condition = applied_condition(episode.condition)
+        labels = episode.labels()
+        labels["_position"] = position
+        labels["suite_level"] = condition.level
+        plans.generalization.append(
+            PlannedEpisode(condition=condition, labels=labels, record_replay=record_gen_replays)
+        )
+    return plans
+
+
+def _condition_section(condition_rows: list[dict[str, Any]], plan_count: int) -> dict[str, Any]:
+    """Per-condition breakdown of the fixed evaluation seed list."""
+    tracker = ConditionTracker(window=plan_count + 1)
+    for row in condition_rows:
+        tracker.record(
+            Condition(**row["condition"]),
+            float(row.get("episode_reward", 0.0)),
+            bool(row.get("win", False)),
+            int(row.get("episode_length", 0)),
+        )
+    report = generalization_report(tracker, top_n=5)
+    report["action_pipeline"] = summarize_action_pipeline(condition_rows)
+    report["episodes_detail"] = condition_rows
+    report["distribution"] = "union_of_curriculum_ladder_eval_seeds"
+    return report
+
+
+def _generalization_section(
+    plans: _BatteryPlans,
+    generalization_rows: list[dict[str, Any]],
+    executor: Any,
+    destination: Path,
+) -> dict[str, Any]:
+    """Held-out suite result, or an explicit reason why it was skipped."""
+    if executor is None:
+        return {"skipped": True, "reason": "executor unavailable"}
+    if plans.suite is None:
+        return {
+            "skipped": True,
+            "reason": plans.note,
+            "episodes": 0,
+            "trained_level": plans.trained_level,
+        }
+    for position, row in enumerate(generalization_rows):
+        extra = {}
+        if row.get("skill"):
+            extra["aim_accuracy"] = row["skill"].get("aim", {}).get("accuracy", 0.0)
+        plans.suite.record(
+            plans.suite_episodes[position],
+            won=bool(row.get("win", False)),
+            reward=float(row.get("episode_reward", 0.0)),
+            steps=int(row.get("episode_length", 0)),
+            extra=extra,
+        )
+    report = plans.suite.report()
+    report["suite_level"] = plans.suite.level
+    report["trained_level"] = plans.trained_level
+    report["action_pipeline"] = summarize_action_pipeline(generalization_rows)
+    report["episodes_detail"] = generalization_rows
+    plans.suite.export(destination)
+    return report
+
+
 def run_checkpoint_evaluation(
     model: Any,
     step: int,
@@ -818,135 +1034,51 @@ def run_checkpoint_evaluation(
     executor_factory = executor_factory or PlanExecutor
     need_executor = config.checkpoint_condition_eval or config.checkpoint_generalization_eval
     owned_executor = executor is None and need_executor
-    if executor is None and need_executor:
+    if owned_executor:
         # Profiling views are injected by the caller's executor_factory (see
         # the training callback), keeping this factory signature unchanged.
         executor = executor_factory(env_kwargs, skill_metrics=True)
-    # Build both sections first and submit one continuous plan batch. Besides
-    # one fewer reset, this lets condition and generalization episodes share
-    # the final partially-filled vector wave instead of paying two separate
-    # tails. Their local labels and report ordering remain unchanged.
-    condition_plans: list[PlannedEpisode] = []
-    suite: GeneralizationSuite | None = None
-    suite_episodes: list[Any] = []
-    generalization_plans: list[PlannedEpisode] = []
-    generalization_note = ""
-    trained_level = 0
-    if config.checkpoint_condition_eval:
-        condition_plans = _condition_eval_plans(config, config.condition_eval_episodes)
-        if record_eval_replays:
-            condition_plans = [replace(plan, record_replay=True) for plan in condition_plans]
-    if config.checkpoint_generalization_eval:
-        suite, generalization_note, trained_level = _generalization_plans(
-            config, pipeline, record_gen_replays
-        )
-        if suite is not None:
-            suite_episodes = suite.plan()
-            for position, episode in enumerate(suite_episodes):
-                # The suite level is a real world level by construction
-                # (>= WORLD_MIN_LEVEL), so applied_condition is the identity
-                # here except for the multi-enemy clamp.
-                condition = applied_condition(episode.condition)
-                labels = episode.labels()
-                labels["_position"] = position
-                labels["suite_level"] = condition.level
-                generalization_plans.append(
-                    PlannedEpisode(
-                        condition=condition,
-                        labels=labels,
-                        record_replay=record_gen_replays,
-                    )
-                )
 
-    all_plans = [*condition_plans, *generalization_plans]
+    plans = _build_battery_plans(config, pipeline, record_eval_replays, record_gen_replays)
     all_rows: list[dict[str, Any]] = []
     try:
-        if executor is not None and all_plans:
+        if executor is not None and plans.all:
             execution_started = time.monotonic() if profiler is not None else 0.0
             all_rows = executor.run(
                 model,
-                all_plans,
+                plans.all,
                 policy_id=policy_id,
                 checkpoint=str(policy_path),
                 replay_dir=(
-                    destination / "replays"
-                    if record_eval_replays or record_gen_replays
-                    else None
+                    destination / "replays" if record_eval_replays or record_gen_replays else None
                 ),
             )
             if profiler is not None:
-                profiler.record(
-                    "eval.battery.execution", time.monotonic() - execution_started
-                )
+                profiler.record("eval.battery.execution", time.monotonic() - execution_started)
                 profiler.add("eval.battery.episodes", len(all_rows))
     finally:
         if owned_executor:
             executor.close()
 
-    condition_rows = all_rows[: len(condition_plans)]
-    generalization_rows = all_rows[
-        len(condition_plans) : len(condition_plans) + len(generalization_plans)
-    ]
+    split = len(plans.condition)
     if config.checkpoint_condition_eval:
-        tracker = ConditionTracker(window=len(condition_plans) + 1)
-        for row in condition_rows:
-            condition = Condition(**row["condition"])
-            tracker.record(
-                condition,
-                float(row.get("episode_reward", 0.0)),
-                bool(row.get("win", False)),
-                int(row.get("episode_length", 0)),
-            )
-        cond_report = generalization_report(tracker, top_n=5)
-        cond_report["action_pipeline"] = summarize_action_pipeline(condition_rows)
-        cond_report["episodes_detail"] = condition_rows
-        cond_report["distribution"] = "union_of_curriculum_ladder_eval_seeds"
-        report["condition_evaluation"] = cond_report
-
+        report["condition_evaluation"] = _condition_section(all_rows[:split], split)
     if config.checkpoint_generalization_eval:
-        if executor is None:
-            report["generalization"] = {
-                "skipped": True,
-                "reason": "executor unavailable",
-            }
-        elif suite is None:
-            report["generalization"] = {
-                "skipped": True,
-                "reason": generalization_note,
-                "episodes": 0,
-                "trained_level": trained_level,
-            }
-        else:
-            for position, row in enumerate(generalization_rows):
-                extra = {}
-                if row.get("skill"):
-                    aim = row["skill"].get("aim", {})
-                    extra["aim_accuracy"] = aim.get("accuracy", 0.0)
-                suite.record(
-                    suite_episodes[position],
-                    won=bool(row.get("win", False)),
-                    reward=float(row.get("episode_reward", 0.0)),
-                    steps=int(row.get("episode_length", 0)),
-                    extra=extra,
-                )
-            generalization = suite.report()
-            generalization["suite_level"] = suite.level
-            generalization["trained_level"] = trained_level
-            generalization["action_pipeline"] = summarize_action_pipeline(generalization_rows)
-            generalization["episodes_detail"] = generalization_rows
-            report["generalization"] = generalization
-            suite.export(destination)
+        report["generalization"] = _generalization_section(
+            plans, all_rows[split : split + len(plans.generalization)], executor, destination
+        )
 
     if config.checkpoint_league_eval and config.league_matches_per_checkpoint > 0:
         section_started = time.monotonic() if profiler is not None else 0.0
-        runner = LeagueRunner(pipeline.run_dir if pipeline else destination, seed=config.seed, device=device)
-        league_env_kwargs = dict(env_kwargs)
+        runner = LeagueRunner(
+            pipeline.run_dir if pipeline else destination, seed=config.seed, device=device
+        )
         report["league"] = runner.evaluate_checkpoint(
             model,
             experiment_id=(config.experiment_id or config.run_id or "policy"),
             step=step,
             matches=config.league_matches_per_checkpoint,
-            env_kwargs=league_env_kwargs,
+            env_kwargs=dict(env_kwargs),
             max_opponents=config.league_max_opponents,
             client_factory=client_factory,
         )

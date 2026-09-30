@@ -21,10 +21,11 @@ Deliberately not included: smoothing, multi-metric scalarisation, Pareto
 selection. Those change what "best" means in ways that need their own
 evidence; this module only makes the existing decision honest.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
 from typing import Any
 
 #: Selection directions. ``max`` keeps the highest score (reward, win
@@ -68,8 +69,9 @@ class CheckpointSelectionRule:
             raise ValueError("checkpoint selection metric must be a non-empty key")
         if self.goal not in SELECTION_GOALS:
             raise ValueError(
-                "unknown checkpoint selection goal %r; expected one of %s"
-                % (self.goal, ", ".join(SELECTION_GOALS))
+                "unknown checkpoint selection goal {!r}; expected one of {}".format(
+                    self.goal, ", ".join(SELECTION_GOALS)
+                )
             )
         if self.min_delta < 0.0 or not math.isfinite(self.min_delta):
             raise ValueError("checkpoint selection min_delta must be finite and >= 0")
@@ -77,7 +79,7 @@ class CheckpointSelectionRule:
     # -- construction ------------------------------------------------------
 
     @classmethod
-    def from_config(cls, config: Any) -> "CheckpointSelectionRule":
+    def from_config(cls, config: Any) -> CheckpointSelectionRule:
         return cls(
             metric=str(getattr(config, "checkpoint_selection_metric", DEFAULT_SELECTION_METRIC)),
             goal=str(getattr(config, "checkpoint_selection_goal", "max")),
@@ -85,7 +87,7 @@ class CheckpointSelectionRule:
         )
 
     @classmethod
-    def from_dict(cls, payload: Any) -> "CheckpointSelectionRule":
+    def from_dict(cls, payload: Any) -> CheckpointSelectionRule:
         """Rebuilds a rule from a ``best.json`` record.
 
         ``None`` (a pre-rule ``best.json``) means the historical default,

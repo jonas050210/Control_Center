@@ -1,9 +1,10 @@
 """Tests for the multi-policy architecture (Phase 5)."""
+
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT, OBSERVATION_INDEX
 from sandboxai.policies import (

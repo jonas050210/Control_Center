@@ -11,7 +11,6 @@ extends RefCounted
 const Action = preload("res://scripts/core/action.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 
-
 const SCHEMA_VERSION: int = 1
 
 var recording: bool = false

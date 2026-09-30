@@ -23,10 +23,12 @@ result back may promote or demote, which reconfigures the distribution for
 the *next* episode — never the one in flight, because changing the setup
 mid-episode is how a curriculum corrupts its own statistics.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, replace
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, replace
+from typing import Any
 
 from .auto_curriculum import AutoCurriculum, CurriculumSchedule
 from .conditions import LIGHTING_IDS, MAP_IDS, Condition

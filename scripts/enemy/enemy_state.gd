@@ -339,7 +339,9 @@ func _blend_strafe_direction(chase_dir: Vector3, distance: float) -> Vector3:
 	var proximity: float = clampf(1.0 - (distance / maxf(attack_range * 4.0, 0.001)), 0.0, 0.85)
 	var forward_weight: float = 1.0 - proximity
 	var lateral_weight: float = (0.4 + proximity) * SandboxConfig.ENEMY_STRAFE_SPEED_SCALE
-	var blended: Vector3 = chase_dir * forward_weight + perpendicular * strafe_signal * lateral_weight
+	var blended: Vector3 = (
+		chase_dir * forward_weight + perpendicular * strafe_signal * lateral_weight
+	)
 	if blended.length_squared() < 0.0001:
 		return chase_dir
 	return blended.normalized()

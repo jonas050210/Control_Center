@@ -10,7 +10,6 @@ extends Node3D
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const AgentState = preload("res://scripts/agent/agent_state.gd")
 
-
 var state: AgentState
 var camera: Camera3D
 var body_mesh: MeshInstance3D

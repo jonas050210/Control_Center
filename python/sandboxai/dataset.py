@@ -17,14 +17,15 @@ than silent. In particular:
   transition-level split leaks the validation distribution into training
   and reports a validation loss that is mostly memorisation.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from pathlib import Path
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -154,6 +155,59 @@ class SplitReport:
         }
 
 
+def _is_finite_number(value: Any) -> bool:
+    """True for a finite int/float.
+
+    JSONL demonstrations can contain ``null``, strings or NaN when a recorder
+    was interrupted mid-write; training on those silently poisons the loss,
+    so they are rejected at load time rather than discovered as a NaN policy.
+    """
+    return isinstance(value, (int, float)) and not math.isnan(value) and not math.isinf(value)
+
+
+def _validate_transition(transition: dict[str, Any], index: int, expected_dim: int | None) -> int:
+    """Validates one transition and returns the observation width to expect.
+
+    Split out of ``DemonstrationDataset.validate`` so the per-record rules
+    are readable on their own; the caller keeps the cross-record state (the
+    agreed observation width) and the contract-width decision.
+    """
+    for field_name in ("observation", "action", "next_observation", "reward", "done"):
+        if field_name not in transition:
+            raise ValueError(f"transition {index} is missing field {field_name!r}")
+
+    obs = transition["observation"]
+    next_obs = transition["next_observation"]
+    if not obs or not next_obs:
+        raise ValueError(f"transition {index} has an empty observation")
+    if expected_dim is None:
+        expected_dim = len(obs)
+    if len(obs) != expected_dim or len(next_obs) != expected_dim:
+        raise ValueError(
+            f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})"
+        )
+
+    for field_name, values in (("observation", obs), ("next_observation", next_obs)):
+        for value in values:
+            if not _is_finite_number(value):
+                raise ValueError(
+                    f"transition {index} {field_name} contains invalid number: {value}"
+                )
+
+    reward = transition["reward"]
+    if not _is_finite_number(reward):
+        raise ValueError(f"transition {index} reward contains invalid number: {reward}")
+
+    encoded = action_to_multidiscrete(transition["action"])
+    for component, (value, size) in enumerate(zip(encoded, ACTION_NVEC)):
+        if not 0 <= value < size:
+            raise ValueError(
+                f"transition {index} action component {component} is {value}, "
+                f"outside the contract range [0, {size - 1}]"
+            )
+    return expected_dim
+
+
 @dataclass
 class DemonstrationDataset:
     transitions: list[dict[str, Any]]
@@ -163,26 +217,30 @@ class DemonstrationDataset:
     fingerprint: str = ""
 
     @classmethod
-    def load(cls, path: str | Path) -> "DemonstrationDataset":
+    def load(cls, path: str | Path) -> DemonstrationDataset:
         source = Path(path)
         if not source.exists():
             raise FileNotFoundError(source)
         metadata: dict[str, Any] = {}
         transitions: list[dict[str, Any]] = []
         if source.suffix.lower() == ".json":
-            value = json.loads(source.read_text(encoding="utf-8"))
+            value = json.loads(source.read_text(encoding="utf-8-sig"))
             if isinstance(value, dict):
                 metadata = dict(value.get("metadata", {}))
                 transitions = list(value.get("transitions", []))
             else:
                 transitions = list(value)
         else:
-            with source.open("r", encoding="utf-8") as stream:
+            with source.open("r", encoding="utf-8-sig") as stream:
                 for line_number, line in enumerate(stream, 1):
                     if not line.strip():
                         continue
                     value = json.loads(line)
-                    if not transitions and isinstance(value, dict) and value.get("schema") == SCHEMA:
+                    if (
+                        not transitions
+                        and isinstance(value, dict)
+                        and value.get("schema") == SCHEMA
+                    ):
                         metadata = value
                         continue
                     if not isinstance(value, dict):
@@ -209,37 +267,7 @@ class DemonstrationDataset:
 
         expected_dim: int | None = None
         for index, transition in enumerate(self.transitions):
-            for field in ("observation", "action", "next_observation", "reward", "done"):
-                if field not in transition:
-                    raise ValueError(f"transition {index} is missing field {field!r}")
-            obs = transition["observation"]
-            next_obs = transition["next_observation"]
-            if not obs or not next_obs:
-                raise ValueError(f"transition {index} has an empty observation")
-            if expected_dim is None:
-                expected_dim = len(obs)
-            if len(obs) != expected_dim or len(next_obs) != expected_dim:
-                raise ValueError(f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})")
-
-            # Check for non-finite values
-            for val in obs:
-                if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
-                    raise ValueError(f"transition {index} observation contains invalid number: {val}")
-            for val in next_obs:
-                if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
-                    raise ValueError(f"transition {index} next_observation contains invalid number: {val}")
-
-            rew = transition["reward"]
-            if not isinstance(rew, (int, float)) or math.isnan(rew) or math.isinf(rew):
-                raise ValueError(f"transition {index} reward contains invalid number: {rew}")
-
-            encoded = action_to_multidiscrete(transition["action"])
-            for component, (value, size) in enumerate(zip(encoded, ACTION_NVEC)):
-                if not 0 <= value < size:
-                    raise ValueError(
-                        f"transition {index} action component {component} is {value}, "
-                        f"outside the contract range [0, {size - 1}]"
-                    )
+            expected_dim = _validate_transition(transition, index, expected_dim)
         if require_contract_width and expected_dim != OBSERVATION_FIELD_COUNT:
             raise ValueError(
                 f"dataset observations are {expected_dim} floats but the observation "
@@ -291,7 +319,9 @@ class DemonstrationDataset:
         """
         problems: list[str] = []
         if not self.has_episode_structure():
-            problems.append("no episode_id/episode_key on any transition; episodes cannot be separated")
+            problems.append(
+                "no episode_id/episode_key on any transition; episodes cannot be separated"
+            )
             return problems
         for key, indices in self.episode_groups().items():
             dones = [bool(self.transitions[index].get("done", False)) for index in indices]
@@ -300,9 +330,9 @@ class DemonstrationDataset:
             if not dones[-1]:
                 problems.append(f"episode {key}: truncated (last transition is not terminal)")
             steps = [
-                self.transitions[index].get("step")
+                int(step)
                 for index in indices
-                if isinstance(self.transitions[index].get("step"), int)
+                if isinstance(step := self.transitions[index].get("step"), int)
             ]
             if steps and steps != sorted(steps):
                 problems.append(f"episode {key}: step numbers are not monotonic")
@@ -410,7 +440,9 @@ class DemonstrationDataset:
         metadata = {
             "schema": SCHEMA,
             "schema_version": 1,
-            "observation_dim": len(self.transitions[0]["observation"]) if self.transitions else OBSERVATION_FIELD_COUNT,
+            "observation_dim": len(self.transitions[0]["observation"])
+            if self.transitions
+            else OBSERVATION_FIELD_COUNT,
             # Matches the Godot recorder: the contract-v2 log array with
             # `jump` at index 5 and the look deltas at 6/7.
             "action_encoding": "[move, strafe, yaw, pitch, shoot, jump, look_delta_x, look_delta_y]",
@@ -427,14 +459,24 @@ class DemonstrationDataset:
         try:
             import numpy as np  # type: ignore
         except ImportError as exc:
-            raise RuntimeError("numpy is required to turn demonstrations into training arrays") from exc
-        observations = np.asarray([item["observation"] for item in self.transitions], dtype=np.float32)
-        next_observations = np.asarray([item["next_observation"] for item in self.transitions], dtype=np.float32)
-        actions = np.asarray([action_to_multidiscrete(item["action"]) for item in self.transitions], dtype=np.int64)
+            raise RuntimeError(
+                "numpy is required to turn demonstrations into training arrays"
+            ) from exc
+        observations = np.asarray(
+            [item["observation"] for item in self.transitions], dtype=np.float32
+        )
+        next_observations = np.asarray(
+            [item["next_observation"] for item in self.transitions], dtype=np.float32
+        )
+        actions = np.asarray(
+            [action_to_multidiscrete(item["action"]) for item in self.transitions], dtype=np.int64
+        )
         rewards = np.asarray([float(item["reward"]) for item in self.transitions], dtype=np.float32)
         dones = np.asarray([bool(item["done"]) for item in self.transitions], dtype=np.bool_)
         if observations.ndim != 2 or observations.shape[1] != next_observations.shape[1]:
-            raise ValueError("observations must be a rectangular 2-D array with matching next_observations")
+            raise ValueError(
+                "observations must be a rectangular 2-D array with matching next_observations"
+            )
         return observations, actions, next_observations, rewards, dones
 
     def split(self, validation_fraction: float, seed: int = 1234, strategy: str = "auto"):
@@ -463,7 +505,7 @@ class DemonstrationDataset:
         validation_fraction: float,
         seed: int = 1234,
         strategy: str = "auto",
-    ) -> tuple["DemonstrationDataset", "DemonstrationDataset", SplitReport]:
+    ) -> tuple[DemonstrationDataset, DemonstrationDataset, SplitReport]:
         if not 0.0 < validation_fraction < 1.0:
             raise ValueError("validation_fraction must be between 0 and 1")
         if strategy not in SPLIT_STRATEGIES:
@@ -480,9 +522,9 @@ class DemonstrationDataset:
             else:
                 effective = "transition"
                 degraded_reason = (
-                    "dataset exposes %d episode group(s); a leakage-free episode split "
-                    "needs at least 2, so the transition shuffle was used. Record "
-                    "episode_id/environment_id to remove this fallback." % len(groups)
+                    f"dataset exposes {len(groups)} episode group(s); a leakage-free "
+                    "episode split needs at least 2, so the transition shuffle was "
+                    "used. Record episode_id/environment_id to remove this fallback."
                 )
         if effective == "episode" and len(groups) < 2:
             raise ValueError(
@@ -537,9 +579,7 @@ class DemonstrationDataset:
         keys = sorted(groups)
         ranked = sorted(
             keys,
-            key=lambda key: hashlib.blake2b(
-                f"{seed}:{key}".encode("utf-8"), digest_size=8
-            ).hexdigest(),
+            key=lambda key: hashlib.blake2b(f"{seed}:{key}".encode(), digest_size=8).hexdigest(),
         )
         total = len(self.transitions)
         target = max(1, int(round(total * validation_fraction)))
@@ -554,9 +594,7 @@ class DemonstrationDataset:
             validation_keys.append(key)
             held += len(groups[key])
         validation_set = set(validation_keys)
-        validation_indices = [
-            index for key in sorted(validation_set) for index in groups[key]
-        ]
+        validation_indices = [index for key in sorted(validation_set) for index in groups[key]]
         train_indices = [
             index for key in sorted(set(keys) - validation_set) for index in groups[key]
         ]

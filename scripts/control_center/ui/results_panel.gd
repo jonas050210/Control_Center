@@ -131,21 +131,22 @@ func refresh(snapshot: Dictionary) -> void:
 	lines.append(_format_aggregate("human", comparison["human"]))
 	if bool(comparison["comparable"]):
 		var deltas: Dictionary = comparison["deltas"]
-		lines.append(
-			(
-				"delta (human - ai): reward %+.2f   accuracy %+.1f%%   kills %+.2f   win %+.0f%%"
-				% [
-					float(deltas.get("reward", 0.0)),
-					float(deltas.get("accuracy", 0.0)) * 100.0,
-					float(deltas.get("kills", 0.0)),
-					float(deltas.get("win_rate", 0.0)) * 100.0,
-				]
+		(
+			lines
+			. append(
+				(
+					"delta (human - ai): reward %+.2f   accuracy %+.1f%%   kills %+.2f   win %+.0f%%"
+					% [
+						float(deltas.get("reward", 0.0)),
+						float(deltas.get("accuracy", 0.0)) * 100.0,
+						float(deltas.get("kills", 0.0)),
+						float(deltas.get("win_rate", 0.0)) * 100.0,
+					]
+				)
 			)
 		)
 	else:
-		lines.append(
-			"Play the same scenario in HUMAN mode and watch it in WATCH mode to compare."
-		)
+		lines.append("Play the same scenario in HUMAN mode and watch it in WATCH mode to compare.")
 	_comparison_label.text = "\n".join(lines)
 
 	_refresh_history()
@@ -190,18 +191,21 @@ func _refresh_history() -> void:
 	_episode_list.clear()
 	for entry_value in history:
 		var entry: Dictionary = entry_value
-		_episode_list.add_item(
-			(
-				"#%d %-5s env%d  r %.1f  k%d  acc %.0f%%  %s"
-				% [
-					int(entry["index"]),
-					str(entry["source"]),
-					int(entry["env_index"]),
-					float(entry["reward"]),
-					int(entry["kills"]),
-					float(entry["accuracy"]) * 100.0,
-					str(entry["done_reason"]),
-				]
+		(
+			_episode_list
+			. add_item(
+				(
+					"#%d %-5s env%d  r %.1f  k%d  acc %.0f%%  %s"
+					% [
+						int(entry["index"]),
+						str(entry["source"]),
+						int(entry["env_index"]),
+						float(entry["reward"]),
+						int(entry["kills"]),
+						float(entry["accuracy"]) * 100.0,
+						str(entry["done_reason"]),
+					]
+				)
 			)
 		)
 	if selected_index >= 0 and selected_index < _episode_list.item_count:

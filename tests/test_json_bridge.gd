@@ -9,7 +9,6 @@ const Observation = preload("res://scripts/core/observation.gd")
 const RLAdapter = preload("res://scripts/rl/rl_adapter.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -71,7 +70,8 @@ func test_adapter_multidiscrete_shoot_reaches_simulation() -> SandboxTest:
 
 	var result_idle: Dictionary = adapter.step([[1, 1, 1, 1, 0, 0]])
 	t.assert_eq(
-		result_idle.infos[0].metrics.shots_fired, 1,
+		result_idle.infos[0].metrics.shots_fired,
+		1,
 		"shoot=0 must not fire; the episode total must stay at one shot"
 	)
 

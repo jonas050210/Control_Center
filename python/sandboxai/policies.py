@@ -22,14 +22,16 @@ A *slot* is an agent position in an environment (slot 0 is the historical
 single-agent seat). ``SlotAssignment`` maps slots to policies, so
 A-vs-B, A-vs-B-vs-A and A-vs-B-vs-C are configuration rather than code.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import json
 import math
-from pathlib import Path
 import random
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any, cast
 
 from .contract import ACTION_NVEC, observation_value
 
@@ -73,7 +75,9 @@ class PolicySpec:
         if self.kind not in ("checkpoint", "scripted"):
             raise ValueError(f"unknown policy kind: {self.kind!r}")
         if self.kind == "checkpoint" and self.role != PolicyRole.BASELINE and not self.checkpoint:
-            raise ValueError(f"policy {self.policy_id!r} is a checkpoint policy without a checkpoint")
+            raise ValueError(
+                f"policy {self.policy_id!r} is a checkpoint policy without a checkpoint"
+            )
 
     @property
     def trainable(self) -> bool:
@@ -83,7 +87,7 @@ class PolicySpec:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "PolicySpec":
+    def from_dict(cls, payload: dict[str, Any]) -> PolicySpec:
         known = {key: value for key, value in payload.items() if key in cls.__annotations__}
         return cls(**known)
 
@@ -115,7 +119,8 @@ class ScriptedBaseline:
         # Batched input (a vector env hands over a 2-D array): act per row.
         first = observation[0] if len(observation) and hasattr(observation[0], "__len__") else None
         if first is not None:
-            return [self.predict(row, deterministic)[0] for row in observation], None
+            rows = cast("Sequence[Sequence[float]]", observation)
+            return [self.predict(row, deterministic)[0] for row in rows], None
 
         visible = observation_value(observation, "primary_enemy_visible") > 0.5
         bearing = observation_value(observation, "primary_enemy_bearing_norm")
@@ -191,8 +196,7 @@ class PolicyHandle:
             from stable_baselines3 import PPO  # type: ignore
         except ImportError as exc:  # pragma: no cover - optional extra
             raise PolicyError(
-                "loading a checkpoint policy requires stable-baselines3; "
-                "install the training extra"
+                "loading a checkpoint policy requires stable-baselines3; install the training extra"
             ) from exc
         self.model = PPO.load(Path(self.spec.checkpoint), device=target_device)
         return self.model
@@ -274,14 +278,16 @@ class PolicyRoster:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
-            json.dumps({"policies": [spec.to_dict() for spec in self.specs()]}, indent=2, sort_keys=True),
+            json.dumps(
+                {"policies": [spec.to_dict() for spec in self.specs()]}, indent=2, sort_keys=True
+            ),
             encoding="utf-8",
         )
         return target
 
     @classmethod
-    def load(cls, path: str | Path) -> "PolicyRoster":
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    def load(cls, path: str | Path) -> PolicyRoster:
+        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         roster = cls()
         for entry in payload.get("policies", []):
             roster.add(PolicySpec.from_dict(entry))
@@ -453,7 +459,9 @@ def _flatten_parameter(parameter: Any) -> list[float]:
             tolist = getattr(flat, "tolist", None)
             if callable(tolist):
                 return [float(value) for value in _iter_flat(tolist())]
-        except Exception:  # pragma: no cover - defensive against exotic types
+        except (AttributeError, TypeError, ValueError):
+            # An array-like whose flatten()/tolist() does not behave; fall
+            # through to the generic element walk below.
             pass
     return [float(value) for value in _iter_flat(parameter)]
 

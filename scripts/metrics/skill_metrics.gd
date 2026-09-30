@@ -81,7 +81,8 @@ static func from_snapshot(snapshot: Dictionary) -> Dictionary:
 	categories["positioning"] = {
 		"health_fraction": float(agent.get("health", 0.0)) / max_health,
 		"damage_taken": float(episode.get("damage_received", 0.0)),
-		"damage_ratio": (
+		"damage_ratio":
+		(
 			float(episode.get("damage_dealt", 0.0))
 			/ maxf(1.0, float(episode.get("damage_received", 0.0)))
 		),
@@ -103,9 +104,8 @@ static func from_snapshot(snapshot: Dictionary) -> Dictionary:
 		"damage_dealt": float(episode.get("damage_dealt", 0.0)),
 		"shooting": bool(action.get("shooting", false)),
 		"trigger_discipline_events": discipline,
-		"trigger_discipline_rate": (
-			float(discipline) / float(maxi(1, shots + discipline)) if shots + discipline > 0 else 0.0
-		),
+		"trigger_discipline_rate":
+		float(discipline) / float(maxi(1, shots + discipline)) if shots + discipline > 0 else 0.0,
 		"reload_starts": int(episode.get("reload_starts", 0)),
 		"reloading_time": float(episode.get("reloading_time", 0.0)),
 		"weapon_ammo": int(agent.get("weapon_ammo", 0)),
@@ -162,9 +162,7 @@ static func rows(categories: Dictionary) -> Array:
 		var keys: Array = values.keys()
 		keys.sort()
 		for key in keys:
-			out.append(
-				{"category": category, "metric": str(key), "value": values[key]}
-			)
+			out.append({"category": category, "metric": str(key), "value": values[key]})
 	return out
 
 

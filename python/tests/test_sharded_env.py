@@ -4,6 +4,7 @@ The contract under test is strong on purpose: sharding must be a pure
 *wall-time* change. A batch produced by W workers has to be identical to the
 batch the same environments produce inside one process, index for index.
 """
+
 from __future__ import annotations
 
 import os
@@ -12,11 +13,12 @@ from pathlib import Path
 
 from optional_deps import HAS_SB3, SB3_REASON
 from simulated_bridge import SimulatedBridgeExecutable, supported
+
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.godot_env import GodotBatchClient, make_batch_client
 from sandboxai.sharded_env import (
-    ShardFailure,
     ShardedBatchClient,
+    ShardFailure,
     plan_shards,
     recommended_worker_count,
 )

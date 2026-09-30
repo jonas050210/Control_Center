@@ -5,6 +5,7 @@ run exactly as before — headless, with no GUI code constructed, no telemetry
 built and no logging buffered. These tests parse the sources instead of
 launching Godot so they run anywhere (Godot is not required in CI).
 """
+
 from __future__ import annotations
 
 import re
@@ -143,9 +144,7 @@ class TrainingPathIsolationTests(unittest.TestCase):
         for name in data_layer:
             source = (CONTROL_CENTER_DIR / name).read_text(encoding="utf-8")
             self.assertNotIn("/ui/", source, f"{name} must stay independent of the UI layer")
-            self.assertNotIn(
-                "extends Control", source, f"{name} must be a plain data/logic class"
-            )
+            self.assertNotIn("extends Control", source, f"{name} must be a plain data/logic class")
 
 
 class ControlCenterSurfaceTests(unittest.TestCase):

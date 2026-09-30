@@ -8,6 +8,7 @@ contract.py's module docstring. The GodotSourceDriftTests below narrow that
 gap statically: they parse the GDScript sources and fail loudly when the
 Godot-side constants/field layout no longer match the Python contract.
 """
+
 import re
 import unittest
 from pathlib import Path
@@ -117,7 +118,7 @@ class GodotSourceDriftTests(unittest.TestCase):
         start = source.find("func to_array()")
         end = source.find("\nfunc ", start + 1)
         self.assertGreater(start, -1, "to_array() not found in observation.gd")
-        body = source[start:end if end != -1 else len(source)]
+        body = source[start : end if end != -1 else len(source)]
         indices = [int(value) for value in re.findall(r"arr\[(\d+)\]\s*=", body)]
         self.assertEqual(
             sorted(indices),
@@ -212,9 +213,7 @@ class GodotSourceDriftTests(unittest.TestCase):
 
     def test_godot_action_nvec_matches_python_contract(self):
         source = self._godot_source("scripts/core/action.gd")
-        match = re.search(
-            r"const MULTI_DISCRETE_NVECS:\s*Array\s*=\s*\[([0-9,\s]+)\]", source
-        )
+        match = re.search(r"const MULTI_DISCRETE_NVECS:\s*Array\s*=\s*\[([0-9,\s]+)\]", source)
         self.assertIsNotNone(match, "Action.MULTI_DISCRETE_NVECS declaration not found")
         self.assertEqual(
             tuple(int(value) for value in match.group(1).split(",")),

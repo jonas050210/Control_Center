@@ -1,10 +1,10 @@
 import json
-from pathlib import Path
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from sandboxai.telemetry import (
@@ -101,14 +101,16 @@ class TelemetryTests(unittest.TestCase):
             # Completing the line on a later write must produce it exactly
             # once, not corrupt/duplicate/drop it.
             with path.open("ab") as handle:
-                handle.write(b'}\n')
+                handle.write(b"}\n")
             rows = tailer.read_new()
             self.assertEqual([row["timesteps"] for row in rows], [2])
 
     def test_incremental_tailer_skips_malformed_lines_without_raising(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "training.jsonl"
-            path.write_bytes(b'{"timesteps": 1}\nnot json at all\n["also", "not", "a", "row"]\n{"timesteps": 2}\n')
+            path.write_bytes(
+                b'{"timesteps": 1}\nnot json at all\n["also", "not", "a", "row"]\n{"timesteps": 2}\n'
+            )
             tailer = IncrementalJsonlTailer(path)
             rows = tailer.read_new()
             self.assertEqual([row["timesteps"] for row in rows], [1, 2])
@@ -135,7 +137,9 @@ class TelemetryTests(unittest.TestCase):
             with JsonlTelemetry(path) as telem:
                 telem.write({"step": 100, "reward": 5.0})
                 telem.write({"step": 200, "reward": 10.0})
-            lines = [json.loads(line) for line in path.read_text(encoding="utf-8").strip().split("\n")]
+            lines = [
+                json.loads(line) for line in path.read_text(encoding="utf-8").strip().split("\n")
+            ]
             self.assertEqual(len(lines), 2)
             self.assertEqual(lines[0]["step"], 100)
             self.assertEqual(lines[1]["reward"], 10.0)
