@@ -935,7 +935,9 @@ class EvaluationPage(Page):
 
         detail_frame = ttk.LabelFrame(right, text="Structured result / comparison", padding=8)
         detail_frame.pack(fill="both", expand=True, pady=(8, 0))
-        self.detail_text = tk.Text(detail_frame, wrap="word", state="disabled", height=18, font=("Consolas", 9))
+        self.detail_text = tk.Text(detail_frame, wrap="word", state="disabled", height=18, font=("Consolas", 9),
+                                   background=COLOR_SURFACE, foreground=COLOR_TEXT, insertbackground=COLOR_TEXT,
+                                   selectbackground="#164e63", relief="flat", borderwidth=0, padx=10, pady=10)
         self.detail_text.pack(fill="both", expand=True)
 
         self._checkpoint_paths: dict[str, str] = {}
@@ -1110,7 +1112,9 @@ class RunsPage(Page):
 
         bottom = ttk.LabelFrame(paned, text="Run detail", padding=8)
         paned.add(bottom, weight=1)
-        self.detail_text = tk.Text(bottom, wrap="word", state="disabled", font=("Consolas", 9))
+        self.detail_text = tk.Text(bottom, wrap="word", state="disabled", font=("Consolas", 9),
+                                   background=COLOR_SURFACE, foreground=COLOR_TEXT, insertbackground=COLOR_TEXT,
+                                   selectbackground="#164e63", relief="flat", borderwidth=0, padx=10, pady=10)
         self.detail_text.pack(fill="both", expand=True)
         actions = ttk.Frame(bottom)
         actions.pack(fill="x", pady=(6, 0))
@@ -1363,6 +1367,9 @@ class ControlCenter(tk.Tk):
         except tk.TclError:
             pass
         self.configure(background=COLOR_BG)
+        self.option_add("*TCombobox*Listbox.background", COLOR_SURFACE_RAISED)
+        self.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
+        self.option_add("*TCombobox*Listbox.selectBackground", "#164e63")
         style.configure(".", background=COLOR_BG, foreground=COLOR_TEXT,
                         fieldbackground=COLOR_SURFACE_RAISED, bordercolor=COLOR_BORDER,
                         lightcolor=COLOR_BORDER, darkcolor=COLOR_BORDER,
