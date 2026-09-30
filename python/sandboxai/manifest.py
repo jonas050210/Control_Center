@@ -32,7 +32,7 @@ from typing import Any
 
 #: Bumped from v1: additive host/godot/code-provenance sections. Readers
 #: that only look up known keys are unaffected.
-MANIFEST_FORMAT = "sandboxai.run_manifest/v2"
+MANIFEST_FORMAT = "sandboxai.run_manifest/v3"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -46,9 +46,10 @@ def contract_fingerprint() -> dict[str, Any]:
     Dimensions, not a version string: they are what actually decides
     compatibility, and they are what replay files stamp.
     """
-    from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+    from .contract import ACTION_NVEC, CONTRACT_VERSION, OBSERVATION_FIELD_COUNT
 
     return {
+        "version": CONTRACT_VERSION,
         "observation_dim": OBSERVATION_FIELD_COUNT,
         "action_nvec": list(ACTION_NVEC),
         "observation_fields": "v3 (additive since v1; see docs/OBSERVATION_ACTION_CONTRACT.md)",
@@ -177,12 +178,32 @@ def godot_snapshot(config: Any, probe: bool = True) -> dict[str, Any]:
     return snapshot
 
 
+def _dataset_provenance(run_dir: Path) -> dict[str, Any] | None:
+    """Returns BC dataset identity when PPO was warm-started from one."""
+    path = run_dir / "warm_start.json"
+    if not path.is_file():
+        return None
+    try:
+        warm_start = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not warm_start.get("transferred"):
+        return None
+    return {
+        "id": warm_start.get("dataset_fingerprint"),
+        "source": warm_start.get("dataset"),
+        "contract_version": warm_start.get("contract_version"),
+        "bc_checkpoint": warm_start.get("source"),
+    }
+
+
 def build_manifest(
     config: Any,
     run_dir: Path,
     device: str,
     driver: Any | None,
     probe_godot: bool = True,
+    status: str = "running",
 ) -> dict[str, Any]:
     """Enough information to reproduce and interpret a run, and no more."""
     from .pipeline import EVAL_MASTER_SEED_SALT
@@ -207,9 +228,19 @@ def build_manifest(
         "experiment_id": config.experiment_id,
         "run_id": config.run_id,
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "status": status,
+        "algorithm": "PPO",
         "seed": config.seed,
         "device": device,
         "contract": contract_fingerprint(),
+        "dataset": _dataset_provenance(run_dir),
+        "checkpoints": [
+            str(path.relative_to(run_dir))
+            for path in sorted((run_dir / "checkpoints").glob("*.zip"))
+            if path.is_file()
+        ]
+        + (["final.zip"] if (run_dir / "final.zip").is_file() else []),
         "godot_project": str(config.project),
         "godot": godot_snapshot(config, probe=probe_godot),
         "host": host_snapshot(),
@@ -270,5 +301,12 @@ def build_manifest(
 def write_manifest(run_dir: Path, manifest: dict[str, Any]) -> Path:
     """Writes ``run_manifest.json`` next to config.json / run_summary.json."""
     path = run_dir / "run_manifest.json"
+    if path.is_file():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8-sig"))
+            if previous.get("created_utc"):
+                manifest["created_utc"] = previous["created_utc"]
+        except (OSError, json.JSONDecodeError):
+            pass
     path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
     return path

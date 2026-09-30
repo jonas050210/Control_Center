@@ -25,6 +25,7 @@ from sandboxai.manifest import (
 class ProvenanceSectionTests(unittest.TestCase):
     def test_contract_fingerprint_is_the_frozen_contract(self):
         fingerprint = contract_fingerprint()
+        self.assertEqual(fingerprint["version"], 3)
         self.assertEqual(fingerprint["observation_dim"], 84)
         self.assertEqual(fingerprint["action_nvec"], [3, 3, 3, 3, 2, 2])
 
@@ -122,6 +123,10 @@ class ManifestDocumentTests(unittest.TestCase):
             self.assertIn(section, manifest, f"missing manifest section: {section}")
         self.assertEqual(manifest["seed"], config.seed)
         self.assertEqual(manifest["run_id"], "manifest_test")
+        self.assertEqual(manifest["algorithm"], "PPO")
+        self.assertEqual(manifest["status"], "running")
+        self.assertEqual(manifest["checkpoints"], [])
+        self.assertIsNone(manifest["dataset"])
 
     def test_manifest_records_the_parallelism_actually_used(self):
         manifest, _ = self._manifest()

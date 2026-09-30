@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .config import BCConfig
+from .contract import CONTRACT_VERSION
 from .dataset import ACTION_NVECS, DemonstrationDataset
 from .telemetry import resource_snapshot
 
@@ -219,6 +220,9 @@ def _write_run_documents(
             {
                 "format": "sandboxai.bc_dataset_report/v1",
                 "dataset": str(dataset_path),
+                "dataset_id": full.fingerprint,
+                "dataset_version": full.metadata.get("schema_version"),
+                "dataset_config": full.metadata,
                 "fingerprint": full.fingerprint,
                 "statistics": statistics,
                 "split": split_report.to_dict(),
@@ -406,6 +410,7 @@ def train_behavior_cloning(
                 "epoch": epoch + 1,
                 "split": split_report.to_dict(),
                 "dataset_fingerprint": full.fingerprint,
+                "contract_version": CONTRACT_VERSION,
                 "observation_dim": model.observation_dim,
                 "hidden_sizes": list(model.hidden_sizes),
                 "action_nvec": list(model.action_nvec),
@@ -468,6 +473,12 @@ def load_bc_into_sb3_policy(
     """
     _require_torch()
     checkpoint = _load_checkpoint(Path(checkpoint_path), device)
+    recorded_contract = checkpoint.get("contract_version")
+    if recorded_contract is not None and recorded_contract != CONTRACT_VERSION:
+        raise ValueError(
+            f"BC checkpoint contract version {recorded_contract} is incompatible with the "
+            f"current contract version {CONTRACT_VERSION}"
+        )
     model = BehaviorCloningPolicy(
         int(checkpoint["observation_dim"]), tuple(checkpoint["hidden_sizes"])
     )
@@ -500,4 +511,7 @@ def load_bc_into_sb3_policy(
         "transferred": True,
         "observation_dim": model.observation_dim,
         "hidden_sizes": list(model.hidden_sizes),
+        "contract_version": checkpoint.get("contract_version"),
+        "dataset": checkpoint.get("dataset"),
+        "dataset_fingerprint": checkpoint.get("dataset_fingerprint"),
     }
