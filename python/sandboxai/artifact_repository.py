@@ -1,11 +1,23 @@
 """Single read-only gateway for persisted runs, checkpoints and evaluations."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+import shutil
 from typing import Any, Callable
 
 from .control_center_schema import DashboardSnapshot
 from .run_inspection import discover_run_directories, inspect_run, inspect_runs
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionPolicy:
+    keep_newest_runs: int = 25
+    keep_checkpoints_per_run: int = 10
+
+    def __post_init__(self) -> None:
+        if self.keep_newest_runs < 1 or self.keep_checkpoints_per_run < 1:
+            raise ValueError("retention counts must be positive")
 
 
 class ArtifactRepository:
@@ -86,3 +98,40 @@ class ArtifactRepository:
                 })
         entries.sort(key=lambda item: item.get("modified_utc") or "", reverse=True)
         return entries[:limit]
+
+    def cleanup_plan(self, policy: RetentionPolicy) -> dict[str, list[str]]:
+        """Return safe deletion candidates without changing the filesystem."""
+        runs = self.run_directories()
+        removable_runs: list[str] = []
+        for path in runs[:-policy.keep_newest_runs]:
+            report = inspect_run(path)
+            state = str((report.get("status") or {}).get("state", ""))
+            if state in {"finished", "stopped", "error"} and not path.is_symlink():
+                removable_runs.append(str(path.resolve()))
+
+        removable_checkpoints: list[str] = []
+        for run in runs[-policy.keep_newest_runs:]:
+            directory = run / "checkpoints"
+            candidates = [
+                path for path in directory.glob("*.zip")
+                if path.name not in {"latest.zip", "best_eval.zip", "final.zip"} and not path.is_symlink()
+            ] if directory.is_dir() else []
+            candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+            removable_checkpoints.extend(str(path.resolve()) for path in candidates[policy.keep_checkpoints_per_run:])
+        return {"runs": removable_runs, "checkpoints": removable_checkpoints}
+
+    def cleanup(self, policy: RetentionPolicy, *, confirm: bool = False) -> dict[str, list[str]]:
+        """Apply a reviewed cleanup plan; defaults to a non-destructive preview."""
+        plan = self.cleanup_plan(policy)
+        if not confirm:
+            return plan
+        root = self.output_root.resolve()
+        for raw in plan["checkpoints"]:
+            path = Path(raw).resolve()
+            if root in path.parents:
+                path.unlink(missing_ok=True)
+        for raw in plan["runs"]:
+            path = Path(raw).resolve()
+            if root in path.parents and path != root:
+                shutil.rmtree(path)
+        return plan
