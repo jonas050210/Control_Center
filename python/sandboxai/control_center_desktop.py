@@ -102,11 +102,17 @@ class BackgroundRunner:
 # ---------------------------------------------------------------------------
 
 _FONT_FAMILY = "Segoe UI"
-COLOR_OK = "#1a7f37"
-COLOR_WARN = "#9a6700"
-COLOR_ERROR = "#cf222e"
-COLOR_MUTED = "#57606a"
-COLOR_BORDER = "#d0d7de"
+COLOR_BG = "#0b1120"
+COLOR_SURFACE = "#111827"
+COLOR_SURFACE_RAISED = "#151f32"
+COLOR_HOVER = "#1c2940"
+COLOR_TEXT = "#e7edf7"
+COLOR_ACCENT = "#38bdf8"
+COLOR_OK = "#4ade80"
+COLOR_WARN = "#fbbf24"
+COLOR_ERROR = "#fb7185"
+COLOR_MUTED = "#94a3b8"
+COLOR_BORDER = "#2b3a52"
 
 
 class StatCard(ttk.Frame):
@@ -128,10 +134,12 @@ class StatRow(ttk.Frame):
     def __init__(self, parent: tk.Misc, labels: tuple[str, ...]) -> None:
         super().__init__(parent)
         self._cards: dict[str, StatCard] = {}
+        columns = min(5, max(1, len(labels)))
         for index, label in enumerate(labels):
             card = StatCard(self, label)
-            card.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 6, 0))
-            self.columnconfigure(index, weight=1)
+            row, column = divmod(index, columns)
+            card.grid(row=row, column=column, sticky="nsew", padx=4, pady=4)
+            self.columnconfigure(column, weight=1, uniform="stats")
             self._cards[label] = card
 
     def update_values(self, values: dict[str, tuple[str, str | None]]) -> None:
@@ -152,7 +160,7 @@ class LineChart(tk.Canvas):
     """
 
     def __init__(self, parent: tk.Misc, title: str, height: int = 140) -> None:
-        super().__init__(parent, height=height, background="white", highlightthickness=1,
+        super().__init__(parent, height=height, background=COLOR_SURFACE_RAISED, highlightthickness=1,
                           highlightbackground=COLOR_BORDER)
         self._title = title
         self._points: list[tuple[float, float]] = []
@@ -191,7 +199,7 @@ class LineChart(tk.Canvas):
 
         for fraction in (0.0, 0.5, 1.0):
             gy = pad_top + fraction * plot_h
-            self.create_line(pad_left, gy, width - pad_right, gy, fill="#eef1f4")
+            self.create_line(pad_left, gy, width - pad_right, gy, fill="#243044")
             value = y_max - fraction * (y_max - y_min)
             self.create_text(pad_left - 6, gy, anchor="e", text=vm.format_number(value, 2), fill=COLOR_MUTED,
                               font=(_FONT_FAMILY, 8))
@@ -199,7 +207,7 @@ class LineChart(tk.Canvas):
         for x, y in points:
             cx, cy = to_canvas(x, y)
             coords.extend((cx, cy))
-        self.create_line(*coords, fill="#0969da", width=2, smooth=False)
+        self.create_line(*coords, fill=COLOR_ACCENT, width=2, smooth=False)
         self.create_text(width - pad_right, height - 4, anchor="se",
                           text=f"latest: {vm.format_number(ys[-1], 3)}", fill=COLOR_MUTED, font=(_FONT_FAMILY, 8))
 
@@ -1354,16 +1362,54 @@ class ControlCenter(tk.Tk):
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("PageTitle.TLabel", font=(_FONT_FAMILY, 16, "bold"))
-        style.configure("PageSubtitle.TLabel", foreground=COLOR_MUTED)
-        style.configure("Section.TLabel", font=(_FONT_FAMILY, 11, "bold"))
-        style.configure("Card.TFrame", background="#f6f8fa", relief="solid", borderwidth=1)
-        style.configure("CardLabel.TLabel", background="#f6f8fa", foreground=COLOR_MUTED, font=(_FONT_FAMILY, 9))
-        style.configure("CardValue.TLabel", background="#f6f8fa", font=(_FONT_FAMILY, 14, "bold"))
-        style.configure("Warning.TLabel", foreground=COLOR_WARN)
-        style.configure("Error.TLabel", foreground=COLOR_ERROR)
-        style.configure("Nav.TButton", anchor="w")
-        style.configure("NavSelected.TButton", anchor="w", font=(_FONT_FAMILY, 9, "bold"))
+        self.configure(background=COLOR_BG)
+        style.configure(".", background=COLOR_BG, foreground=COLOR_TEXT,
+                        fieldbackground=COLOR_SURFACE_RAISED, bordercolor=COLOR_BORDER,
+                        lightcolor=COLOR_BORDER, darkcolor=COLOR_BORDER,
+                        font=(_FONT_FAMILY, 10))
+        style.configure("TFrame", background=COLOR_BG)
+        style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT)
+        style.configure("PageTitle.TLabel", background=COLOR_BG, foreground=COLOR_TEXT,
+                        font=(_FONT_FAMILY, 20, "bold"))
+        style.configure("PageSubtitle.TLabel", background=COLOR_BG, foreground=COLOR_MUTED,
+                        font=(_FONT_FAMILY, 10))
+        style.configure("Section.TLabel", background=COLOR_BG, foreground=COLOR_TEXT,
+                        font=(_FONT_FAMILY, 12, "bold"))
+        style.configure("Card.TFrame", background=COLOR_SURFACE_RAISED, relief="flat", borderwidth=0)
+        style.configure("CardLabel.TLabel", background=COLOR_SURFACE_RAISED, foreground=COLOR_MUTED,
+                        font=(_FONT_FAMILY, 9))
+        style.configure("CardValue.TLabel", background=COLOR_SURFACE_RAISED, foreground=COLOR_TEXT,
+                        font=(_FONT_FAMILY, 15, "bold"))
+        style.configure("TLabelframe", background=COLOR_BG, bordercolor=COLOR_BORDER, relief="solid")
+        style.configure("TLabelframe.Label", background=COLOR_BG, foreground=COLOR_MUTED,
+                        font=(_FONT_FAMILY, 10, "bold"))
+        style.configure("TButton", background=COLOR_SURFACE_RAISED, foreground=COLOR_TEXT,
+                        borderwidth=0, padding=(12, 8))
+        style.map("TButton", background=[("active", COLOR_HOVER), ("pressed", "#243b53")],
+                  foreground=[("disabled", COLOR_MUTED)])
+        style.configure("Nav.TButton", anchor="w", padding=(14, 10), background=COLOR_BG)
+        style.map("Nav.TButton", background=[("active", COLOR_HOVER)])
+        style.configure("NavSelected.TButton", anchor="w", padding=(14, 10),
+                        background=COLOR_HOVER, foreground=COLOR_ACCENT,
+                        font=(_FONT_FAMILY, 10, "bold"))
+        style.map("NavSelected.TButton", background=[("active", COLOR_HOVER)])
+        style.configure("Warning.TLabel", background=COLOR_BG, foreground=COLOR_WARN)
+        style.configure("Error.TLabel", background=COLOR_BG, foreground=COLOR_ERROR)
+        style.configure("Treeview", background=COLOR_SURFACE, fieldbackground=COLOR_SURFACE,
+                        foreground=COLOR_TEXT, rowheight=30, borderwidth=0)
+        style.configure("Treeview.Heading", background=COLOR_SURFACE_RAISED,
+                        foreground=COLOR_MUTED, relief="flat", padding=(8, 8))
+        style.map("Treeview", background=[("selected", "#164e63")],
+                  foreground=[("selected", COLOR_TEXT)])
+        style.configure("TEntry", fieldbackground=COLOR_SURFACE_RAISED, foreground=COLOR_TEXT,
+                        insertcolor=COLOR_TEXT, padding=7)
+        style.configure("TCombobox", fieldbackground=COLOR_SURFACE_RAISED, foreground=COLOR_TEXT,
+                        padding=6)
+        style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
+        style.configure("TNotebook.Tab", background=COLOR_SURFACE, foreground=COLOR_MUTED,
+                        padding=(12, 8))
+        style.map("TNotebook.Tab", background=[("selected", COLOR_HOVER)],
+                  foreground=[("selected", COLOR_ACCENT)])
 
     def _build_shell(self) -> None:
         outer = ttk.Frame(self, padding=0)
@@ -1378,10 +1424,10 @@ class ControlCenter(tk.Tk):
 
         body = ttk.Frame(outer)
         body.pack(fill="both", expand=True)
-        nav = ttk.Frame(body, width=190, padding=10)
+        nav = ttk.Frame(body, width=210, padding=(12, 18))
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
-        self.content = ttk.Frame(body, padding=(0, 10, 14, 14))
+        self.content = ttk.Frame(body, padding=(8, 14, 18, 18))
         self.content.pack(side="left", fill="both", expand=True)
 
         for page_class in PAGE_CLASSES:

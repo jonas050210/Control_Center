@@ -66,14 +66,14 @@ const RIGHT_PANEL_WIDTH: float = 380.0
 
 ## Navigation entries: page id -> label, in display order.
 const PAGES: Array = [
-	["home", "HOME"],
-	["agents", "AGENTS"],
-	["headless", "HEADLESS"],
-	["training", "TRAINING"],
-	["simulation", "SIMULATION"],
-	["analytics", "ANALYTICS"],
-	["history", "HISTORY"],
-	["settings", "SETTINGS"],
+	["home", "Home"],
+	["agents", "Agents"],
+	["headless", "Headless"],
+	["training", "Training"],
+	["simulation", "Simulation"],
+	["analytics", "Analytics"],
+	["history", "History"],
+	["settings", "Settings"],
 ]
 
 var session
@@ -125,16 +125,17 @@ func setup(p_session) -> void:
 
 func _build_layout() -> void:
 	var root := MarginContainer.new()
+	root.theme = ControlCenterTheme.build_theme()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_theme_constant_override("margin_left", 6)
-	root.add_theme_constant_override("margin_right", 6)
-	root.add_theme_constant_override("margin_top", 6)
-	root.add_theme_constant_override("margin_bottom", 6)
+	root.add_theme_constant_override("margin_left", 12)
+	root.add_theme_constant_override("margin_right", 12)
+	root.add_theme_constant_override("margin_top", 12)
+	root.add_theme_constant_override("margin_bottom", 12)
 	add_child(root)
 
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", 10)
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(column)
 
@@ -309,7 +310,7 @@ func _make_side_column(width: float) -> Control:
 	var column := VBoxContainer.new()
 	column.custom_minimum_size = Vector2(width, 0.0)
 	column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", 10)
 	return column
 
 
