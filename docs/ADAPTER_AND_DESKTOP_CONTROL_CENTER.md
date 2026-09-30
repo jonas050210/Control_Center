@@ -102,6 +102,18 @@ provides the Tk-free presentation (`hardware_profile_view`,
 cannot fill. `HardwareProfile.config_overrides()` yields the
 `{device, inference_device}` pair a training launch should adopt.
 
+The same measurement is reachable from a shell (useful for headless hosts
+and CI, and the escape hatch when no GUI is running):
+
+```bash
+sandboxai hardware-wizard --godot-executable godot   # measure and persist
+sandboxai hardware-wizard --show                     # print the saved profile
+sandboxai hardware-wizard --no-save --steps 2000     # a quick, non-persisting run
+```
+
+It exits non-zero when it had to fall back to CPU defaults, so a script
+can tell a real measurement from a fallback.
+
 ## Data ownership (unchanged)
 
 * live state: `status.json`, `events.jsonl`, `logs/training.jsonl`, and

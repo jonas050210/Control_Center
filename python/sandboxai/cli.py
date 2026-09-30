@@ -520,6 +520,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the plan without measuring anything (no Godot required)",
     )
 
+    hardware = sub.add_parser(
+        "hardware-wizard",
+        help="measure CPU/Hybrid/CUDA throughput and persist a hardware profile",
+    )
+    hardware.add_argument("--project-path", default="")
+    hardware.add_argument("--godot-executable", default=None)
+    hardware.add_argument(
+        "--steps",
+        type=int,
+        default=None,
+        help="steps to time per device candidate (default: the wizard's 5,000-step budget)",
+    )
+    hardware.add_argument(
+        "--no-save",
+        action="store_true",
+        help="print the measured profile without persisting it to .sandboxai/",
+    )
+    hardware.add_argument(
+        "--show",
+        action="store_true",
+        help="print the persisted profile without measuring anything",
+    )
+
     replay = sub.add_parser("replay", help="inspect or validate a recorded episode replay")
     replay.add_argument("--path", required=True)
     replay.add_argument(
@@ -965,6 +988,44 @@ def _cmd_benchmark_suites(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_hardware_wizard(args: argparse.Namespace) -> int:
+    from .hardware_profile import (
+        DEFAULT_MEASUREMENT_STEPS,
+        load_profile,
+        run_hardware_wizard,
+    )
+
+    if args.show:
+        profile = load_profile()
+        if profile is None:
+            print(json.dumps({"available": False, "note": "no hardware profile persisted yet"}))
+            return 1
+        print(json.dumps(profile.to_dict(), indent=2, default=str))
+        return 0
+
+    project = _resolve_project_path(args.project_path)
+    steps = args.steps if args.steps is not None else DEFAULT_MEASUREMENT_STEPS
+
+    def _on_progress(measurement: Any) -> None:
+        status = measurement.status
+        rate = (
+            f"{measurement.steps_per_second:.1f} steps/s"
+            if measurement.steps_per_second is not None
+            else status
+        )
+        print(f"  {measurement.label}: {rate}", file=sys.stderr)
+
+    profile = run_hardware_wizard(
+        project_path=project,
+        godot_executable=getattr(args, "godot_executable", None),
+        steps=steps,
+        on_progress=_on_progress,
+        save=not args.no_save,
+    )
+    print(json.dumps(profile.to_dict(), indent=2, default=str))
+    return 0 if not profile.fallback else 1
+
+
 def _cmd_replay(args: argparse.Namespace) -> int:
     from .replay import load_replay, validate_replay
 
@@ -1109,6 +1170,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "evaluate": _cmd_evaluate,
     "benchmark": _cmd_benchmark,
     "benchmark-suites": _cmd_benchmark_suites,
+    "hardware-wizard": _cmd_hardware_wizard,
     "replay": _cmd_replay,
     "curriculum": _cmd_curriculum,
     "ttk-report": _cmd_ttk_report,
