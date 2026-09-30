@@ -115,6 +115,47 @@ COLOR_MUTED = "#94a3b8"
 COLOR_BORDER = "#2b3a52"
 
 
+class ToolTip:
+    """Small, delayed keyboard/mouse help bubble for otherwise terse controls."""
+
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self._after_id: str | None = None
+        self._window: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<FocusIn>", self._schedule, add="+")
+        widget.bind("<FocusOut>", self._hide, add="+")
+
+    def _schedule(self, _event: object = None) -> None:
+        self._cancel()
+        self._after_id = self.widget.after(450, self._show)
+
+    def _cancel(self) -> None:
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self) -> None:
+        if self._window is not None or not self.text:
+            return
+        self._after_id = None
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{self.widget.winfo_rootx() + 14}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 8}")
+        tk.Label(tip, text=self.text, justify="left", background=COLOR_SURFACE_RAISED,
+                 foreground=COLOR_TEXT, relief="solid", borderwidth=1, padx=9, pady=6,
+                 font=(_FONT_FAMILY, 9), wraplength=320).pack()
+        self._window = tip
+
+    def _hide(self, _event: object = None) -> None:
+        self._cancel()
+        if self._window is not None:
+            self._window.destroy()
+            self._window = None
+
+
 class StatCard(ttk.Frame):
     """One labelled value in a Dashboard/System stat row."""
 
@@ -314,9 +355,16 @@ def _safe_line(line: Any) -> str:
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:
     """Builds a Treeview with click-to-sort columns (ascending/descending)."""
     tree = ttk.Treeview(parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended")
+    numeric_columns = {
+        "environments", "workers", "total_steps", "steps_per_second", "episodes_per_second",
+        "p50_ms", "p95_ms", "elapsed_seconds", "timesteps", "episodes", "win_rate",
+        "loss_rate", "mean_episode_reward",
+    }
     for key, title, width in columns:
-        tree.heading(key, text=title, command=lambda k=key: _sort_tree(tree, k, False))
-        tree.column(key, width=width, anchor="w", stretch=True)
+        anchor = "e" if key in numeric_columns else "w"
+        tree.heading(key, text=title, anchor=anchor,
+                     command=lambda k=key: _sort_tree(tree, k, False))
+        tree.column(key, width=width, anchor=anchor, stretch=True)
     return tree
 
 
@@ -562,6 +610,8 @@ class TrainingPage(Page):
         self.process_id: str | None = None
 
     def _build_fields(self, parent: ttk.Frame, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]) -> None:
+        parent.columnconfigure(1, weight=1)
+        parent.columnconfigure(2, weight=2)
         for row_index, spec in enumerate(specs):
             ttk.Label(parent, text=spec.label, width=26).grid(row=row_index, column=0, sticky="w", pady=2)
             var = tk.StringVar(value=defaults.get(spec.name, ""))
@@ -577,10 +627,10 @@ class TrainingPage(Page):
                            command=lambda v=var: self._browse_file(v)).pack(side="left", padx=(4, 0))
             else:
                 widget = ttk.Entry(parent, textvariable=var, width=30)
-            widget.grid(row=row_index, column=1, sticky="w", pady=2, padx=(6, 16))
+            widget.grid(row=row_index, column=1, sticky="ew", pady=4, padx=(8, 16))
             if spec.help:
                 ttk.Label(parent, text=spec.help, foreground=COLOR_MUTED, wraplength=360).grid(
-                    row=row_index, column=2, sticky="w"
+                    row=row_index, column=2, sticky="ew"
                 )
 
     def _browse_file(self, var: tk.StringVar) -> None:
@@ -1459,6 +1509,7 @@ class ControlCenter(tk.Tk):
             button = ttk.Button(nav, text=page_class.title, style="Nav.TButton",
                                  command=lambda name=page_class.title: self.show_page(name))
             button.pack(fill="x", pady=2)
+            ToolTip(button, f"Open {page_class.title}")
             self._nav_buttons[page_class.title] = button
             page = page_class(self.content, self)
             self.pages[page_class.title] = page

@@ -420,8 +420,15 @@ func set_page(page_id: String, persist: bool = true) -> void:
 	session.config.active_page = resolved
 	if persist:
 		session.config.save_preferences()
+	var selected_page: Control = _pages[resolved] as Control
 	for existing_id in _pages:
 		(_pages[existing_id] as Control).visible = str(existing_id) == resolved
+	# A short opacity transition makes context changes readable without
+	# slowing an operator down or animating live telemetry itself.
+	selected_page.modulate.a = 0.0
+	var transition := create_tween()
+	transition.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	transition.tween_property(selected_page, "modulate:a", 1.0, 0.14)
 	for nav_id in _nav_buttons:
 		(_nav_buttons[nav_id] as Button).button_pressed = str(nav_id) == resolved
 	if resolved == "history":

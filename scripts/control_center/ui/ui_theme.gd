@@ -107,7 +107,7 @@ static func make_button(text: String, tooltip: String = "") -> Button:
 	button.add_theme_stylebox_override("pressed", control_style(Color("#243b53"), COLOR_ACCENT))
 	button.add_theme_stylebox_override("focus", control_style(COLOR_SURFACE_HOVER, COLOR_ACCENT))
 	button.add_theme_stylebox_override("disabled", control_style(Color("#111827"), Color("#243044")))
-	button.focus_mode = Control.FOCUS_NONE
+	button.focus_mode = Control.FOCUS_ALL
 	return button
 
 
@@ -209,7 +209,7 @@ static func make_option_button(tooltip: String = "") -> OptionButton:
 	option.add_theme_stylebox_override("normal", control_style(COLOR_SURFACE))
 	option.add_theme_stylebox_override("hover", control_style(COLOR_SURFACE_HOVER, COLOR_ACCENT))
 	option.add_theme_stylebox_override("pressed", control_style(Color("#243b53"), COLOR_ACCENT))
-	option.focus_mode = Control.FOCUS_NONE
+	option.focus_mode = Control.FOCUS_ALL
 	return option
 
 
