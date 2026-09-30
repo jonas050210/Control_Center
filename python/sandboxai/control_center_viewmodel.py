@@ -629,6 +629,28 @@ def default_training_values() -> dict[str, str]:
     return values
 
 
+def training_values_from_profile(profile: dict[str, Any] | None) -> dict[str, str]:
+    """Training-form defaults with the hardware profile's device applied.
+
+    Starts from :func:`default_training_values` and overlays the persisted
+    profile's ``device``/``inference_device`` (the concrete pair its
+    ``config_overrides`` recommends) so the Training page opens with the
+    wizard's measured choice already selected. A fallback profile — one
+    where nothing could be measured — is ignored, because it carries no
+    measured preference worth imposing on the form.
+    """
+    values = default_training_values()
+    if not profile or profile.get("fallback"):
+        return values
+    device = profile.get("device")
+    inference = profile.get("inference_device")
+    if isinstance(device, str) and device:
+        values["device"] = device
+    if isinstance(inference, str) and inference:
+        values["inference_device"] = inference
+    return values
+
+
 def parse_training_form(values: dict[str, str]) -> TrainingConfig:
     """Turns raw Training-page form strings into a validated TrainingConfig.
 

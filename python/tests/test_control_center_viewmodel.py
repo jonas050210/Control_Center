@@ -371,3 +371,26 @@ def test_hardware_profile_view_surfaces_cuda_device_when_present():
     }
     view = vm.hardware_profile_view(profile)
     assert view["cuda_device"] == "RTX 4060 Ti"
+
+
+def test_training_values_from_profile_applies_measured_device():
+    profile = {
+        "selected_device": "hybrid",
+        "device": "cuda",
+        "inference_device": "cpu",
+        "fallback": False,
+    }
+    values = vm.training_values_from_profile(profile)
+    assert values["device"] == "cuda"
+    assert values["inference_device"] == "cpu"
+
+
+def test_training_values_from_profile_ignores_fallback():
+    profile = {"device": "cpu", "inference_device": "cpu", "fallback": True}
+    baseline = vm.default_training_values()
+    values = vm.training_values_from_profile(profile)
+    assert values["device"] == baseline["device"]
+
+
+def test_training_values_from_profile_without_profile_is_defaults():
+    assert vm.training_values_from_profile(None) == vm.default_training_values()
