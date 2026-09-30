@@ -234,13 +234,30 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
         self.assertTrue(BackgroundRunner.CLOSE_TIMEOUT_S >= 1.0, "the real timeout stays generous")
 
     def test_close_leaves_no_live_worker_threads(self) -> None:
+        """No worker may still be around once the pool has wound down.
+
+        Deliberately not asserted the instant ``close()`` returns. What
+        ``close()`` guarantees is that the submitted *work* has finished
+        or been abandoned; the pool's threads then exit on their own,
+        and that last step is not instantaneous. Asserting on the
+        instant made this pass locally and fail in CI, which is a flaky
+        test rather than a real guarantee.
+        """
         import threading
+
+        def live_workers() -> list[str]:
+            return [t.name for t in threading.enumerate() if "control-center-bg" in t.name]
 
         runner = self._runner()
         for _ in range(3):
             runner.submit(lambda: time.sleep(0.05), lambda _result, _error: None)
         runner.close()
-        alive = [t.name for t in threading.enumerate() if "control-center-bg" in t.name]
+
+        deadline = time.monotonic() + 10.0
+        while live_workers() and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        alive = live_workers()
         self.assertEqual(alive, [], f"worker threads outlived close(): {alive}")
 
     def test_close_drops_undelivered_results(self) -> None:
