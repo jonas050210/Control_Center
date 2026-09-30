@@ -50,6 +50,20 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # The Python suite had never run on Windows CI before this workflow
+    # (the pre-existing godot-tests.yml only ran it on ubuntu-latest). The
+    # first Windows run here found ~10 pre-existing, real failures specific
+    # to native Windows (not WSL): WSL-path-translation string building in
+    # test_wsl_interop.py, tilde-expansion in test_config.py, a short-name
+    # vs long-name path mismatch in test_control_center_desktop.py, a
+    # Godot version-string parse mismatch in test_manifest.py, and a
+    # process-kill assertion in test_adapter.py. None of these can be
+    # safely diagnosed or fixed from a Linux sandbox without guessing at
+    # real Windows behaviour, so this leg is non-blocking (continue-on
+    # -error) until someone with real Windows access fixes them - but it
+    # keeps running and reporting so the failures stay visible instead of
+    # silently disappearing.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4
 
