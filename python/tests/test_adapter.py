@@ -70,7 +70,20 @@ def test_process_manager_force_stop_kills_non_training_process(tmp_path):
     record = manager.start("benchmark", [sys.executable, "-c", "import time; time.sleep(30)"], tmp_path, tmp_path)
     manager.force_stop(record.id)
     record.process.wait(timeout=3)
-    assert manager.snapshot(record.id)["state"] == "failed"
+    # `record.process.wait()` above only confirms the OS process exited; the
+    # manager's own state field is set by its background reaper thread
+    # (ProcessManager._wait), which is scheduled independently and can lag
+    # behind by more than a few milliseconds under load (observed on
+    # Windows CI runners). Poll briefly for that eventual update instead of
+    # racing it - this changes nothing about what is asserted, only how
+    # long the test is willing to wait for an already-true fact to become
+    # visible.
+    deadline = time.monotonic() + 3.0
+    state = manager.snapshot(record.id)["state"]
+    while state == "running" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        state = manager.snapshot(record.id)["state"]
+    assert state == "failed"
 
 
 def test_finished_process_retention_is_bounded(tmp_path):

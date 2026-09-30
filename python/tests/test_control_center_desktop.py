@@ -111,7 +111,13 @@ class ControlCenterConstructionTests(unittest.TestCase):
     def test_settings_page_shows_the_real_project_and_output_roots(self):
         self.app.show_page("Settings")
         page = self.app.pages["Settings"]
-        assert str(self.project_root) in page.project_root_label.cget("text")
+        # SandboxAIAdapter.__init__ stores project_root.resolve() (a
+        # deliberate canonicalization). self.project_root here is the raw,
+        # unresolved tempdir path; on Windows temp paths can come back in
+        # 8.3 short form (RUNNER~1) while .resolve() reports the real long
+        # name (runneradmin) for the identical directory, so compare the
+        # resolved form the label actually shows.
+        assert str(self.project_root.resolve()) in page.project_root_label.cget("text")
 
     def test_close_shuts_down_background_worker(self):
         self.app._on_close()

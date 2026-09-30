@@ -52,17 +52,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The Python suite had never run on Windows CI before this workflow
     # (the pre-existing godot-tests.yml only ran it on ubuntu-latest). The
-    # first Windows run here found ~10 pre-existing, real failures specific
-    # to native Windows (not WSL): WSL-path-translation string building in
-    # test_wsl_interop.py, tilde-expansion in test_config.py, a short-name
-    # vs long-name path mismatch in test_control_center_desktop.py, a
-    # Godot version-string parse mismatch in test_manifest.py, and a
-    # process-kill assertion in test_adapter.py. None of these can be
-    # safely diagnosed or fixed from a Linux sandbox without guessing at
-    # real Windows behaviour, so this leg is non-blocking (continue-on
-    # -error) until someone with real Windows access fixes them - but it
-    # keeps running and reporting so the failures stay visible instead of
-    # silently disappearing.
+    # first Windows run here found 10 pre-existing test failures, none of
+    # them a real product bug: is_wsl()'s POSIX-only tests were never
+    # stubbing os.name; a tilde-expansion test only set HOME, which native
+    # Windows expanduser ignores (it needs USERPROFILE); a settings-page
+    # test compared an unresolved tempdir path against the adapter's
+    # .resolve()d one (8.3 short name vs long name); a manifest test's
+    # fake Godot executable was a POSIX '#!/bin/sh' script; and a
+    # force-stop test raced ProcessManager's background reaper thread
+    # instead of polling for it. All five are fixed (see those test
+    # files' comments). The one remaining, not-yet-fixed case is
+    # test_wsl_interop.py's *WSL path-translation string building*
+    # (GodotTransportWslTests/CliWslLaunchTests): their fixtures build
+    # self.project/self.executable from a real host tempdir, which is
+    # already Windows-form on a native Windows runner, so mocking
+    # `is_wsl()=True` with a POSIX-oriented fake wslpath produces a
+    # doubled drive letter. Fixing that needs the fixtures rebuilt around
+    # a host-OS-independent fake POSIX path, which risks depending on
+    # exact pathlib/filesystem behaviour I cannot verify without a real
+    # Windows or WSL machine - left as continue-on-error until someone
+    # can verify a fix there, so it stays visible without blocking merges.
     continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v4

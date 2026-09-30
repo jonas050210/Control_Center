@@ -1,5 +1,6 @@
 """Run-manifest provenance: code, host, simulator and selection rule."""
 import json
+import os
 import stat
 import sys
 import unittest
@@ -59,6 +60,7 @@ class ProvenanceSectionTests(unittest.TestCase):
         self.assertEqual(snapshot["configured"], "definitely-not-installed-godot")
         self.assertIsNone(snapshot["version"])
 
+    @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
     def test_godot_snapshot_reports_the_probed_version_when_available(self):
         # Regression test: godot_snapshot used to import a class named
         # GodotRuntimeValidator that does not exist (the real class is

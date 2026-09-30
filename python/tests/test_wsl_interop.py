@@ -57,24 +57,33 @@ def _fake_wslpath(flag: str, path: str) -> str:
 
 
 class WslDetectionTests(unittest.TestCase):
+    """is_wsl() starts with `if os.name != "posix": return False` - correct
+    for production (WSL only exists under a POSIX Python), but it means
+    these marker/proc-version checks only ever run on a real POSIX host
+    unless os.name is also stubbed. Patching it here is what makes the
+    suite "hermetic" the way the module docstring promises: identical
+    results on Linux, native Windows and real WSL."""
+
     def test_is_wsl_via_environment_markers(self):
-        with mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}, clear=True):
-            self.assertTrue(is_wsl())
-        with mock.patch.dict(os.environ, {"WSL_INTEROP": "/run/WSL/8_interop"}, clear=True):
-            self.assertTrue(is_wsl())
+        with mock.patch("os.name", "posix"):
+            with mock.patch.dict(os.environ, {"WSL_DISTRO_NAME": "Ubuntu"}, clear=True):
+                self.assertTrue(is_wsl())
+            with mock.patch.dict(os.environ, {"WSL_INTEROP": "/run/WSL/8_interop"}, clear=True):
+                self.assertTrue(is_wsl())
 
     def test_is_wsl_via_proc_version(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch(
-                "sandboxai.wsl._proc_version_text",
-                return_value="Linux version 5.15.90.1-microsoft-standard-WSL2 (gcc x86_64)",
-            ):
-                self.assertTrue(is_wsl())
-            with mock.patch(
-                "sandboxai.wsl._proc_version_text",
-                return_value="Linux version 6.1.0-13-amd64 (debian-kernel@lists.debian.org)",
-            ):
-                self.assertFalse(is_wsl())
+        with mock.patch("os.name", "posix"):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch(
+                    "sandboxai.wsl._proc_version_text",
+                    return_value="Linux version 5.15.90.1-microsoft-standard-WSL2 (gcc x86_64)",
+                ):
+                    self.assertTrue(is_wsl())
+                with mock.patch(
+                    "sandboxai.wsl._proc_version_text",
+                    return_value="Linux version 6.1.0-13-amd64 (debian-kernel@lists.debian.org)",
+                ):
+                    self.assertFalse(is_wsl())
 
     def test_is_wsl_without_proc_version(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
