@@ -399,7 +399,8 @@ Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` co
 - **CURRENT:** episode seeds feed local Godot RNGs; episode-plan generation is a pure deterministic function with disjoint streams.
 - **CURRENT:** simulation uses explicit `1/60` dt and analytic state/collision; deterministic recoil and bloom consume no RNG.
 - **CURRENT:** replay setup stores seed, map/scenario/lighting, enemy count, curriculum, policy/checkpoint identity, actions, and optional observations.
-- **CURRENT:** CI executes Godot tests on Windows and Linux, which is important cross-platform evidence.
+- **CURRENT:** CI executes Godot tests on Windows and Linux (`.github/workflows/godot-tests.yml`), which is important cross-platform evidence.
+- **CURRENT:** CI also runs the Python suite (`.github/workflows/python-tests.yml`): a `ruff`/pyflakes-equivalent lint pass, a numpy-only "core" job that guards the deliberately tiny hard dependency set, and a "full" job with the training extras installed on both Windows and Linux.
 - **CONSTRAINT:** Godot's general physics engine is officially nondeterministic; this project avoids it for canonical state. Floating-point/compiler/platform differences can still exist.
 - **CONSTRAINT:** PyTorch does not promise complete reproducibility across releases/platforms/devices. Record seeds, commit, Godot build, Python package versions, device, CPU thread settings, and hardware. Compare deterministic replay hashes/metrics within a declared boundary.
 - **CONSTRAINT:** any future parallel reduction must preserve per-environment RNG ownership and deterministic result ordering. Never share one mutable RNG across workers.
@@ -549,7 +550,7 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 | Self-play/league | `scripts/self_play/`, `python/sandboxai/{self_play,league,policies}.py` |
 | Replay/metrics/profile | `python/sandboxai/{replay,metrics,telemetry,training_profile}.py` |
 | Public commands | `python/sandboxai/cli.py` |
-| Real behavior tests | `python/tests/`, `tests/`, `.github/workflows/godot-tests.yml` |
+| Real behavior tests | `python/tests/`, `tests/`, `.github/workflows/{godot-tests,python-tests}.yml` |
 
 ## 17. Research evidence translated into engineering decisions
 

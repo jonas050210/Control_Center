@@ -11,7 +11,6 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.runtime_validation import (
     RuntimeValidationReport,
     RuntimeValidator,

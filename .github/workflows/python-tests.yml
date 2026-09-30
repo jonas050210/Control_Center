@@ -1,0 +1,73 @@
+name: Python tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff (pyflakes-equivalent checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tooling
+        run: pip install -e ".[lint]"
+
+      - name: Run ruff
+        run: ruff check .
+
+  core-tests:
+    name: pytest (core, numpy-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the package with only the hard/test dependencies
+        run: pip install -e ".[test]"
+
+      - name: Run the Python suite
+        run: PYTHONPATH=python python -m pytest python/tests -q
+
+  full-tests:
+    name: pytest (full training extras, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the package with training + test extras
+        run: pip install -e ".[test,training]"
+
+      - name: Run the Python suite (bash)
+        if: runner.os != 'Windows'
+        run: PYTHONPATH=python python -m pytest python/tests -q
+
+      - name: Run the Python suite (PowerShell)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "python"
+          python -m pytest python/tests -q

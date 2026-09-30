@@ -28,6 +28,11 @@ test = [
 gdscript = [
   "gdtoolkit>=4.3,<5",
 ]
+# Static analysis for the Python package/tests (CI "lint" job). Kept separate
+# from `test` so running the suite locally never requires it.
+lint = [
+  "ruff>=0.6",
+]
 
 [project.scripts]
 sandboxai = "sandboxai.cli:main"
@@ -37,3 +42,13 @@ where = ["python"]
 
 [tool.setuptools.package-dir]
 "" = "python"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# Only pyflakes-equivalent checks (undefined names, unused imports/variables,
+# etc.). Style/formatting rules are deliberately out of scope for now so this
+# does not turn into an unrelated repo-wide reformat.
+select = ["F"]

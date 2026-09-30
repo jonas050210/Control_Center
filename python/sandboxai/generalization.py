@@ -32,7 +32,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from .conditions import LIGHTING_IDS, MAP_IDS, Condition
+from .conditions import MAP_IDS, Condition
 
 ## Map split buckets, in report order.
 MAP_BUCKETS: tuple[str, ...] = ("known", "unseen_seeds", "unseen_variants", "unseen_maps")

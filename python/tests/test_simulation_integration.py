@@ -1,4 +1,3 @@
-import json
 import math
 import tempfile
 import unittest
@@ -8,7 +7,6 @@ try:  # Optional training extra; the suite must skip, never fail, without it.
     import torch
 except ImportError:  # pragma: no cover - environment dependent
     torch = None
-import numpy as np
 
 from optional_deps import HAS_TORCH, TORCH_REASON
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -20,13 +18,11 @@ from sandboxai.dataset import (
     discrete_to_multidiscrete,
 )
 from sandboxai.bc import (
-    BehaviorCloningPolicy,
-    create_bc_policy,
     load_bc_checkpoint,
     train_behavior_cloning,
     load_bc_into_sb3_policy,
 )
-from sandboxai.config import BCConfig, TrainingConfig
+from sandboxai.config import BCConfig
 from sandboxai.self_play import PolicySlot, SelfPlayCoordinator
 
 

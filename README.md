@@ -207,6 +207,18 @@ python -m pytest -q
 PYTHONPATH=python python -m unittest discover -s python/tests -v
 ```
 
+Static lint (pyflakes-equivalent checks only, via `ruff`, install with
+`pip install -e ".[lint]"`):
+
+```bash
+ruff check .
+```
+
+Both GitHub Actions workflows run on every push/PR:
+`.github/workflows/godot-tests.yml` (Godot 4.7.2 headless suite on Windows
+and Linux) and `.github/workflows/python-tests.yml` (`ruff`, a numpy-only
+"core" job, and a "full" job with the training extras on Windows and Linux).
+
 The Python suite also statically analyses and lints the GDScript half of the
 repository (`python/tests/test_gdscript_static.py`). It parses every `.gd`
 file with the real grammar and fails on the classes of defect a

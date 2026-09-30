@@ -24,7 +24,7 @@ from pathlib import Path
 
 from optional_deps import HAS_SB3, HAS_TORCH, SB3_REASON, TORCH_REASON
 
-from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

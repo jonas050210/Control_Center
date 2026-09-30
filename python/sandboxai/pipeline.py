@@ -45,7 +45,6 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
-import time
 from typing import Any
 
 from .conditions import Condition
@@ -55,7 +54,7 @@ from .curriculum_stages import (
     EpisodeOutcome,
     applied_condition,
 )
-from .manifest import build_manifest, contract_fingerprint, write_manifest
+from .manifest import build_manifest, contract_fingerprint, write_manifest  # noqa: F401  (contract_fingerprint/write_manifest are re-exported: `from .pipeline import write_manifest` is the historical import path used by ppo.py and the tests)
 from .metrics import EpisodeMetrics, MetricsAggregator, StepSample
 from .randomization import DistributionRunTracker, EpisodePlan
 from .replay import DetailLevel, ReplayHeader, ReplayRecorder
@@ -478,7 +477,7 @@ class ReplayController:
         won = bool(metrics.get("win", False))
         truncated = bool(metrics.get("truncated", False))
         done_reason = str(metrics.get("done_reason", reason))
-        episode = recorder.finish(
+        recorder.finish(
             {
                 "win": won,
                 "done_reason": done_reason,
