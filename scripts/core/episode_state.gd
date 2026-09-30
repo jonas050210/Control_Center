@@ -7,7 +7,6 @@ extends RefCounted
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const RewardSystem = preload("res://scripts/reward/reward_system.gd")
 
-
 var step_count: int = 0
 var episode_count: int = 0
 var cumulative_reward: float = 0.0

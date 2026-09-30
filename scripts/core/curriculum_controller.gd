@@ -60,9 +60,7 @@ static func create(
 	return controller
 
 
-func configure(
-	p_window: int, p_promote: float, p_demote: float, p_cooldown: int = -1
-) -> void:
+func configure(p_window: int, p_promote: float, p_demote: float, p_cooldown: int = -1) -> void:
 	window = maxi(1, p_window)
 	promote_threshold = clampf(p_promote, 0.0, 1.0)
 	demote_threshold = clampf(p_demote, 0.0, promote_threshold)

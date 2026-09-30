@@ -12,7 +12,6 @@ const Observation = preload("res://scripts/core/observation.gd")
 const ObservationInspector = preload("res://scripts/control_center/observation_inspector.gd")
 const RLAdapter = preload("res://scripts/rl/rl_adapter.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -79,7 +78,7 @@ func test_grouped_rows_partition_every_index_once() -> SandboxTest:
 	for bucket_value in grouped:
 		var bucket: Dictionary = bucket_value
 		t.assert_false(str(bucket["group"]).is_empty())
-		for row_value in (bucket["rows"] as Array):
+		for row_value in bucket["rows"] as Array:
 			var row: Dictionary = row_value
 			t.assert_false(covered.has(int(row["index"])), "index %d appears twice" % row["index"])
 			covered[int(row["index"])] = true
@@ -102,9 +101,7 @@ func test_action_rows_follow_the_adapter_action_space() -> SandboxTest:
 		t.assert_eq(int(row["multidiscrete"]), int(multidiscrete[index]))
 		t.assert_eq(int(row["cardinality"]), int(Action.MULTI_DISCRETE_NVECS[index]))
 	t.assert_eq(
-		ObservationInspector.build_action_rows(null).size(),
-		0,
-		"no action means no invented rows"
+		ObservationInspector.build_action_rows(null).size(), 0, "no action means no invented rows"
 	)
 	return t
 

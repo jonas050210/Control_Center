@@ -42,9 +42,7 @@ func test_visible_beats_remembered_and_near_beats_far() -> SandboxTest:
 	)
 	t.assert_eq(int((ranked[0] as Dictionary)["id"]), 0, "a visible contact outranks a memory")
 
-	var by_distance: Array = TargetSelector.rank(
-		[_belief(1, 9.0, true), _belief(0, 4.0, true)], {}
-	)
+	var by_distance: Array = TargetSelector.rank([_belief(1, 9.0, true), _belief(0, 4.0, true)], {})
 	t.assert_eq(int((by_distance[0] as Dictionary)["id"]), 0, "the nearer visible contact wins")
 	return t
 
@@ -74,9 +72,7 @@ func test_unreachable_contacts_are_deprioritised_but_not_hidden() -> SandboxTest
 	var ranked: Array = TargetSelector.rank([near_blocked, far_open], {"unreachable": [0]})
 	t.assert_eq(int((ranked[0] as Dictionary)["id"]), 1)
 	t.assert_eq(ranked.size(), 2, "an unreachable contact is still reported, just ranked lower")
-	t.assert_true(
-		TargetSelector.reason(near_blocked, {"unreachable": [0]}).contains("unreachable")
-	)
+	t.assert_true(TargetSelector.reason(near_blocked, {"unreachable": [0]}).contains("unreachable"))
 	return t
 
 

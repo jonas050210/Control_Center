@@ -25,7 +25,6 @@ const AgentState = preload("res://scripts/agent/agent_state.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 ## Contract v3 = 65 (v2, unchanged) + 19 fields for conditions, contact
 ## overflow, target selection, richer hearing and map knowledge. Indices
 ## [0-32] keep their exact v1 meaning and [0-64] their exact v2 meaning;
@@ -120,12 +119,7 @@ const FIELD_SPEC: Array = [
 	{"index": 44, "width": 1, "name": "primary_enemy_source_sound", "group": "memory"},
 	{"index": 45, "width": 1, "name": "secondary_enemy_visible", "group": "secondary_enemy"},
 	{"index": 46, "width": 1, "name": "secondary_enemy_info_age_norm", "group": "memory"},
-	{
-		"index": 47,
-		"width": 1,
-		"name": "secondary_enemy_elevation_norm",
-		"group": "secondary_enemy"
-	},
+	{"index": 47, "width": 1, "name": "secondary_enemy_elevation_norm", "group": "secondary_enemy"},
 	{"index": 48, "width": 1, "name": "tertiary_enemy_visible", "group": "tertiary_enemy"},
 	{"index": 49, "width": 1, "name": "tertiary_enemy_info_age_norm", "group": "memory"},
 	{"index": 50, "width": 1, "name": "tertiary_enemy_elevation_norm", "group": "tertiary_enemy"},
@@ -359,7 +353,9 @@ static func build(
 		float(ranked_alive.size()) / float(maxi(1, enemies.size())) if enemies.size() > 0 else 0.0
 	)
 
-	var primary: EnemyState = ranked_alive[0] if ranked_alive.size() > 0 else _fallback_enemy(enemies)
+	var primary: EnemyState = (
+		ranked_alive[0] if ranked_alive.size() > 0 else _fallback_enemy(enemies)
+	)
 	if primary != null:
 		var to_enemy: Vector3 = primary.position - agent.position
 		var distance: float = to_enemy.length()
@@ -486,9 +482,7 @@ static func _apply_context(
 	obs.remembered_enemy_count_norm = _count_norm(remembered_count)
 
 
-static func _apply_world_context(
-	obs: Observation, agent: AgentState, context: Dictionary
-) -> void:
+static func _apply_world_context(obs: Observation, agent: AgentState, context: Dictionary) -> void:
 	var world = context.get("world")
 	if world == null:
 		obs.nearest_obstacle_distance_norm = 1.0
@@ -500,9 +494,7 @@ static func _apply_world_context(
 	obs.nearest_obstacle_distance_norm = clampf(
 		float(info["distance"]) / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), 0.0, 1.0
 	)
-	obs.nearest_obstacle_bearing_norm = clampf(
-		float(info["bearing_deg"]) / 180.0, -1.0, 1.0
-	)
+	obs.nearest_obstacle_bearing_norm = clampf(float(info["bearing_deg"]) / 180.0, -1.0, 1.0)
 
 
 static func _apply_sound_context(obs: Observation, context: Dictionary) -> void:
@@ -553,14 +545,18 @@ static func _apply_condition_context(obs: Observation, context: Dictionary) -> v
 	obs.overflow_contact_count_norm = _count_norm(int(contacts.get("overflow_count", 0)))
 	obs.overflow_visible_count_norm = _count_norm(int(contacts.get("overflow_visible", 0)))
 	obs.overflow_mean_distance_norm = clampf(
-		float(contacts.get("overflow_mean_distance", 0.0))
-		/ maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001),
+		(
+			float(contacts.get("overflow_mean_distance", 0.0))
+			/ maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001)
+		),
 		0.0,
 		1.0
 	)
 	obs.overflow_min_distance_norm = clampf(
-		float(contacts.get("overflow_min_distance", 0.0))
-		/ maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001),
+		(
+			float(contacts.get("overflow_min_distance", 0.0))
+			/ maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001)
+		),
 		0.0,
 		1.0
 	)
@@ -729,7 +725,11 @@ static func rank_alive_enemies(enemies: Array, agent_position: Vector3) -> Array
 		var enemy: EnemyState = enemies[i]
 		if enemy.alive:
 			alive_list.append(
-				{"enemy": enemy, "index": i, "dist_sq": enemy.position.distance_squared_to(agent_position)}
+				{
+					"enemy": enemy,
+					"index": i,
+					"dist_sq": enemy.position.distance_squared_to(agent_position)
+				}
 			)
 	alive_list.sort_custom(
 		func(a, b):

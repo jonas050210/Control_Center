@@ -43,9 +43,7 @@ func _init(environment_count: int = 1, base_seed: int = SandboxConfig.DEFAULT_RA
 			# silently serializes as [] over the bridge. Fail loudly instead
 			# (the compile error itself is on stderr) and keep going with the
 			# environments that did construct.
-			push_error(
-				"SelfPlayEnvironmentCore.new() returned null: the script failed to compile"
-			)
+			push_error("SelfPlayEnvironmentCore.new() returned null: the script failed to compile")
 			continue
 		env.reset(base_seed + index)
 		environments.append(env)

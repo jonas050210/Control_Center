@@ -82,10 +82,13 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 		seen.append(agent_id)
 		var card: ControlCenterAgentCard = _ensure_card(agent_id)
 		card.update_from(snapshot)
-		var terminal: bool = state_id in [
-			TrainingRunController.State.FINISHED,
-			TrainingRunController.State.ERROR,
-		]
+		var terminal: bool = (
+			state_id
+			in [
+				TrainingRunController.State.FINISHED,
+				TrainingRunController.State.ERROR,
+			]
+		)
 		var target: GridContainer = _recent_grid if terminal else _active_grid
 		if card.get_parent() != target:
 			if card.get_parent() != null:

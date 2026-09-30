@@ -270,7 +270,10 @@ func test_set_forward_horizontal_round_trips() -> SandboxTest:
 	var t := SandboxTest.new("set_forward_horizontal_round_trips")
 	var agent := AgentState.new()
 	for direction in [
-		Vector3(0.0, 0.0, 1.0), Vector3(0.0, 0.0, -1.0), Vector3(1.0, 0.0, 0.0), Vector3(1.0, 0.0, 1.0)
+		Vector3(0.0, 0.0, 1.0),
+		Vector3(0.0, 0.0, -1.0),
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, 0.0, 1.0)
 	]:
 		agent.set_forward_horizontal(direction)
 		t.assert_vec_almost_eq((direction as Vector3).normalized(), agent.get_forward_horizontal())
@@ -321,9 +324,7 @@ func test_try_attack_accepts_empty_events_and_stub_rng() -> SandboxTest:
 	var events: Dictionary = {}
 	EnemyBrain._try_attack(enemy, context, events)
 	t.assert_true(bool(events.get("hit", false)))
-	t.assert_almost_eq(
-		float(events.get("damage", 0.0)), SandboxConfig.ENEMY_ATTACK_DAMAGE, 0.0001
-	)
+	t.assert_almost_eq(float(events.get("damage", 0.0)), SandboxConfig.ENEMY_ATTACK_DAMAGE, 0.0001)
 	return t
 
 

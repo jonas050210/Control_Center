@@ -413,9 +413,11 @@ func _apply_agent_weapon_profile() -> void:
 		agent.weapon.configure_profile(WeaponState.PROFILE_RIFLE)
 	# Curriculum hit-radius scaling is still honored so early aiming stages
 	# retain their larger target tolerance regardless of the selected weapon.
-	var base_radius: float = float(WeaponState.profile_definition(agent.weapon.profile_id).get(
-		"hit_radius", SandboxConfig.WEAPON_HIT_RADIUS
-	))
+	var base_radius: float = float(
+		WeaponState.profile_definition(agent.weapon.profile_id).get(
+			"hit_radius", SandboxConfig.WEAPON_HIT_RADIUS
+		)
+	)
 	agent.weapon.hit_radius = base_radius * curriculum.target_radius_scale()
 	# Recoil/bloom/fire-mode/magazine are a curriculum capability, not a
 	# property of the profile: the same rifle behaves like the original
@@ -427,17 +429,11 @@ func _apply_agent_weapon_profile() -> void:
 
 
 func _world_enabled() -> bool:
-	return (
-		curriculum.obstacles_enabled()
-		or not scenario_id.is_empty()
-		or not map_id.is_empty()
-	)
+	return curriculum.obstacles_enabled() or not scenario_id.is_empty() or not map_id.is_empty()
 
 
 func step(
-	action: Action,
-	dt: float = SandboxConfig.SIMULATION_DT,
-	compact_info: bool = false
+	action: Action, dt: float = SandboxConfig.SIMULATION_DT, compact_info: bool = false
 ) -> Dictionary:
 	if not _has_reset:
 		reset(SandboxConfig.DEFAULT_RANDOM_SEED)
@@ -551,9 +547,7 @@ func step(
 		done = true
 		reason = "map_explored"
 	elif (
-		SandboxConfig.END_EPISODE_ON_ALL_ENEMIES_DEAD
-		and enemies.size() > 0
-		and _all_enemies_dead()
+		SandboxConfig.END_EPISODE_ON_ALL_ENEMIES_DEAD and enemies.size() > 0 and _all_enemies_dead()
 	):
 		done = true
 		reason = "all_enemies_eliminated"
@@ -863,10 +857,7 @@ func _update_enemies(dt: float, sound_on: bool) -> float:
 			# NavigationAgent increments stuck_time even with a null graph. On
 			# the following tick this supplies the shared graph and planning can
 			# begin. Once baked, later enemies reuse the same graph.
-			if (
-				navigation == null
-				and enemy.navigation.stuck_time >= SandboxConfig.NAV_STUCK_TIME
-			):
+			if navigation == null and enemy.navigation.stuck_time >= SandboxConfig.NAV_STUCK_TIME:
 				context["navigation"] = _ensure_navigation()
 			var brain_events: Dictionary = EnemyBrain.update(enemy, context)
 			damage = float(brain_events["damage"])
@@ -908,13 +899,16 @@ func _select_target(beliefs: Array, dt: float) -> void:
 			var belief: Dictionary = belief_value
 			if not navigation.is_reachable(agent.position, belief["position"]):
 				unreachable.append(int(belief["id"]))
-	_selection = TargetSelector.select(
-		beliefs,
-		{
-			"damage_source": last_damage_source,
-			"previous_target_id": _target_id,
-			"unreachable": unreachable,
-		}
+	_selection = (
+		TargetSelector
+		. select(
+			beliefs,
+			{
+				"damage_source": last_damage_source,
+				"previous_target_id": _target_id,
+				"unreachable": unreachable,
+			}
+		)
 	)
 	_beliefs = _selection["ranked"]
 	_target_reason = str(_selection["reason"])
@@ -964,29 +958,30 @@ func _emit_motion_sounds(motion: Dictionary, position: Vector3, source_id: int) 
 func _build_observation() -> Observation:
 	if not curriculum.perception_enabled():
 		return Observation.build(agent, enemies, arena_half_extent)
-	return Observation.build(
-		agent,
-		enemies,
-		arena_half_extent,
-		{
-			"beliefs": _beliefs,
-			"sounds": perception.heard,
-			"sound_summary": perception.sound_summary,
-			"world": world,
-			"forward_clearance": perception.forward_clearance,
-			"in_cover": perception.in_cover,
-			"corpse_count": get_corpse_count(),
-			"enemy_slots": enemies.size(),
-			"local_illumination": perception.local_illumination,
-			"contact_summary": AgentPerception.summarize_contacts(
-				_beliefs, Observation.MAX_TRACKED_ENEMIES
-			),
-			"target_priority_norm": float(_selection.get("priority_norm", 0.0)),
-			"target_switch_recent": (
-				_time_since_target_switch < SandboxConfig.TARGET_SWITCH_RECENT_WINDOW
-			),
-			"exploration": _exploration_observation(),
-		}
+	return (
+		Observation
+		. build(
+			agent,
+			enemies,
+			arena_half_extent,
+			{
+				"beliefs": _beliefs,
+				"sounds": perception.heard,
+				"sound_summary": perception.sound_summary,
+				"world": world,
+				"forward_clearance": perception.forward_clearance,
+				"in_cover": perception.in_cover,
+				"corpse_count": get_corpse_count(),
+				"enemy_slots": enemies.size(),
+				"local_illumination": perception.local_illumination,
+				"contact_summary":
+				AgentPerception.summarize_contacts(_beliefs, Observation.MAX_TRACKED_ENEMIES),
+				"target_priority_norm": float(_selection.get("priority_norm", 0.0)),
+				"target_switch_recent":
+				_time_since_target_switch < SandboxConfig.TARGET_SWITCH_RECENT_WINDOW,
+				"exploration": _exploration_observation(),
+			}
+		)
 	)
 
 
@@ -1009,13 +1004,15 @@ func _exploration_observation() -> Dictionary:
 		"area_known": memory.is_known(agent.position),
 		"time_since_visit": memory.time_since_visit(agent.position),
 		"cover_distance": float(cover.get("distance", -1.0)) if not cover.is_empty() else -1.0,
-		"cover_bearing_deg": (
+		"cover_bearing_deg":
+		(
 			PerceptionSystem.bearing_deg(forward, agent.position, cover["position"])
 			if not cover.is_empty()
 			else 0.0
 		),
 		"danger_distance": float(danger.get("distance", -1.0)) if not danger.is_empty() else -1.0,
-		"danger_bearing_deg": (
+		"danger_bearing_deg":
+		(
 			PerceptionSystem.bearing_deg(forward, agent.position, danger["position"])
 			if not danger.is_empty()
 			else 0.0

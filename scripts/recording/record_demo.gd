@@ -9,7 +9,6 @@ const DemonstrationRecorder = preload("res://scripts/recording/demonstration_rec
 const HumanController = preload("res://scripts/input/human_controller.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 var main_scene: Node
 var recorder: DemonstrationRecorder
 var output_path: String = "training/datasets/human_demo.jsonl"

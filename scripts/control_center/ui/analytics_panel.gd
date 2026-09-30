@@ -8,9 +8,7 @@ extends PanelContainer
 ## Bounded per-agent reward series (samples, not wall time).
 const MAX_TREND_SAMPLES: int = 240
 
-const ControlCenterMetricSparkline = preload(
-	"res://scripts/control_center/ui/metric_sparkline.gd"
-)
+const ControlCenterMetricSparkline = preload("res://scripts/control_center/ui/metric_sparkline.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 const TrainingRunController = preload("res://scripts/control_center/training_run_controller.gd")
 
@@ -40,8 +38,10 @@ func setup(p_session) -> void:
 	)
 	root.add_child(
 		ControlCenterTheme.make_label(
-			"Backend-published metrics per agent. Reward trend uses only "
-			+ "real progress samples from the current run.",
+			(
+				"Backend-published metrics per agent. Reward trend uses only "
+				+ "real progress samples from the current run."
+			),
 			ControlCenterTheme.FONT_SIZE_SMALL,
 			ControlCenterTheme.COLOR_MUTED
 		)
@@ -73,11 +73,14 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 		count += 1
 		_record_trend(agent_id, snapshot)
 		var row: Dictionary = _ensure_row(agent_id)
-		(row["title"] as Label).text = "%s · %s · %s" % [
-			str(snapshot.get("label", "Agent %d" % agent_id)),
-			str(snapshot.get("algorithm", "")),
-			str(snapshot.get("state", "Idle")),
-		]
+		(row["title"] as Label).text = (
+			"%s · %s · %s"
+			% [
+				str(snapshot.get("label", "Agent %d" % agent_id)),
+				str(snapshot.get("algorithm", "")),
+				str(snapshot.get("state", "Idle")),
+			]
+		)
 		(row["values"] as Label).text = _values_text(snapshot)
 		var trend: Dictionary = _trends.get(agent_id, {})
 		var samples: Array = trend.get("samples", [])
@@ -97,9 +100,13 @@ static func _values_text(snapshot: Dictionary) -> String:
 		"episodes %s" % ControlCenterTheme.optional_metric(snapshot, "episodes", 0),
 		"kills %s" % ControlCenterTheme.optional_metric(snapshot, "mean_kills", 2),
 		"deaths %s" % ControlCenterTheme.optional_metric(snapshot, "mean_deaths", 2),
-		"accuracy %s" % ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%"),
-		"throughput %s" % ControlCenterTheme.optional_metric(
-			snapshot, "steps_per_second", 1, 1.0, " sps"
+		(
+			"accuracy %s"
+			% ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%")
+		),
+		(
+			"throughput %s"
+			% ControlCenterTheme.optional_metric(snapshot, "steps_per_second", 1, 1.0, " sps")
 		),
 	]
 	return " · ".join(parts)

@@ -77,9 +77,7 @@ func test_graph_generation_is_deterministic() -> SandboxTest:
 		var world_b: ArenaWorld = WorldGenerator.build(layout_id, 991)
 		var graph_a: NavigationGraph = NavigationGraph.build(world_a, RADIUS, HEIGHT)
 		var graph_b: NavigationGraph = NavigationGraph.build(world_b, RADIUS, HEIGHT)
-		t.assert_eq(
-			graph_a.node_count(), graph_b.node_count(), "%s node count differs" % layout_id
-		)
+		t.assert_eq(graph_a.node_count(), graph_b.node_count(), "%s node count differs" % layout_id)
 		t.assert_eq(
 			graph_a.component_count,
 			graph_b.component_count,
@@ -197,7 +195,9 @@ func test_steering_target_prefers_the_direct_line() -> SandboxTest:
 		"an unobstructed route must be followed directly"
 	)
 	# Across the wall: the immediate steering target must differ from the goal.
-	var across: Vector3 = graph.steering_target(world, Vector3(-6.0, 0.0, 0.0), Vector3(6.0, 0.0, 0.0))
+	var across: Vector3 = graph.steering_target(
+		world, Vector3(-6.0, 0.0, 0.0), Vector3(6.0, 0.0, 0.0)
+	)
 	t.assert_gt(
 		across.distance_to(Vector3(6.0, 0.0, 0.0)),
 		0.5,

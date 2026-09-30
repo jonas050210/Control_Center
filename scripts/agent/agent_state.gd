@@ -23,7 +23,6 @@ const CharacterMotor = preload("res://scripts/world/character_motor.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
-
 var position: Vector3 = SandboxConfig.AGENT_SPAWN_POSITION
 var velocity: Vector3 = Vector3.ZERO
 var yaw_deg: float = SandboxConfig.AGENT_SPAWN_YAW_DEG
@@ -150,16 +149,12 @@ func get_eye_position() -> Vector3:
 ##
 ## Returns the motion events the caller turns into sound:
 ##   {"jumped": bool, "landed": bool, "footstep": bool, "moving": bool}
-func apply_action(
-	action: Action, dt: float, arena_half_extent: float, world = null
-) -> Dictionary:
+func apply_action(action: Action, dt: float, arena_half_extent: float, world = null) -> Dictionary:
 	# Cooldown, reload, recoil recovery and bloom recovery. With handling
 	# disabled `tick_handling` is exactly the old `weapon.tick(dt)`.
 	var recovery: Dictionary = weapon.tick_handling(dt)
 	reload_finished = bool(recovery.get("reload_finished", false))
-	var events: Dictionary = {
-		"jumped": false, "landed": false, "footstep": false, "moving": false
-	}
+	var events: Dictionary = {"jumped": false, "landed": false, "footstep": false, "moving": false}
 	if not alive:
 		velocity = Vector3.ZERO
 		speed_fraction = 0.0

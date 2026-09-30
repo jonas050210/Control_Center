@@ -144,9 +144,8 @@ const SCENARIOS: Array = [
 		"enemy_count": 2,
 		"spawn": SPAWN_ELEVATED,
 		"level": CurriculumConfig.Level.VERTICAL_COMBAT,
-		"flags": {
-			"obstacles": true, "perception": true, "sound": true, "memory": true, "vertical": true
-		},
+		"flags":
+		{"obstacles": true, "perception": true, "sound": true, "memory": true, "vertical": true},
 	},
 	{
 		"id": "rifle_lane_drill",
@@ -187,7 +186,8 @@ const SCENARIOS: Array = [
 	{
 		"id": "smg_tracking_drill",
 		"label": "SMG tracking drill",
-		"description": "Close moving-target drill: high cadence, sharp falloff and sustained tracking.",
+		"description":
+		"Close moving-target drill: high cadence, sharp falloff and sustained tracking.",
 		"layout": "pillars",
 		"enemy_count": 3,
 		"spawn": SPAWN_RING,
@@ -204,9 +204,8 @@ const SCENARIOS: Array = [
 		"enemy_count": 3,
 		"spawn": SPAWN_RANDOM,
 		"level": CurriculumConfig.Level.MIXED_RANDOMIZED,
-		"flags": {
-			"obstacles": true, "perception": true, "sound": true, "memory": true, "vertical": true
-		},
+		"flags":
+		{"obstacles": true, "perception": true, "sound": true, "memory": true, "vertical": true},
 	},
 ]
 
@@ -309,9 +308,7 @@ static func _populate(
 		spawn_rule = str(rules[rng.randi_range(0, rules.size() - 1)])
 
 	var agent_spawn: Vector3 = _place_agent(world, rng, layout)
-	var enemy_spawns: Array = _place_enemies(
-		world, rng, agent_spawn, enemy_count, spawn_rule
-	)
+	var enemy_spawns: Array = _place_enemies(world, rng, agent_spawn, enemy_count, spawn_rule)
 
 	return {
 		"id": str(entry["id"]),
@@ -347,11 +344,7 @@ static func _place_agent(world: ArenaWorld, rng: RandomNumberGenerator, layout: 
 
 
 static func _place_enemies(
-	world: ArenaWorld,
-	rng: RandomNumberGenerator,
-	agent_spawn: Vector3,
-	count: int,
-	rule: String
+	world: ArenaWorld, rng: RandomNumberGenerator, agent_spawn: Vector3, count: int, rule: String
 ) -> Array:
 	var spawns: Array = []
 	for index in range(maxi(1, count)):
@@ -430,8 +423,9 @@ static func _authored_enemy_spawn(
 			continue
 		if not world.is_position_free(candidate, radius, height):
 			continue
-		if require_occluded and PerceptionSystem.has_line_of_sight(
-			world, agent_eye, candidate, height
+		if (
+			require_occluded
+			and PerceptionSystem.has_line_of_sight(world, agent_eye, candidate, height)
 		):
 			continue
 		return candidate
@@ -501,9 +495,7 @@ static func _elevated_spawn(
 			var obstacle = obstacle_value
 			if not obstacle.standable or obstacle.top_y() < 0.6:
 				continue
-			var candidate := Vector3(
-				obstacle.center.x, obstacle.top_y(), obstacle.center.z
-			)
+			var candidate := Vector3(obstacle.center.x, obstacle.top_y(), obstacle.center.z)
 			if world.is_position_free(candidate, radius, height):
 				return candidate
 	return _ring_spawn(world, rng, agent_spawn, index, 3, 5.0, 10.0, radius, height)

@@ -137,9 +137,9 @@ func _track_progress(position: Vector3, wants_move: bool, dt: float) -> void:
 		last_position = position
 		has_last_position = true
 		return
-	var travelled: float = Vector2(
-		position.x - last_position.x, position.z - last_position.z
-	).length()
+	var travelled: float = (
+		Vector2(position.x - last_position.x, position.z - last_position.z).length()
+	)
 	last_position = position
 	if dt <= 0.0:
 		return
@@ -157,9 +157,10 @@ func _needs_replan(destination: Vector3) -> bool:
 		return false
 	# The destination is usually a moving target (a believed enemy position),
 	# so re-plan when it has drifted meaningfully rather than every tick.
-	return Vector2(
-		destination.x - path_destination.x, destination.z - path_destination.z
-	).length() > 1.5
+	return (
+		Vector2(destination.x - path_destination.x, destination.z - path_destination.z).length()
+		> 1.5
+	)
 
 
 func _replan(navigation: NavigationGraph, position: Vector3, destination: Vector3) -> void:
@@ -175,9 +176,7 @@ func _replan(navigation: NavigationGraph, position: Vector3, destination: Vector
 func _consume_reached_waypoints(position: Vector3) -> void:
 	while path_index < path.size():
 		var waypoint: Vector3 = path[path_index]
-		var distance: float = Vector2(
-			waypoint.x - position.x, waypoint.z - position.z
-		).length()
+		var distance: float = Vector2(waypoint.x - position.x, waypoint.z - position.z).length()
 		if distance > SandboxConfig.NAV_WAYPOINT_TOLERANCE:
 			return
 		path_index += 1

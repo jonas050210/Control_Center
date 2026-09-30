@@ -57,32 +57,44 @@ func setup(p_session) -> void:
 	row.add_child(_state_label)
 
 	row.add_child(VSeparator.new())
-	row.add_child(ControlCenterTheme.make_label("env", ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED))
+	row.add_child(
+		ControlCenterTheme.make_label(
+			"env", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
 	_environment_option = ControlCenterTheme.make_option_button(
 		"Which environment is rendered and inspected. Others keep running headless."
 	)
 	_environment_option.item_selected.connect(_on_environment_selected)
 	row.add_child(_environment_option)
 
-	row.add_child(ControlCenterTheme.make_label("agent", ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED))
+	row.add_child(
+		ControlCenterTheme.make_label(
+			"agent", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
 	_agent_option = ControlCenterTheme.make_option_button(
 		"Agent slot inside the selected environment."
 	)
 	_agent_option.item_selected.connect(_on_agent_selected)
 	row.add_child(_agent_option)
 
-	row.add_child(ControlCenterTheme.make_label("policy", ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED))
+	row.add_child(
+		ControlCenterTheme.make_label(
+			"policy", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
 	_policy_option = ControlCenterTheme.make_option_button(
 		"Which action source drives the AI-controlled environments."
 	)
 	_policy_option.item_selected.connect(_on_policy_selected)
 	row.add_child(_policy_option)
 
-	row.add_child(ControlCenterTheme.make_label("camera", ControlCenterTheme.FONT_SIZE_SMALL,
-		ControlCenterTheme.COLOR_MUTED))
+	row.add_child(
+		ControlCenterTheme.make_label(
+			"camera", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+		)
+	)
 	_camera_option = ControlCenterTheme.make_option_button(
 		"Presentation-only camera. The policy never receives camera data."
 	)
@@ -125,7 +137,9 @@ func _populate_options() -> void:
 	var count: int = session.simulation_manager.environments.size()
 	for index in range(count):
 		_environment_option.add_item("Environment %d" % index, index)
-	_environment_option.selected = clampi(session.config.selected_environment, 0, maxi(0, count - 1))
+	_environment_option.selected = clampi(
+		session.config.selected_environment, 0, maxi(0, count - 1)
+	)
 
 	_agent_option.clear()
 	var slots: Array = session.available_agent_slots()
@@ -193,9 +207,13 @@ func refresh(snapshot: Dictionary) -> void:
 	)
 	if int(status["mode"]) == ControlCenterConfig.Mode.HUMAN:
 		state_text += (
-			"  |  input: CAPTURED" if bool(status["human_input_enabled"]) else "  |  input: released"
+			"  |  input: CAPTURED"
+			if bool(status["human_input_enabled"])
+			else "  |  input: released"
 		)
-	var state_color: Color = ControlCenterTheme.COLOR_OK if running else ControlCenterTheme.COLOR_WARN
+	var state_color: Color = (
+		ControlCenterTheme.COLOR_OK if running else ControlCenterTheme.COLOR_WARN
+	)
 	if training_state in ["Starting", "Paused", "Stopping"]:
 		state_color = ControlCenterTheme.COLOR_WARN
 	elif training_state == "Error":
@@ -224,9 +242,7 @@ func refresh(snapshot: Dictionary) -> void:
 	if not system_text.is_empty():
 		_rate_label.text += "   " + system_text
 	var pending: PackedStringArray = status["pending_settings"]
-	_pending_label.text = (
-		"" if pending.is_empty() else "pending reset: %s" % ", ".join(pending)
-	)
+	_pending_label.text = ("" if pending.is_empty() else "pending reset: %s" % ", ".join(pending))
 
 	if not _updating:
 		_updating = true
@@ -249,9 +265,7 @@ static func _compact_system_status(system_value) -> String:
 	if gpu.get("utilization_percent") != null:
 		parts.append("GPU %.0f%%" % float(gpu["utilization_percent"]))
 	elif gpu.get("vram_used_mb") != null and gpu.get("vram_total_mb") != null:
-		parts.append(
-			"VRAM %.0f/%.0fMB" % [float(gpu["vram_used_mb"]), float(gpu["vram_total_mb"])]
-		)
+		parts.append("VRAM %.0f/%.0fMB" % [float(gpu["vram_used_mb"]), float(gpu["vram_total_mb"])])
 	return "  ".join(parts)
 
 

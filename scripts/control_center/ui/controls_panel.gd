@@ -86,10 +86,7 @@ func setup(p_session) -> void:
 		var button := ControlCenterTheme.make_toggle(
 			"%sx" % ControlCenterTheme.format_number(preset),
 			false,
-			(
-				"Run %s simulation steps per real-time step"
-				% ControlCenterTheme.format_number(preset)
-			)
+			"Run %s simulation steps per real-time step" % ControlCenterTheme.format_number(preset)
 		)
 		button.pressed.connect(_on_speed_preset.bind(preset))
 		speed_row.add_child(button)

@@ -140,7 +140,9 @@ static func make_button(text: String, tooltip: String = "") -> Button:
 	button.add_theme_stylebox_override("hover", control_style(COLOR_SURFACE_HOVER, COLOR_ACCENT))
 	button.add_theme_stylebox_override("pressed", control_style(Color("#243b53"), COLOR_ACCENT))
 	button.add_theme_stylebox_override("focus", control_style(COLOR_SURFACE_HOVER, COLOR_ACCENT))
-	button.add_theme_stylebox_override("disabled", control_style(Color("#111827"), Color("#243044")))
+	button.add_theme_stylebox_override(
+		"disabled", control_style(Color("#111827"), Color("#243044"))
+	)
 	button.focus_mode = Control.FOCUS_ALL
 	return button
 

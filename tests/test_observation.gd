@@ -8,7 +8,6 @@ const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -131,7 +130,9 @@ func test_observation_bearing_is_signed_for_left_and_right() -> SandboxTest:
 	enemy_left.reset(Vector3(-5.0, 0.0, 0.0))
 	var obs_right := Observation.build(agent, [enemy_right], SandboxConfig.ARENA_HALF_EXTENT)
 	var obs_left := Observation.build(agent, [enemy_left], SandboxConfig.ARENA_HALF_EXTENT)
-	t.assert_gt(obs_right.enemy_bearing_norm, 0.0, "an enemy to the right must have positive bearing")
+	t.assert_gt(
+		obs_right.enemy_bearing_norm, 0.0, "an enemy to the right must have positive bearing"
+	)
 	t.assert_lt(obs_left.enemy_bearing_norm, 0.0, "an enemy to the left must have negative bearing")
 	return t
 

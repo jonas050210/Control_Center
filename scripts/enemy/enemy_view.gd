@@ -7,7 +7,6 @@ extends Node3D
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 
-
 var state: EnemyState
 var body_mesh: MeshInstance3D
 

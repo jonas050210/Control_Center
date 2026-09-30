@@ -8,7 +8,6 @@ extends RefCounted
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -74,7 +73,8 @@ func test_rebuild_settings_are_explicitly_classified() -> SandboxTest:
 		)
 	for key in ["curriculum_level", "simulation_speed", "camera_mode"]:
 		t.assert_false(
-			ControlCenterConfig.requires_rebuild(key), "%s applies live and must not be pending" % key
+			ControlCenterConfig.requires_rebuild(key),
+			"%s applies live and must not be pending" % key
 		)
 	return t
 
@@ -98,8 +98,7 @@ func test_scenarios_only_bundle_supported_settings() -> SandboxTest:
 			t.assert_true(allowed.has(str(key)), "unexpected scenario key %s" % str(key))
 
 	t.assert_true(
-		config.apply_scenario("does_not_exist").is_empty(),
-		"an unknown scenario id changes nothing"
+		config.apply_scenario("does_not_exist").is_empty(), "an unknown scenario id changes nothing"
 	)
 	return t
 

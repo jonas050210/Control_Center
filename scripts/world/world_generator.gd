@@ -259,9 +259,7 @@ static func _build_vertical(world: ArenaWorld, rng: RandomNumberGenerator) -> vo
 		Obstacle.Kind.PLATFORM
 	)
 	world.add_box(
-		Vector3(
-			side * rng.randf_range(4.5, 6.5), high_top * 0.5, rng.randf_range(-4.0, 4.0)
-		),
+		Vector3(side * rng.randf_range(4.5, 6.5), high_top * 0.5, rng.randf_range(-4.0, 4.0)),
 		Vector3(1.6, high_top * 0.5, 1.6),
 		Obstacle.Kind.PLATFORM
 	)
@@ -270,7 +268,6 @@ static func _build_vertical(world: ArenaWorld, rng: RandomNumberGenerator) -> vo
 		Vector3(WALL_HALF_THICKNESS, HIGH_COVER_HEIGHT * 0.5, rng.randf_range(2.0, 4.0)),
 		Obstacle.Kind.WALL
 	)
-
 
 
 ## A full RL-combat sandbox: four distinct areas connected by doorways,
@@ -291,12 +288,8 @@ static func _build_combat_complex(world: ArenaWorld, rng: RandomNumberGenerator)
 	_add_split_wall(world, center_shift_z - 3.2, -span, span, 4.2, door_half, height, false)
 	# A vertical divider is offset and heavily gapped so it creates varied
 	# sightlines without disconnecting the floor.
-	_add_split_wall(
-		world, center_shift_x - 3.4, -span, span, 0.0, door_half * 1.35, height, true
-	)
-	_add_split_wall(
-		world, center_shift_x + 4.2, -span, span, -1.8, door_half, height, true
-	)
+	_add_split_wall(world, center_shift_x - 3.4, -span, span, 0.0, door_half * 1.35, height, true)
+	_add_split_wall(world, center_shift_x + 4.2, -span, span, -1.8, door_half, height, true)
 
 	# East long lane / corridor: long-range shots through the lane, but the
 	# side opening and low crates make it contestable rather than a tunnel.
@@ -307,16 +300,18 @@ static func _build_combat_complex(world: ArenaWorld, rng: RandomNumberGenerator)
 		Obstacle.Kind.WALL
 	)
 	_add_split_wall(
-		world, lane_x + 1.6, -span * 0.75, span * 0.75,
-		rng.randf_range(-2.0, 2.0), 1.4, height, true
+		world,
+		lane_x + 1.6,
+		-span * 0.75,
+		span * 0.75,
+		rng.randf_range(-2.0, 2.0),
+		1.4,
+		height,
+		true
 	)
 	for z_value in [-5.2, 0.0, 5.2]:
 		world.add_box(
-			Vector3(
-				lane_x,
-				LOW_COVER_HEIGHT * 0.5,
-				z_value + rng.randf_range(-0.4, 0.4)
-			),
+			Vector3(lane_x, LOW_COVER_HEIGHT * 0.5, z_value + rng.randf_range(-0.4, 0.4)),
 			Vector3(0.75, LOW_COVER_HEIGHT * 0.5, 0.75),
 			Obstacle.Kind.LOW_COVER
 		)
@@ -332,9 +327,7 @@ static func _build_combat_complex(world: ArenaWorld, rng: RandomNumberGenerator)
 		)
 		world.add_box(
 			Vector3(
-				x + rng.randf_range(1.0, 2.2),
-				LOW_COVER_HEIGHT * 0.5,
-				z + rng.randf_range(0.8, 1.6)
+				x + rng.randf_range(1.0, 2.2), LOW_COVER_HEIGHT * 0.5, z + rng.randf_range(0.8, 1.6)
 			),
 			Vector3(0.7, LOW_COVER_HEIGHT * 0.5, 0.7),
 			Obstacle.Kind.LOW_COVER
@@ -354,9 +347,7 @@ static func _build_combat_complex(world: ArenaWorld, rng: RandomNumberGenerator)
 		if cover_height == LOW_COVER_HEIGHT:
 			kind = Obstacle.Kind.LOW_COVER
 		world.add_box(
-			cover + Vector3(
-				rng.randf_range(-0.35, 0.35), 0.0, rng.randf_range(-0.35, 0.35)
-			),
+			cover + Vector3(rng.randf_range(-0.35, 0.35), 0.0, rng.randf_range(-0.35, 0.35)),
 			Vector3(0.9, cover_height * 0.5, 0.7),
 			kind
 		)
@@ -376,18 +367,10 @@ static func _build_crossfire_complex(world: ArenaWorld, rng: RandomNumberGenerat
 	# Two room shells in opposite corners, each with a doorway facing the
 	# center. Walls are axis-aligned but their seeded offsets vary sightlines.
 	var room_offset: float = span * 0.48
-	_add_split_wall(
-		world, -room_offset, -span, -1.0, -room_offset, door_half, height, true
-	)
-	_add_split_wall(
-		world, -room_offset, 1.0, span, room_offset, door_half, height, false
-	)
-	_add_split_wall(
-		world, room_offset, 1.0, span, room_offset, door_half, height, true
-	)
-	_add_split_wall(
-		world, room_offset, -span, -1.0, -room_offset, door_half, height, false
-	)
+	_add_split_wall(world, -room_offset, -span, -1.0, -room_offset, door_half, height, true)
+	_add_split_wall(world, -room_offset, 1.0, span, room_offset, door_half, height, false)
+	_add_split_wall(world, room_offset, 1.0, span, room_offset, door_half, height, true)
+	_add_split_wall(world, room_offset, -span, -1.0, -room_offset, door_half, height, false)
 
 	# Staggered high walls force pathing decisions and make flank routes
 	# meaningful; the low cover in between creates peek fights.
@@ -426,11 +409,7 @@ static func _build_crossfire_complex(world: ArenaWorld, rng: RandomNumberGenerat
 	for side in [-1.0, 1.0]:
 		var top: float = rng.randf_range(0.9, 1.15)
 		world.add_box(
-			Vector3(
-				side * span * 0.25,
-				top * 0.5,
-				rng.randf_range(-span * 0.25, span * 0.25)
-			),
+			Vector3(side * span * 0.25, top * 0.5, rng.randf_range(-span * 0.25, span * 0.25)),
 			Vector3(1.25, top * 0.5, 1.25),
 			Obstacle.Kind.PLATFORM
 		)

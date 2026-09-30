@@ -86,9 +86,7 @@ func clear() -> void:
 func add_spawn_point(
 	role: String, p_position: Vector3, yaw_deg: float = 0.0, tag: String = ""
 ) -> void:
-	spawn_points.append(
-		{"role": role, "position": p_position, "yaw_deg": yaw_deg, "tag": tag}
-	)
+	spawn_points.append({"role": role, "position": p_position, "yaw_deg": yaw_deg, "tag": tag})
 
 
 func spawn_points_for(role: String) -> Array:
@@ -256,25 +254,19 @@ func resolve_move(
 	var delta_x: float = desired.x - from_position.x
 	var delta_z: float = desired.z - from_position.z
 	var distance: float = sqrt(delta_x * delta_x + delta_z * delta_z)
-	var substeps: int = clampi(
-		int(ceil(distance / MAX_MOVE_SUBSTEP)), 1, MAX_MOVE_SUBSTEPS
-	)
+	var substeps: int = clampi(int(ceil(distance / MAX_MOVE_SUBSTEP)), 1, MAX_MOVE_SUBSTEPS)
 	var blocked_x: bool = false
 	var blocked_z: bool = false
 	for index in range(1, substeps + 1):
 		var fraction: float = float(index) / float(substeps)
 		if not blocked_x:
-			var step_x := Vector3(
-				from_position.x + delta_x * fraction, resolved.y, resolved.z
-			)
+			var step_x := Vector3(from_position.x + delta_x * fraction, resolved.y, resolved.z)
 			if is_blocked(step_x, radius, height):
 				blocked_x = true
 			else:
 				resolved = step_x
 		if not blocked_z:
-			var step_z := Vector3(
-				resolved.x, resolved.y, from_position.z + delta_z * fraction
-			)
+			var step_z := Vector3(resolved.x, resolved.y, from_position.z + delta_z * fraction)
 			if is_blocked(step_z, radius, height):
 				blocked_z = true
 			else:
@@ -434,9 +426,7 @@ func find_peek_position(
 ## Distance to the nearest obstacle surface from a point, and its bearing
 ## relative to `forward`. Returned as {"distance": float, "bearing_deg":
 ## float, "kind": int}; distance is `max_distance` when nothing is near.
-func nearest_obstacle_info(
-	point: Vector3, forward: Vector3, max_distance: float
-) -> Dictionary:
+func nearest_obstacle_info(point: Vector3, forward: Vector3, max_distance: float) -> Dictionary:
 	var best_distance: float = max_distance
 	var best_delta: Vector3 = Vector3.ZERO
 	var best_kind: int = -1
@@ -477,13 +467,16 @@ func to_dict() -> Dictionary:
 	var spawns: Array = []
 	for point_value in spawn_points:
 		var point: Dictionary = point_value
-		spawns.append(
-			{
-				"role": str(point.get("role", "")),
-				"position": point.get("position", Vector3.ZERO),
-				"yaw_deg": float(point.get("yaw_deg", 0.0)),
-				"tag": str(point.get("tag", "")),
-			}
+		(
+			spawns
+			. append(
+				{
+					"role": str(point.get("role", "")),
+					"position": point.get("position", Vector3.ZERO),
+					"yaw_deg": float(point.get("yaw_deg", 0.0)),
+					"tag": str(point.get("tag", "")),
+				}
+			)
 		)
 	return {
 		"layout_id": layout_id,

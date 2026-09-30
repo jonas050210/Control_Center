@@ -18,7 +18,6 @@ extends ControllerBase
 ## Keep only the explicit base preload here for standalone/headless parsing.
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
 
-
 @export var mouse_sensitivity_deg_per_px: float = 0.15
 @export var start_mouse_captured: bool = true
 @export var arrow_key_look_enabled: bool = true

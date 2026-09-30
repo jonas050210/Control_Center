@@ -19,7 +19,6 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SelfPlayAdapter = preload("res://scripts/rl/self_play_adapter.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 ## Maximum accepted length (in bytes) of one incoming JSON request line.
 ## A "step" request grows linearly with the environment count; 1 MiB gives
 ## enormous headroom while staying cheap to allocate per read.
@@ -84,7 +83,9 @@ func _serve_stdio() -> void:
 			var parse_started: int = Time.get_ticks_usec() if profiling_enabled else 0
 			var request = JSON.parse_string(line)
 			_profile_add_time("request_parse", parse_started)
-			var command: String = str(request.get("cmd", "invalid")) if request is Dictionary else "invalid"
+			var command: String = (
+				str(request.get("cmd", "invalid")) if request is Dictionary else "invalid"
+			)
 			var handle_started: int = Time.get_ticks_usec() if profiling_enabled else 0
 			var response: Dictionary = (
 				_handle_self_play_request(request)
@@ -250,8 +251,7 @@ func _profile_add_time(name: String, started_usec: int) -> void:
 		return
 	var elapsed: int = maxi(0, Time.get_ticks_usec() - started_usec)
 	var entry: Dictionary = _profile_timings.get(
-		name,
-		{"count": 0, "total_usec": 0, "min_usec": elapsed, "max_usec": 0}
+		name, {"count": 0, "total_usec": 0, "min_usec": elapsed, "max_usec": 0}
 	)
 	entry["count"] = int(entry["count"]) + 1
 	entry["total_usec"] = int(entry["total_usec"]) + elapsed

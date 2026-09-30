@@ -146,7 +146,8 @@ func test_heard_combat_sound_marks_danger_at_the_estimated_location() -> Sandbox
 		"world": null,
 		"lighting": null,
 		"vision_range": 0.0,
-		"sounds": [
+		"sounds":
+		[
 			{
 				"category": 3,  # SHOT
 				"direction": Vector3(0.0, 0.0, -1.0),
@@ -170,7 +171,7 @@ func test_heard_combat_sound_marks_danger_at_the_estimated_location() -> Sandbox
 		"the danger belief sits at the estimated source cell"
 	)
 	var danger_cells: int = 0
-	for cell_value in (analyzer.memory.to_dict()["cells"] as Array):
+	for cell_value in analyzer.memory.to_dict()["cells"] as Array:
 		if float((cell_value as Dictionary)["danger"]) >= 0.2:
 			danger_cells += 1
 	t.assert_eq(danger_cells, 1, "only the combat sound raises danger")

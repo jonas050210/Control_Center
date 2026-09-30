@@ -15,12 +15,7 @@ const DT: float = 1.0 / 60.0
 
 
 func _step(
-	world,
-	position: Vector3,
-	velocity: Vector3,
-	wish: Vector3,
-	jump: bool,
-	on_ground: bool
+	world, position: Vector3, velocity: Vector3, wish: Vector3, jump: bool, on_ground: bool
 ) -> Dictionary:
 	return CharacterMotor.step(
 		world, position, velocity, wish, 4.5, DT, 0.4, 1.8, jump, on_ground, 10.0
@@ -29,9 +24,7 @@ func _step(
 
 func test_grounded_character_does_not_fall_through_the_floor() -> SandboxTest:
 	var t := SandboxTest.new("grounded_character_does_not_fall_through_the_floor")
-	var state: Dictionary = {
-		"position": Vector3.ZERO, "velocity": Vector3.ZERO, "on_ground": true
-	}
+	var state: Dictionary = {"position": Vector3.ZERO, "velocity": Vector3.ZERO, "on_ground": true}
 	for _i in range(120):
 		var result: Dictionary = _step(
 			null, state["position"], state["velocity"], Vector3.ZERO, false, state["on_ground"]
@@ -91,15 +84,15 @@ func test_air_control_limits_mid_air_steering() -> SandboxTest:
 	var airborne: Dictionary = _step(
 		null, Vector3(0.0, 1.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, -1.0), false, false
 	)
-	var air_speed: float = Vector2(
-		float(airborne["velocity"].x), float(airborne["velocity"].z)
-	).length()
+	var air_speed: float = (
+		Vector2(float(airborne["velocity"].x), float(airborne["velocity"].z)).length()
+	)
 	var grounded: Dictionary = _step(
 		null, Vector3.ZERO, Vector3.ZERO, Vector3(0.0, 0.0, -1.0), false, true
 	)
-	var ground_speed: float = Vector2(
-		float(grounded["velocity"].x), float(grounded["velocity"].z)
-	).length()
+	var ground_speed: float = (
+		Vector2(float(grounded["velocity"].x), float(grounded["velocity"].z)).length()
+	)
 	t.assert_almost_eq(ground_speed, 4.5, 0.001)
 	t.assert_lt(air_speed, ground_speed, "air control must be weaker than ground acceleration")
 	t.assert_almost_eq(air_speed, 4.5 * SandboxConfig.AIR_CONTROL, 0.01)
@@ -123,17 +116,7 @@ func test_character_can_jump_onto_a_low_box_and_stand_on_it() -> SandboxTest:
 		var jump: bool = step_index == 30
 		var wish: Vector3 = Vector3.ZERO if stood_on_box else Vector3(0.0, 0.0, -1.0)
 		var result: Dictionary = CharacterMotor.step(
-			world,
-			position,
-			velocity,
-			wish,
-			4.5,
-			DT,
-			0.4,
-			1.8,
-			jump,
-			on_ground,
-			10.0
+			world, position, velocity, wish, 4.5, DT, 0.4, 1.8, jump, on_ground, 10.0
 		)
 		position = result["position"]
 		velocity = result["velocity"]
@@ -145,9 +128,7 @@ func test_character_can_jump_onto_a_low_box_and_stand_on_it() -> SandboxTest:
 	t.assert_gt(highest, 0.8, "the jump must clear the 0.8 m box top")
 	t.assert_almost_eq(position.y, 0.8, 0.05, "the character must end up standing on the box top")
 	t.assert_true(on_ground)
-	t.assert_true(
-		absf(position.z) <= 1.9, "the character must still be over the box footprint"
-	)
+	t.assert_true(absf(position.z) <= 1.9, "the character must still be over the box footprint")
 	return t
 
 
@@ -171,9 +152,7 @@ func test_falling_onto_the_edge_of_a_platform_lands_on_top_of_it() -> SandboxTes
 		on_ground = bool(result["on_ground"])
 	t.assert_true(on_ground, "the character must come to rest")
 	t.assert_almost_eq(position.y, 0.8, 0.01, "it must rest on the platform top")
-	t.assert_false(
-		world.is_blocked(position, 0.4, 1.8), "it must never end up inside the box"
-	)
+	t.assert_false(world.is_blocked(position, 0.4, 1.8), "it must never end up inside the box")
 	return t
 
 

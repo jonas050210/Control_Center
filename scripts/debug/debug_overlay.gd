@@ -22,7 +22,6 @@ const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 var simulation_manager: SimulationManager
 var focused_env_index: int = 0
 var _label: Label
@@ -163,7 +162,9 @@ func _process(_delta: float) -> void:
 		return
 	if simulation_manager.environments.is_empty():
 		return
-	_label.text = "\n".join(format_lines(build_telemetry_dict(simulation_manager, focused_env_index)))
+	_label.text = "\n".join(
+		format_lines(build_telemetry_dict(simulation_manager, focused_env_index))
+	)
 
 
 ## Pure data-collection function: reads current state into a plain
@@ -188,7 +189,9 @@ static func build_telemetry_dict(
 	telemetry["focused_env_index"] = idx
 	telemetry["seed"] = p_simulation_manager.base_seed
 	telemetry["curriculum_level"] = p_simulation_manager.curriculum_level
-	telemetry["curriculum_name"] = CurriculumConfig.level_name(p_simulation_manager.curriculum_level)
+	telemetry["curriculum_name"] = CurriculumConfig.level_name(
+		p_simulation_manager.curriculum_level
+	)
 
 	telemetry["episode"] = env.episode.episode_count
 	telemetry["timestep"] = env.episode.step_count
@@ -204,15 +207,18 @@ static func build_telemetry_dict(
 	var enemy_reports: Array = []
 	for i in range(env.enemies.size()):
 		var enemy: EnemyState = env.enemies[i]
-		enemy_reports.append(
-			{
-				"index": i,
-				"position": enemy.position,
-				"health": enemy.health,
-				"max_health": enemy.max_health,
-				"alive": enemy.alive,
-				"ai_state": EnemyState.ai_state_name(enemy.ai_state),
-			}
+		(
+			enemy_reports
+			. append(
+				{
+					"index": i,
+					"position": enemy.position,
+					"health": enemy.health,
+					"max_health": enemy.max_health,
+					"alive": enemy.alive,
+					"ai_state": EnemyState.ai_state_name(enemy.ai_state),
+				}
+			)
 		)
 	telemetry["enemy_count"] = env.enemies.size()
 	telemetry["enemies_alive"] = env.get_alive_enemy_count()
@@ -275,9 +281,7 @@ static func format_lines(telemetry: Dictionary) -> PackedStringArray:
 			% [telemetry.active_environments, telemetry.focused_env_index, telemetry.seed]
 		)
 	)
-	lines.append(
-		"curriculum: %d (%s)" % [telemetry.curriculum_level, telemetry.curriculum_name]
-	)
+	lines.append("curriculum: %d (%s)" % [telemetry.curriculum_level, telemetry.curriculum_name])
 	lines.append("episode: %d   timestep: %d" % [telemetry.episode, telemetry.timestep])
 	lines.append("")
 	lines.append(
@@ -293,7 +297,9 @@ static func format_lines(telemetry: Dictionary) -> PackedStringArray:
 		)
 	)
 	if telemetry.has("current_action"):
-		lines.append("current action [move,strafe,yaw,pitch,shoot]: %s" % str(telemetry.current_action))
+		lines.append(
+			"current action [move,strafe,yaw,pitch,shoot]: %s" % str(telemetry.current_action)
+		)
 	lines.append("")
 	lines.append("enemies alive: %d / %d" % [telemetry.enemies_alive, telemetry.enemy_count])
 	for enemy_info in telemetry.enemies:

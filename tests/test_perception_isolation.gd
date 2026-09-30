@@ -51,8 +51,10 @@ func test_debug_perception_does_not_change_the_observation() -> SandboxTest:
 					left[field],
 					right[field],
 					0.000001,
-					"level %d step %d field %d changed when debug_perception was on"
-					% [level, step_index, field]
+					(
+						"level %d step %d field %d changed when debug_perception was on"
+						% [level, step_index, field]
+					)
 				)
 	return t
 

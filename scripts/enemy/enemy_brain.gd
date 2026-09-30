@@ -130,7 +130,7 @@ static func _perceive(enemy: EnemyState, context: Dictionary, dt: float) -> void
 		enemy.visual_contact_time += dt
 		enemy.time_since_visual = 0.0
 		if enemy.visual_contact_time >= enemy.reaction.visual_detection_delay * delay_scale:
-			var direction: Vector3 = (agent_position - enemy.position)
+			var direction: Vector3 = agent_position - enemy.position
 			direction.y = 0.0
 			enemy.memory.observe_visual(
 				AGENT_TRACK_ID,
@@ -175,9 +175,7 @@ static func _hear(enemy: EnemyState, context: Dictionary) -> void:
 	var distance: float = float(event["distance"])
 	var estimate: Vector3 = enemy.position + direction * distance
 	estimate.y = 0.0
-	enemy.memory.observe_sound(
-		AGENT_TRACK_ID, estimate, direction, float(event["loudness"])
-	)
+	enemy.memory.observe_sound(AGENT_TRACK_ID, estimate, direction, float(event["loudness"]))
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +279,9 @@ static func _choose_retreat(enemy: EnemyState, context: Dictionary, track: Dicti
 	var limit: float = (
 		float(context.get("arena_half_extent", SandboxConfig.ARENA_HALF_EXTENT)) - enemy.radius
 	)
-	var candidate: Vector3 = enemy.position + away.normalized() * SandboxConfig.ENEMY_RETREAT_DISTANCE
+	var candidate: Vector3 = (
+		enemy.position + away.normalized() * SandboxConfig.ENEMY_RETREAT_DISTANCE
+	)
 	candidate.x = clampf(candidate.x, -limit, limit)
 	candidate.z = clampf(candidate.z, -limit, limit)
 	candidate.y = 0.0
@@ -429,17 +429,10 @@ static func _act(
 	# Navigation is consulted only when the enemy is demonstrably blocked
 	# (see NavigationAgent): in the open field this is two float compares.
 	var steering: Vector3 = enemy.navigation.update(
-		context.get("navigation"),
-		world,
-		enemy.position,
-		destination,
-		speed_scale > 0.0,
-		dt
+		context.get("navigation"), world, enemy.position, destination, speed_scale > 0.0, dt
 	)
 	if enemy.navigation.status != NavigationAgent.STATUS_DIRECT:
-		enemy.tactical_reason = "%s (nav: %s)" % [
-			enemy.tactical_reason, enemy.navigation.status
-		]
+		enemy.tactical_reason = "%s (nav: %s)" % [enemy.tactical_reason, enemy.navigation.status]
 	destination = steering
 
 	var jump_requested: bool = _wants_jump(enemy, destination, context)

@@ -104,8 +104,10 @@ static func validate_header(header: Dictionary, strict_contract: bool = true) ->
 	var version: int = int(header.get("version", -1))
 	if not READABLE_VERSIONS.has(version):
 		problems.append(
-			"replay format version %d is not readable by this build (supported: %s)"
-			% [version, str(READABLE_VERSIONS)]
+			(
+				"replay format version %d is not readable by this build (supported: %s)"
+				% [version, str(READABLE_VERSIONS)]
+			)
 		)
 	var detail: String = str(header.get("detail", DETAIL_LIGHT))
 	if not DETAIL_LEVELS.has(detail):

@@ -85,8 +85,10 @@ func track_target_change(env) -> void:
 	if (
 		int(_data.get("engagement_step", -1)) < 0
 		and target_index >= 0
-		and env.agent.position.distance_to(env.enemies[target_index].position)
-		<= env.agent.weapon.range_m
+		and (
+			env.agent.position.distance_to(env.enemies[target_index].position)
+			<= env.agent.weapon.range_m
+		)
 	):
 		_data["engagement_step"] = int(_data.get("steps", 0))
 

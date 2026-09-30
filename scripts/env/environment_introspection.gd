@@ -100,18 +100,21 @@ static func navigation_state(env) -> Dictionary:
 	var enemy_states: Array = []
 	for enemy_value in env.enemies:
 		var enemy: EnemyState = enemy_value
-		enemy_states.append(
-			{
-				"id": enemy.enemy_id,
-				"state": EnemyState.ai_state_name(enemy.ai_state),
-				"reason": enemy.tactical_reason,
-				"destination": enemy.tactical_destination,
-				"has_destination": enemy.has_tactical_destination,
-				"target_confirmed": enemy.target_confirmed,
-				"time_since_visual": enemy.time_since_visual,
-				"reaction": enemy.reaction.to_dict(),
-				"navigation": enemy.navigation.to_dict(),
-			}
+		(
+			enemy_states
+			. append(
+				{
+					"id": enemy.enemy_id,
+					"state": EnemyState.ai_state_name(enemy.ai_state),
+					"reason": enemy.tactical_reason,
+					"destination": enemy.tactical_destination,
+					"has_destination": enemy.has_tactical_destination,
+					"target_confirmed": enemy.target_confirmed,
+					"time_since_visual": enemy.time_since_visual,
+					"reaction": enemy.reaction.to_dict(),
+					"navigation": enemy.navigation.to_dict(),
+				}
+			)
 		)
 	return {
 		"layout_id": env.world.layout_id if env.world != null else "none",

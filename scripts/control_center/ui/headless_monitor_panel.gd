@@ -114,10 +114,13 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 	var snapshot: Dictionary = manager.agent_snapshot(agent_id)
 	var state_id: int = int(snapshot.get("state_id", TrainingRunController.State.IDLE))
 	var state_name: String = str(snapshot.get("state", "Idle"))
-	_title.text = "%s · %s" % [
-		str(snapshot.get("label", "Agent %d" % agent_id)),
-		str(snapshot.get("algorithm", "")),
-	]
+	_title.text = (
+		"%s · %s"
+		% [
+			str(snapshot.get("label", "Agent %d" % agent_id)),
+			str(snapshot.get("algorithm", "")),
+		]
+	)
 	ControlCenterTheme.apply_status_badge(
 		_state, state_name, ControlCenterTheme.state_color(state_name)
 	)
@@ -125,11 +128,14 @@ func refresh(_snapshot: Dictionary = {}) -> void:
 	_status_text.text = "\n".join(build_status_rows(snapshot))
 	_pause.disabled = state_id != TrainingRunController.State.RUNNING
 	_resume.disabled = state_id != TrainingRunController.State.PAUSED
-	_stop.disabled = state_id not in [
-		TrainingRunController.State.STARTING,
-		TrainingRunController.State.RUNNING,
-		TrainingRunController.State.PAUSED,
-	]
+	_stop.disabled = (
+		state_id
+		not in [
+			TrainingRunController.State.STARTING,
+			TrainingRunController.State.RUNNING,
+			TrainingRunController.State.PAUSED,
+		]
+	)
 	_ingest_new_events(manager.get_controller(agent_id))
 
 
@@ -140,16 +146,23 @@ static func build_status_rows(snapshot: Dictionary) -> Array:
 	rows.append("state          %s" % str(snapshot.get("state", "Idle")))
 	if snapshot.has("epoch") or snapshot.has("total_epochs"):
 		rows.append(
-			"epoch          %d / %d"
-			% [int(snapshot.get("epoch", 0)), int(snapshot.get("total_epochs", 0))]
+			(
+				"epoch          %d / %d"
+				% [int(snapshot.get("epoch", 0)), int(snapshot.get("total_epochs", 0))]
+			)
 		)
 	else:
-		rows.append(
-			"steps          %s / %s"
-			% [
-				ControlCenterTheme.optional_metric(snapshot, "timesteps", 0),
-				ControlCenterTheme.optional_metric(snapshot, "total_training_steps", 0),
-			]
+		(
+			rows
+			. append(
+				(
+					"steps          %s / %s"
+					% [
+						ControlCenterTheme.optional_metric(snapshot, "timesteps", 0),
+						ControlCenterTheme.optional_metric(snapshot, "total_training_steps", 0),
+					]
+				)
+			)
 		)
 	rows.append("episodes       " + ControlCenterTheme.optional_metric(snapshot, "episodes", 0))
 	rows.append(
@@ -163,63 +176,91 @@ static func build_status_rows(snapshot: Dictionary) -> Array:
 	rows.append(
 		"hits           " + ControlCenterTheme.optional_metric(snapshot, "mean_shots_hit", 2)
 	)
-	rows.append(
-		"near/useless   %s / %s"
-		% [
-			ControlCenterTheme.optional_metric(snapshot, "mean_near_miss_shots", 2),
-			ControlCenterTheme.optional_metric(snapshot, "mean_useless_shots", 2),
-		]
+	(
+		rows
+		. append(
+			(
+				"near/useless   %s / %s"
+				% [
+					ControlCenterTheme.optional_metric(snapshot, "mean_near_miss_shots", 2),
+					ControlCenterTheme.optional_metric(snapshot, "mean_useless_shots", 2),
+				]
+			)
+		)
 	)
 	rows.append(
 		"cooldown pulls " + ControlCenterTheme.optional_metric(snapshot, "mean_cooldown_shots", 2)
 	)
 	rows.append(
-		"accuracy       "
-		+ ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%")
+		(
+			"accuracy       "
+			+ ControlCenterTheme.optional_metric(snapshot, "mean_accuracy", 1, 100.0, "%")
+		)
 	)
 	rows.append(
 		"damage dealt   " + ControlCenterTheme.optional_metric(snapshot, "mean_damage_dealt", 2)
 	)
 	rows.append(
-		"damage taken   "
-		+ ControlCenterTheme.optional_metric(snapshot, "mean_damage_received", 2)
+		"damage taken   " + ControlCenterTheme.optional_metric(snapshot, "mean_damage_received", 2)
 	)
 	rows.append(
-		"survival       "
-		+ ControlCenterTheme.optional_metric(snapshot, "mean_survival_time", 2, 1.0, " s")
+		(
+			"survival       "
+			+ ControlCenterTheme.optional_metric(snapshot, "mean_survival_time", 2, 1.0, " s")
+		)
 	)
-	rows.append(
-		"win/loss       %s / %s"
-		% [
-			ControlCenterTheme.optional_metric(snapshot, "win_rate", 1, 100.0, "%"),
-			ControlCenterTheme.optional_metric(snapshot, "loss_rate", 1, 100.0, "%"),
-		]
+	(
+		rows
+		. append(
+			(
+				"win/loss       %s / %s"
+				% [
+					ControlCenterTheme.optional_metric(snapshot, "win_rate", 1, 100.0, "%"),
+					ControlCenterTheme.optional_metric(snapshot, "loss_rate", 1, 100.0, "%"),
+				]
+			)
+		)
 	)
 	if snapshot.has("train_loss") or snapshot.has("validation_loss"):
-		rows.append(
-			"loss           %s / %s"
-			% [
-				ControlCenterTheme.optional_metric(snapshot, "train_loss", 5),
-				ControlCenterTheme.optional_metric(snapshot, "validation_loss", 5),
-			]
+		(
+			rows
+			. append(
+				(
+					"loss           %s / %s"
+					% [
+						ControlCenterTheme.optional_metric(snapshot, "train_loss", 5),
+						ControlCenterTheme.optional_metric(snapshot, "validation_loss", 5),
+					]
+				)
+			)
 		)
 	if snapshot.has("component_accuracy") or snapshot.has("exact_accuracy"):
-		rows.append(
-			"bc accuracy    %s / %s"
-			% [
-				ControlCenterTheme.optional_metric(snapshot, "component_accuracy", 1, 100.0, "%"),
-				ControlCenterTheme.optional_metric(snapshot, "exact_accuracy", 1, 100.0, "%"),
-			]
+		(
+			rows
+			. append(
+				(
+					"bc accuracy    %s / %s"
+					% [
+						ControlCenterTheme.optional_metric(
+							snapshot, "component_accuracy", 1, 100.0, "%"
+						),
+						ControlCenterTheme.optional_metric(
+							snapshot, "exact_accuracy", 1, 100.0, "%"
+						),
+					]
+				)
+			)
 		)
 	rows.append(
-		"throughput     "
-		+ ControlCenterTheme.optional_metric(snapshot, "steps_per_second", 1, 1.0, " sps")
+		(
+			"throughput     "
+			+ ControlCenterTheme.optional_metric(snapshot, "steps_per_second", 1, 1.0, " sps")
+		)
 	)
 	var eta = snapshot.get("eta_seconds")
 	rows.append("ETA            %s" % ControlCenterTheme.format_duration(eta))
 	rows.append(
-		"runtime        %s"
-		% ControlCenterTheme.format_duration(snapshot.get("runtime_seconds"))
+		"runtime        %s" % ControlCenterTheme.format_duration(snapshot.get("runtime_seconds"))
 	)
 	if snapshot.has("current_checkpoint"):
 		rows.append("checkpoint     %s" % str(snapshot["current_checkpoint"]))

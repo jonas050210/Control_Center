@@ -63,13 +63,16 @@ static func create(p_memory: SpatialMemory) -> ExplorationReport:
 func sample(time_seconds: float) -> void:
 	if memory == null:
 		return
-	coverage_samples.append(
-		{
-			"time": time_seconds,
-			"coverage": memory.coverage_fraction(),
-			"known_cells": memory.known_cell_count(),
-			"visited_cells": memory.visited_cell_count(),
-		}
+	(
+		coverage_samples
+		. append(
+			{
+				"time": time_seconds,
+				"coverage": memory.coverage_fraction(),
+				"known_cells": memory.known_cell_count(),
+				"visited_cells": memory.visited_cell_count(),
+			}
+		)
 	)
 
 
@@ -218,16 +221,19 @@ func sightlines(limit: int = 5) -> Array:
 		var score: float = openness * 0.6 + light * 0.25 - risk * 0.5
 		if score <= 0.0:
 			continue
-		candidates.append(
-			{
-				"index": index,
-				"position": memory.cell_center(index),
-				"score": score,
-				"openness": openness,
-				"illumination": light,
-				"danger": risk,
-				"confidence": memory.confidence[index],
-			}
+		(
+			candidates
+			. append(
+				{
+					"index": index,
+					"position": memory.cell_center(index),
+					"score": score,
+					"openness": openness,
+					"illumination": light,
+					"danger": risk,
+					"confidence": memory.confidence[index],
+				}
+			)
 		)
 	candidates.sort_custom(func(a, b): return float(a["score"]) > float(b["score"]))
 	return candidates.slice(0, maxi(0, limit))
@@ -243,14 +249,17 @@ func cover_positions(limit: int = 5) -> Array:
 			continue
 		if memory.cover_score[index] < COVER_THRESHOLD:
 			continue
-		candidates.append(
-			{
-				"index": index,
-				"position": memory.cell_center(index),
-				"cover": memory.cover_score[index],
-				"danger": memory.danger[index],
-				"confidence": memory.confidence[index],
-			}
+		(
+			candidates
+			. append(
+				{
+					"index": index,
+					"position": memory.cell_center(index),
+					"cover": memory.cover_score[index],
+					"danger": memory.danger[index],
+					"confidence": memory.confidence[index],
+				}
+			)
 		)
 	candidates.sort_custom(func(a, b): return float(a["cover"]) > float(b["cover"]))
 	return candidates.slice(0, maxi(0, limit))

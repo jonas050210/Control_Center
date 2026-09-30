@@ -10,7 +10,6 @@ const EnvironmentView = preload("res://scripts/env/environment_view.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -154,7 +153,10 @@ func test_get_last_actions_mirrors_last_step_all_input() -> SandboxTest:
 	t.assert_eq((idle_actions[0] as Action).shoot, false)
 
 	sim.step_all(
-		[Action.from_discrete(Action.Discrete.SHOOT), Action.from_discrete(Action.Discrete.MOVE_FORWARD)]
+		[
+			Action.from_discrete(Action.Discrete.SHOOT),
+			Action.from_discrete(Action.Discrete.MOVE_FORWARD)
+		]
 	)
 	var last_actions: Array = sim.get_last_actions()
 	t.assert_true((last_actions[0] as Action).shoot, "env0's last action should have been SHOOT")

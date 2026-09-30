@@ -10,7 +10,6 @@ const Action = preload("res://scripts/core/action.gd")
 const DebugOverlay = preload("res://scripts/debug/debug_overlay.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

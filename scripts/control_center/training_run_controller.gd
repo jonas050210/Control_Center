@@ -136,9 +136,7 @@ func build_command(config: ControlCenterConfig, paths: Dictionary = {}) -> Packe
 		)
 		_append_option(command, "--output-dir", str(resolved_paths["output_dir"]))
 		if config.resume_from_checkpoint:
-			_append_option(
-				command, "--resume-checkpoint", _filesystem_path(config.checkpoint_path)
-			)
+			_append_option(command, "--resume-checkpoint", _filesystem_path(config.checkpoint_path))
 	else:
 		command.append("resume" if config.resume_from_checkpoint else "train")
 		if config.resume_from_checkpoint:
@@ -230,8 +228,10 @@ func start(config: ControlCenterConfig) -> bool:
 	process_id = OS.create_process(executable, arguments, false)
 	if process_id <= 0:
 		_fail(
-			"Could not start '%s'. Install the Python package or set the Python executable."
-			% executable
+			(
+				"Could not start '%s'. Install the Python package or set the Python executable."
+				% executable
+			)
 		)
 		return false
 	_started_msec = Time.get_ticks_msec()
@@ -383,9 +383,7 @@ func _poll_events() -> void:
 
 func _prepare_run_paths(training_type: int) -> void:
 	var prefix: String = (
-		"bc"
-		if training_type == ControlCenterConfig.TrainingType.BEHAVIOR_CLONING
-		else "ppo"
+		"bc" if training_type == ControlCenterConfig.TrainingType.BEHAVIOR_CLONING else "ppo"
 	)
 	var run_id: String = (
 		"control_center_%s_%d_%d"
@@ -408,13 +406,19 @@ func _write_command(command: String) -> void:
 	_command_sequence += 1
 	var file := FileAccess.open(command_file, FileAccess.WRITE)
 	if file != null:
-		file.store_string(
-			JSON.stringify(
-				{
-					"command": command,
-					"sequence": _command_sequence,
-					"issued_at": Time.get_unix_time_from_system(),
-				}
+		(
+			file
+			. store_string(
+				(
+					JSON
+					. stringify(
+						{
+							"command": command,
+							"sequence": _command_sequence,
+							"issued_at": Time.get_unix_time_from_system(),
+						}
+					)
+				)
 			)
 		)
 

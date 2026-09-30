@@ -137,18 +137,21 @@ func to_dict() -> Array:
 	var out: Array = []
 	for entry_value in ranked():
 		var entry: Dictionary = entry_value
-		out.append(
-			{
-				"id": int(entry["id"]),
-				"position": entry["position"],
-				"direction": entry["direction"],
-				"source": int(entry["source"]),
-				"source_name": source_name(int(entry["source"])),
-				"age": float(entry["age"]),
-				"confidence": float(entry["confidence"]),
-				"health_norm": float(entry.get("health_norm", 1.0)),
-				"investigated": bool(entry["investigated"]),
-			}
+		(
+			out
+			. append(
+				{
+					"id": int(entry["id"]),
+					"position": entry["position"],
+					"direction": entry["direction"],
+					"source": int(entry["source"]),
+					"source_name": source_name(int(entry["source"])),
+					"age": float(entry["age"]),
+					"confidence": float(entry["confidence"]),
+					"health_norm": float(entry.get("health_norm", 1.0)),
+					"investigated": bool(entry["investigated"]),
+				}
+			)
 		)
 	return out
 

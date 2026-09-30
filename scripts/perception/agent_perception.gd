@@ -197,14 +197,12 @@ static func summarize_contacts(beliefs: Array, slot_count: int) -> Dictionary:
 		"contact_count": beliefs.size(),
 		"visible_count": visible_count,
 		"remembered_count": remembered_count,
-		"memory_uncertainty": (
-			uncertainty_total / float(remembered_count) if remembered_count > 0 else 0.0
-		),
+		"memory_uncertainty":
+		uncertainty_total / float(remembered_count) if remembered_count > 0 else 0.0,
 		"overflow_count": overflow_count,
 		"overflow_visible": overflow_visible,
-		"overflow_mean_distance": (
-			overflow_distance_total / float(overflow_count) if overflow_count > 0 else 0.0
-		),
+		"overflow_mean_distance":
+		overflow_distance_total / float(overflow_count) if overflow_count > 0 else 0.0,
 		"overflow_min_distance": maxf(overflow_min_distance, 0.0),
 	}
 
@@ -217,14 +215,7 @@ func _evaluate_enemy(
 	# closer before it resolves at all.
 	var effective_range: float = lighting.detection_range(vision_range, enemy.position)
 	var evaluation: Dictionary = PerceptionSystem.evaluate_target(
-		world,
-		eye,
-		agent.position,
-		forward,
-		enemy.position,
-		enemy.height,
-		fov_deg,
-		effective_range
+		world, eye, agent.position, forward, enemy.position, enemy.height, fov_deg, effective_range
 	)
 	# Threat accounting uses pure geometry (does the enemy see me?), not the
 	# agent's own FOV, and never leaks into the observation as a position.
@@ -273,9 +264,7 @@ func _evaluate_enemy(
 	var grace: float = SandboxConfig.VISUAL_LOSS_GRACE * lighting.loss_grace_scale(enemy.position)
 	var confirmed: bool = geometric and contact >= required_contact
 	var within_grace: bool = (
-		not geometric
-		and float(loss_timers.get(enemy_id, 0.0)) <= grace
-		and memory.has(enemy_id)
+		not geometric and float(loss_timers.get(enemy_id, 0.0)) <= grace and memory.has(enemy_id)
 	)
 	var visible: bool = confirmed or within_grace
 

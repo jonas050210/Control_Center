@@ -16,9 +16,7 @@ func test_snapshot_payload_shape_is_complete_before_any_sample() -> SandboxTest:
 	for section_name in ["gpu", "cpu", "ram"]:
 		t.assert_true(snapshot.has(section_name), "missing section %s" % section_name)
 		var section: Dictionary = snapshot[section_name]
-		t.assert_false(
-			bool(section["available"]), "%s must start unavailable" % section_name
-		)
+		t.assert_false(bool(section["available"]), "%s must start unavailable" % section_name)
 	var gpu: Dictionary = snapshot["gpu"]
 	for key in ["name", "utilization_percent", "vram_used_mb", "vram_total_mb", "temperature_c"]:
 		t.assert_true(gpu.has(key), "gpu section is missing %s" % key)
@@ -97,9 +95,7 @@ func test_gpu_name_with_comma_survives_parsing() -> SandboxTest:
 
 func test_windows_cpu_load_parsing() -> SandboxTest:
 	var t := SandboxTest.new("system_monitor_windows_cpu_load")
-	var single = ControlCenterSystemMonitor.parse_windows_cpu_load(
-		"\r\nLoadPercentage=37\r\n\r\n"
-	)
+	var single = ControlCenterSystemMonitor.parse_windows_cpu_load("\r\nLoadPercentage=37\r\n\r\n")
 	t.assert_not_null(single)
 	t.assert_almost_eq(float(single), 37.0)
 	var multi = ControlCenterSystemMonitor.parse_windows_cpu_load(
@@ -137,9 +133,7 @@ func test_proc_stat_cpu_percent_needs_two_valid_samples() -> SandboxTest:
 		ControlCenterSystemMonitor.cpu_percent_between(second, second),
 		"identical samples (no elapsed time) must not fake 0% or 100%"
 	)
-	t.assert_false(
-		bool(ControlCenterSystemMonitor.parse_proc_stat_totals("intr 12345")["valid"])
-	)
+	t.assert_false(bool(ControlCenterSystemMonitor.parse_proc_stat_totals("intr 12345")["valid"]))
 	return t
 
 

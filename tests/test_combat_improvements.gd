@@ -6,7 +6,6 @@ extends RefCounted
 const Action = preload("res://scripts/core/action.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -22,7 +21,7 @@ func test_closest_enemy_hit_first() -> SandboxTest:
 
 	# Near enemy at z=0, Far enemy at z=-5
 	env.enemies[0].position = Vector3(0.0, 0.0, -5.0)  # far enemy in array slot 0
-	env.enemies[1].position = Vector3(0.0, 0.0, 0.0)   # near enemy in array slot 1
+	env.enemies[1].position = Vector3(0.0, 0.0, 0.0)  # near enemy in array slot 1
 
 	env.agent.weapon.cooldown_remaining = 0.0
 	var result: Dictionary = env.step(Action.from_discrete(Action.Discrete.SHOOT))
@@ -158,8 +157,12 @@ func test_stationary_agent_gains_no_positioning_from_enemy_approach() -> Sandbox
 	env.set_curriculum_level(2)  # enemy moves, does not attack
 	env.reset(3)
 	var result: Dictionary = env.step(Action.idle())
-	t.assert_almost_eq(result.info.events.positioning_delta, 0.0, 0.0001,
-		"idle agent must not be paid for the enemy's own approach")
+	t.assert_almost_eq(
+		result.info.events.positioning_delta,
+		0.0,
+		0.0001,
+		"idle agent must not be paid for the enemy's own approach"
+	)
 	var breakdown: Dictionary = env.episode.get_reward_breakdown()
 	t.assert_almost_eq(breakdown.reward_positioning, 0.0, 0.0001)
 	return t

@@ -31,3 +31,14 @@ __pycache__/
 
 # Machine-local tool settings (remembered --godot-executable, etc.)
 /.sandboxai/
+
+# Python tooling caches and coverage data
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+# Virtualenv created by the desktop-ui-tests CI job
+.ui-venv/

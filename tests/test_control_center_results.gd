@@ -7,7 +7,6 @@ extends RefCounted
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterResults = preload("res://scripts/control_center/control_center_results.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

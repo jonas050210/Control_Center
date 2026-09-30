@@ -206,16 +206,21 @@ func _probe_windows_cpu() -> Dictionary:
 		if value != null:
 			return {"percent": value, "source": "wmic"}
 	output.clear()
-	code = OS.execute(
-		"powershell",
-		[
-			"-NoProfile",
-			"-Command",
-			"(Get-CimInstance Win32_Processor | "
-			+ "Measure-Object -Property LoadPercentage -Average).Average",
-		],
-		output,
-		true
+	code = (
+		OS
+		. execute(
+			"powershell",
+			[
+				"-NoProfile",
+				"-Command",
+				(
+					"(Get-CimInstance Win32_Processor | "
+					+ "Measure-Object -Property LoadPercentage -Average).Average"
+				),
+			],
+			output,
+			true
+		)
 	)
 	if code == 0 and not output.is_empty():
 		var value = parse_windows_cpu_load(str(output[0]))
@@ -279,13 +284,15 @@ static func empty_snapshot() -> Dictionary:
 	return {
 		"sampled_at": null,
 		"gpu": unavailable_gpu(),
-		"cpu": {
+		"cpu":
+		{
 			"available": false,
 			"utilization_percent": null,
 			"temperature_c": null,
 			"source": "",
 		},
-		"ram": {
+		"ram":
+		{
 			"available": false,
 			"used_mb": null,
 			"total_mb": null,

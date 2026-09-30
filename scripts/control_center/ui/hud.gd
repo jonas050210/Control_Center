@@ -130,7 +130,7 @@ func _draw_health(agent: Dictionary) -> void:
 	var weapon_label: String = str(agent.get("weapon_label", agent.get("weapon_profile", "weapon")))
 	_draw_text(
 		Vector2(16.0, size.y - 22.0),
-		"%s %s" % [weapon_label.to_upper(), ("READY" if ready else "reload %.2fs" % cooldown)],
+		"%s %s" % [weapon_label.to_upper(), "READY" if ready else "reload %.2fs" % cooldown],
 		ControlCenterTheme.COLOR_OK if ready else ControlCenterTheme.COLOR_WARN
 	)
 
@@ -138,38 +138,57 @@ func _draw_health(agent: Dictionary) -> void:
 func _draw_status(agent: Dictionary, episode: Dictionary, target: Dictionary) -> void:
 	var lines: PackedStringArray = PackedStringArray()
 	lines.append(
-		"TIME %5.1fs   STEP %4d/%d"
-		% [float(episode["time_seconds"]), int(episode["step"]), int(episode["max_steps"])]
+		(
+			"TIME %5.1fs   STEP %4d/%d"
+			% [float(episode["time_seconds"]), int(episode["step"]), int(episode["max_steps"])]
+		)
 	)
 	lines.append(
-		"REWARD %7.2f   KILLS %d   DEATHS %d"
-		% [float(episode["reward"]), int(episode["kills"]), int(episode["deaths"])]
+		(
+			"REWARD %7.2f   KILLS %d   DEATHS %d"
+			% [float(episode["reward"]), int(episode["kills"]), int(episode["deaths"])]
+		)
 	)
-	lines.append(
-		"ENEMIES %d/%d   ACCURACY %3.0f%%"
-		% [
-			int(episode["alive_enemies"]),
-			int(episode["total_enemies"]),
-			float(episode["accuracy"]) * 100.0,
-		]
+	(
+		lines
+		. append(
+			(
+				"ENEMIES %d/%d   ACCURACY %3.0f%%"
+				% [
+					int(episode["alive_enemies"]),
+					int(episode["total_enemies"]),
+					float(episode["accuracy"]) * 100.0,
+				]
+			)
+		)
 	)
-	lines.append(
-		"SHOT near %d useless %d cooldown %d last %s"
-		% [
-			int(episode.get("near_miss_shots", 0)),
-			int(episode.get("useless_shots", 0)),
-			int(episode.get("cooldown_shots", 0)),
-			str(episode.get("last_shot_result", "none")),
-		]
+	(
+		lines
+		. append(
+			(
+				"SHOT near %d useless %d cooldown %d last %s"
+				% [
+					int(episode.get("near_miss_shots", 0)),
+					int(episode.get("useless_shots", 0)),
+					int(episode.get("cooldown_shots", 0)),
+					str(episode.get("last_shot_result", "none")),
+				]
+			)
+		)
 	)
 	if bool(target.get("has_target", false)):
-		lines.append(
-			"TARGET %4.1fm %s   HP %3.0f"
-			% [
-				float(target["distance_m"]),
-				"IN RANGE" if bool(target["in_range"]) else "far",
-				float(target["health"]),
-			]
+		(
+			lines
+			. append(
+				(
+					"TARGET %4.1fm %s   HP %3.0f"
+					% [
+						float(target["distance_m"]),
+						"IN RANGE" if bool(target["in_range"]) else "far",
+						float(target["health"]),
+					]
+				)
+			)
 		)
 	else:
 		lines.append("TARGET none")
@@ -209,7 +228,12 @@ func _draw_text(at: Vector2, text: String, color: Color) -> void:
 	if _font == null:
 		return
 	draw_string(
-		_font, at + Vector2(1.0, 1.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _font_size,
+		_font,
+		at + Vector2(1.0, 1.0),
+		text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1.0,
+		_font_size,
 		Color(0.0, 0.0, 0.0, 0.7)
 	)
 	draw_string(_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _font_size, color)

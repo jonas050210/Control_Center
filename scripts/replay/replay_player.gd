@@ -36,7 +36,9 @@ func tick_count() -> int:
 
 
 func simulation_dt() -> float:
-	var dt: float = float((episode.get("header", {}) as Dictionary).get("simulation_dt", 1.0 / 60.0))
+	var dt: float = float(
+		(episode.get("header", {}) as Dictionary).get("simulation_dt", 1.0 / 60.0)
+	)
 	return dt if dt > 0.0 else 1.0 / 60.0
 
 

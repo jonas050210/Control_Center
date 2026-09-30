@@ -64,12 +64,14 @@ func refresh(snapshot: Dictionary = {}) -> void:
 	var state: int = session.training_run.state
 	var problem: String = session.training_run.validation_error(session.config)
 	_start.disabled = (
-		state
-		not in [
-			TrainingRunController.State.IDLE,
-			TrainingRunController.State.FINISHED,
-			TrainingRunController.State.ERROR,
-		]
+		(
+			state
+			not in [
+				TrainingRunController.State.IDLE,
+				TrainingRunController.State.FINISHED,
+				TrainingRunController.State.ERROR,
+			]
+		)
 		or not problem.is_empty()
 	)
 	_start_additional.disabled = not problem.is_empty()

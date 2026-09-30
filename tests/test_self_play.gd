@@ -150,9 +150,7 @@ func test_self_play_perception_gating_detects_visible_and_hidden() -> SandboxTes
 ## Ticks of uninterrupted sight needed before perception confirms a target,
 ## plus one so the comparison is strictly satisfied.
 static func _visual_confirmation_ticks() -> int:
-	return (
-		int(ceil(SandboxConfig.AGENT_VISUAL_DETECTION_DELAY / SandboxConfig.SIMULATION_DT)) + 1
-	)
+	return int(ceil(SandboxConfig.AGENT_VISUAL_DETECTION_DELAY / SandboxConfig.SIMULATION_DT)) + 1
 
 
 ## A shot is audible to the other agent, after (and only after) the sound
@@ -189,9 +187,7 @@ func test_self_play_sound_emission_and_hearing() -> SandboxTest:
 	t.assert_false(heard_b.is_empty(), "agent B must hear agent A's shot")
 	if not heard_b.is_empty():
 		t.assert_eq(heard_b[0].category, 3)  # SHOT category
-	t.assert_true(
-		env.perception_a.heard.is_empty(), "an agent never hears its own weapon"
-	)
+	t.assert_true(env.perception_a.heard.is_empty(), "an agent never hears its own weapon")
 	return t
 
 
@@ -228,7 +224,8 @@ func test_self_play_reset_resolves_lighting_in_all_branches() -> SandboxTest:
 	t.assert_eq(obs_map[0].to_array().size(), Observation.FIELD_COUNT)
 	t.assert_eq(obs_map[1].to_array().size(), Observation.FIELD_COUNT)
 	t.assert_eq(
-		LightingProfile.mode_id(with_map.lighting.mode), "normal",
+		LightingProfile.mode_id(with_map.lighting.mode),
+		"normal",
 		"the map's declared lighting must resolve"
 	)
 

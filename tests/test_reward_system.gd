@@ -6,7 +6,6 @@ extends RefCounted
 const RewardSystem = preload("res://scripts/reward/reward_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 
@@ -67,12 +66,18 @@ func test_missed_shot_is_cheaper_than_useless_shot() -> SandboxTest:
 	var t := SandboxTest.new("reward_missed_shot_cheaper_than_useless_shot")
 	var miss_reward := RewardSystem.compute({"missed_shot": true, "alive": true})
 	t.assert_almost_eq(miss_reward, SandboxConfig.PENALTY_MISSED_SHOT, 0.0001)
-	t.assert_gt(SandboxConfig.PENALTY_MISSED_SHOT, SandboxConfig.PENALTY_USELESS_SHOT,
-		"a genuine near-miss must be cheaper than an impossible pull")
+	t.assert_gt(
+		SandboxConfig.PENALTY_MISSED_SHOT,
+		SandboxConfig.PENALTY_USELESS_SHOT,
+		"a genuine near-miss must be cheaper than an impossible pull"
+	)
 	# Sanity: an aimed hit (+1.0 plus damage shaping in the environment) must
 	# outweigh many real misses.
-	t.assert_gt(SandboxConfig.REWARD_HIT, 50.0 * -SandboxConfig.PENALTY_MISSED_SHOT,
-		"hitting must dominate missing often enough for shooting to stay learnable")
+	t.assert_gt(
+		SandboxConfig.REWARD_HIT,
+		50.0 * -SandboxConfig.PENALTY_MISSED_SHOT,
+		"hitting must dominate missing often enough for shooting to stay learnable"
+	)
 	return t
 
 
@@ -98,26 +103,32 @@ func test_combat_time_pressure_applies_with_live_target() -> SandboxTest:
 
 func test_aiming_progress_is_rewarded_only_for_hittable_target() -> SandboxTest:
 	var t := SandboxTest.new("reward_aiming_progress_hittable")
-	var reward := RewardSystem.compute(
-		{
-			"aiming_delta": 0.5,
-			"alive": true,
-			"valid_target": true,
-			"target_hittable": true,
-			"meaningful_action": true,
-		}
+	var reward := (
+		RewardSystem
+		. compute(
+			{
+				"aiming_delta": 0.5,
+				"alive": true,
+				"valid_target": true,
+				"target_hittable": true,
+				"meaningful_action": true,
+			}
+		)
 	)
 	t.assert_gt(reward, 0.0)
 	t.assert_lte(reward, SandboxConfig.REWARD_AIMING_MAX + SandboxConfig.PENALTY_COMBAT_TIME)
 
-	var through_wall := RewardSystem.compute(
-		{
-			"aiming_delta": 0.5,
-			"alive": true,
-			"valid_target": true,
-			"target_hittable": false,
-			"meaningful_action": true,
-		}
+	var through_wall := (
+		RewardSystem
+		. compute(
+			{
+				"aiming_delta": 0.5,
+				"alive": true,
+				"valid_target": true,
+				"target_hittable": false,
+				"meaningful_action": true,
+			}
+		)
 	)
 	t.assert_almost_eq(through_wall, SandboxConfig.PENALTY_COMBAT_TIME, 0.0001)
 	return t
@@ -140,8 +151,12 @@ func test_aim_only_cannot_farm_survival_bonus() -> SandboxTest:
 func test_shot_hit_beats_miss_and_passivity() -> SandboxTest:
 	var t := SandboxTest.new("reward_useful_shot_balance")
 	var hit_events := {
-		"hit": true, "damage_dealt": 25.0, "shot_fired": true, "alive": true,
-		"valid_target": true, "meaningful_action": true,
+		"hit": true,
+		"damage_dealt": 25.0,
+		"shot_fired": true,
+		"alive": true,
+		"valid_target": true,
+		"meaningful_action": true,
 	}
 	var hit := RewardSystem.compute(hit_events)
 	var passive := RewardSystem.compute(

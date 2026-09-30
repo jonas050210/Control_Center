@@ -71,7 +71,8 @@ const ZONE_HEAD: String = "head"
 const ZONE_BODY: String = "body"
 
 const PROFILE_DEFINITIONS: Dictionary = {
-	"rifle": {
+	"rifle":
+	{
 		"label": "Rifle",
 		"category": "primary",
 		"damage": SandboxConfig.WEAPON_DAMAGE,
@@ -95,9 +96,11 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"spread_recovery_deg_per_s": 4.0,
 		"headshot_multiplier": 2.0,
 		"move_speed_scale_firing": 0.75,
-		"description": "Baseline single-ray rifle: controllable mid-range damage with mild falloff.",
+		"description":
+		"Baseline single-ray rifle: controllable mid-range damage with mild falloff.",
 	},
-	"shotgun": {
+	"shotgun":
+	{
 		"label": "Breach shotgun",
 		"category": "shotgun",
 		"damage": 112.0,
@@ -121,9 +124,11 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"spread_recovery_deg_per_s": 6.0,
 		"headshot_multiplier": 1.5,
 		"move_speed_scale_firing": 0.7,
-		"description": "Close-range 8-pellet pattern; one-shot potential requires a centered close hit.",
+		"description":
+		"Close-range 8-pellet pattern; one-shot potential requires a centered close hit.",
 	},
-	"pistol": {
+	"pistol":
+	{
 		"label": "Sidearm",
 		"category": "sidearm",
 		"damage": 20.0,
@@ -149,7 +154,8 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"move_speed_scale_firing": 0.85,
 		"description": "Lower damage precision backup for deliberate finishing drills.",
 	},
-	"smg": {
+	"smg":
+	{
 		"label": "SMG",
 		"category": "secondary_auto",
 		"damage": 14.0,
@@ -173,7 +179,8 @@ const PROFILE_DEFINITIONS: Dictionary = {
 		"spread_recovery_deg_per_s": 5.5,
 		"headshot_multiplier": 1.8,
 		"move_speed_scale_firing": 0.8,
-		"description": "Fast close-range profile with sharp falloff that rewards sustained tracking.",
+		"description":
+		"Fast close-range profile with sharp falloff that rewards sustained tracking.",
 	},
 }
 
@@ -522,11 +529,11 @@ func recoil_kick(index: int) -> Dictionary:
 	var n: int = maxi(0, index)
 	var pattern_length: float = float(maxi(1, SandboxConfig.RECOIL_PATTERN_LENGTH))
 	var progress: float = clampf(float(n) / pattern_length, 0.0, 1.0)
-	var vertical: float = recoil_vertical_deg * lerpf(
-		1.0, SandboxConfig.RECOIL_SUSTAIN_SCALE, progress
+	var vertical: float = (
+		recoil_vertical_deg * lerpf(1.0, SandboxConfig.RECOIL_SUSTAIN_SCALE, progress)
 	)
-	var horizontal: float = recoil_horizontal_deg * sin(
-		float(n) * SandboxConfig.HANDLING_GOLDEN_ANGLE
+	var horizontal: float = (
+		recoil_horizontal_deg * sin(float(n) * SandboxConfig.HANDLING_GOLDEN_ANGLE)
 	)
 	return {"pitch_deg": vertical, "yaw_deg": horizontal}
 
@@ -579,10 +586,8 @@ func apply_spread(
 	var radius_fraction: float = fposmod(n * SandboxConfig.HANDLING_R1_ALPHA, 1.0)
 	var azimuth: float = n * SandboxConfig.HANDLING_GOLDEN_ANGLE
 	var angle: float = deg_to_rad(spread) * sqrt(clampf(radius_fraction, 0.0, 1.0))
-	var lateral: Vector3 = (
-		right * cos(azimuth) * sin(angle) + up * sin(azimuth) * sin(angle)
-	)
-	var result: Vector3 = (dir * cos(angle) + lateral)
+	var lateral: Vector3 = right * cos(azimuth) * sin(angle) + up * sin(azimuth) * sin(angle)
+	var result: Vector3 = dir * cos(angle) + lateral
 	return result.normalized() if not result.is_zero_approx() else dir
 
 
@@ -604,9 +609,7 @@ func resolve_hit_zone(
 		return {"zone": ZONE_NONE, "distance": -1.0, "multiplier": 0.0}
 	if head_zone_enabled and headshot_multiplier > 1.0:
 		var head_radius: float = hit_radius * SandboxConfig.HEAD_HIT_RADIUS_SCALE
-		var head_distance: float = _ray_sphere_distance(
-			origin, direction, head_center, head_radius
-		)
+		var head_distance: float = _ray_sphere_distance(origin, direction, head_center, head_radius)
 		if head_distance >= 0.0:
 			return {
 				"zone": ZONE_HEAD,
@@ -639,13 +642,9 @@ func projectile_damage_at_distance(distance_m: float) -> float:
 
 ## Ideal center-mass TTK for diagnostics. The first shot occurs at t=0,
 ## therefore N lethal shots take (N-1) fire intervals.
-func ideal_ttk_seconds(
-	target_health: float, distance_m: float, pellets_landed: int = -1
-) -> float:
+func ideal_ttk_seconds(target_health: float, distance_m: float, pellets_landed: int = -1) -> float:
 	var landed: int = (
-		projectile_count
-		if pellets_landed < 0
-		else clampi(pellets_landed, 0, projectile_count)
+		projectile_count if pellets_landed < 0 else clampi(pellets_landed, 0, projectile_count)
 	)
 	var volley_damage: float = projectile_damage_at_distance(distance_m) * float(landed)
 	if volley_damage <= 0.0:
@@ -679,8 +678,7 @@ func projectile_directions(direction: Vector3, up_hint: Vector3 = Vector3.UP) ->
 		var radius_scale: float = 0.45 + 0.55 * (float(pellet_index % 3) / 2.0)
 		var pellet_angle: float = spread_rad * radius_scale
 		var lateral: Vector3 = (
-			right * cos(angle) * sin(pellet_angle)
-			+ up * sin(angle) * sin(pellet_angle)
+			right * cos(angle) * sin(pellet_angle) + up * sin(angle) * sin(pellet_angle)
 		)
 		var pellet_dir: Vector3 = (dir * cos(pellet_angle) + lateral).normalized()
 		directions.append(pellet_dir)
@@ -763,9 +761,7 @@ func sustained_ttk_seconds(
 	target_health: float, distance_m: float, pellets_landed: int = -1
 ) -> float:
 	var landed: int = (
-		projectile_count
-		if pellets_landed < 0
-		else clampi(pellets_landed, 0, projectile_count)
+		projectile_count if pellets_landed < 0 else clampi(pellets_landed, 0, projectile_count)
 	)
 	var volley_damage: float = projectile_damage_at_distance(distance_m) * float(landed)
 	if volley_damage <= 0.0:

@@ -231,7 +231,7 @@ func _bake_components() -> void:
 		while stack.size() > 0:
 			var current: int = stack[stack.size() - 1]
 			stack.remove_at(stack.size() - 1)
-			for neighbor_value in (neighbors[current] as PackedInt32Array):
+			for neighbor_value in neighbors[current] as PackedInt32Array:
 				var neighbor: int = neighbor_value
 				if components[neighbor] == INVALID_NODE:
 					components[neighbor] = component
@@ -263,9 +263,7 @@ func _allocate_scratch() -> void:
 
 func _cell_center(column: int, row: int) -> Vector3:
 	return Vector3(
-		origin_x + (float(column) + 0.5) * cell_size,
-		0.0,
-		origin_z + (float(row) + 0.5) * cell_size
+		origin_x + (float(column) + 0.5) * cell_size, 0.0, origin_z + (float(row) + 0.5) * cell_size
 	)
 
 
@@ -378,20 +376,18 @@ func find_path(from_position: Vector3, to_position: Vector3) -> Array:
 			found = true
 			break
 		var current_g: float = _g_score[current]
-		for neighbor_value in (neighbors[current] as PackedInt32Array):
+		for neighbor_value in neighbors[current] as PackedInt32Array:
 			var neighbor: int = neighbor_value
 			if _closed_stamp[neighbor] == stamp:
 				continue
-			var step_cost: float = _flat_distance(
-				node_positions[current], node_positions[neighbor]
-			)
+			var step_cost: float = _flat_distance(node_positions[current], node_positions[neighbor])
 			var tentative: float = current_g + step_cost
 			if _visit_stamp[neighbor] == stamp and tentative >= _g_score[neighbor] - 0.00001:
 				continue
 			_visit_stamp[neighbor] = stamp
 			_g_score[neighbor] = tentative
-			_f_score[neighbor] = tentative + _flat_distance(
-				node_positions[neighbor], node_positions[goal]
+			_f_score[neighbor] = (
+				tentative + _flat_distance(node_positions[neighbor], node_positions[goal])
 			)
 			_came_from[neighbor] = current
 			_heap_push(neighbor)
@@ -477,7 +473,7 @@ func recovery_direction(from_position: Vector3, desired: Vector3) -> Vector3:
 	var goal_distance: float = _flat_distance(node_positions[start], desired)
 	var best: Vector3 = Vector3.ZERO
 	var best_score: float = -INF
-	for neighbor_value in (neighbors[start] as PackedInt32Array):
+	for neighbor_value in neighbors[start] as PackedInt32Array:
 		var neighbor: int = neighbor_value
 		var candidate: Vector3 = node_positions[neighbor]
 		var progress: float = goal_distance - _flat_distance(candidate, desired)

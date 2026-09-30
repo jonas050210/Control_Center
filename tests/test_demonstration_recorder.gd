@@ -9,7 +9,6 @@ const DemonstrationRecorder = preload("res://scripts/recording/demonstration_rec
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 
-
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
 

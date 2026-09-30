@@ -75,10 +75,7 @@ func test_checkpoint_resume_and_bc_commands_use_real_cli_surfaces() -> SandboxTe
 	var ppo: PackedStringArray = controller.build_command(config)
 	t.assert_eq(ppo[3], "resume")
 	_assert_option(
-		t,
-		ppo,
-		"--checkpoint",
-		ProjectSettings.globalize_path("res://%s" % config.checkpoint_path)
+		t, ppo, "--checkpoint", ProjectSettings.globalize_path("res://%s" % config.checkpoint_path)
 	)
 
 	config.training_type = ControlCenterConfig.TrainingType.BEHAVIOR_CLONING
@@ -169,8 +166,15 @@ func test_agent_dashboard_snapshot_contains_real_display_state() -> SandboxTest:
 	var snapshot: Dictionary = session.build_snapshot()
 	var agent: Dictionary = snapshot["agent"]
 	for key in [
-		"position", "forward", "velocity", "yaw_deg", "pitch_deg", "health", "alive",
-		"on_ground", "in_combat",
+		"position",
+		"forward",
+		"velocity",
+		"yaw_deg",
+		"pitch_deg",
+		"health",
+		"alive",
+		"on_ground",
+		"in_combat",
 	]:
 		t.assert_true(agent.has(key), "agent display is missing %s" % key)
 	var target: Dictionary = snapshot["target"]

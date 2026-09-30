@@ -94,9 +94,7 @@ const DEFAULT_PAGE: String = "home"
 
 ## Stable tile identifiers. The presentation uses these rather than node
 ## names so visibility/order survives a UI refactor.
-const TILE_IDS: Array = [
-	"simulation", "agent", "inspector", "training", "controls", "logs"
-]
+const TILE_IDS: Array = ["simulation", "agent", "inspector", "training", "controls", "logs"]
 const DEFAULT_TILE_ORDER: Array = [
 	"simulation", "agent", "training", "inspector", "controls", "logs"
 ]
@@ -153,8 +151,11 @@ const SCENARIOS: Array = [
 		"label": "Overwhelmed",
 		"curriculum_level": CurriculumConfig.Level.MULTIPLE_ENEMIES,
 		"enemy_count": 6,
-		"description": "Level 4 with 6 enemies: more enemies than the "
-		+ "observation tracks, so some are invisible to the policy.",
+		"description":
+		(
+			"Level 4 with 6 enemies: more enemies than the "
+			+ "observation tracks, so some are invisible to the policy."
+		),
 	},
 	{
 		"id": "cover_fight",
@@ -633,7 +634,8 @@ func _sanitize_tiles() -> void:
 
 
 func duplicate_config() -> ControlCenterConfig:
-	var copy: ControlCenterConfig = (load("res://scripts/control_center/control_center_config.gd")
-		as GDScript).new()
+	var copy: ControlCenterConfig = (
+		(load("res://scripts/control_center/control_center_config.gd") as GDScript).new()
+	)
 	copy.apply_dict(to_dict())
 	return copy

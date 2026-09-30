@@ -90,7 +90,7 @@ func test_ground_truth_is_kept_separate() -> SandboxTest:
 	var snapshot: Dictionary = _snapshot()
 	var available: Dictionary = SkillMetrics.ai_available(snapshot)
 	for category in available:
-		for key in (available[category] as Dictionary):
+		for key in available[category] as Dictionary:
 			t.assert_false(
 				SkillMetrics.GROUND_TRUTH_KEYS.has(str(key)),
 				"AI-available metrics leaked ground truth key %s" % str(key)

@@ -36,9 +36,7 @@ const EpisodeProbe = preload("res://scripts/control_center/episode_probe.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const SimulationManager = preload("res://scripts/core/simulation_manager.gd")
 const TrainingAgentManager = preload("res://scripts/control_center/training_agent_manager.gd")
-const TrainingRunController = preload(
-	"res://scripts/control_center/training_run_controller.gd"
-)
+const TrainingRunController = preload("res://scripts/control_center/training_run_controller.gd")
 
 var config: ControlCenterConfig
 var simulation_manager: SimulationManager
@@ -164,9 +162,11 @@ func start_training() -> bool:
 	# deterministic preview. Headless mode removes all presentation work and
 	# dedicates the dashboard to metrics from the Python backend.
 	set_mode(
-		ControlCenterConfig.Mode.WATCH
-		if config.training_mode == ControlCenterConfig.TrainingMode.VISUAL
-		else ControlCenterConfig.Mode.TRAINING
+		(
+			ControlCenterConfig.Mode.WATCH
+			if config.training_mode == ControlCenterConfig.TrainingMode.VISUAL
+			else ControlCenterConfig.Mode.TRAINING
+		)
 	)
 	if config.training_mode == ControlCenterConfig.TrainingMode.HEADLESS:
 		# The external PPO process owns simulation throughput. Do not run an
@@ -318,10 +318,12 @@ func select_agent_slot(slot: int) -> bool:
 	if not is_agent_slot_available(slot):
 		log_warning(
 			(
-				"agent slot %d is unavailable: SimulationManager builds single-agent "
-				+ "EnvironmentCore instances (slot 1 requires the self-play environment)"
+				(
+					"agent slot %d is unavailable: SimulationManager builds single-agent "
+					+ "EnvironmentCore instances (slot 1 requires the self-play environment)"
+				)
+				% slot
 			)
-			% slot
 		)
 		return false
 	config.selected_agent_slot = slot
@@ -341,11 +343,13 @@ func set_policy_source(source: int) -> bool:
 	if not ControlCenterConfig.policy_source_available(source):
 		log_warning(
 			(
-				"policy source '%s' is unavailable in-engine: Godot has no inference "
-				+ "runtime, trained checkpoints run in the Python trainer over the "
-				+ "JSON-lines bridge"
+				(
+					"policy source '%s' is unavailable in-engine: Godot has no inference "
+					+ "runtime, trained checkpoints run in the Python trainer over the "
+					+ "JSON-lines bridge"
+				)
+				% ControlCenterConfig.policy_source_name(source)
 			)
-			% ControlCenterConfig.policy_source_name(source)
 		)
 		return false
 	if source == config.policy_source:
@@ -387,7 +391,9 @@ func available_agent_slots() -> Array:
 func get_selected_environment() -> EnvironmentCore:
 	if simulation_manager == null or simulation_manager.environments.is_empty():
 		return null
-	var index: int = clampi(config.selected_environment, 0, simulation_manager.environments.size() - 1)
+	var index: int = clampi(
+		config.selected_environment, 0, simulation_manager.environments.size() - 1
+	)
 	return simulation_manager.environments[index]
 
 
@@ -401,9 +407,7 @@ func get_selected_environment() -> EnvironmentCore:
 ## enemy lists in place), so it is applied immediately.
 func set_curriculum_level(level: int) -> void:
 	var resolved: int = clampi(
-		level,
-		CurriculumConfig.Level.STATIONARY_TARGET,
-		CurriculumConfig.Level.AGENT_VS_AGENT
+		level, CurriculumConfig.Level.STATIONARY_TARGET, CurriculumConfig.Level.AGENT_VS_AGENT
 	)
 	if resolved == config.curriculum_level and simulation_manager.curriculum_level == resolved:
 		return
@@ -412,9 +416,7 @@ func set_curriculum_level(level: int) -> void:
 	simulation_manager.set_curriculum_level(resolved)
 	config.enemy_count = simulation_manager.enemy_count_per_environment
 	_apply_view_visibility()
-	log_system(
-		"curriculum level -> %d (%s)" % [resolved, CurriculumConfig.level_name(resolved)]
-	)
+	log_system("curriculum level -> %d (%s)" % [resolved, CurriculumConfig.level_name(resolved)])
 
 
 ## Records a setting that cannot be applied to running environments.
@@ -735,17 +737,20 @@ func _record_episode(env_index: int, result: Dictionary) -> void:
 		record["reaction_time"] = -1.0
 
 	var stored: Dictionary = results.record(record)
-	event_log.log_event(
-		ControlCenterEventLog.Category.SYSTEM,
-		(
-			"env %d episode end (%s): reward %.2f, kills %d, accuracy %.0f%%"
-			% [
-				env_index,
-				str(record["done_reason"]),
-				float(record["reward"]),
-				int(record["kills"]),
-				float(record["accuracy"]) * 100.0,
-			]
+	(
+		event_log
+		. log_event(
+			ControlCenterEventLog.Category.SYSTEM,
+			(
+				"env %d episode end (%s): reward %.2f, kills %d, accuracy %.0f%%"
+				% [
+					env_index,
+					str(record["done_reason"]),
+					float(record["reward"]),
+					int(record["kills"]),
+					float(record["accuracy"]) * 100.0,
+				]
+			)
 		)
 	)
 	if is_selected:
@@ -886,14 +891,10 @@ func get_status() -> Dictionary:
 		"pending_settings": _pending_setting_keys.duplicate(),
 		"log_dropped": event_log.dropped_count,
 		"episodes_recorded": results.size(),
-		"training_state": (
-			training_run.state if training_run != null else TrainingRunController.State.IDLE
-		),
-		"training_state_name": (
-			TrainingRunController.state_name(training_run.state)
-			if training_run != null
-			else "Idle"
-		),
+		"training_state":
+		training_run.state if training_run != null else TrainingRunController.State.IDLE,
+		"training_state_name":
+		TrainingRunController.state_name(training_run.state) if training_run != null else "Idle",
 		"training_type": config.training_type,
 		"training_type_name": ControlCenterConfig.training_type_name(config.training_type),
 		"training_mode": config.training_mode,

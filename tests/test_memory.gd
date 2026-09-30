@@ -105,10 +105,7 @@ func test_capacity_is_enforced_by_dropping_the_least_confident() -> SandboxTest:
 	for index in range(SandboxConfig.MEMORY_MAX_TRACKS + 4):
 		# Decreasing strength, so the later ones are the weakest.
 		memory.observe_sound(
-			index,
-			Vector3(float(index), 0.0, 0.0),
-			Vector3.ZERO,
-			1.0 - float(index) * 0.05
+			index, Vector3(float(index), 0.0, 0.0), Vector3.ZERO, 1.0 - float(index) * 0.05
 		)
 	t.assert_eq(memory.size(), SandboxConfig.MEMORY_MAX_TRACKS)
 	t.assert_true(memory.has(0), "the strongest contact must survive")
