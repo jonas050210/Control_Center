@@ -47,7 +47,7 @@ ruff format --check .        # 126 files already formatted
 mypy                         # Success: no issues found in 48 source files
 gdlint scripts tests         # Success: no problems found
 gdformat --check scripts tests
-PYTHONPATH=python python -m pytest -q   # 945 passed, 13 skipped, 711 subtests
+PYTHONPATH=python python -m pytest -q   # 945 passed, 17 skipped, 711 subtests
 ```
 
 `mypy` takes **no arguments** — its configuration lives in
@@ -164,7 +164,7 @@ difference you should see. Finish with `gdlint`, `gdformat --check` and
 `sandboxai.gdscript_analysis.analyze('.')` (syntax, resource paths,
 symbol resolution, call arity, undefined local calls).
 
-The four extra skips versus a Tk-capable machine are the desktop tests;
+The eight extra skips versus a Tk-capable machine are the desktop tests;
 `desktop-ui-tests` in CI runs them under Xvfb, and the Windows leg runs
 them natively. A skip count of 9 there is expected, not a regression.
 

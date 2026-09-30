@@ -6,10 +6,12 @@ visual token palette can evolve without growing the application shell module.
 
 from __future__ import annotations
 
+import gc
 import os
 import queue
 import subprocess
 import sys
+import threading
 import tkinter as tk
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +24,48 @@ from . import control_center_viewmodel as vm
 # ---------------------------------------------------------------------------
 # Background work: keeps every adapter call off the Tk event loop thread.
 # ---------------------------------------------------------------------------
+
+# Tk objects may only be finalised on the thread that owns the Tcl
+# interpreter, and CPython's cyclic collector honours no such rule: it
+# runs in whichever thread happens to cross an allocation threshold. A
+# background worker walking a directory tree allocates heavily, so it is
+# a prime candidate - and the widget trees this GUI discards (page
+# switches, closed windows) sit in reference cycles, because widgets
+# point at their parent and callbacks point back at their page. Collect
+# such a cycle on a worker and tkinter.Variable.__del__ reaches into Tcl
+# from the wrong thread. On Linux that is usually survivable; on Windows
+# the process dies instantly with exception code 0x80000003, no
+# traceback and no failing test - which is exactly how CI found this.
+#
+# So automatic collection is suspended for as long as a runner is alive
+# and driven explicitly from _pump instead, which runs on the Tk thread.
+# Nothing leaks: the collector still runs, just somewhere it is allowed
+# to. Reference-counted garbage - the overwhelming majority - is freed
+# immediately as always; only cycles wait for the next sweep.
+
+_gc_lock = threading.Lock()
+_gc_suspenders = 0
+_gc_was_enabled = True
+
+
+def _suspend_automatic_gc() -> None:
+    global _gc_suspenders, _gc_was_enabled
+    with _gc_lock:
+        if _gc_suspenders == 0:
+            _gc_was_enabled = gc.isenabled()
+            gc.disable()
+        _gc_suspenders += 1
+
+
+def _resume_automatic_gc() -> None:
+    """Restore the collector once the last runner has gone."""
+    global _gc_suspenders
+    with _gc_lock:
+        if _gc_suspenders == 0:
+            return
+        _gc_suspenders -= 1
+        if _gc_suspenders == 0 and _gc_was_enabled:
+            gc.enable()
 
 
 class BackgroundRunner:
@@ -44,6 +88,12 @@ class BackgroundRunner:
         ] = queue.Queue()
         self._closed = False
         self._poll_ms = poll_ms
+        # Collect every tenth pump rather than every one: a full sweep of a
+        # live GUI heap costs a few milliseconds, which is fine once a
+        # second and wasteful ten times a second.
+        self._pumps_between_collections = max(1, 1000 // max(poll_ms, 1))
+        self._pumps_since_collection = 0
+        _suspend_automatic_gc()
         self._pump()
 
     def submit(
@@ -76,8 +126,17 @@ class BackgroundRunner:
                     traceback.print_exc()
         except queue.Empty:
             pass
+        self._collect_if_due()
         if not self._closed:
             self._root.after(self._poll_ms, self._pump)
+
+    def _collect_if_due(self) -> None:
+        """Run the cyclic collector here, on the thread that owns Tk."""
+        self._pumps_since_collection += 1
+        if self._pumps_since_collection < self._pumps_between_collections:
+            return
+        self._pumps_since_collection = 0
+        gc.collect()
 
     def close(self) -> None:
         """Stop accepting work and wait for what is already running.
@@ -98,6 +157,8 @@ class BackgroundRunner:
         so the wait is bounded by the single in-flight call rather than
         by the whole queue.
         """
+        if self._closed:
+            return
         self._closed = True
         self._executor.shutdown(wait=True, cancel_futures=True)
         # Results that arrived while shutting down. Nothing will deliver
@@ -109,6 +170,11 @@ class BackgroundRunner:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
+        # One last sweep on this thread, so the widget tree the caller is
+        # about to destroy does not become a worker's problem later, then
+        # hand the collector back.
+        gc.collect()
+        _resume_automatic_gc()
 
 
 # ---------------------------------------------------------------------------

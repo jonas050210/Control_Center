@@ -115,6 +115,12 @@ records what changed and why.
   reference to a Tk widget and run its finaliser off the Tk thread. On
   Windows that is not an exception but a silent interpreter crash
   (`0x80000003`), which is how CI found it.
+- The desktop Control Center no longer lets a background thread collect
+  garbage. CPython runs the cyclic collector in whichever thread trips the
+  allocation threshold, discarded widget trees are cyclic, and finalising
+  one off the Tk thread reaches into Tcl from a thread that does not own
+  it. `BackgroundRunner` now suspends automatic collection while it is
+  alive and collects from its Tk-thread poll instead.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

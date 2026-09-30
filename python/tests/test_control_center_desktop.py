@@ -230,3 +230,91 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
         runner.submit(lambda: calls.append("ran"), lambda _result, _error: None)
         time.sleep(0.1)
         self.assertEqual(calls, [])
+
+
+@unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+class BackgroundRunnerOwnsGarbageCollectionTests(unittest.TestCase):
+    """Cycle collection must happen on the Tk thread, not on a worker.
+
+    Second half of the same Windows crash. Waiting for workers at
+    shutdown was necessary but not sufficient: the fatal collection
+    happened *while* a worker was running, mid-``pathlib`` walk, because
+    CPython collects in whichever thread trips the allocation threshold.
+    Discarded widget trees are cyclic, so a worker that trips it runs
+    ``tkinter.Variable.__del__`` against the Tcl interpreter it does not
+    own, and the process dies without a traceback.
+
+    The runner therefore suspends automatic collection while it is alive
+    and drives the collector from ``_pump``, which is on the Tk thread.
+    """
+
+    class _StubRoot:
+        def after(self, _delay_ms: int, _callback) -> str:
+            return "timer"
+
+    def _runner(self, poll_ms: int = 100):
+        from sandboxai.control_center_widgets import BackgroundRunner
+
+        runner = BackgroundRunner(self._StubRoot(), poll_ms=poll_ms)  # type: ignore[arg-type]
+        self.addCleanup(runner.close)
+        return runner
+
+    def test_automatic_collection_is_suspended_while_a_runner_is_alive(self) -> None:
+        import gc
+
+        self.assertTrue(gc.isenabled(), "precondition: the suite runs with gc on")
+        runner = self._runner()
+        self.assertFalse(
+            gc.isenabled(),
+            "automatic collection is still on, so a worker thread can finalise Tk objects",
+        )
+        runner.close()
+        self.assertTrue(gc.isenabled(), "close() did not hand the collector back")
+
+    def test_the_last_runner_out_restores_the_collector(self) -> None:
+        """set_output_root builds a second runner before dropping the first."""
+        import gc
+
+        first = self._runner()
+        second = self._runner()
+        first.close()
+        self.assertFalse(gc.isenabled(), "the first close() freed a collector it did not own")
+        second.close()
+        self.assertTrue(gc.isenabled())
+
+    def test_closing_twice_does_not_unbalance_the_counter(self) -> None:
+        import gc
+
+        runner = self._runner()
+        runner.close()
+        runner.close()
+        other = self._runner()
+        self.assertFalse(
+            gc.isenabled(),
+            "a double close() decremented the counter twice and left a live runner "
+            "running with automatic collection on",
+        )
+        other.close()
+        self.assertTrue(gc.isenabled())
+
+    def test_pump_collects_cycles_on_the_calling_thread(self) -> None:
+        runner = self._runner(poll_ms=1000)  # collect on every pump
+
+        collected: list[str] = []
+
+        class Cyclic:
+            def __del__(self) -> None:
+                collected.append("finalised")
+
+        node = Cyclic()
+        node.self_reference = node  # type: ignore[attr-defined]
+        del node
+
+        self.assertEqual(collected, [], "a cycle should survive until something collects it")
+        runner._pump()
+        self.assertEqual(
+            collected,
+            ["finalised"],
+            "_pump did not collect, so cycles are left for whichever thread trips the "
+            "allocation threshold - which is the bug",
+        )
