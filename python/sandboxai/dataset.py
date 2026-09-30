@@ -224,14 +224,14 @@ class DemonstrationDataset:
         metadata: dict[str, Any] = {}
         transitions: list[dict[str, Any]] = []
         if source.suffix.lower() == ".json":
-            value = json.loads(source.read_text(encoding="utf-8"))
+            value = json.loads(source.read_text(encoding="utf-8-sig"))
             if isinstance(value, dict):
                 metadata = dict(value.get("metadata", {}))
                 transitions = list(value.get("transitions", []))
             else:
                 transitions = list(value)
         else:
-            with source.open("r", encoding="utf-8") as stream:
+            with source.open("r", encoding="utf-8-sig") as stream:
                 for line_number, line in enumerate(stream, 1):
                     if not line.strip():
                         continue

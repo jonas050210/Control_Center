@@ -126,7 +126,7 @@ def load_godot_executable_setting() -> str | None:
     remembered-executable fallback.
     """
     try:
-        data = json.loads(_settings_path().read_text(encoding="utf-8"))
+        data = json.loads(_settings_path().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
     value = data.get("godot_executable") if isinstance(data, dict) else None
@@ -608,7 +608,7 @@ class TrainingConfig:
 
     @classmethod
     def load(cls, path: str | Path) -> TrainingConfig:
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
 
 @dataclass

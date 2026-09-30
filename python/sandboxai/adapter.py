@@ -292,7 +292,7 @@ class ProcessManager:
         # training state and progress; the OS process state is supplementary.
         status_path = record.run_dir / "status.json"
         try:
-            status = json.loads(status_path.read_text(encoding="utf-8"))
+            status = json.loads(status_path.read_text(encoding="utf-8-sig"))
             if isinstance(status, dict):
                 result["backend"] = cast("RunStatus", status)
         except FileNotFoundError:
@@ -617,7 +617,7 @@ class SandboxAIAdapter:
     def profiling(self, run: str | Path) -> dict[str, Any]:
         path = Path(run) / "logs" / "training_profile.json"
         try:
-            value = json.loads(path.read_text(encoding="utf-8"))
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
             return value if isinstance(value, dict) else {"error": "profile is not an object"}
         except FileNotFoundError:
             return {"available": False, "reason": "profiling not enabled or run incomplete"}
@@ -694,7 +694,7 @@ class SandboxAIAdapter:
         if not path.is_absolute():
             path = self.project_root / path
         try:
-            rows = json.loads((path / "benchmark.json").read_text(encoding="utf-8"))
+            rows = json.loads((path / "benchmark.json").read_text(encoding="utf-8-sig"))
             return {
                 "results": rows,
                 "scaling": summarize_scaling(rows) if isinstance(rows, list) else {},

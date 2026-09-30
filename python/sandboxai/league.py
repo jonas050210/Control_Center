@@ -175,7 +175,7 @@ class CheckpointRegistry:
         source = Path(path) if path else self.path
         if source is None or not source.exists():
             raise FileNotFoundError(f"registry not found: {source}")
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
         self._records = {}
         self._order = []
         for entry in payload.get("policies", []):
@@ -650,7 +650,7 @@ class EvaluationLeague(League):
         loading a history *alongside* a registry that already contains
         those totals, and applying them twice would double-count.
         """
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         self.results = [MatchResult.from_dict(entry) for entry in payload.get("results", [])]
         if replay_into_registry:
             for result in self.results:

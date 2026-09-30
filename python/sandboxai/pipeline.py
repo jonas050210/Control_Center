@@ -739,7 +739,7 @@ class TrainingPipeline:
         source = Path(path)
         if not source.is_file():
             return False
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = json.loads(source.read_text(encoding="utf-8-sig"))
         self.driver.load_state_dict(payload.get("driver", {}))
         return True
 

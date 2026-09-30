@@ -201,6 +201,44 @@ def _module_level_imports(path: Path) -> set[str]:
     return siblings
 
 
+class DependencyDeclarationTests(unittest.TestCase):
+    """pyproject.toml is the only place dependencies are declared.
+
+    There used to be a requirements.txt as well. Nothing referenced it -
+    not the README, not CI, not the helper scripts; the pip-audit job
+    builds its own list from pyproject - and it had already drifted,
+    listing ``torch>=2.1`` where pyproject says ``torch>=2.1,<3``. A
+    second copy of a fact nobody reads is a second copy that goes wrong
+    quietly, so it was deleted. This test keeps it deleted.
+    """
+
+    def test_there_is_no_second_dependency_list(self) -> None:
+        stray = REPOSITORY_ROOT / "requirements.txt"
+        self.assertFalse(
+            stray.is_file(),
+            "requirements.txt is back. Dependencies belong in pyproject.toml; "
+            "if a plain list is needed, generate it rather than maintaining it.",
+        )
+
+    def test_the_lock_file_is_labelled_as_platform_specific(self) -> None:
+        lock = REPOSITORY_ROOT / "requirements-lock-linux-py311-cpu.txt"
+        self.assertTrue(lock.is_file(), "the generated CI lock file is missing")
+        header = lock.read_text(encoding="utf-8")[:2000]
+        self.assertIn("linux", header.lower())
+
+    def test_every_extra_resolves_to_a_declared_extra(self) -> None:
+        data = tomllib.loads(_read("pyproject.toml"))
+        extras = data["project"]["optional-dependencies"]
+        for name, requirements in extras.items():
+            for requirement in requirements:
+                match = re.fullmatch(r"sandboxai\[([\w,\s-]+)\]", requirement)
+                if match is None:
+                    continue
+                for referenced in match.group(1).split(","):
+                    with self.subTest(extra=name, references=referenced.strip()):
+                        self.assertIn(referenced.strip(), extras)
+
+
 class ModuleMapTests(unittest.TestCase):
     """docs/PYTHON_MODULE_MAP.md is generated from the package, so it must match it.
 

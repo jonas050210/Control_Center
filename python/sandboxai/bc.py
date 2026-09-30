@@ -100,9 +100,44 @@ def _atomic_torch_save(value: dict[str, Any], path: Path) -> None:
     temporary.replace(path)
 
 
+def _load_checkpoint(path: Path, device: str) -> dict[str, Any]:
+    """Load a checkpoint written by :func:`_atomic_torch_save`.
+
+    ``weights_only=True`` is the point of this function. The default of
+    ``torch.load`` before PyTorch 2.6 - and what this module used to ask
+    for explicitly - unpickles arbitrary objects, which means loading a
+    checkpoint runs whatever code the file's author put in it. Nothing
+    here needs that: :func:`train_bc` writes tensors, strings, numbers,
+    lists and dicts, all of which the restricted unpickler accepts.
+
+    A checkpoint that genuinely cannot be read this way is reported as
+    such rather than loaded unsafely, because "this file wants to run
+    code" is exactly the case worth refusing.
+    """
+    try:
+        checkpoint = torch.load(path, map_location=device, weights_only=True)
+    except Exception as exc:
+        # Deliberately broad. torch does not document what the restricted
+        # unpickler raises, and it is not one type: a hostile payload
+        # gives pickle.UnpicklingError, while a truncated or non-torch
+        # file surfaces as IndexError from inside
+        # torch._weights_only_unpickler. Both were observed. Guessing a
+        # tuple here would leave holes that only show up as an
+        # unreadable traceback in front of a user holding a bad file.
+        raise ValueError(
+            f"{path} could not be loaded safely: {exc}. SandboxAI reads "
+            f"checkpoints with weights_only=True, which only accepts tensors "
+            f"and plain data. A checkpoint that needs arbitrary unpickling "
+            f"was either written by a different tool or is not trustworthy."
+        ) from exc
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"{path} does not contain a checkpoint dictionary")
+    return checkpoint
+
+
 def load_bc_checkpoint(path: str | Path, device: str = "cpu") -> BehaviorCloningPolicy:
     _require_torch()
-    checkpoint = torch.load(Path(path), map_location=device, weights_only=False)
+    checkpoint = _load_checkpoint(Path(path), device)
     hidden_sizes = tuple(int(value) for value in checkpoint["hidden_sizes"])
     if len(hidden_sizes) != 2:
         raise ValueError(
@@ -151,7 +186,7 @@ def _restore_checkpoint(
     """Returns (start_epoch, best_validation_loss), restoring model/optimizer in place."""
     if not resume_checkpoint:
         return 0, float("inf")
-    checkpoint = torch.load(Path(resume_checkpoint), map_location=device, weights_only=False)
+    checkpoint = _load_checkpoint(Path(resume_checkpoint), device)
     model.load_state_dict(checkpoint["model_state_dict"])
     if "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -432,7 +467,7 @@ def load_bc_into_sb3_policy(
     a future SB3 version changes parameter names or dimensions.
     """
     _require_torch()
-    checkpoint = torch.load(Path(checkpoint_path), map_location=device, weights_only=False)
+    checkpoint = _load_checkpoint(Path(checkpoint_path), device)
     model = BehaviorCloningPolicy(
         int(checkpoint["observation_dim"]), tuple(checkpoint["hidden_sizes"])
     )

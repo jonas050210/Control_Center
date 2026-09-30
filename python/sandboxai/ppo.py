@@ -254,7 +254,16 @@ def _finished_episode_metrics(infos: Any) -> list[dict[str, Any]]:
 
 
 def _mean(buffer: Sequence[dict[str, Any]], key: str, source: str | None = None) -> float:
-    """Mean of `key` over `buffer`, reading it out of `source` when nested."""
+    """Mean of `key` over `buffer`, reading it out of `source` when nested.
+
+    An empty buffer means "no episodes finished in this interval", which
+    is a normal state early in a rollout, not an error. It averages to
+    0.0 rather than raising: the callers feed this straight into a
+    progress payload, and a crash there would take down a training run
+    over a missing log line.
+    """
+    if not buffer:
+        return 0.0
     total = 0.0
     for item in buffer:
         container = item if source is None else item.get(source, {})
@@ -1142,7 +1151,7 @@ def _inherit_best_score(
     """
     if not best_record_path.exists():
         return
-    previous_best = json.loads(best_record_path.read_text(encoding="utf-8"))
+    previous_best = json.loads(best_record_path.read_text(encoding="utf-8-sig"))
     if not selection_rule.matches(previous_best.get("selection_rule")):
         telemetry.write(
             {

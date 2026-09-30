@@ -43,11 +43,11 @@ PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
 
 ```bash
 ruff check .                 # All checks passed!
-ruff format --check .        # 124 files already formatted
+ruff format --check .        # 126 files already formatted
 mypy                         # Success: no issues found in 48 source files
 gdlint scripts tests         # Success: no problems found
 gdformat --check scripts tests
-PYTHONPATH=python python -m pytest -q   # 931 passed, 9 skipped, 705 subtests
+PYTHONPATH=python python -m pytest -q   # 944 passed, 9 skipped, 711 subtests
 ```
 
 `mypy` takes **no arguments** — its configuration lives in
@@ -164,18 +164,19 @@ difference you should see. Finish with `gdlint`, `gdformat --check` and
 `sandboxai.gdscript_analysis.analyze('.')` (syntax, resource paths,
 symbol resolution, call arity, undefined local calls).
 
-## 8. Open findings — verified, not yet fixed
+## 8. Findings — all six closed
 
-Each of these was reproduced, not guessed.
+The audit that produced this list is done and every item is fixed. The
+table is kept because the *reasoning* is worth more than the diff.
 
-| ID | Finding | Evidence |
+| ID | Was | Resolution |
 | --- | --- | --- |
-| **S1** | `torch.load(..., weights_only=False)` at `bc.py:105`, `:154`, `:435`. Loading a checkpoint executes arbitrary pickle code. | A real checkpoint built with `_atomic_torch_save` loads fine with `weights_only=True` — the flag is unnecessary, not just risky. |
-| **D1** | `requirements.txt` and `pyproject.toml` have already diverged: the former lacks the upper bounds (`numpy>=1.24` vs `numpy>=1.24,<3`). | Two sources of truth, no drift test. Generate one from the other, or delete it. |
-| **W1** | 40 read sites use `encoding="utf-8"`; a UTF-8 BOM raises `JSONDecodeError`. PowerShell's `Out-File -Encoding utf8` writes one. | Reproduced with `TrainingConfig`. `utf-8-sig` reads both forms correctly. Low urgency: the maintainer works in Ubuntu/WSL. |
-| **R1** | `ppo._mean` / `_episode_means` raise `ZeroDivisionError` on an empty buffer. | Not reachable today — the only caller guards with `if episode_metrics:`. A trap for the next caller. |
-| **R2** | `contract.validate_observation_spec()` is built entirely from `assert`. | Under `python -O` it silently becomes a no-op: a "validation" that validates nothing. |
-| **R3** | `godot_env._stdout_lines` is an unbounded `queue.Queue`. | stderr is capped at `deque(maxlen=200)`; stdout is not. |
+| **S1** | `torch.load(..., weights_only=False)` at three call sites: opening a checkpoint executed whatever its author pickled into it. | One `_load_checkpoint()` with `weights_only=True`. `test_bc.py::CheckpointLoadingIsSandboxedTests` builds an actually hostile checkpoint and asserts the payload does not run. |
+| **D1** | `requirements.txt` and `pyproject.toml` had diverged (missing upper bounds). | Deleted. Nothing referenced it — CI builds its own list from pyproject. A test keeps it deleted. |
+| **W1** | 20 JSON reads used `encoding="utf-8"`; a Windows BOM made them fail with `Expecting value: line 1 column 1`. | All reads use `utf-8-sig` (identical for BOM-less files). `test_bom_tolerance.py` pins the behaviour *and* fails on a new plain-`utf-8` JSON read. |
+| **R1** | `ppo._mean` raised `ZeroDivisionError` on an empty buffer. | Returns `0.0`. "No episodes finished this interval" is a normal state, not an error. |
+| **R2** | `contract.validate_observation_spec()` was built from `assert` and became a no-op under `python -O`. | Raises `ValueError`. Verified under `-O`. |
+| **R3** | `godot_env._stdout_lines` is an unbounded queue. | **Left as is, deliberately.** A `maxsize` would apply backpressure to the pump thread, fill the OS pipe buffer and block Godot's next write — recreating the exact deadlock the surrounding code prevents. Now documented in place. Do not "fix" this. |
 
 **Checked and found clean** (do not re-audit without reason): division by
 zero in GDScript (all four candidates guarded), `DemonstrationDataset.statistics`
@@ -187,7 +188,8 @@ no `eval`/`exec`, no mutable default arguments, no `utcnow`, no committed
 artefacts.
 
 Weakest test coverage: `benchmark.py` 43 %, `cli.py` 61 %, `adapter.py`
-72 %. Total 86 %, gate 70 %.
+72 %. Total 86 %, gate 70 %. `benchmark.py` is the one worth raising —
+it is the module the maintainer has to trust when sizing `--env-workers`.
 
 ## 9. The maintainer's setup — read before optimising anything
 

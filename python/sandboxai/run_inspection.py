@@ -70,7 +70,7 @@ def read_json(path: Path) -> tuple[Any, str | None]:
     if not path.is_file():
         return None, None
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
+        return json.loads(path.read_text(encoding="utf-8-sig")), None
     except (OSError, UnicodeDecodeError) as exc:
         return None, f"{path.name}: unreadable ({exc.__class__.__name__})"
     except json.JSONDecodeError as exc:

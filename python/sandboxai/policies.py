@@ -287,7 +287,7 @@ class PolicyRoster:
 
     @classmethod
     def load(cls, path: str | Path) -> PolicyRoster:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         roster = cls()
         for entry in payload.get("policies", []):
             roster.add(PolicySpec.from_dict(entry))

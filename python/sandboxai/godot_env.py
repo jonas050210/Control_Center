@@ -125,6 +125,15 @@ class GodotProcessTransport:
         # otherwise fill the OS pipe buffer and deadlock the whole bridge.
         # Reading stdout through a queue makes request_timeout enforceable
         # portably (select() does not work on pipes on Windows).
+        #
+        # The queue is unbounded on purpose, unlike the stderr tail below.
+        # A maxsize would apply backpressure to the pump thread, which
+        # would let the OS pipe buffer fill, which would block Godot's
+        # next write - reintroducing exactly the deadlock the previous
+        # paragraph exists to prevent. Growth is self-limiting anyway:
+        # stdout carries the request/response protocol, so a shard that
+        # produced faster than the trainer consumed would be one that had
+        # already stopped answering requests.
         self._stdout_lines: queue.Queue[str | None] = queue.Queue()
         self._stderr_tail: deque[str] = deque(maxlen=200)
         self._stdout_thread = threading.Thread(target=self._pump_stdout, daemon=True)

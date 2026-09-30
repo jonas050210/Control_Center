@@ -404,7 +404,7 @@ class TTKDataset:
             raise FileNotFoundError(source)
         metadata: dict[str, Any] = {}
         raw: list[dict[str, Any]] = []
-        with source.open("r", encoding="utf-8") as stream:
+        with source.open("r", encoding="utf-8-sig") as stream:
             for line_number, line in enumerate(stream, 1):
                 if not line.strip():
                     continue

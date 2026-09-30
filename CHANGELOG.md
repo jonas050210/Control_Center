@@ -109,6 +109,30 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- Loading a behavior-cloning checkpoint could execute arbitrary code.
+  `bc.py` passed `weights_only=False` to `torch.load` at three call
+  sites, which unpickles whatever the file contains; a checkpoint is
+  therefore a program, not data. Nothing needed it - the checkpoints
+  hold tensors, strings, numbers, lists and dicts - so all three go
+  through one `_load_checkpoint()` with `weights_only=True`, and a file
+  that cannot be read that way is refused with an explanation instead of
+  being trusted. The regression test builds a genuinely hostile
+  checkpoint and asserts its payload does not run.
+- JSON files written on Windows were unreadable. Twenty read sites used
+  `encoding="utf-8"`, which hands a byte-order mark straight to
+  `json.loads`; PowerShell's `Out-File -Encoding utf8` writes one, so a
+  config produced that way failed with `Expecting value: line 1 column
+  1`. Reads now use `utf-8-sig`, which is byte-identical for files
+  without a BOM. Writes deliberately still use `utf-8` - emitting a BOM
+  would be the opposite bug - and a test enforces both directions.
+- `ppo._mean` raised `ZeroDivisionError` on an empty buffer. No caller
+  could reach it, but the next one would have: it now returns 0.0,
+  because "no episodes finished in this interval" is a normal state
+  early in a rollout.
+- `contract.validate_observation_spec()` consisted entirely of `assert`
+  statements, so under `python -O` it silently became a no-op while
+  still reading like a guarantee. It raises `ValueError` now.
+
 - `ReplayEpisode.event_tick` was a copy of the recorder's property and
   read `self._tick`, a cursor only the recorder has - so asking a parsed
   episode where to anchor an event raised `AttributeError`. Found by
@@ -144,5 +168,10 @@ records what changed and why.
   for the exact diagnosis of each).
 
 ### Removed
+- `requirements.txt`. Nothing referenced it - not the README, not CI
+  (the pip-audit job builds its own list from `pyproject.toml`), not the
+  helper scripts - and it had already drifted, declaring `torch>=2.1`
+  where `pyproject.toml` says `torch>=2.1,<3`. Dependencies are declared
+  in one place now, and a test keeps the second copy from coming back.
 - Dead/unused imports across several `sandboxai` modules found by the
   new ruff CI job.

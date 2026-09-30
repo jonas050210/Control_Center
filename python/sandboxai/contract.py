@@ -719,26 +719,42 @@ def observation_slice(observation: Sequence[float], name: str) -> list[float]:
 
 
 def validate_observation_spec() -> None:
-    """Raises AssertionError if OBSERVATION_SPEC is internally inconsistent."""
+    """Raises ValueError if OBSERVATION_SPEC is internally inconsistent.
+
+    This deliberately raises rather than asserting. ``python -O`` strips
+    ``assert`` statements, and a consistency check that silently becomes
+    a no-op under an interpreter flag is worse than no check at all - it
+    still reads like a guarantee.
+    """
     expected_index = 0
     for field in OBSERVATION_SPEC:
-        assert field.index == expected_index, (
-            f"observation field {field.name!r} starts at {field.index}, expected {expected_index}"
-        )
-        assert field.width > 0
+        if field.index != expected_index:
+            raise ValueError(
+                f"observation field {field.name!r} starts at {field.index}, "
+                f"expected {expected_index}"
+            )
+        if field.width <= 0:
+            raise ValueError(f"observation field {field.name!r} has width {field.width}")
         expected_index += field.width
-    assert expected_index == OBSERVATION_FIELD_COUNT
+    if expected_index != OBSERVATION_FIELD_COUNT:
+        raise ValueError(
+            f"OBSERVATION_SPEC covers {expected_index} values, "
+            f"OBSERVATION_FIELD_COUNT says {OBSERVATION_FIELD_COUNT}"
+        )
 
     # Every field belongs to exactly one adapter channel. This is what makes
     # OBSERVATION_GROUPS a usable implementation checklist rather than
     # decorative documentation.
     grouped: list[str] = [name for names in OBSERVATION_GROUPS.values() for name in names]
-    assert len(grouped) == len(set(grouped)), "a field appears in more than one observation group"
+    if len(grouped) != len(set(grouped)):
+        raise ValueError("a field appears in more than one observation group")
     declared = {field.name for field in OBSERVATION_SPEC}
     missing = declared - set(grouped)
     unknown = set(grouped) - declared
-    assert not missing, f"observation fields not assigned to a group: {sorted(missing)}"
-    assert not unknown, f"OBSERVATION_GROUPS references unknown fields: {sorted(unknown)}"
+    if missing:
+        raise ValueError(f"observation fields not assigned to a group: {sorted(missing)}")
+    if unknown:
+        raise ValueError(f"OBSERVATION_GROUPS references unknown fields: {sorted(unknown)}")
 
 
 class GameAdapter(ABC):

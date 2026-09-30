@@ -151,7 +151,7 @@ class RunControl:
         if self.command_path is None or not self.command_path.is_file():
             return {}
         try:
-            value = json.loads(self.command_path.read_text(encoding="utf-8"))
+            value = json.loads(self.command_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
             # A malformed/partially replaced command is ignored.  Godot will
             # retry on the next UI action; training must never crash because

@@ -285,7 +285,7 @@ def _call_godot_process(command: list[str]) -> int:
 def _config_from_args(args: argparse.Namespace) -> TrainingConfig:
     values: dict[str, Any] = {}
     if args.config:
-        values = json.loads(Path(args.config).read_text(encoding="utf-8"))
+        values = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     fields = set(TrainingConfig.__dataclass_fields__)
     for key, value in vars(args).items():
         if key in fields and value is not None:
@@ -1067,8 +1067,8 @@ def _cmd_validate_runtime(args: argparse.Namespace) -> int:
 def _cmd_compare_experiments(args: argparse.Namespace) -> int:
     from .experiment import compare_experiments, format_experiment_report
 
-    base_data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
-    cand_data = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
+    base_data = json.loads(Path(args.baseline).read_text(encoding="utf-8-sig"))
+    cand_data = json.loads(Path(args.candidate).read_text(encoding="utf-8-sig"))
     res = compare_experiments(base_data, cand_data, threshold=args.threshold)
     if args.json:
         print(json.dumps(res, indent=2, default=str))
@@ -1082,7 +1082,7 @@ def _cmd_summarize_experiment(args: argparse.Namespace) -> int:
 
     target_dir = Path(args.path)
     summary_files = list(target_dir.glob("**/run_summary.json")) or list(target_dir.glob("*.json"))
-    run_dicts = [json.loads(p.read_text(encoding="utf-8")) for p in summary_files]
+    run_dicts = [json.loads(p.read_text(encoding="utf-8-sig")) for p in summary_files]
     agg = aggregate_seed_runs(run_dicts)
     if args.json:
         print(json.dumps(agg, indent=2, default=str))

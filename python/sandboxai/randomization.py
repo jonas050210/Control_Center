@@ -321,7 +321,7 @@ class TrainingDistribution:
 
     @classmethod
     def load(cls, path: str | Path) -> TrainingDistribution:
-        return cls(**json.loads(Path(path).read_text(encoding="utf-8")))
+        return cls(**json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
 
 class DistributionRunTracker:
