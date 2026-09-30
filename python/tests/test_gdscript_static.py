@@ -15,19 +15,21 @@ It is deliberately a *static* check. It does NOT prove the simulation
 behaves correctly; only `godot --headless --path . --script
 res://tests/run_tests.gd` does that.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from optional_deps import GDTOOLKIT_REASON, HAS_GDTOOLKIT
+
 from sandboxai.gdscript_analysis import (
     ProjectIndex,
     analyze,
+    check_enum_members,
     check_local_method_calls,
     check_static_calls,
-    check_enum_members,
     check_typed_local_calls,
     lint_all,
 )
@@ -108,7 +110,7 @@ class StaticCallThroughScriptClassTests(unittest.TestCase):
             "var mode: int = 0\n"
             "\n"
             "static func create() -> Profile:\n"
-            "\treturn load(\"res://scripts/profile.gd\").new()\n"
+            '\treturn load("res://scripts/profile.gd").new()\n'
             "\n"
             "static func from_id(id: String, seed: int = 0) -> Profile:\n"
             "\treturn create()\n",
@@ -118,12 +120,12 @@ class StaticCallThroughScriptClassTests(unittest.TestCase):
             "class_name Env\n"
             "extends RefCounted\n"
             "\n"
-            "const Profile = preload(\"res://scripts/profile.gd\")\n"
+            'const Profile = preload("res://scripts/profile.gd")\n'
             "\n"
             "var lighting = null\n"
             "\n"
             "func reset() -> void:\n"
-            "\tlighting = Profile.mode(\"low_light\")\n",
+            '\tlighting = Profile.mode("low_light")\n',
             encoding="utf-8",
         )
         return root
@@ -145,12 +147,12 @@ class StaticCallThroughScriptClassTests(unittest.TestCase):
             "class_name Env\n"
             "extends RefCounted\n"
             "\n"
-            "const Profile = preload(\"res://scripts/profile.gd\")\n"
+            'const Profile = preload("res://scripts/profile.gd")\n'
             "\n"
             "var lighting = null\n"
             "\n"
             "func reset() -> void:\n"
-            "\tlighting = Profile.from_id(\"low_light\")\n"
+            '\tlighting = Profile.from_id("low_light")\n'
             "\tvar fresh = Profile.new()\n",
             encoding="utf-8",
         )
@@ -160,9 +162,7 @@ class StaticCallThroughScriptClassTests(unittest.TestCase):
         # Direct, named regression guard: the file that broke the real
         # runtime must contain zero class-level calls of instance members.
         index = ProjectIndex(REPO_ROOT)
-        sp_findings = [
-            f for f in check_static_calls(index) if "self_play" in f.path
-        ]
+        sp_findings = [f for f in check_static_calls(index) if "self_play" in f.path]
         self.assertEqual(
             sp_findings,
             [],
@@ -200,7 +200,7 @@ class UndefinedLocalCallTests(unittest.TestCase):
             "extends Node\n"
             "\n"
             "func poll() -> void:\n"
-            "\tvar jobs := {\"cpu_command\": _needs_cpu_command()}\n"
+            '\tvar jobs := {"cpu_command": _needs_cpu_command()}\n'
             "\t_ready()\n"
             "\tsuper._init()\n",
             encoding="utf-8",
@@ -260,9 +260,7 @@ class UndefinedLocalCallTests(unittest.TestCase):
         # Direct, named regression guard for the file that broke the real
         # runtime: it must not call any helper it does not declare.
         index = ProjectIndex(REPO_ROOT)
-        findings = [
-            f for f in check_local_method_calls(index) if "system_monitor" in f.path
-        ]
+        findings = [f for f in check_local_method_calls(index) if "system_monitor" in f.path]
         self.assertEqual(
             findings,
             [],
@@ -330,9 +328,7 @@ class TypedLocalCallTests(unittest.TestCase):
     def test_reassigned_locals_are_dropped_rather_than_guessed(self):
         # After `w = something_else` the declared type no longer holds, so
         # reporting on it would be a false positive.
-        root = self._project(
-            "\tvar w := Weapon.new()\n\tw = make_other()\n\tw.detonate()\n"
-        )
+        root = self._project("\tvar w := Weapon.new()\n\tw = make_other()\n\tw.detonate()\n")
         self.assertEqual(check_typed_local_calls(ProjectIndex(root)), [])
 
     def test_scope_does_not_leak_between_functions(self):
@@ -414,13 +410,7 @@ class EnumMemberTests(unittest.TestCase):
         (root / "project.godot").write_text("[application]\n", encoding="utf-8")
         (root / "scripts").mkdir()
         (root / "scripts" / "cfg.gd").write_text(
-            "class_name Cfg\n"
-            "extends RefCounted\n"
-            "\n"
-            "enum Level {\n"
-            "\tFIRST = 1,\n"
-            "\tSECOND = 2,\n"
-            "}\n",
+            "class_name Cfg\nextends RefCounted\n\nenum Level {\n\tFIRST = 1,\n\tSECOND = 2,\n}\n",
             encoding="utf-8",
         )
         (root / "scripts" / "user.gd").write_text(

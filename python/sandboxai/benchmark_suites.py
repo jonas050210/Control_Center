@@ -27,13 +27,15 @@ rather than returning a plausible-looking table — a fabricated benchmark
 is worse than no benchmark. :func:`describe_plan` exists so the plan can
 be inspected, documented and tested without an engine present.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import json
-from pathlib import Path
 import shutil
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 from .benchmark import benchmark_simulation, summarize_scaling
 from .telemetry import resource_snapshot

@@ -5,6 +5,7 @@ real Godot binary: a small Python subprocess speaks the same protocol as
 scripts/rl/rl_server.gd. POSIX-only because the fake executable relies on a
 shebang wrapper.
 """
+
 import os
 import stat
 import sys
@@ -13,12 +14,13 @@ import unittest
 from pathlib import Path
 
 from optional_deps import GYMNASIUM_REASON, HAS_GYMNASIUM, HAS_SB3, SB3_REASON
+
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
-from sandboxai.godot_env import GodotProcessTransport, GodotGymEnv, GodotVecEnv
+from sandboxai.godot_env import GodotGymEnv, GodotProcessTransport, GodotVecEnv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-FAKE_BRIDGE_SOURCE = r'''
+FAKE_BRIDGE_SOURCE = r"""
 import json, os, sys
 
 OBS_DIM = __OBS_DIM__
@@ -182,7 +184,7 @@ for line in sys.stdin:
              "infos": [info for _ in range(ENV_COUNT)]})
     else:
         out({"ok": False, "error": "unknown command"})
-'''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
+""".replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT))
 
 
 @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
@@ -195,7 +197,9 @@ class FakeBridgeTestCase(unittest.TestCase):
         bridge_py.write_text(FAKE_BRIDGE_SOURCE, encoding="utf-8")
         wrapper = tmp / "fake_godot"
         # Forward "$@" so launch flags (e.g. --self-play 1) reach the fake.
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
+        wrapper.write_text(
+            f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8"
+        )
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.executable = str(wrapper)
 
@@ -302,8 +306,9 @@ class FakeBridgeTestCase(unittest.TestCase):
 
     @unittest.skipUnless(HAS_SB3, SB3_REASON)
     def test_vec_env_consumes_sb3_seeds_on_reset(self):
-        env = GodotVecEnv(project_path=PROJECT_ROOT, godot_executable=self.executable,
-                          environment_count=1)
+        env = GodotVecEnv(
+            project_path=PROJECT_ROOT, godot_executable=self.executable, environment_count=1
+        )
         try:
             env.seed(123)
             env.reset()

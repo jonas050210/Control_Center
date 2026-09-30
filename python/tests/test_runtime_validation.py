@@ -6,6 +6,7 @@ Ensures that:
 2. The report formatter outputs clear, diagnostic summaries.
 3. Contract checks enforce the 84-float observation and 6-field MultiDiscrete action.
 """
+
 from __future__ import annotations
 
 import unittest
@@ -21,7 +22,10 @@ from sandboxai.runtime_validation import (
 
 class RuntimeValidationHarnessTests(unittest.TestCase):
     def test_validator_refuses_to_invent_when_godot_missing(self):
-        with mock.patch("sandboxai.runtime_validation.find_godot_executable", side_effect=FileNotFoundError("not found")):
+        with mock.patch(
+            "sandboxai.runtime_validation.find_godot_executable",
+            side_effect=FileNotFoundError("not found"),
+        ):
             validator = RuntimeValidator(godot_executable="non_existent_godot")
             self.assertFalse(validator.is_godot_available())
 

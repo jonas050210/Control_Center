@@ -46,13 +46,15 @@ global index range and the tail of that process' stderr, and every other
 shard is closed before the error propagates. Partial, silently truncated
 batches are never returned.
 """
+
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 import os
 import time
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any
 
 from .contract import OBSERVATION_FIELD_COUNT
 from .godot_env import GodotBatchClient, PendingRequest
@@ -297,9 +299,7 @@ class ShardedBatchClient:
         else:
             actions = list(actions)
         if len(actions) != self.environment_count:
-            raise ValueError(
-                f"expected {self.environment_count} actions, got {len(actions)}"
-            )
+            raise ValueError(f"expected {self.environment_count} actions, got {len(actions)}")
 
         def payload(shard: ShardSpec) -> dict[str, Any]:
             return {
@@ -444,7 +444,7 @@ class ShardedBatchClient:
             for shard in self.shards
         ]
 
-    def __enter__(self) -> "ShardedBatchClient":
+    def __enter__(self) -> ShardedBatchClient:
         return self
 
     def __exit__(self, *_args: Iterable[Any]) -> None:

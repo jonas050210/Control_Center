@@ -1,11 +1,12 @@
 """Tests for the research/skill metrics subsystem (Phase 3)."""
+
 from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from sandboxai.contract import OBSERVATION_FIELD_COUNT, OBSERVATION_INDEX
 from sandboxai.metrics import (
@@ -59,7 +60,11 @@ class AimAndReactionTests(unittest.TestCase):
             metrics.record(
                 StepSample(
                     observation=obs(primary_enemy_visible=1.0, primary_enemy_bearing_norm=0.1),
-                    events={"shot_fired": True, "hit": index < 3, "damage_dealt": 10.0 if index < 3 else 0.0},
+                    events={
+                        "shot_fired": True,
+                        "hit": index < 3,
+                        "damage_dealt": 10.0 if index < 3 else 0.0,
+                    },
                     action=IDLE_ACTION,
                     dt=DT,
                 )
@@ -248,7 +253,12 @@ class CombatSurvivalExplorationTests(unittest.TestCase):
         metrics.record(
             StepSample(
                 observation=obs(),
-                events={"damage_taken": 12.0, "useless_shot": True, "shot_fired": True, "shot_result": "useless_spam"},
+                events={
+                    "damage_taken": 12.0,
+                    "useless_shot": True,
+                    "shot_fired": True,
+                    "shot_result": "useless_spam",
+                },
                 action=IDLE_ACTION,
                 dt=DT,
             )
@@ -290,9 +300,7 @@ class CombatSurvivalExplorationTests(unittest.TestCase):
                 dt=DT,
             )
         )
-        metrics.record(
-            StepSample(observation=obs(agent_in_cover=1.0), action=IDLE_ACTION, dt=DT)
-        )
+        metrics.record(StepSample(observation=obs(agent_in_cover=1.0), action=IDLE_ACTION, dt=DT))
         survival = metrics.survival()
         self.assertEqual(survival["escapes"], 1)
         self.assertAlmostEqual(survival["survival_time"], 2 * DT, places=6)
@@ -314,7 +322,9 @@ class CombatSurvivalExplorationTests(unittest.TestCase):
         self.assertAlmostEqual(exploration["map_coverage"], 0.95, places=6)
         self.assertEqual(exploration["new_area_events"], 19)
         self.assertGreater(exploration["time_to_half_coverage"], 0.0)
-        self.assertGreater(exploration["time_to_target_coverage"], exploration["time_to_half_coverage"])
+        self.assertGreater(
+            exploration["time_to_target_coverage"], exploration["time_to_half_coverage"]
+        )
         self.assertGreater(exploration["exploration_efficiency"], 0.0)
 
 
@@ -349,13 +359,17 @@ class ResetTests(unittest.TestCase):
         metrics = EpisodeMetrics()
         for _ in range(10):
             metrics.record(
-                StepSample(observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT)
+                StepSample(
+                    observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT
+                )
             )
         first = metrics.finish({})
         metrics.reset()
         for _ in range(2):
             metrics.record(
-                StepSample(observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT)
+                StepSample(
+                    observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT
+                )
             )
         second = metrics.finish({})
         self.assertEqual(first["categories"]["aim"]["shots"], 10)
@@ -432,7 +446,9 @@ class AggregationAndExportTests(unittest.TestCase):
         aggregator.add(happened.finish({}))
         # Only the episode where detection happened contributes; a -1
         # sentinel averaged in would report a negative latency.
-        self.assertGreaterEqual(aggregator.aggregate()["categories"]["reaction"]["detection_latency"], 0.0)
+        self.assertGreaterEqual(
+            aggregator.aggregate()["categories"]["reaction"]["detection_latency"], 0.0
+        )
 
     def test_empty_aggregate_is_well_formed(self):
         aggregate = MetricsAggregator().aggregate()

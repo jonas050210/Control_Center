@@ -13,6 +13,7 @@ the PPO pipeline still trains (loss/policy update runs without crashing) at
 the new observation size, without spending real time on a full Godot-backed
 500k-step run.
 """
+
 import os
 import stat
 import sys
@@ -26,10 +27,10 @@ from sandboxai.manifest import MANIFEST_FORMAT
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-FAKE_BRIDGE_SOURCE = r'''
+FAKE_BRIDGE_SOURCE = rf"""
 import json, random, sys
 
-OBS_DIM = {obs_dim}
+OBS_DIM = {OBSERVATION_FIELD_COUNT}
 random.seed(0)
 
 
@@ -113,7 +114,7 @@ for line in sys.stdin:
         break
     else:
         out({{"ok": False, "error": "unknown command"}})
-'''.format(obs_dim=OBSERVATION_FIELD_COUNT)
+"""
 
 
 @unittest.skipUnless(os.name == "posix", "fake bridge executable requires POSIX shebang support")
@@ -129,7 +130,9 @@ class PPOSmokeTest(unittest.TestCase):
         bridge_py = tmp / "fake_bridge.py"
         bridge_py.write_text(FAKE_BRIDGE_SOURCE, encoding="utf-8")
         wrapper = tmp / "fake_godot"
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
+        wrapper.write_text(
+            f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8"
+        )
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.executable = str(wrapper)
 
@@ -197,7 +200,9 @@ class EnvKwargsPropagationTests(unittest.TestCase):
             curriculum_level=5,
         ).validate()
         kwargs = _env_kwargs(config)
-        self.assertEqual(kwargs["godot_executable"], "/opt/godot/Godot_v4.7.2-stable_win64_console.exe")
+        self.assertEqual(
+            kwargs["godot_executable"], "/opt/godot/Godot_v4.7.2-stable_win64_console.exe"
+        )
         self.assertEqual(kwargs["environment_count"], 3)
         self.assertEqual(kwargs["enemy_count"], 2)
         self.assertEqual(kwargs["seed"], 77)
@@ -230,7 +235,9 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         bridge_py = tmp / "fake_bridge.py"
         bridge_py.write_text(FAKE_BRIDGE_SOURCE, encoding="utf-8")
         wrapper = tmp / "fake_godot"
-        wrapper.write_text(f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8")
+        wrapper.write_text(
+            f"#!/bin/sh\nexec '{sys.executable}' '{bridge_py}' \"$@\"\n", encoding="utf-8"
+        )
         wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         self.executable = str(wrapper)
 
@@ -286,7 +293,9 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
             "checkpoints/curriculum_state.json",
             "logs/episodes.jsonl",
         ):
-            self.assertTrue((run_dir / relative).is_file(), f"missing pipeline artifact: {relative}")
+            self.assertTrue(
+                (run_dir / relative).is_file(), f"missing pipeline artifact: {relative}"
+            )
         import json
 
         manifest = json.loads((run_dir / "run_manifest.json").read_text(encoding="utf-8"))
@@ -297,7 +306,9 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         battery = json.loads(reports[-1].read_text(encoding="utf-8"))
         self.assertIn("condition_evaluation", battery)
         self.assertIn("curriculum", battery)
-        episodes = (run_dir / "logs" / "episodes.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        episodes = (
+            (run_dir / "logs" / "episodes.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        )
         self.assertTrue(episodes, "episodes.jsonl must contain at least one episode row")
         first_row = json.loads(episodes[0])
         self.assertIn("plan", first_row)
@@ -305,6 +316,7 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
 
     def test_profiled_training_writes_rollout_update_and_bridge_breakdown(self):
         import json
+
         from sandboxai.ppo import train_ppo
 
         result = train_ppo(
@@ -350,7 +362,9 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
 
         first = train_ppo(self._config())
         run_dir = Path(first["run_dir"])
-        second = train_ppo(self._config(total_training_steps=96), resume_checkpoint=run_dir / "final.zip")
+        second = train_ppo(
+            self._config(total_training_steps=96), resume_checkpoint=run_dir / "final.zip"
+        )
         self.assertEqual(Path(second["run_dir"]), run_dir)
         self.assertFalse((run_dir.parent / "checkpoints").exists())
 
@@ -380,15 +394,23 @@ class PPOTrainingWorkflowTests(unittest.TestCase):
         run_dir = Path(result["run_dir"])
         rows = [
             json.loads(line)
-            for line in (run_dir / "logs" / "training.jsonl").read_text(encoding="utf-8").splitlines()
+            for line in (run_dir / "logs" / "training.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]
         ppo_updates = [row for row in rows if row.get("event") == "ppo_update"]
         self.assertTrue(ppo_updates, "expected at least one ppo_update telemetry row")
         first_update = ppo_updates[0]
         for key in (
-            "n_updates", "approx_kl", "clip_fraction", "explained_variance",
-            "entropy", "value_loss", "policy_gradient_loss", "loss",
+            "n_updates",
+            "approx_kl",
+            "clip_fraction",
+            "explained_variance",
+            "entropy",
+            "value_loss",
+            "policy_gradient_loss",
+            "loss",
         ):
             self.assertIn(key, first_update, f"ppo_update row is missing {key!r}")
             self.assertIsInstance(first_update[key], float)

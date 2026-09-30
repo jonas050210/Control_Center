@@ -24,13 +24,15 @@ episode list; the caller runs it (against Godot, a mock, or a replay) and
 feeds results back through ``record``. Running the episodes is deliberately
 not this module's job, which is what keeps it testable without an engine.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import csv
 import json
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 from .conditions import MAP_IDS, Condition
 
@@ -220,13 +222,23 @@ class GeneralizationSuite:
                         "unseen_variants",
                     )
             for map_id in self.split.holdout_maps:
-                add(map_id, default_lighting, default_scenario, 1, self._seed(index), "maps", "unseen_maps")
+                add(
+                    map_id,
+                    default_lighting,
+                    default_scenario,
+                    1,
+                    self._seed(index),
+                    "maps",
+                    "unseen_maps",
+                )
 
         # Axis 2: lighting conditions, on trained maps so the axis is clean
         for repeat in range(self.episodes_per_cell):
             for lighting in self.lightings:
                 map_id = self.split.train_maps[repeat % len(self.split.train_maps)]
-                add(map_id, lighting, default_scenario, 1, self._seed(index), "conditions", lighting)
+                add(
+                    map_id, lighting, default_scenario, 1, self._seed(index), "conditions", lighting
+                )
 
         # Axis 3: enemy counts
         for repeat in range(self.episodes_per_cell):
@@ -246,7 +258,9 @@ class GeneralizationSuite:
         for repeat in range(self.episodes_per_cell):
             for family, scenario_id in self.scenarios.items():
                 map_id = self.split.train_maps[repeat % len(self.split.train_maps)]
-                add(map_id, default_lighting, scenario_id, 2, self._seed(index), "scenarios", family)
+                add(
+                    map_id, default_lighting, scenario_id, 2, self._seed(index), "scenarios", family
+                )
 
         return episodes
 
@@ -312,7 +326,9 @@ class GeneralizationSuite:
             "mean_steps": sum(float(row["steps"]) for row in rows) / len(rows),
         }
 
-    def _by(self, key: str, rows: Sequence[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    def _by(
+        self, key: str, rows: Sequence[dict[str, Any]] | None = None
+    ) -> dict[str, dict[str, Any]]:
         selected = list(rows if rows is not None else self._rows)
         buckets: dict[str, list[dict[str, Any]]] = {}
         order: list[str] = []
@@ -339,10 +355,7 @@ class GeneralizationSuite:
             "map_buckets": {
                 bucket: by_map_bucket.get(bucket, self._summarize([])) for bucket in MAP_BUCKETS
             },
-            "by_axis": {
-                axis: self.axis_report(axis)
-                for axis in EVALUATION_AXES
-            },
+            "by_axis": {axis: self.axis_report(axis) for axis in EVALUATION_AXES},
             "by_map": self._by("map_id"),
             "by_lighting": self._by("lighting"),
             "by_enemy_count": self._by("enemy_count"),
@@ -357,7 +370,9 @@ class GeneralizationSuite:
         target = Path(directory)
         target.mkdir(parents=True, exist_ok=True)
         report_path = target / "generalization.json"
-        report_path.write_text(json.dumps(self.report(), indent=2, default=str) + "\n", encoding="utf-8")
+        report_path.write_text(
+            json.dumps(self.report(), indent=2, default=str) + "\n", encoding="utf-8"
+        )
         csv_path = target / "episodes.csv"
         fields: list[str] = []
         for row in self._rows:

@@ -12,6 +12,7 @@ absent rather than fail: a missing optional dependency is an environment
 fact, not a regression in SandboxAI. Tests must never be deleted to make
 the suite green — see the testing rules in docs/ARCHITECTURE.md.
 """
+
 from __future__ import annotations
 
 from importlib.util import find_spec

@@ -1,13 +1,14 @@
 """Tests for generalization evaluation (Phase 7) and the randomized
 training distribution (Phase 11)."""
+
 from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 import re
 import tempfile
 import unittest
+from pathlib import Path
 
 from sandboxai.conditions import LIGHTING_IDS, MAP_IDS
 from sandboxai.generalization import (
@@ -103,7 +104,9 @@ class PlanTests(unittest.TestCase):
         )
         declared = set(re.findall(r'"id":\s*"([a-z_]+)"', source))
         for family, scenario_id in SCENARIO_FAMILIES.items():
-            self.assertIn(scenario_id, declared, f"{family} -> {scenario_id} is not a real scenario")
+            self.assertIn(
+                scenario_id, declared, f"{family} -> {scenario_id} is not a real scenario"
+            )
 
     def test_episodes_per_cell_scales_the_plan(self):
         single = GeneralizationSuite(episodes_per_cell=1).plan_size()

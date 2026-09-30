@@ -1,10 +1,11 @@
 """Stable-Baselines3 PPO orchestration for the Godot environment."""
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import time
-from typing import Any, TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from .config import TrainingConfig
 from .evaluation import (
@@ -24,7 +25,11 @@ if TYPE_CHECKING:
 def _require_sb3():
     try:
         from stable_baselines3 import PPO  # type: ignore
-        from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback  # type: ignore
+        from stable_baselines3.common.callbacks import (  # type: ignore
+            BaseCallback,
+            CallbackList,
+            CheckpointCallback,
+        )
     except ImportError as exc:
         raise RuntimeError(
             "PPO requires stable-baselines3, gymnasium, torch and numpy. "
@@ -133,7 +138,7 @@ class InferenceDeviceScheduler:
 def train_ppo(
     config: TrainingConfig,
     resume_checkpoint: str | Path | None = None,
-    run_control: "RunControl | None" = None,
+    run_control: RunControl | None = None,
 ) -> dict[str, Any]:
     config.validate()
     PPO, BaseCallback, CallbackList, CheckpointCallback = _require_sb3()
@@ -172,6 +177,7 @@ def train_ppo(
     profiler = TrainingProfiler() if config.profile_training else None
     algorithm_class = PPO
     if profiler is not None:
+
         class ProfiledPPO(PPO):
             """PPO with an exact timer around SB3's optimizer update."""
 
@@ -337,7 +343,10 @@ def train_ppo(
                 if info.get("done_reason") or info.get("terminal_observation") is not None:
                     self.episode_count += 1
                     self.episode_metrics_buffer.append(metrics)
-            if self.num_timesteps - self.last_telemetry_step >= max(config.environment_count, 1) * 100:
+            if (
+                self.num_timesteps - self.last_telemetry_step
+                >= max(config.environment_count, 1) * 100
+            ):
                 elapsed = max(time.perf_counter() - self.started, 1e-9)
                 completed_steps = max(0, self.num_timesteps - self.start_timesteps)
                 steps_per_second = completed_steps / elapsed
@@ -357,7 +366,9 @@ def train_ppo(
                     "steps_per_second": steps_per_second,
                     # Based on the measured run-average throughput. It is
                     # omitted until a positive rate exists rather than faked.
-                    "eta_seconds": remaining_steps / steps_per_second if steps_per_second > 0 else None,
+                    "eta_seconds": remaining_steps / steps_per_second
+                    if steps_per_second > 0
+                    else None,
                     "episodes": self.episode_count,
                     "environment_count": config.environment_count,
                     "device": device,
@@ -373,40 +384,130 @@ def train_ppo(
                 }
                 if self.episode_metrics_buffer:
                     buf = self.episode_metrics_buffer
-                    payload["mean_episode_reward"] = sum(float(item.get("episode_reward", 0.0)) for item in buf) / len(buf)
-                    payload["mean_kills"] = sum(float(item.get("kills", 0.0)) for item in buf) / len(buf)
-                    payload["mean_deaths"] = sum(float(item.get("deaths", 0.0)) for item in buf) / len(buf)
-                    payload["mean_damage_dealt"] = sum(float(item.get("damage_dealt", 0.0)) for item in buf) / len(buf)
-                    payload["mean_damage_received"] = sum(float(item.get("damage_received", 0.0)) for item in buf) / len(buf)
-                    payload["mean_shots_fired"] = sum(float(item.get("shots_fired", 0.0)) for item in buf) / len(buf)
-                    payload["mean_shots_hit"] = sum(float(item.get("shots_hit", 0.0)) for item in buf) / len(buf)
-                    payload["mean_trigger_pulls"] = sum(float(item.get("trigger_pulls", 0.0)) for item in buf) / len(buf)
-                    payload["mean_near_miss_shots"] = sum(float(item.get("near_miss_shots", 0.0)) for item in buf) / len(buf)
-                    payload["mean_useless_shots"] = sum(float(item.get("useless_shots", 0.0)) for item in buf) / len(buf)
-                    payload["mean_cooldown_shots"] = sum(float(item.get("cooldown_shots", 0.0)) for item in buf) / len(buf)
-                    payload["mean_survival_time"] = sum(float(item.get("survival_time", 0.0)) for item in buf) / len(buf)
-                    payload["mean_accuracy"] = sum(float(item.get("accuracy", 0.0)) for item in buf) / len(buf)
-                    payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in buf) / len(buf)
-                    payload["loss_rate"] = sum(float(item.get("loss", 0.0)) for item in buf) / len(buf)
+                    payload["mean_episode_reward"] = sum(
+                        float(item.get("episode_reward", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_kills"] = sum(
+                        float(item.get("kills", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_deaths"] = sum(
+                        float(item.get("deaths", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_damage_dealt"] = sum(
+                        float(item.get("damage_dealt", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_damage_received"] = sum(
+                        float(item.get("damage_received", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_shots_fired"] = sum(
+                        float(item.get("shots_fired", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_shots_hit"] = sum(
+                        float(item.get("shots_hit", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_trigger_pulls"] = sum(
+                        float(item.get("trigger_pulls", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_near_miss_shots"] = sum(
+                        float(item.get("near_miss_shots", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_useless_shots"] = sum(
+                        float(item.get("useless_shots", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_cooldown_shots"] = sum(
+                        float(item.get("cooldown_shots", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_survival_time"] = sum(
+                        float(item.get("survival_time", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["mean_accuracy"] = sum(
+                        float(item.get("accuracy", 0.0)) for item in buf
+                    ) / len(buf)
+                    payload["win_rate"] = sum(float(item.get("win", 0.0)) for item in buf) / len(
+                        buf
+                    )
+                    payload["loss_rate"] = sum(float(item.get("loss", 0.0)) for item in buf) / len(
+                        buf
+                    )
                     if config.reward_breakdown_logging:
                         payload["reward_breakdown"] = {
-                            "hits": sum(float(item.get("reward_breakdown", {}).get("reward_hits", 0.0)) for item in buf) / len(buf),
-                            "kills": sum(float(item.get("reward_breakdown", {}).get("reward_kills", 0.0)) for item in buf) / len(buf),
-                            "damage_reward": sum(float(item.get("reward_breakdown", {}).get("reward_damage", 0.0)) for item in buf) / len(buf),
-                            "survive": sum(float(item.get("reward_breakdown", {}).get("reward_survive", 0.0)) for item in buf) / len(buf),
-                            "positioning": sum(float(item.get("reward_breakdown", {}).get("reward_positioning", 0.0)) for item in buf) / len(buf),
-                            "aiming": sum(float(item.get("reward_breakdown", {}).get("reward_aiming", 0.0)) for item in buf) / len(buf),
-                            "passivity_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_passivity", 0.0)) for item in buf) / len(buf),
-                            "combat_time_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_combat_time", 0.0)) for item in buf) / len(buf),
-                            "damage_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_damage", 0.0)) for item in buf) / len(buf),
-                            "death_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_death", 0.0)) for item in buf) / len(buf),
+                            "hits": sum(
+                                float(item.get("reward_breakdown", {}).get("reward_hits", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
+                            "kills": sum(
+                                float(item.get("reward_breakdown", {}).get("reward_kills", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
+                            "damage_reward": sum(
+                                float(item.get("reward_breakdown", {}).get("reward_damage", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
+                            "survive": sum(
+                                float(item.get("reward_breakdown", {}).get("reward_survive", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
+                            "positioning": sum(
+                                float(
+                                    item.get("reward_breakdown", {}).get("reward_positioning", 0.0)
+                                )
+                                for item in buf
+                            )
+                            / len(buf),
+                            "aiming": sum(
+                                float(item.get("reward_breakdown", {}).get("reward_aiming", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
+                            "passivity_penalty": sum(
+                                float(
+                                    item.get("reward_breakdown", {}).get("penalty_passivity", 0.0)
+                                )
+                                for item in buf
+                            )
+                            / len(buf),
+                            "combat_time_penalty": sum(
+                                float(
+                                    item.get("reward_breakdown", {}).get("penalty_combat_time", 0.0)
+                                )
+                                for item in buf
+                            )
+                            / len(buf),
+                            "damage_penalty": sum(
+                                float(item.get("reward_breakdown", {}).get("penalty_damage", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
+                            "death_penalty": sum(
+                                float(item.get("reward_breakdown", {}).get("penalty_death", 0.0))
+                                for item in buf
+                            )
+                            / len(buf),
                             # Shot economy: how much reward was lost to real
                             # near-misses vs to trigger pulls that could not
                             # plausibly connect. Watching these two columns
                             # is the fastest way to tell whether shooting is
                             # being explored and becoming profitable.
-                            "missed_shot_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_missed_shot", 0.0)) for item in buf) / len(buf),
-                            "useless_shot_penalty": sum(float(item.get("reward_breakdown", {}).get("penalty_useless_shot", 0.0)) for item in buf) / len(buf),
+                            "missed_shot_penalty": sum(
+                                float(
+                                    item.get("reward_breakdown", {}).get("penalty_missed_shot", 0.0)
+                                )
+                                for item in buf
+                            )
+                            / len(buf),
+                            "useless_shot_penalty": sum(
+                                float(
+                                    item.get("reward_breakdown", {}).get(
+                                        "penalty_useless_shot", 0.0
+                                    )
+                                )
+                                for item in buf
+                            )
+                            / len(buf),
                         }
                     self.episode_metrics_buffer.clear()
                 telemetry.write(payload)
@@ -435,7 +536,9 @@ def train_ppo(
             if run_control is not None:
                 # CLI publishes Finished only after final checkpoints are
                 # safely written. Until then this is still stopping work.
-                run_control.update(state="Stopping" if run_control.stop_requested else "Running", **values)
+                run_control.update(
+                    state="Stopping" if run_control.stop_requested else "Running", **values
+                )
 
     class EvaluationCallback(BaseCallback):
         def __init__(self):
@@ -468,7 +571,9 @@ def train_ppo(
         def _ensure_eval_env(self) -> Any:
             if self.eval_env is not None:
                 return self.eval_env
-            assert self.eval_env_kwargs is not None, "evaluation env kwargs missing (training start not fired?)"
+            assert self.eval_env_kwargs is not None, (
+                "evaluation env kwargs missing (training start not fired?)"
+            )
             from .godot_env import GodotGymEnv, GodotVecEnv
 
             started = time.perf_counter() if profiler is not None else 0.0
@@ -487,7 +592,9 @@ def train_ppo(
         def _ensure_battery_executor(self) -> Any:
             if self.battery_executor is not None:
                 return self.battery_executor
-            assert self.battery_env_kwargs is not None, "battery env kwargs missing (training start not fired?)"
+            assert self.battery_env_kwargs is not None, (
+                "battery env kwargs missing (training start not fired?)"
+            )
             from .checkpoint_eval import PlanExecutor
 
             started = time.perf_counter() if profiler is not None else 0.0
@@ -527,7 +634,9 @@ def train_ppo(
             self.battery_profiler = battery_view
             if profiler is not None:
                 profiler.set_metadata(
-                    evaluation_execution=("parallel_roles" if pipeline is not None else "normal_only")
+                    evaluation_execution=(
+                        "parallel_roles" if pipeline is not None else "normal_only"
+                    )
                 )
             eval_kwargs = _env_kwargs(config)
             # More slots than requested episodes can only simulate ignored
@@ -624,9 +733,7 @@ def train_ppo(
                 write_checkpoint_report(checkpoint_report, step_directory)
                 if profiler is not None:
                     profiler.record("eval.parallel.wall", parallel_timing["wall_seconds"])
-                    profiler.record(
-                        "eval.parallel.overlap", parallel_timing["overlap_seconds"]
-                    )
+                    profiler.record("eval.parallel.overlap", parallel_timing["overlap_seconds"])
                 summary["curriculum"] = pipeline.driver.curriculum_snapshot()
                 for section in ("condition_evaluation", "generalization", "league"):
                     body = checkpoint_report.get(section)
@@ -661,7 +768,9 @@ def train_ppo(
                 )
                 summary["timesteps"] = self.num_timesteps
             reward = float(summary.get("mean_episode_reward", 0.0))
-            (evaluations / "latest.json").write_text(json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8")
+            (evaluations / "latest.json").write_text(
+                json.dumps(summary, indent=2, default=str) + "\n", encoding="utf-8"
+            )
             best_started = time.perf_counter() if profiler is not None else 0.0
             score = selection_rule.score(summary)
             if score is None:
@@ -701,7 +810,10 @@ def train_ppo(
                 )
             else:
                 eval_patience_counter += 1
-                if config.early_stopping_patience > 0 and eval_patience_counter >= config.early_stopping_patience:
+                if (
+                    config.early_stopping_patience > 0
+                    and eval_patience_counter >= config.early_stopping_patience
+                ):
                     stop_training = True
             if config.min_eval_reward is not None and reward >= config.min_eval_reward:
                 stop_training = True
@@ -715,9 +827,7 @@ def train_ppo(
             while self.next_evaluation <= self.num_timesteps:
                 self.next_evaluation += config.evaluation_frequency
             if profiler is not None:
-                profiler.record(
-                    "callback.evaluation", time.perf_counter() - evaluation_started
-                )
+                profiler.record("callback.evaluation", time.perf_counter() - evaluation_started)
             return not stop_training
 
     class TimedCheckpointCallback(CheckpointCallback):
@@ -819,9 +929,7 @@ def train_ppo(
             rollout_seconds, timesteps = self.pending_rollout
             profiler.record("ppo.policy_update", update_seconds)
             self.iteration += 1
-            profiler.add_iteration(
-                self.iteration, rollout_seconds, update_seconds, timesteps
-            )
+            profiler.add_iteration(self.iteration, rollout_seconds, update_seconds, timesteps)
             self.pending_rollout = None
 
         def _on_rollout_start(self) -> None:
@@ -892,7 +1000,9 @@ def train_ppo(
         callback_items.insert(0, ProfilingCallback())
     inference_scheduler: InferenceDeviceScheduler | None = None
     if config.inference_device != "auto":
-        inference_scheduler = InferenceDeviceScheduler(model=None, training_device=device, inference_device=config.resolved_inference_device())
+        inference_scheduler = InferenceDeviceScheduler(
+            model=None, training_device=device, inference_device=config.resolved_inference_device()
+        )
         callback_items.insert(0, InferenceDeviceCallback(inference_scheduler))
     callbacks = CallbackList(callback_items)
     try:
@@ -914,21 +1024,26 @@ def train_ppo(
                 clip_range=config.clip_range,
                 seed=config.seed,
                 device=device,
-                policy_kwargs={"net_arch": {"pi": list(config.net_arch), "vf": list(config.net_arch)}},
+                policy_kwargs={
+                    "net_arch": {"pi": list(config.net_arch), "vf": list(config.net_arch)}
+                },
                 tensorboard_log=str(logs / "tensorboard"),
                 verbose=1,
             )
             warm_start = {"transferred": False}
             if config.bc_checkpoint:
                 from .bc import load_bc_into_sb3_policy
-                warm_start = load_bc_into_sb3_policy(model.policy, config.bc_checkpoint, device=device)
+
+                warm_start = load_bc_into_sb3_policy(
+                    model.policy, config.bc_checkpoint, device=device
+                )
                 warm_start["source"] = config.bc_checkpoint
-            (run_dir / "warm_start.json").write_text(json.dumps(warm_start, indent=2) + "\n", encoding="utf-8")
+            (run_dir / "warm_start.json").write_text(
+                json.dumps(warm_start, indent=2) + "\n", encoding="utf-8"
+            )
         if profiler is not None:
             rollout_samples = int(model.n_steps) * int(model.n_envs)
-            actual_updates = (
-                config.total_training_steps + rollout_samples - 1
-            ) // rollout_samples
+            actual_updates = (config.total_training_steps + rollout_samples - 1) // rollout_samples
             profiler.set_metadata(
                 ppo_epochs=int(model.n_epochs),
                 rollout_length=int(model.n_steps),
@@ -980,7 +1095,9 @@ def train_ppo(
             "best_checkpoint": str(best_path) if best_path.exists() else None,
             "device": device,
             "timesteps": model.num_timesteps,
-            "training_steps_completed": max(0, model.num_timesteps - metrics_callback.start_timesteps),
+            "training_steps_completed": max(
+                0, model.num_timesteps - metrics_callback.start_timesteps
+            ),
             "stopped": bool(run_control is not None and run_control.stop_requested),
             "warm_start": warm_start,
             "training_profile": str(profile_path) if profile_path is not None else None,
@@ -995,7 +1112,9 @@ def train_ppo(
             write_manifest(run_dir, pipeline.manifest())
             result["curriculum"] = pipeline.driver.curriculum_snapshot()
             result["manifest"] = str(run_dir / "run_manifest.json")
-        (run_dir / "run_summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        (run_dir / "run_summary.json").write_text(
+            json.dumps(result, indent=2) + "\n", encoding="utf-8"
+        )
         return result
     finally:
         if inference_scheduler is not None:

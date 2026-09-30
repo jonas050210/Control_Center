@@ -25,6 +25,7 @@ CI runner. Those specific tests are skipped off POSIX; see their
 docstrings/comments for exactly what breaks and why it cannot occur in
 production.
 """
+
 from __future__ import annotations
 
 import io
@@ -95,8 +96,10 @@ class WslDetectionTests(unittest.TestCase):
                     self.assertFalse(is_wsl())
 
     def test_is_wsl_without_proc_version(self):
-        with mock.patch.dict(os.environ, {}, clear=True), \
-            mock.patch("sandboxai.wsl._proc_version_text", return_value=""):
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch("sandboxai.wsl._proc_version_text", return_value=""),
+        ):
             self.assertFalse(is_wsl())
 
     def test_is_windows_executable(self):
@@ -109,7 +112,14 @@ class WslDetectionTests(unittest.TestCase):
         self.assertFalse(is_windows_executable("/usr/bin/Godot_v4.7.2-stable_linux.x86_64"))
 
     def test_is_windows_shell(self):
-        for name in ("cmd.exe", r"C:\Windows\System32\cmd.exe", "cmd", "powershell.exe", "pwsh", "pwsh.exe"):
+        for name in (
+            "cmd.exe",
+            r"C:\Windows\System32\cmd.exe",
+            "cmd",
+            "powershell.exe",
+            "pwsh",
+            "pwsh.exe",
+        ):
             self.assertTrue(is_windows_shell(name), name)
         self.assertFalse(is_windows_shell("godot.exe"))
 
@@ -128,24 +138,35 @@ class WslPathTranslationTests(unittest.TestCase):
     def test_wslpath_result_is_used_verbatim_and_stripped(self):
         # wslpath is the authority: it understands custom automount roots and
         # the \\wsl$ UNC form for files inside the Linux filesystem.
-        with mock.patch("sandboxai.wsl.shutil.which", return_value="/usr/bin/wslpath"), \
+        with (
+            mock.patch("sandboxai.wsl.shutil.which", return_value="/usr/bin/wslpath"),
             mock.patch(
                 "sandboxai.wsl.subprocess.run",
-                return_value=subprocess.CompletedProcess([], 0, stdout="  T:\\odd\\root\\x \n", stderr=""),
-            ) as runner:
+                return_value=subprocess.CompletedProcess(
+                    [], 0, stdout="  T:\\odd\\root\\x \n", stderr=""
+                ),
+            ) as runner,
+        ):
             self.assertEqual(wsl_to_windows_path("/weird/mount/x"), r"T:\odd\root\x")
         self.assertEqual(runner.call_args[0][0][:2], ["/usr/bin/wslpath", "-w"])
 
     def test_wslpath_failure_falls_back_to_drive_mount_mapping(self):
         failing = mock.Mock(side_effect=subprocess.TimeoutExpired(cmd=["wslpath"], timeout=10))
-        with mock.patch("sandboxai.wsl.shutil.which", return_value="/usr/bin/wslpath"), \
-            mock.patch("sandboxai.wsl.subprocess.run", failing):
-            self.assertEqual(wsl_to_windows_path("/mnt/c/Users/tester/Proj Folder"), r"C:\Users\tester\Proj Folder")
-        with mock.patch("sandboxai.wsl.shutil.which", return_value="/usr/bin/wslpath"), \
+        with (
+            mock.patch("sandboxai.wsl.shutil.which", return_value="/usr/bin/wslpath"),
+            mock.patch("sandboxai.wsl.subprocess.run", failing),
+        ):
+            self.assertEqual(
+                wsl_to_windows_path("/mnt/c/Users/tester/Proj Folder"),
+                r"C:\Users\tester\Proj Folder",
+            )
+        with (
+            mock.patch("sandboxai.wsl.shutil.which", return_value="/usr/bin/wslpath"),
             mock.patch(
                 "sandboxai.wsl.subprocess.run",
                 return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="err"),
-            ):
+            ),
+        ):
             self.assertEqual(wsl_to_windows_path("/mnt/c/Users/tester"), r"C:\Users\tester")
 
     def test_drive_mount_fallback_without_wslpath(self):
@@ -162,7 +183,9 @@ class WslPathTranslationTests(unittest.TestCase):
 
     def test_windows_to_wsl_fallbacks(self):
         with mock.patch("sandboxai.wsl._wslpath", return_value=None):
-            self.assertEqual(windows_to_wsl_path(r"C:\Users\tester\project"), "/mnt/c/Users/tester/project")
+            self.assertEqual(
+                windows_to_wsl_path(r"C:\Users\tester\project"), "/mnt/c/Users/tester/project"
+            )
             self.assertEqual(windows_to_wsl_path("d:/tools/godot"), "/mnt/d/tools/godot")
             self.assertEqual(
                 windows_to_wsl_path(r"\\wsl$\Ubuntu-24.04\home\tester"),
@@ -171,8 +194,10 @@ class WslPathTranslationTests(unittest.TestCase):
             self.assertEqual(windows_to_wsl_path("/already/posix"), "/already/posix")
 
     def test_normalize_host_path_accepts_windows_form_only_under_wsl(self):
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", return_value=None):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", return_value=None),
+        ):
             self.assertEqual(normalize_host_path(r"C:\proj\Sandbox"), "/mnt/c/proj/Sandbox")
             self.assertEqual(normalize_host_path("/mnt/c/proj"), "/mnt/c/proj")
         with mock.patch("sandboxai.wsl.is_wsl", return_value=False):
@@ -202,8 +227,10 @@ class WindowsInteropPlanningTests(unittest.TestCase):
         self.assertEqual(interop.launch_candidates(command), [command])
 
     def test_windows_godot_on_wsl_converts_paths_and_offers_cmd_fallback(self):
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath),
+        ):
             interop = WindowsInterop("/mnt/c/tooling/Godot v4/Godot_console.exe")
             project = interop.windows_path("/mnt/c/Users/ai/Sandbox AI")
             self.assertTrue(interop.active)
@@ -229,8 +256,10 @@ class WindowsInteropPlanningTests(unittest.TestCase):
         self.assertIn("Sandbox AI", fallback[fallback.index("--path") + 1])
 
     def test_windows_form_and_bare_executables_pass_through_to_cmd(self):
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath),
+        ):
             windows_form = WindowsInterop(r"C:\Godot\godot_console.exe")
             bare = WindowsInterop("godot.exe")
             command_win = [r"C:\Godot\godot_console.exe", "--headless"]
@@ -277,7 +306,10 @@ class WindowsInteropFallbackTests(unittest.TestCase):
         process = mock.Mock()
         with mock.patch(
             "sandboxai.wsl.subprocess.Popen",
-            side_effect=[PermissionError(13, "Permission denied", "/mnt/c/tools/Godot_console.exe"), process],
+            side_effect=[
+                PermissionError(13, "Permission denied", "/mnt/c/tools/Godot_console.exe"),
+                process,
+            ],
         ) as popen:
             result = interop.popen(
                 ["/mnt/c/tools/Godot_console.exe", "--headless", "--path", r"C:\p"],
@@ -289,7 +321,9 @@ class WindowsInteropFallbackTests(unittest.TestCase):
         self.assertEqual(popen.call_count, 2)
         first, second = popen.call_args_list
         self.assertEqual(first[0][0][0], "/mnt/c/tools/Godot_console.exe")
-        self.assertEqual(second[0][0][:4], ["cmd.exe", "/C", "call", r"C:\wsl\mnt\c\tools\Godot_console.exe"])
+        self.assertEqual(
+            second[0][0][:4], ["cmd.exe", "/C", "call", r"C:\wsl\mnt\c\tools\Godot_console.exe"]
+        )
         # The fallback must keep the exact stdio wiring of the direct launch.
         self.assertEqual(first[1], second[1])
 
@@ -305,8 +339,12 @@ class WindowsInteropFallbackTests(unittest.TestCase):
     def test_single_candidate_failure_raises_launch_error_without_retry(self):
         with mock.patch("sandboxai.wsl.is_wsl", return_value=False):
             interop = WindowsInterop("godot")
-        with mock.patch("sandboxai.wsl.subprocess.Popen", side_effect=PermissionError(13, "denied")) as popen, \
-            self.assertRaises(GodotLaunchError) as ctx:
+        with (
+            mock.patch(
+                "sandboxai.wsl.subprocess.Popen", side_effect=PermissionError(13, "denied")
+            ) as popen,
+            self.assertRaises(GodotLaunchError) as ctx,
+        ):
             interop.popen(["godot", "--headless"])
         # Native behavior preserved: one attempt, no hidden side effects.
         self.assertEqual(popen.call_count, 1)
@@ -314,10 +352,13 @@ class WindowsInteropFallbackTests(unittest.TestCase):
 
     def test_exhausted_candidates_report_every_attempt_and_wsl_remedies(self):
         interop = self._active_interop()
-        with mock.patch(
-            "sandboxai.wsl.subprocess.Popen",
-            side_effect=[PermissionError(13, "denied"), OSError(8, "Exec format error")],
-        ), self.assertRaises(GodotLaunchError) as ctx:
+        with (
+            mock.patch(
+                "sandboxai.wsl.subprocess.Popen",
+                side_effect=[PermissionError(13, "denied"), OSError(8, "Exec format error")],
+            ),
+            self.assertRaises(GodotLaunchError) as ctx,
+        ):
             interop.popen(["/mnt/c/tools/Godot_console.exe", "--headless"])
         message = str(ctx.exception)
         self.assertIn("attempt 1", message)
@@ -328,7 +369,9 @@ class WindowsInteropFallbackTests(unittest.TestCase):
 
     def test_call_and_run_use_the_same_fallback(self):
         interop = self._active_interop()
-        with mock.patch("sandboxai.wsl.subprocess.call", side_effect=[OSError("denied"), 0]) as call:
+        with mock.patch(
+            "sandboxai.wsl.subprocess.call", side_effect=[OSError("denied"), 0]
+        ) as call:
             self.assertEqual(interop.call(["/mnt/c/tools/Godot_console.exe"]), 0)
         self.assertEqual(call.call_args_list[1][0][0][0], "cmd.exe")
         completed = subprocess.CompletedProcess([], 0, stdout="4.7.2-stable\n", stderr="")
@@ -362,12 +405,16 @@ class GodotTransportWslTests(unittest.TestCase):
     def _make_transport(self, popen_side_effect, project_path=None):
         from sandboxai.godot_env import GodotProcessTransport
 
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath), \
-            mock.patch("sandboxai.wsl.Path.exists", return_value=True), \
-            mock.patch("sandboxai.godot_env.find_godot_executable", return_value=str(self.executable)), \
-            mock.patch("sandboxai.wsl.subprocess.Popen", side_effect=popen_side_effect) as popen, \
-            mock.patch("sandboxai.godot_env.GodotProcessTransport.request", _bridge_handshake):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath),
+            mock.patch("sandboxai.wsl.Path.exists", return_value=True),
+            mock.patch(
+                "sandboxai.godot_env.find_godot_executable", return_value=str(self.executable)
+            ),
+            mock.patch("sandboxai.wsl.subprocess.Popen", side_effect=popen_side_effect) as popen,
+            mock.patch("sandboxai.godot_env.GodotProcessTransport.request", _bridge_handshake),
+        ):
             transport = GodotProcessTransport(
                 project_path=project_path if project_path is not None else self.project,
                 godot_executable=str(self.executable),
@@ -389,7 +436,9 @@ class GodotTransportWslTests(unittest.TestCase):
         self.assertEqual(popen.call_count, 1)
         argv = popen.call_args[0][0]
         self.assertEqual(argv[0], str(self.executable))
-        self.assertEqual(argv[argv.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\"))
+        self.assertEqual(
+            argv[argv.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\")
+        )
         self.assertEqual(transport.executable, str(self.executable))
 
     @unittest.skipUnless(
@@ -425,8 +474,10 @@ class GodotTransportWslTests(unittest.TestCase):
         self.assertIn("cmd.exe", message)
 
     def test_windows_form_project_path_is_accepted(self):
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", return_value=None):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", return_value=None),
+        ):
             _transport, popen = self._make_transport(
                 [self._fake_process()],
                 project_path="C:\\wsl" + str(self.project).replace("/", "\\"),
@@ -448,12 +499,16 @@ class GodotTransportWslTests(unittest.TestCase):
 
         from sandboxai.godot_env import GodotProcessTransport
 
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", side_effect=translate), \
-            mock.patch("sandboxai.godot_env.find_godot_executable", return_value=str(self.executable)), \
-            mock.patch("sandboxai.wsl.subprocess.Popen", return_value=self._fake_process()), \
-            mock.patch("sandboxai.godot_env.GodotProcessTransport.request", _bridge_handshake), \
-            mock.patch("sandboxai.wsl.Path.exists", return_value=True):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", side_effect=translate),
+            mock.patch(
+                "sandboxai.godot_env.find_godot_executable", return_value=str(self.executable)
+            ),
+            mock.patch("sandboxai.wsl.subprocess.Popen", return_value=self._fake_process()),
+            mock.patch("sandboxai.godot_env.GodotProcessTransport.request", _bridge_handshake),
+            mock.patch("sandboxai.wsl.Path.exists", return_value=True),
+        ):
             transport = GodotProcessTransport(
                 project_path=windows_form,
                 godot_executable=str(self.executable),
@@ -477,16 +532,18 @@ class ConfigWslResolutionTests(unittest.TestCase):
         self.settings_path = self.checkout / ".sandboxai" / "settings.json"
         self.executable = tmp / "Godot_v4.7.2-stable_win64_console.exe"
         self.executable.touch()
-        for target, value in (
-            ("sandboxai.config._settings_path", self.settings_path),
-        ):
+        for target, value in (("sandboxai.config._settings_path", self.settings_path),):
             patcher = mock.patch(target, return_value=value)
             patcher.start()
             self.addCleanup(patcher.stop)
         which_patcher = mock.patch("sandboxai.config.shutil.which", return_value=None)
         which_patcher.start()
         self.addCleanup(which_patcher.stop)
-        env = {key: value for key, value in os.environ.items() if key not in ("GODOT_PATH", "GODOT_EXECUTABLE")}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("GODOT_PATH", "GODOT_EXECUTABLE")
+        }
         env_patcher = mock.patch.dict(os.environ, env, clear=True)
         env_patcher.start()
         self.addCleanup(env_patcher.stop)
@@ -504,9 +561,12 @@ class ConfigWslResolutionTests(unittest.TestCase):
         from sandboxai.config import find_godot_executable
 
         windows_form = self._windows_form_of(self.executable)
-        self.settings_path.write_text(json.dumps({"godot_executable": windows_form}), encoding="utf-8")
-        with mock.patch("sandboxai.config.is_wsl", return_value=True), self._patched_translation(
-            windows_form, str(self.executable)
+        self.settings_path.write_text(
+            json.dumps({"godot_executable": windows_form}), encoding="utf-8"
+        )
+        with (
+            mock.patch("sandboxai.config.is_wsl", return_value=True),
+            self._patched_translation(windows_form, str(self.executable)),
         ):
             self.assertEqual(find_godot_executable("godot"), str(self.executable))
 
@@ -514,8 +574,9 @@ class ConfigWslResolutionTests(unittest.TestCase):
         from sandboxai.config import find_godot_executable
 
         windows_form = self._windows_form_of(self.executable)
-        with mock.patch("sandboxai.config.is_wsl", return_value=True), self._patched_translation(
-            windows_form, str(self.executable)
+        with (
+            mock.patch("sandboxai.config.is_wsl", return_value=True),
+            self._patched_translation(windows_form, str(self.executable)),
         ):
             self.assertEqual(find_godot_executable(windows_form), str(self.executable))
 
@@ -523,9 +584,13 @@ class ConfigWslResolutionTests(unittest.TestCase):
         from sandboxai.config import find_godot_executable
 
         windows_form = self._windows_form_of(self.executable)
-        self.settings_path.write_text(json.dumps({"godot_executable": windows_form}), encoding="utf-8")
-        with mock.patch("sandboxai.config.is_wsl", return_value=False), \
-            mock.patch("sandboxai.config._GODOT_CANDIDATES", ()):
+        self.settings_path.write_text(
+            json.dumps({"godot_executable": windows_form}), encoding="utf-8"
+        )
+        with (
+            mock.patch("sandboxai.config.is_wsl", return_value=False),
+            mock.patch("sandboxai.config._GODOT_CANDIDATES", ()),
+        ):
             # Native Linux: no translation attempted, documented default.
             self.assertEqual(find_godot_executable("godot"), "godot")
 
@@ -573,7 +638,9 @@ class CliWslLaunchTests(unittest.TestCase):
             5.0,
             2,
         )
-        self.assertEqual(command[command.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\"))
+        self.assertEqual(
+            command[command.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\")
+        )
         output_value = command[command.index("--output") + 1]
         self.assertTrue(output_value.startswith("C:\\wsl"), output_value)
         self.assertNotIn("/mnt/", " ".join(command))
@@ -597,7 +664,9 @@ class CliWslLaunchTests(unittest.TestCase):
         command = build_control_center_command(
             str(self.executable), str(self.project), "watch", 1, 1, 3, 1234
         )
-        self.assertEqual(command[command.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\"))
+        self.assertEqual(
+            command[command.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\")
+        )
 
     def test_record_dispatch_retries_through_cmd_after_permission_error(self):
         from sandboxai.cli import main
@@ -632,11 +701,15 @@ class CliWslLaunchTests(unittest.TestCase):
     def test_shell_as_executable_is_a_clean_cli_error(self):
         from sandboxai.cli import main
 
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath), \
-            mock.patch("sandboxai.cli.save_godot_executable_setting", return_value=None) as save, \
-            mock.patch("sandboxai.cli.load_godot_executable_setting", return_value=None), \
-            mock.patch("sandboxai.cli.shutil.which", return_value="/mnt/c/Windows/System32/cmd.exe"):
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath),
+            mock.patch("sandboxai.cli.save_godot_executable_setting", return_value=None) as save,
+            mock.patch("sandboxai.cli.load_godot_executable_setting", return_value=None),
+            mock.patch(
+                "sandboxai.cli.shutil.which", return_value="/mnt/c/Windows/System32/cmd.exe"
+            ),
+        ):
             exit_code = main(["control-center", "--godot-executable", "cmd.exe"])
         self.assertEqual(exit_code, 1)
         # A shell workaround must never be remembered for later runs.
@@ -644,11 +717,11 @@ class CliWslLaunchTests(unittest.TestCase):
 
 
 FAKE_WSL_BRIDGE_SOURCE = (
-    r'''
+    r"""
 import json, sys
-OBS_DIM = '''
+OBS_DIM = """
     + str(OBSERVATION_FIELD_COUNT)
-    + r'''
+    + r"""
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -667,7 +740,7 @@ for line in sys.stdin:
     elif command == "close":
         print(json.dumps({"ok": True, "close": True}), flush=True)
         break
-'''
+"""
 )
 
 # A fake `wslpath` with a deterministic, uniquely identifiable mapping:
@@ -807,15 +880,17 @@ class RuntimeValidationWslTests(unittest.TestCase):
         from sandboxai.runtime_validation import RuntimeValidator
 
         completed = subprocess.CompletedProcess([], 0, stdout="4.7.2-stable\n", stderr="")
-        with mock.patch("sandboxai.wsl.is_wsl", return_value=True), \
-            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath), \
+        with (
+            mock.patch("sandboxai.wsl.is_wsl", return_value=True),
+            mock.patch("sandboxai.wsl._wslpath", side_effect=_fake_wslpath),
             mock.patch(
                 "sandboxai.wsl.subprocess.run",
                 side_effect=[PermissionError(13, "Permission denied"), completed],
-            ) as runner:
-            version = RuntimeValidator("/nonexistent-project", godot_executable="godot.exe").probe_version(
-                "/mnt/c/tools/Godot_console.exe"
-            )
+            ) as runner,
+        ):
+            version = RuntimeValidator(
+                "/nonexistent-project", godot_executable="godot.exe"
+            ).probe_version("/mnt/c/tools/Godot_console.exe")
         self.assertEqual(version, "4.7.2-stable")
         self.assertEqual(runner.call_count, 2)
         second = runner.call_args_list[1][0][0]

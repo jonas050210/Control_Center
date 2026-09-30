@@ -5,6 +5,7 @@ do not verify throughput numbers: those require a real Godot executable,
 and this suite asserts that the module refuses to invent them when one is
 absent.
 """
+
 from __future__ import annotations
 
 import unittest

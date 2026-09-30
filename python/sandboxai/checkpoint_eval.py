@@ -21,14 +21,16 @@ report covering everything a researcher needs to compare checkpoints:
 Nothing here changes PPO: it reads finished checkpoints, runs frozen
 policies and writes JSON. The reward stream is untouched.
 """
+
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass, field, replace
 import json
-from pathlib import Path
 import time
-from typing import Any, Callable, Sequence
+from collections import deque
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any
 
 from .action_audit import (
     EpisodeActionAudit,
@@ -115,7 +117,9 @@ class PlanExecutor:
     environment count — yields bit-identical episodes.
     """
 
-    def __init__(self, env_kwargs: dict[str, Any], skill_metrics: bool = True, profiler: Any = None) -> None:
+    def __init__(
+        self, env_kwargs: dict[str, Any], skill_metrics: bool = True, profiler: Any = None
+    ) -> None:
         from .godot_env import GodotBatchClient
 
         self.profiler = profiler
@@ -129,7 +133,7 @@ class PlanExecutor:
         client: Any,
         skill_metrics: bool = True,
         profiler: Any = None,
-    ) -> "PlanExecutor":
+    ) -> PlanExecutor:
         """Wraps an already-running batch client without taking ownership.
 
         This is used by normal vector evaluation so its persistent bridge
@@ -147,7 +151,7 @@ class PlanExecutor:
     def close(self) -> None:
         self.client.close()
 
-    def __enter__(self) -> "PlanExecutor":
+    def __enter__(self) -> PlanExecutor:
         return self
 
     def __exit__(self, *_args) -> None:
@@ -252,7 +256,9 @@ class PlanExecutor:
                     sink.record_step(env_index, observations[env_index], actions[env_index], events)
                 recorder = recorders[env_index]
                 if recorder is not None:
-                    recorder.record_step(actions[env_index], float(rewards[env_index]), events=events)
+                    recorder.record_step(
+                        actions[env_index], float(rewards[env_index]), events=events
+                    )
                 if not bool(dones[env_index]):
                     continue
                 metrics = dict(info.get("metrics", {}))
@@ -392,13 +398,17 @@ class PlanExecutor:
         row.setdefault("episode_reward", 0.0)
         row.setdefault("episode_length", 0)
         row.update(action_audits[env_index].summary())
-        summary = sink.finish(env_index, result={"win": bool(row.get("win", False))}) if sink else None
+        summary = (
+            sink.finish(env_index, result={"win": bool(row.get("win", False))}) if sink else None
+        )
         if summary is not None:
             row["skill"] = summary.get("categories", {})
         recorder = recorders[env_index]
         recorders[env_index] = None
         if recorder is not None and replay_dir is not None:
-            recorder.finish({"win": bool(row.get("win", False)), "done_reason": str(row.get("done_reason", ""))})
+            recorder.finish(
+                {"win": bool(row.get("win", False)), "done_reason": str(row.get("done_reason", ""))}
+            )
             tag = labels.get("bucket") or labels.get("axis") or "eval"
             name = f"{tag}_{condition.map_id or 'arena'}_L{condition.level}_s{condition.seed}.jsonl"
             row["replay"] = str(recorder.save(Path(replay_dir) / name))
@@ -421,11 +431,17 @@ def build_map_split(used_conditions: Sequence[dict[str, Any]]) -> MapSplit:
       the caller bumps the suite base seed until the streams are disjoint.
     """
     train_maps = sorted({str(c.get("map_id", "")) for c in used_conditions if c.get("map_id")})
-    train_scenarios = sorted({str(c.get("scenario", "")) for c in used_conditions if c.get("scenario")})
-    train_seeds = sorted({int(c.get("seed", -1)) for c in used_conditions if int(c.get("seed", -1)) >= 0})
+    train_scenarios = sorted(
+        {str(c.get("scenario", "")) for c in used_conditions if c.get("scenario")}
+    )
+    train_seeds = sorted(
+        {int(c.get("seed", -1)) for c in used_conditions if int(c.get("seed", -1)) >= 0}
+    )
     holdout_maps = [map_id for map_id in MAP_IDS if map_id not in set(train_maps)]
     unseen_scenarios = [
-        scenario_id for scenario_id in SCENARIO_FAMILIES.values() if scenario_id not in set(train_scenarios)
+        scenario_id
+        for scenario_id in SCENARIO_FAMILIES.values()
+        if scenario_id not in set(train_scenarios)
     ]
     return MapSplit(
         train_maps=train_maps or ["open_field"],
@@ -490,13 +506,17 @@ class LeagueRunner:
         self.device = device
         self.seed = int(seed)
         self.registry = CheckpointRegistry(self.directory / "registry.json")
-        self.league = EvaluationLeague(self.registry, strategy=strategy, seed=self.seed, enable_elo=True)
+        self.league = EvaluationLeague(
+            self.registry, strategy=strategy, seed=self.seed, enable_elo=True
+        )
         history = self.directory / "history.json"
         if history.is_file():
             self.league.load_history(history, replay_into_registry=False)
         # The scripted baseline is a permanent, labelled control condition.
         if "scripted_baseline" not in self.registry:
-            self.registry.register("scripted_baseline", checkpoint="", frozen=True, tags=["baseline"])
+            self.registry.register(
+                "scripted_baseline", checkpoint="", frozen=True, tags=["baseline"]
+            )
 
     # -- snapshots ----------------------------------------------------------
 
@@ -546,7 +566,9 @@ class LeagueRunner:
         nvec = tuple(int(v) for v in nvec_raw) if nvec_raw is not None else ()
         problems = []
         if obs_shape != (OBSERVATION_FIELD_COUNT,):
-            problems.append(f"observation space {obs_shape} != contract ({OBSERVATION_FIELD_COUNT},)")
+            problems.append(
+                f"observation space {obs_shape} != contract ({OBSERVATION_FIELD_COUNT},)"
+            )
         if nvec != tuple(ACTION_NVEC):
             problems.append(f"action space {nvec} != contract {tuple(ACTION_NVEC)}")
         if problems:
@@ -869,15 +891,11 @@ def run_checkpoint_evaluation(
                 policy_id=policy_id,
                 checkpoint=str(policy_path),
                 replay_dir=(
-                    destination / "replays"
-                    if record_eval_replays or record_gen_replays
-                    else None
+                    destination / "replays" if record_eval_replays or record_gen_replays else None
                 ),
             )
             if profiler is not None:
-                profiler.record(
-                    "eval.battery.execution", time.monotonic() - execution_started
-                )
+                profiler.record("eval.battery.execution", time.monotonic() - execution_started)
                 profiler.add("eval.battery.episodes", len(all_rows))
     finally:
         if owned_executor:
@@ -939,7 +957,9 @@ def run_checkpoint_evaluation(
 
     if config.checkpoint_league_eval and config.league_matches_per_checkpoint > 0:
         section_started = time.monotonic() if profiler is not None else 0.0
-        runner = LeagueRunner(pipeline.run_dir if pipeline else destination, seed=config.seed, device=device)
+        runner = LeagueRunner(
+            pipeline.run_dir if pipeline else destination, seed=config.seed, device=device
+        )
         league_env_kwargs = dict(env_kwargs)
         report["league"] = runner.evaluate_checkpoint(
             model,

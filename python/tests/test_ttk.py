@@ -1,10 +1,11 @@
 """Manual TTK trial schema, validation, statistics and holdout splitting."""
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from sandboxai.cli import main
 from sandboxai.ttk import (
@@ -94,7 +95,9 @@ class DerivedValueTests(unittest.TestCase):
         near = TTKTrial.from_dict(trial(distance_m=2.0))
         far = TTKTrial.from_dict(trial(distance_m=8.0))
         self.assertNotEqual(near.condition_key(3.0), far.condition_key(3.0))
-        self.assertEqual(near.condition_key(3.0), TTKTrial.from_dict(trial(distance_m=1.0)).condition_key(3.0))
+        self.assertEqual(
+            near.condition_key(3.0), TTKTrial.from_dict(trial(distance_m=1.0)).condition_key(3.0)
+        )
 
 
 class StatisticsTests(unittest.TestCase):
@@ -129,7 +132,16 @@ class DatasetTests(unittest.TestCase):
                     )
                 )
             )
-        rows.append(TTKTrial.from_dict(trial(trial_id="censored", outcome="target_escaped", lethal_time=None, tester="tester-1")))
+        rows.append(
+            TTKTrial.from_dict(
+                trial(
+                    trial_id="censored",
+                    outcome="target_escaped",
+                    lethal_time=None,
+                    tester="tester-1",
+                )
+            )
+        )
         return TTKDataset(rows, {"study": "unit-test"})
 
     def test_censoring_is_counted_not_dropped(self):
@@ -210,7 +222,10 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trials.jsonl"
             TTKDataset(
-                [TTKTrial.from_dict(trial(trial_id=f"t{i}", tester=f"tester-{i%2}")) for i in range(4)],
+                [
+                    TTKTrial.from_dict(trial(trial_id=f"t{i}", tester=f"tester-{i % 2}"))
+                    for i in range(4)
+                ],
                 {},
             ).save(path)
             self.assertEqual(

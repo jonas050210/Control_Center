@@ -40,10 +40,11 @@ outcome sequence; no wall-clock or shared RNG state anywhere on this path.
 ``state_dict``/``load_state_dict`` make a resumed run continue the same
 streams instead of restarting the curriculum.
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +55,11 @@ from .curriculum_stages import (
     EpisodeOutcome,
     applied_condition,
 )
-from .manifest import build_manifest, contract_fingerprint, write_manifest  # noqa: F401  (contract_fingerprint/write_manifest are re-exported: `from .pipeline import write_manifest` is the historical import path used by ppo.py and the tests)
+from .manifest import (  # noqa: F401  (contract_fingerprint/write_manifest are re-exported: `from .pipeline import write_manifest` is the historical import path used by ppo.py and the tests)
+    build_manifest,
+    contract_fingerprint,
+    write_manifest,
+)
 from .metrics import EpisodeMetrics, MetricsAggregator, StepSample
 from .randomization import DistributionRunTracker, EpisodePlan
 from .replay import DetailLevel, ReplayHeader, ReplayRecorder
@@ -306,7 +311,9 @@ class SkillMetricsSink:
     own contract. Disabled means exactly zero per-step cost.
     """
 
-    def __init__(self, environment_count: int, enabled: bool = True, policy_id: str = "policy") -> None:
+    def __init__(
+        self, environment_count: int, enabled: bool = True, policy_id: str = "policy"
+    ) -> None:
         self.environment_count = environment_count
         self.enabled = bool(enabled)
         self.policy_id = policy_id
@@ -551,7 +558,9 @@ class TrainingPipeline:
         "done_reason",
     )
 
-    def __init__(self, config: Any, run_dir: str | Path, telemetry: Any, device: str = "cpu") -> None:
+    def __init__(
+        self, config: Any, run_dir: str | Path, telemetry: Any, device: str = "cpu"
+    ) -> None:
         self.config = config
         self.run_dir = Path(run_dir)
         self.telemetry = telemetry
@@ -623,7 +632,9 @@ class TrainingPipeline:
             [self.driver.stage_next(index) for index in range(self.driver.environment_count)]
         )
 
-    def on_step(self, actions: Any, observations: Any, rewards: Any, dones: Any, infos: list[dict[str, Any]]) -> None:
+    def on_step(
+        self, actions: Any, observations: Any, rewards: Any, dones: Any, infos: list[dict[str, Any]]
+    ) -> None:
         driver = self.driver
         record_metrics = self.skill_metrics.enabled
         record_replays = self.replays.active
@@ -632,9 +643,13 @@ class TrainingPipeline:
             info = infos[env_index] if env_index < len(infos) else {}
             events = info.get("events", {})
             if record_metrics:
-                self.skill_metrics.record_step(env_index, observations[env_index], actions[env_index], events)
+                self.skill_metrics.record_step(
+                    env_index, observations[env_index], actions[env_index], events
+                )
             if record_replays:
-                self.replays.record_step(env_index, actions[env_index], float(rewards[env_index]), events=events)
+                self.replays.record_step(
+                    env_index, actions[env_index], float(rewards[env_index]), events=events
+                )
             if not bool(dones[env_index]):
                 continue
             metrics = dict(info.get("metrics", {}))
@@ -644,7 +659,11 @@ class TrainingPipeline:
                 continue
             change = event.get("change")
             summary = self.skill_metrics.finish(
-                env_index, result={"win": bool(metrics.get("win", False)), "done_reason": str(metrics.get("done_reason", ""))}
+                env_index,
+                result={
+                    "win": bool(metrics.get("win", False)),
+                    "done_reason": str(metrics.get("done_reason", "")),
+                },
             )
             replay_path = self.replays.finish(env_index, metrics, curriculum_change=change)
             self._log_episode(env_index, finished, metrics, summary, replay_path)
@@ -676,7 +695,9 @@ class TrainingPipeline:
             "curriculum_level": self.driver.level,
             "curriculum_stage": self.driver.director.stage.name,
             "plan": plan.to_dict(),
-            "engine_metrics": {key: metrics.get(key) for key in self.EPISODE_FIELDS if key in metrics},
+            "engine_metrics": {
+                key: metrics.get(key) for key in self.EPISODE_FIELDS if key in metrics
+            },
         }
         if summary is not None:
             row["skill_metrics"] = summary.get("categories", {})

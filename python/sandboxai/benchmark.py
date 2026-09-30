@@ -18,12 +18,13 @@ configurations does not take an unbounded amount of time — higher
 environment counts naturally need fewer steps to produce a stable
 steps/second estimate.
 """
+
 from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 import time
+from pathlib import Path
 from typing import Any
 
 from .contract import ACTION_NVEC
@@ -79,7 +80,9 @@ def benchmark_simulation(
         # A worker per environment is the maximum useful shard count;
         # duplicates (e.g. 4 and 8 workers for 4 environments) collapse to
         # one measured configuration instead of two identical ones.
-        planned_workers = sorted({min(int(value), int(environment_count)) for value in worker_counts})
+        planned_workers = sorted(
+            {min(int(value), int(environment_count)) for value in worker_counts}
+        )
         for worker_count in planned_workers:
             client = make_batch_client(
                 project_path=project_path,
@@ -137,7 +140,9 @@ def benchmark_simulation(
     if output_dir is not None:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
-        (destination / "benchmark.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+        (destination / "benchmark.json").write_text(
+            json.dumps(results, indent=2) + "\n", encoding="utf-8"
+        )
         with (destination / "benchmark.csv").open("w", newline="", encoding="utf-8") as stream:
             fields = [
                 "environments",
@@ -179,7 +184,9 @@ def summarize_scaling(results: list[dict[str, Any]]) -> dict[str, Any]:
     for previous, current in zip(sorted_rows, sorted_rows[1:]):
         if previous["steps_per_second"] <= 0:
             continue
-        gain = (current["steps_per_second"] - previous["steps_per_second"]) / previous["steps_per_second"]
+        gain = (current["steps_per_second"] - previous["steps_per_second"]) / previous[
+            "steps_per_second"
+        ]
         env_growth = current["environments"] / max(previous["environments"], 1)
         # Scaling is "diminishing" once throughput grows much slower than
         # the environment count did (single-process/GIL/IPC overhead

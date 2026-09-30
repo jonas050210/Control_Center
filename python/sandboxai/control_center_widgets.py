@@ -3,6 +3,7 @@
 Kept separate from page orchestration so widgets, background execution and the
 visual token palette can evolve without growing the application shell module.
 """
+
 from __future__ import annotations
 
 import os
@@ -10,10 +11,11 @@ import queue
 import subprocess
 import sys
 import tkinter as tk
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Any, Callable
+from typing import Any
 
 from . import control_center_viewmodel as vm
 
@@ -34,15 +36,19 @@ class BackgroundRunner:
 
     def __init__(self, root: tk.Misc, workers: int = 3, poll_ms: int = 100) -> None:
         self._root = root
-        self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="control-center-bg")
-        self._queue: "queue.Queue[tuple[Callable[[Any, BaseException | None], None], Any, BaseException | None]]" = (
-            queue.Queue()
+        self._executor = ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="control-center-bg"
         )
+        self._queue: queue.Queue[
+            tuple[Callable[[Any, BaseException | None], None], Any, BaseException | None]
+        ] = queue.Queue()
         self._closed = False
         self._poll_ms = poll_ms
         self._pump()
 
-    def submit(self, fn: Callable[[], Any], callback: Callable[[Any, BaseException | None], None]) -> None:
+    def submit(
+        self, fn: Callable[[], Any], callback: Callable[[Any, BaseException | None], None]
+    ) -> None:
         if self._closed:
             return
 
@@ -124,10 +130,22 @@ class ToolTip:
         self._after_id = None
         tip = tk.Toplevel(self.widget)
         tip.wm_overrideredirect(True)
-        tip.wm_geometry(f"+{self.widget.winfo_rootx() + 14}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 8}")
-        tk.Label(tip, text=self.text, justify="left", background=COLOR_SURFACE_RAISED,
-                 foreground=COLOR_TEXT, relief="solid", borderwidth=1, padx=9, pady=6,
-                 font=(_FONT_FAMILY, 9), wraplength=320).pack()
+        tip.wm_geometry(
+            f"+{self.widget.winfo_rootx() + 14}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 8}"
+        )
+        tk.Label(
+            tip,
+            text=self.text,
+            justify="left",
+            background=COLOR_SURFACE_RAISED,
+            foreground=COLOR_TEXT,
+            relief="solid",
+            borderwidth=1,
+            padx=9,
+            pady=6,
+            font=(_FONT_FAMILY, 9),
+            wraplength=320,
+        ).pack()
         self._window = tip
 
     def _hide(self, _event: object = None) -> None:
@@ -182,8 +200,13 @@ class LineChart(tk.Canvas):
     """
 
     def __init__(self, parent: tk.Misc, title: str, height: int = 140) -> None:
-        super().__init__(parent, height=height, background=COLOR_SURFACE_RAISED, highlightthickness=1,
-                          highlightbackground=COLOR_BORDER)
+        super().__init__(
+            parent,
+            height=height,
+            background=COLOR_SURFACE_RAISED,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+        )
         self._title = title
         self._points: list[tuple[float, float]] = []
         self.bind("<Configure>", lambda _event: self._redraw())
@@ -197,11 +220,20 @@ class LineChart(tk.Canvas):
         width = max(int(self.winfo_width()), 1)
         height = max(int(self.winfo_height()), 1)
         pad_left, pad_right, pad_top, pad_bottom = 46, 10, 16, 18
-        self.create_text(8, 6, anchor="nw", text=self._title, font=(_FONT_FAMILY, 9, "bold"), fill=COLOR_MUTED)
-        points = vm.downsample_series(self._points, max_points=max(width - pad_left - pad_right, 10))
+        self.create_text(
+            8, 6, anchor="nw", text=self._title, font=(_FONT_FAMILY, 9, "bold"), fill=COLOR_MUTED
+        )
+        points = vm.downsample_series(
+            self._points, max_points=max(width - pad_left - pad_right, 10)
+        )
         if len(points) < 2:
-            self.create_text(width / 2, height / 2, text="not enough data yet", fill=COLOR_MUTED,
-                              font=(_FONT_FAMILY, 9))
+            self.create_text(
+                width / 2,
+                height / 2,
+                text="not enough data yet",
+                fill=COLOR_MUTED,
+                font=(_FONT_FAMILY, 9),
+            )
             return
         xs = [p[0] for p in points]
         ys = [p[1] for p in points]
@@ -223,15 +255,27 @@ class LineChart(tk.Canvas):
             gy = pad_top + fraction * plot_h
             self.create_line(pad_left, gy, width - pad_right, gy, fill="#243044")
             value = y_max - fraction * (y_max - y_min)
-            self.create_text(pad_left - 6, gy, anchor="e", text=vm.format_number(value, 2), fill=COLOR_MUTED,
-                              font=(_FONT_FAMILY, 8))
+            self.create_text(
+                pad_left - 6,
+                gy,
+                anchor="e",
+                text=vm.format_number(value, 2),
+                fill=COLOR_MUTED,
+                font=(_FONT_FAMILY, 8),
+            )
         coords: list[float] = []
         for x, y in points:
             cx, cy = to_canvas(x, y)
             coords.extend((cx, cy))
         self.create_line(*coords, fill=COLOR_ACCENT, width=2, smooth=False)
-        self.create_text(width - pad_right, height - 4, anchor="se",
-                          text=f"latest: {vm.format_number(ys[-1], 3)}", fill=COLOR_MUTED, font=(_FONT_FAMILY, 8))
+        self.create_text(
+            width - pad_right,
+            height - 4,
+            anchor="se",
+            text=f"latest: {vm.format_number(ys[-1], 3)}",
+            fill=COLOR_MUTED,
+            font=(_FONT_FAMILY, 8),
+        )
 
 
 class LogPanel(ttk.Frame):
@@ -262,8 +306,16 @@ class LogPanel(ttk.Frame):
         self._truncated_label.pack(side="right")
         text_frame = ttk.Frame(self)
         text_frame.pack(fill="both", expand=True, pady=(4, 0))
-        self.text = tk.Text(text_frame, height=16, wrap="none", state="disabled", background="#0d1117",
-                             foreground="#c9d1d9", insertbackground="#c9d1d9", font=("Consolas", 9))
+        self.text = tk.Text(
+            text_frame,
+            height=16,
+            wrap="none",
+            state="disabled",
+            background="#0d1117",
+            foreground="#c9d1d9",
+            insertbackground="#c9d1d9",
+            font=("Consolas", 9),
+        )
         yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
         self.text.configure(yscrollcommand=yscroll.set)
         self.text.pack(side="left", fill="both", expand=True)
@@ -335,16 +387,29 @@ def _safe_line(line: Any) -> str:
 
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:
     """Builds a Treeview with click-to-sort columns (ascending/descending)."""
-    tree = ttk.Treeview(parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended")
+    tree = ttk.Treeview(
+        parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended"
+    )
     numeric_columns = {
-        "environments", "workers", "total_steps", "steps_per_second", "episodes_per_second",
-        "p50_ms", "p95_ms", "elapsed_seconds", "timesteps", "episodes", "win_rate",
-        "loss_rate", "mean_episode_reward",
+        "environments",
+        "workers",
+        "total_steps",
+        "steps_per_second",
+        "episodes_per_second",
+        "p50_ms",
+        "p95_ms",
+        "elapsed_seconds",
+        "timesteps",
+        "episodes",
+        "win_rate",
+        "loss_rate",
+        "mean_episode_reward",
     }
     for key, title, width in columns:
         anchor = "e" if key in numeric_columns else "w"
-        tree.heading(key, text=title, anchor=anchor,
-                     command=lambda k=key: _sort_tree(tree, k, False))
+        tree.heading(
+            key, text=title, anchor=anchor, command=lambda k=key: _sort_tree(tree, k, False)
+        )
         tree.column(key, width=width, anchor=anchor, stretch=True)
     return tree
 
@@ -373,5 +438,3 @@ def _open_in_file_manager(path: Path) -> None:
             subprocess.Popen(["xdg-open", str(path)])
     except OSError as exc:
         messagebox.showwarning("Could not open folder", f"{path}\n\n{exc}")
-
-

@@ -37,14 +37,16 @@ observation. :class:`TTKDataset` deliberately offers no ``arrays()``.
 Demonstrations for BC come from the local Godot recorder
 (:mod:`sandboxai.dataset`), which logs the real contract.
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import json
 import math
-from pathlib import Path
 import statistics
-from typing import Any, Iterable, Sequence
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 SCHEMA = "sandboxai.ttk_trials"
 SCHEMA_VERSION = 1
@@ -178,7 +180,7 @@ class TTKTrial:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, values: dict[str, Any]) -> "TTKTrial":
+    def from_dict(cls, values: dict[str, Any]) -> TTKTrial:
         known = {key: values[key] for key in cls.__dataclass_fields__ if key in values}
         return cls(**known)
 
@@ -210,7 +212,11 @@ def validate_trial(values: dict[str, Any], index: int = 0) -> list[str]:
         problems.append(f"trial {index}: hit_zone must be one of {HIT_ZONES}")
     for name in ("distance_m", "target_health"):
         value = values[name]
-        if not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) <= 0.0:
+        if (
+            not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
             problems.append(f"trial {index}: {name} must be a positive finite number")
     for name in ("shots_fired", "shots_hit"):
         value = values.get(name, 0)
@@ -334,7 +340,7 @@ class TTKDataset:
     # -- io ---------------------------------------------------------------
 
     @classmethod
-    def load(cls, path: str | Path, strict: bool = True) -> "TTKDataset":
+    def load(cls, path: str | Path, strict: bool = True) -> TTKDataset:
         """Reads a JSONL trial file (optional leading metadata object).
 
         ``strict`` (the default) refuses the whole file when any trial is
@@ -422,11 +428,7 @@ class TTKDataset:
             # Reaction time is meaningful for censored trials too: the
             # tester still acquired and fired.
             "reaction_time": summarize_values(
-                [
-                    trial.reaction_time
-                    for trial in self.trials
-                    if trial.reaction_time is not None
-                ],
+                [trial.reaction_time for trial in self.trials if trial.reaction_time is not None],
                 seed,
             ),
             "accuracy": summarize_values(
@@ -461,7 +463,9 @@ class TTKDataset:
             }
         return report
 
-    def holdout_split(self, fraction: float = 0.25, seed: int = 1234) -> tuple["TTKDataset", "TTKDataset"]:
+    def holdout_split(
+        self, fraction: float = 0.25, seed: int = 1234
+    ) -> tuple[TTKDataset, TTKDataset]:
         """Split by *tester* (or session) so calibration keeps a real holdout.
 
         Splitting by trial would let the same person's habits appear on
@@ -473,12 +477,11 @@ class TTKDataset:
         keys = sorted({trial.tester or trial.session_id or trial.trial_id for trial in self.trials})
         if len(keys) < 2:
             raise ValueError(
-                "a holdout split needs at least two testers/sessions; "
-                f"this dataset has {len(keys)}"
+                f"a holdout split needs at least two testers/sessions; this dataset has {len(keys)}"
             )
         ranked = sorted(
             keys,
-            key=lambda key: hashlib.blake2b(f"{seed}:{key}".encode("utf-8"), digest_size=8).hexdigest(),
+            key=lambda key: hashlib.blake2b(f"{seed}:{key}".encode(), digest_size=8).hexdigest(),
         )
         holdout_count = max(1, min(len(keys) - 1, round(len(keys) * fraction)))
         holdout_keys = set(ranked[:holdout_count])
@@ -572,7 +575,13 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"censored={censoring.get('censored', 0)} "
         f"({censoring.get('censored_fraction', 0.0):.0%})"
     )
-    for name in ("reaction_time", "trigger_to_kill", "damage_to_kill", "encounter_time", "accuracy"):
+    for name in (
+        "reaction_time",
+        "trigger_to_kill",
+        "damage_to_kill",
+        "encounter_time",
+        "accuracy",
+    ):
         values = summary.get(name, {})
         if not values.get("n"):
             lines.append(f"  {name:<18} n=0")

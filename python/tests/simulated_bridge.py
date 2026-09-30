@@ -17,13 +17,14 @@ serial GDScript simulation does.
 
 This is test/measurement infrastructure. It never ships in a training path.
 """
+
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import stat
 import sys
 import tempfile
+from pathlib import Path
 
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
@@ -203,9 +204,7 @@ for line in sys.stdin:
         break
     else:
         out({"ok": False, "error": "unknown command: %s" % command})
-'''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT)).replace(
-    "__NVEC__", str(list(ACTION_NVEC))
-)
+'''.replace("__OBS_DIM__", str(OBSERVATION_FIELD_COUNT)).replace("__NVEC__", str(list(ACTION_NVEC)))
 
 
 class SimulatedBridgeExecutable:
@@ -230,7 +229,7 @@ class SimulatedBridgeExecutable:
     def cleanup(self) -> None:
         self._tmp.cleanup()
 
-    def __enter__(self) -> "SimulatedBridgeExecutable":
+    def __enter__(self) -> SimulatedBridgeExecutable:
         return self
 
     def __exit__(self, *_args: object) -> None:

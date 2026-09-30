@@ -5,6 +5,7 @@ boundary. Real SB3 models are used for the league tests so snapshot
 isolation, contract checks, weight independence and training-policy
 immutability are exercised against real torch weights.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,6 +14,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from optional_deps import HAS_GYMNASIUM, HAS_SB3, SB3_REASON
 
 from sandboxai.checkpoint_eval import (
     LeagueIncompatibilityError,
@@ -29,8 +31,6 @@ from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.curriculum_stages import applied_condition
 from sandboxai.generalization import GeneralizationSuite
 from sandboxai.pipeline import TrainingPipeline
-
-from optional_deps import HAS_GYMNASIUM, HAS_SB3, SB3_REASON
 
 ## These suites build real SB3 models on purpose (see the module
 ## docstring): faking the policy would stop the tests from proving weight
@@ -60,8 +60,10 @@ def _models():
     def make(seed: int = 0, obs_dim: int = OBSERVATION_FIELD_COUNT):
         env_cls = _Env
         if obs_dim != OBSERVATION_FIELD_COUNT:
+
             class _Bad(_Env):
                 observation_space = spaces.Box(-10, 10, shape=(obs_dim,), dtype=np.float32)
+
             env_cls = _Bad
         return PPO(
             "MlpPolicy",
@@ -72,6 +74,7 @@ def _models():
             device="cpu",
             policy_kwargs={"net_arch": dict(pi=[32], vf=[32])},
         )
+
     return make
 
 
@@ -95,8 +98,14 @@ class _FakeSelfPlayClient:
         done = self._steps >= 5
         obs = [[0.0] * OBSERVATION_FIELD_COUNT, [0.0] * OBSERVATION_FIELD_COUNT]
         done_reason = "timeout" if done else ""
-        info_a = {"metrics": {"win": False, "damage_dealt": 3.0, "episode_length": self._steps}, "done_reason": done_reason}
-        info_b = {"metrics": {"win": done, "damage_dealt": 9.0, "episode_length": self._steps}, "done_reason": done_reason}
+        info_a = {
+            "metrics": {"win": False, "damage_dealt": 3.0, "episode_length": self._steps},
+            "done_reason": done_reason,
+        }
+        info_b = {
+            "metrics": {"win": done, "damage_dealt": 9.0, "episode_length": self._steps},
+            "done_reason": done_reason,
+        }
         return [obs], [[0.0, 0.0]], [done], [[info_a, info_b]]
 
     def close(self):
@@ -134,13 +143,18 @@ class LeagueRunnerTest(unittest.TestCase):
 
     def test_training_policy_is_not_mutated(self):
         model = self._make()
-        before = {key: value.cpu().numpy().copy() for key, value in model.policy.state_dict().items()}
+        before = {
+            key: value.cpu().numpy().copy() for key, value in model.policy.state_dict().items()
+        }
         runner = LeagueRunner(self.tmp, seed=42, device="cpu")
         self._evaluate(runner, model, step=1000)
         after = model.policy.state_dict()
         for key, value in before.items():
-            np.testing.assert_array_equal(value, after[key].cpu().numpy(),
-                                          f"league evaluation mutated training parameter {key}")
+            np.testing.assert_array_equal(
+                value,
+                after[key].cpu().numpy(),
+                f"league evaluation mutated training parameter {key}",
+            )
 
     def test_schedule_is_resume_identical(self):
         model = self._make()
@@ -150,7 +164,9 @@ class LeagueRunnerTest(unittest.TestCase):
         seeds_a = list(_FakeSelfPlayClient.seeds)
 
         _FakeSelfPlayClient.seeds = []
-        runner_b = LeagueRunner(self.tmp, seed=42, device="cpu")  # fresh runner over the same run dir
+        runner_b = LeagueRunner(
+            self.tmp, seed=42, device="cpu"
+        )  # fresh runner over the same run dir
         report_b = self._evaluate(runner_b, model, step=1000)
         self.assertEqual(_FakeSelfPlayClient.seeds, seeds_a)
         self.assertEqual(report_a["opponents"], report_b["opponents"])
@@ -230,9 +246,18 @@ class CheckpointEvaluationTest(unittest.TestCase):
             replay_mode="evaluation",
         )
         self.config.validate()
-        self.pipeline = TrainingPipeline(self.config, self.config.run_directory(), _Telemetry(), device="cpu")
+        self.pipeline = TrainingPipeline(
+            self.config, self.config.run_directory(), _Telemetry(), device="cpu"
+        )
         self.used = [
-            {"seed": s, "map_id": m, "scenario": "cover_fight", "lighting": "normal", "enemy_count": 1, "level": 5}
+            {
+                "seed": s,
+                "map_id": m,
+                "scenario": "cover_fight",
+                "lighting": "normal",
+                "enemy_count": 1,
+                "level": 5,
+            }
             for i, m in enumerate(["open_field", "training_yard"])
             for s in (101 + 17 * i, 3059 + 71 * i)
         ]
@@ -268,7 +293,9 @@ class CheckpointEvaluationTest(unittest.TestCase):
         rows_a = [row["seed"] for row in report["condition_evaluation"]["episodes_detail"]]
         report2 = self._run(step=200_000)
         rows_b = [row["seed"] for row in report2["condition_evaluation"]["episodes_detail"]]
-        self.assertEqual(rows_a, rows_b, "condition eval set must be frozen (comparable across checkpoints)")
+        self.assertEqual(
+            rows_a, rows_b, "condition eval set must be frozen (comparable across checkpoints)"
+        )
         # And disjoint from the training stream by construction (eval master
         # seed salt): none of the eval seeds may be a sampled stage seed.
         self.assertTrue(all(len(str(seed)) > 4 for seed in rows_a))
@@ -287,7 +314,10 @@ class CheckpointEvaluationTest(unittest.TestCase):
             else:
                 self.assertNotIn(row["seed"], trained_seeds, f"trained seed leaked into {bucket}")
         self.assertTrue(known_replays, "known bucket must replay trained seeds")
-        self.assertNotEqual(report["generalization"].get("suite_level"), report["generalization"].get("trained_level"))
+        self.assertNotEqual(
+            report["generalization"].get("suite_level"),
+            report["generalization"].get("trained_level"),
+        )
 
     def test_league_section_records_without_mutating(self):
         report = self._run()
@@ -307,10 +337,22 @@ class CheckpointEvaluationTest(unittest.TestCase):
 class BuildMapSplitTest(unittest.TestCase):
     def test_trained_conditions_classify_as_known(self):
         used = [
-            {"seed": 41, "map_id": "open_field", "scenario": "cover_fight", "lighting": "normal",
-             "enemy_count": 1, "level": 5},
-            {"seed": 37, "map_id": "pillar_hall", "scenario": "corridor_fight", "lighting": "fog",
-             "enemy_count": 2, "level": 7},
+            {
+                "seed": 41,
+                "map_id": "open_field",
+                "scenario": "cover_fight",
+                "lighting": "normal",
+                "enemy_count": 1,
+                "level": 5,
+            },
+            {
+                "seed": 37,
+                "map_id": "pillar_hall",
+                "scenario": "corridor_fight",
+                "lighting": "fog",
+                "enemy_count": 2,
+                "level": 7,
+            },
         ]
         split = build_map_split(used)
         for row in used:
@@ -327,8 +369,14 @@ class BuildMapSplitTest(unittest.TestCase):
 
     def test_suite_disjointness_rule_targets_unseen_buckets_only(self):
         used = [
-            {"seed": 41, "map_id": "open_field", "scenario": "cover_fight", "lighting": "normal",
-             "enemy_count": 1, "level": 5},
+            {
+                "seed": 41,
+                "map_id": "open_field",
+                "scenario": "cover_fight",
+                "lighting": "normal",
+                "enemy_count": 1,
+                "level": 5,
+            },
         ]
         split = build_map_split(used)
         suite = GeneralizationSuite(split=split, level=6, episodes_per_cell=1, base_seed=70_000)
@@ -369,7 +417,9 @@ class _FakeBatchClient:
                 self._target[index] = int(self._pending[index])
                 self._pending[index] = None
             self._counters[index] = 0
-        return [[0.0] * OBSERVATION_FIELD_COUNT for _ in range(self.environment_count)], [{} for _ in range(self.environment_count)]
+        return [[0.0] * OBSERVATION_FIELD_COUNT for _ in range(self.environment_count)], [
+            {} for _ in range(self.environment_count)
+        ]
 
     def reset_indices(self, indices, seed=None):
         self.reset_indices_calls += 1
@@ -379,8 +429,7 @@ class _FakeBatchClient:
                 self._pending[index] = None
             self._counters[index] = 0
         return [
-            {"index": index, "observation": [0.0] * OBSERVATION_FIELD_COUNT}
-            for index in indices
+            {"index": index, "observation": [0.0] * OBSERVATION_FIELD_COUNT} for index in indices
         ]
 
     def step(self, actions):
@@ -392,8 +441,17 @@ class _FakeBatchClient:
             dones.append(done)
             if done:
                 won = self._target[index] % 2 == 0
-                infos.append({"metrics": {"win": won, "episode_length": self._counters[index], "episode_reward": 1.0},
-                              "done_reason": "won" if won else "agent_death", "events": {}})
+                infos.append(
+                    {
+                        "metrics": {
+                            "win": won,
+                            "episode_length": self._counters[index],
+                            "episode_reward": 1.0,
+                        },
+                        "done_reason": "won" if won else "agent_death",
+                        "events": {},
+                    }
+                )
                 # Real Godot consumes a staged plan in the terminal step's
                 # auto-reset and returns that plan's first observation.
                 if self._pending[index] is not None:
@@ -420,8 +478,12 @@ class PlanExecutorTest(unittest.TestCase):
         return [
             PlannedEpisode(
                 condition=Condition(
-                    map_id="open_field", scenario="", lighting="normal",
-                    enemy_count=1, level=5, seed=1000 + i * 97,
+                    map_id="open_field",
+                    scenario="",
+                    lighting="normal",
+                    enemy_count=1,
+                    level=5,
+                    seed=1000 + i * 97,
                 ),
                 labels={"axis": "test", "_position": i},
             )
@@ -440,7 +502,9 @@ class PlanExecutorTest(unittest.TestCase):
         class _Model:
             def predict(self, batch, deterministic=True):
                 import numpy as np
+
                 return np.zeros((len(batch), 6), dtype=np.int64), None
+
         return _Model()
 
     def test_rows_match_plans_in_order_and_are_deterministic(self):
@@ -450,8 +514,7 @@ class PlanExecutorTest(unittest.TestCase):
         self.assertEqual(len(rows_a), 10)
         # Scheduling independence: N=3 and N=2 must produce the same rows.
         strip = lambda rows: [
-            {k: v for k, v in row.items() if k != "environment_index"}
-            for row in rows
+            {k: v for k, v in row.items() if k != "environment_index"} for row in rows
         ]
         self.assertEqual(strip(rows_a), strip(rows_b))
         self.assertEqual([row["labels"]["_position"] for row in rows_a], list(range(10)))
@@ -468,9 +531,7 @@ class PlanExecutorTest(unittest.TestCase):
         # Initial plans plus pending refills are staged before they are
         # needed; no plan is dropped or replayed.
         staged_seeds = [
-            int(payload["seed"])
-            for batch in executor.client.staged
-            for payload in batch
+            int(payload["seed"]) for batch in executor.client.staged for payload in batch
         ]
         self.assertCountEqual(staged_seeds, [plan.condition.seed for plan in self._plans(12)])
 
@@ -491,8 +552,14 @@ class PlanExecutorTest(unittest.TestCase):
         # Guard against a mis-wiring where raw sampled conditions (with maps
         # on low levels) reach the bridge: callers must apply
         # applied_condition first.
-        raw = Condition(map_id="pillar_hall", scenario="ambush", lighting="night",
-                        enemy_count=1, level=2, seed=1)
+        raw = Condition(
+            map_id="pillar_hall",
+            scenario="ambush",
+            lighting="night",
+            enemy_count=1,
+            level=2,
+            seed=1,
+        )
         applied = applied_condition(raw)
         self.assertEqual(applied.map_id, "")
         self.assertEqual(applied.level, 2)

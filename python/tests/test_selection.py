@@ -1,4 +1,5 @@
 """Checkpoint-selection rule: semantics, provenance and resume behaviour."""
+
 import json
 import unittest
 from pathlib import Path
@@ -76,16 +77,12 @@ class SelectionRuleTests(unittest.TestCase):
         self.assertTrue(CheckpointSelectionRule().matches(None))
         self.assertFalse(rule.matches(None))
         # min_delta only tightens the threshold: still the same quantity.
-        self.assertTrue(
-            rule.matches({"metric": "win_rate", "goal": "max", "min_delta": 0.5})
-        )
+        self.assertTrue(rule.matches({"metric": "win_rate", "goal": "max", "min_delta": 0.5}))
         self.assertFalse(rule.matches({"metric": "win_rate", "goal": "min"}))
         self.assertFalse(rule.matches({"metric": "mean_episode_reward", "goal": "max"}))
 
     def test_describe_is_human_readable(self):
-        self.assertEqual(
-            CheckpointSelectionRule().describe(), "maximise mean_episode_reward"
-        )
+        self.assertEqual(CheckpointSelectionRule().describe(), "maximise mean_episode_reward")
         self.assertEqual(
             CheckpointSelectionRule(metric="mean_ttk", goal="min", min_delta=0.25).describe(),
             "minimise mean_ttk by more than 0.25",
@@ -125,12 +122,8 @@ class SelectionConfigTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             path.write_text(json.dumps(config.to_dict()), encoding="utf-8")
-            restored = TrainingConfig.from_dict(
-                json.loads(path.read_text(encoding="utf-8"))
-            )
-        self.assertEqual(
-            restored.checkpoint_selection_rule(), config.checkpoint_selection_rule()
-        )
+            restored = TrainingConfig.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        self.assertEqual(restored.checkpoint_selection_rule(), config.checkpoint_selection_rule())
 
 
 class SelectionResumeTests(unittest.TestCase):

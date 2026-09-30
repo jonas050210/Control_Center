@@ -4,12 +4,13 @@ Also the drift guard the ``conditions.py`` header promises: the map and
 lighting id lists are hand-mirrored from GDScript, so a test has to hold
 them to the engine source.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 import random
 import re
 import unittest
+from pathlib import Path
 
 from sandboxai.conditions import (
     LIGHTING_IDS,
@@ -69,11 +70,17 @@ class ConditionTests(unittest.TestCase):
         self.assertEqual(first.key, second.key)
 
     def test_key_distinguishes_every_other_axis(self):
-        base = Condition(map_id="compound", lighting="fog", scenario="ambush", enemy_count=2, level=6)
+        base = Condition(
+            map_id="compound", lighting="fog", scenario="ambush", enemy_count=2, level=6
+        )
         variants = [
             Condition(map_id="catwalks", lighting="fog", scenario="ambush", enemy_count=2, level=6),
-            Condition(map_id="compound", lighting="night", scenario="ambush", enemy_count=2, level=6),
-            Condition(map_id="compound", lighting="fog", scenario="sound_only", enemy_count=2, level=6),
+            Condition(
+                map_id="compound", lighting="night", scenario="ambush", enemy_count=2, level=6
+            ),
+            Condition(
+                map_id="compound", lighting="fog", scenario="sound_only", enemy_count=2, level=6
+            ),
             Condition(map_id="compound", lighting="fog", scenario="ambush", enemy_count=3, level=6),
             Condition(map_id="compound", lighting="fog", scenario="ambush", enemy_count=2, level=7),
         ]
@@ -106,7 +113,9 @@ class ConditionSpaceTests(unittest.TestCase):
         self.assertEqual(space.size(), 8)
 
     def test_enumerate_grid_repeats_seeds_per_condition(self):
-        space = ConditionSpace(maps=["open_field"], lightings=["normal"], enemy_counts=[1], levels=[1])
+        space = ConditionSpace(
+            maps=["open_field"], lightings=["normal"], enemy_counts=[1], levels=[1]
+        )
         conditions = list(space.enumerate_grid(seeds_per_condition=4))
         self.assertEqual(len(conditions), 4)
         self.assertEqual(len({condition.seed for condition in conditions}), 4)

@@ -26,13 +26,15 @@ and no RNG here. Anything that depends on the actual engine loop (hit
 registration against a moving target, cover, enemy behaviour) is measured
 by running the engine, not by this module.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
 import math
-from pathlib import Path
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
 
 from .gdscript_analysis import project_root
 
@@ -215,7 +217,9 @@ class WeaponProfile:
 
     # -- handling ----------------------------------------------------------
 
-    def recoil_kick(self, index: int, constants: dict[str, float] | None = None) -> tuple[float, float]:
+    def recoil_kick(
+        self, index: int, constants: dict[str, float] | None = None
+    ) -> tuple[float, float]:
         """Mirror of ``WeaponState.recoil_kick`` -> ``(pitch_deg, yaw_deg)``."""
         consts = constants or load_handling_constants()
         pattern_length = max(1.0, consts["RECOIL_PATTERN_LENGTH"])
@@ -238,7 +242,9 @@ class WeaponProfile:
         ceiling = max(self.spread_max_deg, self.spread_air_deg + self.spread_move_deg)
         return min(max(total, 0.0), ceiling)
 
-    def spread_radius_m(self, distance_m: float, shots: int = 0, speed_fraction: float = 0.0) -> float:
+    def spread_radius_m(
+        self, distance_m: float, shots: int = 0, speed_fraction: float = 0.0
+    ) -> float:
         """How far off-axis the cone can throw a round at ``distance_m``."""
         return math.tan(math.radians(self.spread_after(shots, speed_fraction))) * distance_m
 
@@ -262,9 +268,7 @@ class WeaponProfile:
         self, distance_m: float, shots: int = 0, speed_fraction: float = 0.0
     ) -> float:
         """``hit_probability_for_cone`` after ``shots`` uninterrupted shots."""
-        return self.hit_probability_for_cone(
-            distance_m, self.spread_after(shots, speed_fraction)
-        )
+        return self.hit_probability_for_cone(distance_m, self.spread_after(shots, speed_fraction))
 
     def _bloom_decay_per_cycle(self, constants: dict[str, float] | None = None) -> float:
         """Bloom recovered in one firing cycle.
@@ -378,7 +382,7 @@ class WeaponProfile:
                 bloom = max(0.0, bloom - decay)
         return math.inf
 
-    def best_band(self, peers: Iterable["WeaponProfile"] = ()) -> str:
+    def best_band(self, peers: Iterable[WeaponProfile] = ()) -> str:
         """The engagement band this profile *owns*.
 
         Absolute TTK always improves as the target gets closer, so "lowest
@@ -398,9 +402,7 @@ class WeaponProfile:
             if not others:
                 score = -mine
             else:
-                rivals = [
-                    math.inf if probe > p.range_m else p.effective_ttk(probe) for p in others
-                ]
+                rivals = [math.inf if probe > p.range_m else p.effective_ttk(probe) for p in others]
                 finite = [r for r in rivals if math.isfinite(r)]
                 # Advantage over the best rival that can reach this band.
                 # A zero TTK is a one-shot kill, i.e. unbeatable here.
@@ -580,9 +582,8 @@ def format_ttk_table(table: dict[str, Any] | None = None) -> str:
         "  actual = bloom, magazine and reload included, target stationary",
         "",
     ]
-    header = (
-        f"{'profile':<9}{'mode':<6}{'rpm':>6}{'mag':>5}{'range':>7}{'role':>13}  "
-        + "".join(f"{d:g}m".rjust(15) for d in distances)
+    header = f"{'profile':<9}{'mode':<6}{'rpm':>6}{'mag':>5}{'range':>7}{'role':>13}  " + "".join(
+        f"{d:g}m".rjust(15) for d in distances
     )
     lines.append(header)
     lines.append("-" * len(header))

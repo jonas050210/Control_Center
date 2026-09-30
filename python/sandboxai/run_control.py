@@ -7,17 +7,17 @@ status file plus a bounded-rate JSONL event stream.  The trainer remains the
 owner of training; the GUI only requests pause/resume/stop at safe callback
 boundaries.
 """
+
 from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from .control_center_schema import EVENT_SCHEMA_VERSION, STATUS_SCHEMA_VERSION
-
 
 TERMINAL_STATES = frozenset({"Finished", "Error"})
 
@@ -132,7 +132,9 @@ class RunControl:
 
     def finish(self, **values: Any) -> None:
         values.setdefault("stopped", self.stop_requested)
-        self.event("system", "training stopped" if self.stop_requested else "training finished", values)
+        self.event(
+            "system", "training stopped" if self.stop_requested else "training finished", values
+        )
         # Publish the terminal status last, after its final event is durable.
         self.update(state="Finished", **values)
 

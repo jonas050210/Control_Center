@@ -11,6 +11,7 @@ Skipped when Tkinter is not importable (this sandbox) or when no display
 server is available to open a Tk window (headless CI without Xvfb); both are
 environment facts, not regressions, per the project's testing rules.
 """
+
 import json
 import time
 import unittest
@@ -69,8 +70,14 @@ class ControlCenterConstructionTests(unittest.TestCase):
     def test_every_required_page_is_registered(self):
         titles = {page_class.title for page_class in PAGE_CLASSES}
         assert titles == {
-            "Dashboard", "Training", "Agents", "Benchmarks", "Evaluations",
-            "Runs / Checkpoints", "System / Telemetry", "Settings",
+            "Dashboard",
+            "Training",
+            "Agents",
+            "Benchmarks",
+            "Evaluations",
+            "Runs / Checkpoints",
+            "System / Telemetry",
+            "Settings",
         }
 
     def test_every_page_builds_and_refreshes_without_raising(self):
@@ -84,11 +91,21 @@ class ControlCenterConstructionTests(unittest.TestCase):
     def test_dashboard_reflects_a_real_run_directory(self):
         run_dir = self.project_root / "training" / "runs" / "run-a"
         run_dir.mkdir(parents=True)
-        TrainingConfig(total_training_steps=1000, output_root=str(self.project_root / "training"),
-                        run_id="run-a").save(run_dir / "config.json")
-        (run_dir / "status.json").write_text(json.dumps({
-            "state": "Running", "timesteps": 250, "total_training_steps": 1000, "updated_at": time.time(),
-        }))
+        TrainingConfig(
+            total_training_steps=1000,
+            output_root=str(self.project_root / "training"),
+            run_id="run-a",
+        ).save(run_dir / "config.json")
+        (run_dir / "status.json").write_text(
+            json.dumps(
+                {
+                    "state": "Running",
+                    "timesteps": 250,
+                    "total_training_steps": 1000,
+                    "updated_at": time.time(),
+                }
+            )
+        )
         self.app.show_page("Dashboard")
         _drain_background(self.app)
         page = self.app.pages["Dashboard"]

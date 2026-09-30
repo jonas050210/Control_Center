@@ -1,12 +1,13 @@
 """Central, serialisable configuration for SandboxAI experiments."""
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
 import json
 import math
 import os
 import shutil
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .schedule import full_rollout_schedule
@@ -310,7 +311,7 @@ class TrainingConfig:
     # Per-episode JSONL metrics log (the research record of the run).
     episode_log: bool = True
 
-    def validate(self) -> "TrainingConfig":
+    def validate(self) -> TrainingConfig:
         if self.environment_count < 1:
             raise ValueError("environment_count must be >= 1")
         if self.enemy_count < 1:
@@ -434,7 +435,9 @@ class TrainingConfig:
                 raise RuntimeError("CUDA inference was requested but PyTorch is not installed")
             return "cpu"
         if self.inference_device == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("CUDA inference was requested but torch.cuda.is_available() is false")
+            raise RuntimeError(
+                "CUDA inference was requested but torch.cuda.is_available() is false"
+            )
         return self.inference_device
 
     def checkpoint_selection_rule(self):
@@ -520,7 +523,7 @@ class TrainingConfig:
     def run_directory(self) -> Path:
         import datetime as _datetime
 
-        run_id = self.run_id or _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        run_id = self.run_id or _datetime.datetime.now(_datetime.UTC).strftime("%Y%m%d-%H%M%S")
         prefix = f"{self.experiment_id}_" if self.experiment_id else ""
         # Resolve output_root (not the run subdirectory, which may not exist
         # yet - resolve() only needs the existing prefix). Without this, a
@@ -547,11 +550,13 @@ class TrainingConfig:
     def save(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        destination.write_text(
+            json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         return destination
 
     @classmethod
-    def from_dict(cls, values: dict[str, Any]) -> "TrainingConfig":
+    def from_dict(cls, values: dict[str, Any]) -> TrainingConfig:
         fields = {field.name for field in cls.__dataclass_fields__.values()}
         clean = {key: value for key, value in values.items() if key in fields}
         if "net_arch" in clean:
@@ -560,7 +565,7 @@ class TrainingConfig:
         return config.validate()
 
     @classmethod
-    def load(cls, path: str | Path) -> "TrainingConfig":
+    def load(cls, path: str | Path) -> TrainingConfig:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
@@ -592,7 +597,7 @@ class BCConfig:
     ## 1.0 disables the check.
     max_duplicate_fraction: float = 0.5
 
-    def validate(self) -> "BCConfig":
+    def validate(self) -> BCConfig:
         if self.epochs < 1 or self.batch_size < 1:
             raise ValueError("BC epochs and batch_size must be positive")
         if not 0.0 < self.validation_fraction < 1.0:
@@ -618,7 +623,11 @@ class BCConfig:
             return "cpu"
         if self.device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
-        return "cuda" if self.device == "cuda" or (self.device == "auto" and torch.cuda.is_available()) else "cpu"
+        return (
+            "cuda"
+            if self.device == "cuda" or (self.device == "auto" and torch.cuda.is_available())
+            else "cpu"
+        )
 
 
 @dataclass
@@ -645,7 +654,7 @@ class SelfPlayConfig:
     #: opponent stream can be varied without changing episode seeding.
     opponent_seed: int = 0
 
-    def validate(self) -> "SelfPlayConfig":
+    def validate(self) -> SelfPlayConfig:
         from .self_play import OPPONENT_STRATEGIES
 
         if self.environment_count < 1:

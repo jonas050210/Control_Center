@@ -17,14 +17,15 @@ than silent. In particular:
   transition-level split leaks the validation distribution into training
   and reports a validation loss that is mostly memorisation.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from pathlib import Path
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
@@ -163,7 +164,7 @@ class DemonstrationDataset:
     fingerprint: str = ""
 
     @classmethod
-    def load(cls, path: str | Path) -> "DemonstrationDataset":
+    def load(cls, path: str | Path) -> DemonstrationDataset:
         source = Path(path)
         if not source.exists():
             raise FileNotFoundError(source)
@@ -182,7 +183,11 @@ class DemonstrationDataset:
                     if not line.strip():
                         continue
                     value = json.loads(line)
-                    if not transitions and isinstance(value, dict) and value.get("schema") == SCHEMA:
+                    if (
+                        not transitions
+                        and isinstance(value, dict)
+                        and value.get("schema") == SCHEMA
+                    ):
                         metadata = value
                         continue
                     if not isinstance(value, dict):
@@ -219,15 +224,21 @@ class DemonstrationDataset:
             if expected_dim is None:
                 expected_dim = len(obs)
             if len(obs) != expected_dim or len(next_obs) != expected_dim:
-                raise ValueError(f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})")
+                raise ValueError(
+                    f"transition {index} observation dimension mismatch ({len(obs)} vs {expected_dim})"
+                )
 
             # Check for non-finite values
             for val in obs:
                 if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
-                    raise ValueError(f"transition {index} observation contains invalid number: {val}")
+                    raise ValueError(
+                        f"transition {index} observation contains invalid number: {val}"
+                    )
             for val in next_obs:
                 if not isinstance(val, (int, float)) or math.isnan(val) or math.isinf(val):
-                    raise ValueError(f"transition {index} next_observation contains invalid number: {val}")
+                    raise ValueError(
+                        f"transition {index} next_observation contains invalid number: {val}"
+                    )
 
             rew = transition["reward"]
             if not isinstance(rew, (int, float)) or math.isnan(rew) or math.isinf(rew):
@@ -291,7 +302,9 @@ class DemonstrationDataset:
         """
         problems: list[str] = []
         if not self.has_episode_structure():
-            problems.append("no episode_id/episode_key on any transition; episodes cannot be separated")
+            problems.append(
+                "no episode_id/episode_key on any transition; episodes cannot be separated"
+            )
             return problems
         for key, indices in self.episode_groups().items():
             dones = [bool(self.transitions[index].get("done", False)) for index in indices]
@@ -410,7 +423,9 @@ class DemonstrationDataset:
         metadata = {
             "schema": SCHEMA,
             "schema_version": 1,
-            "observation_dim": len(self.transitions[0]["observation"]) if self.transitions else OBSERVATION_FIELD_COUNT,
+            "observation_dim": len(self.transitions[0]["observation"])
+            if self.transitions
+            else OBSERVATION_FIELD_COUNT,
             # Matches the Godot recorder: the contract-v2 log array with
             # `jump` at index 5 and the look deltas at 6/7.
             "action_encoding": "[move, strafe, yaw, pitch, shoot, jump, look_delta_x, look_delta_y]",
@@ -427,14 +442,24 @@ class DemonstrationDataset:
         try:
             import numpy as np  # type: ignore
         except ImportError as exc:
-            raise RuntimeError("numpy is required to turn demonstrations into training arrays") from exc
-        observations = np.asarray([item["observation"] for item in self.transitions], dtype=np.float32)
-        next_observations = np.asarray([item["next_observation"] for item in self.transitions], dtype=np.float32)
-        actions = np.asarray([action_to_multidiscrete(item["action"]) for item in self.transitions], dtype=np.int64)
+            raise RuntimeError(
+                "numpy is required to turn demonstrations into training arrays"
+            ) from exc
+        observations = np.asarray(
+            [item["observation"] for item in self.transitions], dtype=np.float32
+        )
+        next_observations = np.asarray(
+            [item["next_observation"] for item in self.transitions], dtype=np.float32
+        )
+        actions = np.asarray(
+            [action_to_multidiscrete(item["action"]) for item in self.transitions], dtype=np.int64
+        )
         rewards = np.asarray([float(item["reward"]) for item in self.transitions], dtype=np.float32)
         dones = np.asarray([bool(item["done"]) for item in self.transitions], dtype=np.bool_)
         if observations.ndim != 2 or observations.shape[1] != next_observations.shape[1]:
-            raise ValueError("observations must be a rectangular 2-D array with matching next_observations")
+            raise ValueError(
+                "observations must be a rectangular 2-D array with matching next_observations"
+            )
         return observations, actions, next_observations, rewards, dones
 
     def split(self, validation_fraction: float, seed: int = 1234, strategy: str = "auto"):
@@ -463,7 +488,7 @@ class DemonstrationDataset:
         validation_fraction: float,
         seed: int = 1234,
         strategy: str = "auto",
-    ) -> tuple["DemonstrationDataset", "DemonstrationDataset", SplitReport]:
+    ) -> tuple[DemonstrationDataset, DemonstrationDataset, SplitReport]:
         if not 0.0 < validation_fraction < 1.0:
             raise ValueError("validation_fraction must be between 0 and 1")
         if strategy not in SPLIT_STRATEGIES:
@@ -537,9 +562,7 @@ class DemonstrationDataset:
         keys = sorted(groups)
         ranked = sorted(
             keys,
-            key=lambda key: hashlib.blake2b(
-                f"{seed}:{key}".encode("utf-8"), digest_size=8
-            ).hexdigest(),
+            key=lambda key: hashlib.blake2b(f"{seed}:{key}".encode(), digest_size=8).hexdigest(),
         )
         total = len(self.transitions)
         target = max(1, int(round(total * validation_fraction)))
@@ -554,9 +577,7 @@ class DemonstrationDataset:
             validation_keys.append(key)
             held += len(groups[key])
         validation_set = set(validation_keys)
-        validation_indices = [
-            index for key in sorted(validation_set) for index in groups[key]
-        ]
+        validation_indices = [index for key in sorted(validation_set) for index in groups[key]]
         train_indices = [
             index for key in sorted(set(keys) - validation_set) for index in groups[key]
         ]

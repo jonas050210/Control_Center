@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import re
 import unittest
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,21 +29,15 @@ class WeaponProfileStaticTests(unittest.TestCase):
             )
             self.assertRegex(source, pattern, f"{scenario_id} must be an explicit drill")
         self.assertIn("static func training_ids()", source)
-        reset_source = (REPO_ROOT / "scripts/env/environment_reset.gd").read_text(
-            encoding="utf-8"
-        )
+        reset_source = (REPO_ROOT / "scripts/env/environment_reset.gd").read_text(encoding="utf-8")
         self.assertIn("ScenarioLibrary.training_ids()", reset_source)
 
     def test_episode_plans_can_stage_weapon_profiles(self):
         manager_source = (REPO_ROOT / "scripts/core/simulation_manager.gd").read_text(
             encoding="utf-8"
         )
-        reset_source = (REPO_ROOT / "scripts/env/environment_reset.gd").read_text(
-            encoding="utf-8"
-        )
-        env_source = (REPO_ROOT / "scripts/env/environment_core.gd").read_text(
-            encoding="utf-8"
-        )
+        reset_source = (REPO_ROOT / "scripts/env/environment_reset.gd").read_text(encoding="utf-8")
+        env_source = (REPO_ROOT / "scripts/env/environment_core.gd").read_text(encoding="utf-8")
         self.assertIn("set_weapon_profile", env_source)
         self.assertIn('plan.get("weapon_profile"', manager_source)
         self.assertIn("unknown weapon_profile", reset_source)

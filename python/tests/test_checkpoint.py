@@ -29,7 +29,10 @@ class CheckpointTests(unittest.TestCase):
             )
             loaded = load_bc_checkpoint(path)
             self.assertEqual(loaded.observation_dim, OBSERVATION_FIELD_COUNT)
-            self.assertEqual(tuple(loaded.predict(torch.zeros((1, OBSERVATION_FIELD_COUNT))).shape), (1, len(ACTION_NVEC)))
+            self.assertEqual(
+                tuple(loaded.predict(torch.zeros((1, OBSERVATION_FIELD_COUNT))).shape),
+                (1, len(ACTION_NVEC)),
+            )
 
 
 if __name__ == "__main__":

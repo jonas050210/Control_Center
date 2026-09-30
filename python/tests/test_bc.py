@@ -29,10 +29,13 @@ class BehaviorCloningTests(unittest.TestCase):
         recorder = DemonstrationRecorder({"source": "bc_resume_test"})
         recorder.start()
         for i in range(12):
-            recorder.append([0.01 * (i + j) for j in range(OBSERVATION_FIELD_COUNT)],
-                            [0, 0, 0, 0, i % 2, 0.0, 0.0],
-                            [0.01 * (i + j + 1) for j in range(OBSERVATION_FIELD_COUNT)],
-                            0.1, i == 11)
+            recorder.append(
+                [0.01 * (i + j) for j in range(OBSERVATION_FIELD_COUNT)],
+                [0, 0, 0, 0, i % 2, 0.0, 0.0],
+                [0.01 * (i + j + 1) for j in range(OBSERVATION_FIELD_COUNT)],
+                0.1,
+                i == 11,
+            )
         recorder.stop()
         with tempfile.TemporaryDirectory() as tmp:
             dataset = recorder.save(Path(tmp) / "demo.jsonl")
@@ -40,7 +43,9 @@ class BehaviorCloningTests(unittest.TestCase):
             first = train_behavior_cloning(dataset, config, output_dir=Path(tmp) / "run")
             self.assertEqual(first["epochs"], 1)
             resumed = train_behavior_cloning(
-                dataset, config, output_dir=Path(tmp) / "run",
+                dataset,
+                config,
+                output_dir=Path(tmp) / "run",
                 resume_checkpoint=first["latest_checkpoint"],
             )
             self.assertEqual(resumed["epochs"], 1)
@@ -61,9 +66,7 @@ class BehaviorCloningTests(unittest.TestCase):
                             {
                                 "observation": [value + 0.001 * j for j in range(dimension)],
                                 "action": [0, 0, 0, 0, step % 2, 0, 0.0, 0.0],
-                                "next_observation": [
-                                    value + 0.002 * j for j in range(dimension)
-                                ],
+                                "next_observation": [value + 0.002 * j for j in range(dimension)],
                                 "reward": 0.1,
                                 "done": step == length - 1,
                                 "episode_id": episode,

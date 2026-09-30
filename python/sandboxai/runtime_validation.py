@@ -10,13 +10,14 @@ If no Godot executable is found on PATH or passed explicitly, this harness
 marks the run as ``unavailable`` and reports exactly which binary was sought.
 It NEVER invents latency numbers, throughput, or validation passes.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from pathlib import Path
 import platform
 import shutil
 import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .config import find_godot_executable
@@ -296,12 +297,19 @@ class RuntimeValidator:
 
             for i, cond in enumerate(conditions):
                 if cond.get("map_id") != "two_rooms":
-                    raise ValueError(f"Env {i} map_id was {cond.get('map_id')}, expected 'two_rooms'")
+                    raise ValueError(
+                        f"Env {i} map_id was {cond.get('map_id')}, expected 'two_rooms'"
+                    )
                 if cond.get("curriculum_level") != 6:
-                    raise ValueError(f"Env {i} level was {cond.get('curriculum_level')}, expected 6")
+                    raise ValueError(
+                        f"Env {i} level was {cond.get('curriculum_level')}, expected 6"
+                    )
 
             check_plans.passed = True
-            check_plans.details = {"staged_count": len(plans_payload), "conditions_verified": len(conditions)}
+            check_plans.details = {
+                "staged_count": len(plans_payload),
+                "conditions_verified": len(conditions),
+            }
         except Exception as exc:
             check_plans.passed = False
             check_plans.error = str(exc)
@@ -326,9 +334,7 @@ class RuntimeValidator:
                 rewards = step_res.get("rewards", [])
                 dones = step_res.get("dones", [])
                 infos = step_res.get("infos", [])
-                if any(
-                    len(values) != env_count for values in (obs, rewards, dones, infos)
-                ):
+                if any(len(values) != env_count for values in (obs, rewards, dones, infos)):
                     raise ValueError("Step response length mismatch")
 
             elapsed = max(time.perf_counter() - t0, 1e-6)
@@ -395,7 +401,9 @@ class RuntimeValidator:
                 )
                 sp_spaces = sp_transport.spaces
                 if sp_spaces.get("policy_slots") != 2:
-                    raise ValueError(f"Self play policy slots was {sp_spaces.get('policy_slots')}, expected 2")
+                    raise ValueError(
+                        f"Self play policy slots was {sp_spaces.get('policy_slots')}, expected 2"
+                    )
 
                 sp_reset = sp_transport.request({"cmd": "reset", "seed": 777})
                 sp_obs = sp_reset.get("observations", [])
@@ -407,7 +415,9 @@ class RuntimeValidator:
                 sp_obs_step = sp_step.get("observations", [])
                 sp_rewards = sp_step.get("rewards", [])
                 if len(sp_obs_step[0]) != 2 or len(sp_rewards[0]) != 2:
-                    raise ValueError(f"Self play step shape invalid: obs={sp_obs_step}, rew={sp_rewards}")
+                    raise ValueError(
+                        f"Self play step shape invalid: obs={sp_obs_step}, rew={sp_rewards}"
+                    )
 
                 check_self_play.latency_ms = (time.perf_counter() - t0) * 1000.0
                 check_self_play.passed = True
@@ -481,7 +491,9 @@ def format_validation_report(report: RuntimeValidationReport | dict[str, Any]) -
     for check in data.get("checks", []):
         name = str(check.get("name", check.get("check_id", "")))[:40]
         cat = str(check.get("category", ""))[:12]
-        lat = f"{check.get('latency_ms', 0.0):.1f} ms" if check.get("latency_ms") is not None else "-"
+        lat = (
+            f"{check.get('latency_ms', 0.0):.1f} ms" if check.get("latency_ms") is not None else "-"
+        )
         status = "PASS" if check.get("passed") else "FAIL"
         lines.append(f"{name:<42}{cat:<14}{lat:>10}{status:>6}")
         if check.get("error"):

@@ -1,9 +1,9 @@
 import json
-from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 
 from sandboxai.run_control import RunControl, from_cli_paths
 
@@ -28,10 +28,14 @@ class RunControlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             command_path = root / "command.json"
-            control = RunControl(command_path, root / "status.json", root / "events.jsonl", poll_interval=0.02)
+            control = RunControl(
+                command_path, root / "status.json", root / "events.jsonl", poll_interval=0.02
+            )
             control.start()
             control.running()
-            command_path.write_text(json.dumps({"command": "pause", "sequence": 1}), encoding="utf-8")
+            command_path.write_text(
+                json.dumps({"command": "pause", "sequence": 1}), encoding="utf-8"
+            )
             result: list[bool] = []
             worker = threading.Thread(target=lambda: result.append(control.checkpoint()))
             worker.start()
@@ -39,13 +43,17 @@ class RunControlTests(unittest.TestCase):
             while control.state != "Paused" and time.time() < deadline:
                 time.sleep(0.01)
             self.assertEqual(control.state, "Paused")
-            command_path.write_text(json.dumps({"command": "resume", "sequence": 2}), encoding="utf-8")
+            command_path.write_text(
+                json.dumps({"command": "resume", "sequence": 2}), encoding="utf-8"
+            )
             worker.join(timeout=2.0)
             self.assertFalse(worker.is_alive())
             self.assertEqual(result, [True])
             self.assertEqual(control.state, "Running")
 
-            command_path.write_text(json.dumps({"command": "stop", "sequence": 3}), encoding="utf-8")
+            command_path.write_text(
+                json.dumps({"command": "stop", "sequence": 3}), encoding="utf-8"
+            )
             self.assertFalse(control.checkpoint())
             self.assertTrue(control.stop_requested)
             self.assertEqual(control.state, "Stopping")

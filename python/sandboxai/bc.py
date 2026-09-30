@@ -1,11 +1,12 @@
 """Small multi-head PyTorch behavior-cloning policy."""
+
 from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 import random
-from typing import Any, TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from .config import BCConfig
 from .dataset import ACTION_NVECS, DemonstrationDataset
@@ -25,7 +26,9 @@ except ImportError:  # pragma: no cover
 if nn is not None:
 
     class BehaviorCloningPolicy(nn.Module):
-        def __init__(self, observation_dim: int, hidden_sizes: tuple[int, int] = (128, 128)) -> None:
+        def __init__(
+            self, observation_dim: int, hidden_sizes: tuple[int, int] = (128, 128)
+        ) -> None:
             super().__init__()
             self.observation_dim = int(observation_dim)
             self.hidden_sizes = tuple(int(value) for value in hidden_sizes)
@@ -36,7 +39,9 @@ if nn is not None:
                 nn.Linear(self.hidden_sizes[0], self.hidden_sizes[1]),
                 nn.Tanh(),
             )
-            self.heads = nn.ModuleList([nn.Linear(self.hidden_sizes[1], size) for size in self.action_nvec])
+            self.heads = nn.ModuleList(
+                [nn.Linear(self.hidden_sizes[1], size) for size in self.action_nvec]
+            )
 
         def forward(self, observations):
             features = self.backbone(observations)
@@ -44,19 +49,27 @@ if nn is not None:
 
         @torch.no_grad()
         def predict(self, observations, deterministic: bool = True):
-            tensor = observations if torch.is_tensor(observations) else torch.as_tensor(observations, dtype=torch.float32)
+            tensor = (
+                observations
+                if torch.is_tensor(observations)
+                else torch.as_tensor(observations, dtype=torch.float32)
+            )
             logits = self.forward(tensor)
             if deterministic:
                 values = [torch.argmax(logit, dim=-1) for logit in logits]
             else:
-                values = [torch.distributions.Categorical(logits=logit).sample() for logit in logits]
+                values = [
+                    torch.distributions.Categorical(logits=logit).sample() for logit in logits
+                ]
             return torch.stack(values, dim=-1)
 
 else:
 
     class BehaviorCloningPolicy:  # pragma: no cover
         def __init__(self, *_args, **_kwargs):
-            raise RuntimeError("PyTorch is required for behavior cloning; install the training dependencies")
+            raise RuntimeError(
+                "PyTorch is required for behavior cloning; install the training dependencies"
+            )
 
 
 def _require_torch() -> None:
@@ -71,7 +84,9 @@ def create_bc_policy(observation_dim: int, config: BCConfig | None = None) -> Be
 
 
 def _metrics_from_logits(logits, actions) -> tuple[Any, float, float]:
-    losses = [nn.functional.cross_entropy(logit, actions[:, index]) for index, logit in enumerate(logits)]
+    losses = [
+        nn.functional.cross_entropy(logit, actions[:, index]) for index, logit in enumerate(logits)
+    ]
     loss = sum(losses)
     predictions = torch.stack([torch.argmax(logit, dim=-1) for logit in logits], dim=-1)
     component_accuracy = float((predictions == actions).float().mean().item())
@@ -103,7 +118,7 @@ def train_behavior_cloning(
     config: BCConfig | None = None,
     output_dir: str | Path | None = None,
     resume_checkpoint: str | Path | None = None,
-    run_control: "RunControl | None" = None,
+    run_control: RunControl | None = None,
 ) -> dict[str, Any]:
     _require_torch()
     config = (config or BCConfig()).validate()
@@ -111,6 +126,7 @@ def train_behavior_cloning(
     torch.manual_seed(config.seed)
     try:
         import numpy as np  # type: ignore
+
         np.random.seed(config.seed)
     except ImportError as exc:
         raise RuntimeError("numpy is required for behavior cloning") from exc
@@ -150,7 +166,9 @@ def train_behavior_cloning(
 
     destination = Path(output_dir or Path(config.output_root) / "bc_runs" / "latest")
     destination.mkdir(parents=True, exist_ok=True)
-    (destination / "config.json").write_text(json.dumps({**config.__dict__, "device": device}, indent=2) + "\n", encoding="utf-8")
+    (destination / "config.json").write_text(
+        json.dumps({**config.__dict__, "device": device}, indent=2) + "\n", encoding="utf-8"
+    )
     # Dataset provenance and the exact split that produced the validation
     # number reported below. Written before training so an aborted run
     # still explains what it was trained on.
@@ -174,7 +192,16 @@ def train_behavior_cloning(
     if start_epoch == 0:
         metrics_path.write_text("", encoding="utf-8")
     with loss_csv.open("a", newline="", encoding="utf-8") as csv_stream:
-        writer = csv.DictWriter(csv_stream, fieldnames=["epoch", "train_loss", "validation_loss", "component_accuracy", "exact_accuracy"])
+        writer = csv.DictWriter(
+            csv_stream,
+            fieldnames=[
+                "epoch",
+                "train_loss",
+                "validation_loss",
+                "component_accuracy",
+                "exact_accuracy",
+            ],
+        )
         if loss_csv.stat().st_size == 0:
             writer.writeheader()
         train_observations = torch.as_tensor(train_arrays[0], dtype=torch.float32)
@@ -209,7 +236,9 @@ def train_behavior_cloning(
                 batch_observations = train_observations[batch_indices].to(device)
                 batch_actions = train_actions[batch_indices].to(device)
                 optimizer.zero_grad(set_to_none=True)
-                loss, _component, _exact = _metrics_from_logits(model(batch_observations), batch_actions)
+                loss, _component, _exact = _metrics_from_logits(
+                    model(batch_observations), batch_actions
+                )
                 loss.backward()
                 optimizer.step()
                 train_loss_total += float(loss.item())
@@ -293,7 +322,10 @@ def train_behavior_cloning(
                 _atomic_torch_save(checkpoint, destination / "best.pt")
             else:
                 patience_counter += 1
-                if config.early_stopping_patience > 0 and patience_counter >= config.early_stopping_patience:
+                if (
+                    config.early_stopping_patience > 0
+                    and patience_counter >= config.early_stopping_patience
+                ):
                     break
             if (epoch + 1) % config.checkpoint_frequency == 0:
                 _atomic_torch_save(checkpoint, destination / f"epoch_{epoch + 1:05d}.pt")
@@ -326,7 +358,9 @@ def train_behavior_cloning(
     }
 
 
-def load_bc_into_sb3_policy(policy: Any, checkpoint_path: str | Path, device: str = "cpu") -> dict[str, Any]:
+def load_bc_into_sb3_policy(
+    policy: Any, checkpoint_path: str | Path, device: str = "cpu"
+) -> dict[str, Any]:
     """Transfer weights only when the SB3 MLP layout is exactly compatible.
 
     This deliberately raises instead of silently claiming a warm start when
@@ -334,7 +368,9 @@ def load_bc_into_sb3_policy(policy: Any, checkpoint_path: str | Path, device: st
     """
     _require_torch()
     checkpoint = torch.load(Path(checkpoint_path), map_location=device, weights_only=False)
-    model = BehaviorCloningPolicy(int(checkpoint["observation_dim"]), tuple(checkpoint["hidden_sizes"]))
+    model = BehaviorCloningPolicy(
+        int(checkpoint["observation_dim"]), tuple(checkpoint["hidden_sizes"])
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     policy_net = getattr(policy.mlp_extractor, "policy_net", None)
     action_net = getattr(policy, "action_net", None)
@@ -344,7 +380,9 @@ def load_bc_into_sb3_policy(policy: Any, checkpoint_path: str | Path, device: st
     target_layers = [policy_net[0], policy_net[2]]
     for source, target in zip(source_layers, target_layers):
         if source.weight.shape != target.weight.shape or source.bias.shape != target.bias.shape:
-            raise ValueError("BC and PPO hidden-layer dimensions do not match; no weights transferred")
+            raise ValueError(
+                "BC and PPO hidden-layer dimensions do not match; no weights transferred"
+            )
     output_rows = sum(model.action_nvec)
     if tuple(action_net.weight.shape) != (output_rows, model.hidden_sizes[-1]):
         raise ValueError("BC and PPO action-head dimensions do not match; no weights transferred")
@@ -358,4 +396,8 @@ def load_bc_into_sb3_policy(policy: Any, checkpoint_path: str | Path, device: st
             action_net.weight[offset : offset + rows].copy_(head.weight)
             action_net.bias[offset : offset + rows].copy_(head.bias)
             offset += rows
-    return {"transferred": True, "observation_dim": model.observation_dim, "hidden_sizes": list(model.hidden_sizes)}
+    return {
+        "transferred": True,
+        "observation_dim": model.observation_dim,
+        "hidden_sizes": list(model.hidden_sizes),
+    }

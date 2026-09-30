@@ -41,6 +41,7 @@ Caveats of the ``cmd.exe`` fallback (best-effort by design):
 Native Windows and native Linux behavior is untouched: :class:`WindowsInterop`
 is a pass-through unless it detects WSL *and* a Windows executable.
 """
+
 from __future__ import annotations
 
 import os

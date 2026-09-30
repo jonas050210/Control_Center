@@ -15,7 +15,11 @@ class SelfPlayTests(unittest.TestCase):
     def test_coordinator_initialization_and_slots(self):
         slot_a = PolicySlot(name="learning_agent", checkpoint="")
         slot_b = PolicySlot(name="opponent_agent", checkpoint="training/checkpoints/opp.zip")
-        coord = SelfPlayCoordinator(slot_a, slot_b, opponent_pool=["training/checkpoints/opp.zip", "training/checkpoints/opp2.zip"])
+        coord = SelfPlayCoordinator(
+            slot_a,
+            slot_b,
+            opponent_pool=["training/checkpoints/opp.zip", "training/checkpoints/opp2.zip"],
+        )
         self.assertTrue(coord.opponent_slot.frozen)
         self.assertEqual(len(coord.opponent_pool), 2)
 
@@ -23,7 +27,10 @@ class SelfPlayTests(unittest.TestCase):
         slot_a = PolicySlot(name="agent_a")
         slot_b = PolicySlot(name="agent_b")
         coord = SelfPlayCoordinator(slot_a, slot_b)
-        coord.record_match({"win": True, "episode_reward": 10.0, "kills": 1, "accuracy": 0.8}, {"win": False, "episode_reward": -5.0, "kills": 0, "accuracy": 0.2})
+        coord.record_match(
+            {"win": True, "episode_reward": 10.0, "kills": 1, "accuracy": 0.8},
+            {"win": False, "episode_reward": -5.0, "kills": 0, "accuracy": 0.2},
+        )
         summary = coord.summary()
         self.assertEqual(summary["agent_a"]["matches"], 1)
         self.assertEqual(summary["agent_a"]["win_rate"], 1.0)
@@ -37,9 +44,29 @@ class SelfPlayTests(unittest.TestCase):
         client.reset.return_value = [[obs_a, obs_b]]
 
         step_results = [
-            ([[obs_a, obs_b]], [[0.1, -0.1]], [False], [[{"metrics": {"win": False}}, {"metrics": {"win": False}}]]),
-            ([[obs_a, obs_b]], [[0.5, -0.5]], [False], [[{"metrics": {"win": False}}, {"metrics": {"win": False}}]]),
-            ([[obs_a, obs_b]], [[10.0, -5.0]], [True], [[{"done_reason": "agent_a_win", "metrics": {"win": True, "kills": 1}}, {"done_reason": "agent_a_win", "metrics": {"win": False, "kills": 0}}]]),
+            (
+                [[obs_a, obs_b]],
+                [[0.1, -0.1]],
+                [False],
+                [[{"metrics": {"win": False}}, {"metrics": {"win": False}}]],
+            ),
+            (
+                [[obs_a, obs_b]],
+                [[0.5, -0.5]],
+                [False],
+                [[{"metrics": {"win": False}}, {"metrics": {"win": False}}]],
+            ),
+            (
+                [[obs_a, obs_b]],
+                [[10.0, -5.0]],
+                [True],
+                [
+                    [
+                        {"done_reason": "agent_a_win", "metrics": {"win": True, "kills": 1}},
+                        {"done_reason": "agent_a_win", "metrics": {"win": False, "kills": 0}},
+                    ]
+                ],
+            ),
         ]
         client.step.side_effect = step_results
 
@@ -141,22 +168,16 @@ class OpponentSamplingTests(unittest.TestCase):
 
         coordinator = self._coordinator()
         with_rng = [
-            coordinator.choose_opponent_checkpoint(rng=random_module.Random(11))
-            for _ in range(5)
+            coordinator.choose_opponent_checkpoint(rng=random_module.Random(11)) for _ in range(5)
         ]
         other = self._coordinator()
         self.assertEqual(
             with_rng,
-            [
-                other.choose_opponent_checkpoint(rng=random_module.Random(11))
-                for _ in range(5)
-            ],
+            [other.choose_opponent_checkpoint(rng=random_module.Random(11)) for _ in range(5)],
         )
 
     def test_empty_pool_returns_the_configured_opponent(self):
-        coordinator = SelfPlayCoordinator(
-            PolicySlot(name="learner"), PolicySlot(name="frozen")
-        )
+        coordinator = SelfPlayCoordinator(PolicySlot(name="learner"), PolicySlot(name="frozen"))
         self.assertIsNone(coordinator.choose_opponent_checkpoint())
         self.assertIs(coordinator.sample_opponent(), coordinator.opponent_slot)
 
@@ -168,9 +189,7 @@ class OpponentSamplingTests(unittest.TestCase):
 
     def test_unknown_strategy_is_rejected(self):
         with self.assertRaises(ValueError):
-            SelfPlayCoordinator(
-                PolicySlot(name="a"), PolicySlot(name="b"), strategy="whatever"
-            )
+            SelfPlayCoordinator(PolicySlot(name="a"), PolicySlot(name="b"), strategy="whatever")
         with self.assertRaises(ValueError):
             self._coordinator().choose_opponent_checkpoint(strategy="whatever")
 

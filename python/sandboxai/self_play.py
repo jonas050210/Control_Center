@@ -6,12 +6,14 @@ league to play checkpoint tournaments. The bridge is seeded per match and
 never auto-resets, so a finished match is exactly the episode it was
 seeded to be.
 """
+
 from __future__ import annotations
 
+import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-import random
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
@@ -97,7 +99,10 @@ class SelfPlayCoordinator:
         self._rng = random.Random(self.opponent_seed)
         self._draws = 0
         self.opponent_history: list[str] = []
-        self.metrics: dict[str, list[dict[str, Any]]] = {learning_slot.name: [], opponent_slot.name: []}
+        self.metrics: dict[str, list[dict[str, Any]]] = {
+            learning_slot.name: [],
+            opponent_slot.name: [],
+        }
 
     @classmethod
     def from_config(
@@ -105,7 +110,7 @@ class SelfPlayCoordinator:
         config: Any,
         learning_name: str = "learner",
         opponent_name: str = "frozen_opponent",
-    ) -> "SelfPlayCoordinator":
+    ) -> SelfPlayCoordinator:
         """Builds a coordinator from a :class:`~sandboxai.config.SelfPlayConfig`.
 
         Keeps the opponent-selection rule and its seed in the run's config
@@ -223,9 +228,16 @@ class SelfPlayCoordinator:
             output[name] = {
                 "matches": len(rows),
                 "win_rate": wins / len(rows) if rows else 0.0,
-                "mean_reward": sum(float(row.get("episode_reward", 0.0)) for row in rows) / len(rows) if rows else 0.0,
-                "mean_kills": sum(float(row.get("kills", 0.0)) for row in rows) / len(rows) if rows else 0.0,
-                "mean_accuracy": sum(float(row.get("accuracy", 0.0)) for row in rows) / len(rows) if rows else 0.0,
+                "mean_reward": sum(float(row.get("episode_reward", 0.0)) for row in rows)
+                / len(rows)
+                if rows
+                else 0.0,
+                "mean_kills": sum(float(row.get("kills", 0.0)) for row in rows) / len(rows)
+                if rows
+                else 0.0,
+                "mean_accuracy": sum(float(row.get("accuracy", 0.0)) for row in rows) / len(rows)
+                if rows
+                else 0.0,
             }
         return output
 
@@ -280,7 +292,7 @@ class SelfPlayBatchClient:
     def close(self) -> None:
         self.transport.close()
 
-    def __enter__(self) -> "SelfPlayBatchClient":
+    def __enter__(self) -> SelfPlayBatchClient:
         return self
 
     def __exit__(self, *_args) -> None:

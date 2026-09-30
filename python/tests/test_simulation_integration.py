@@ -9,6 +9,13 @@ except ImportError:  # pragma: no cover - environment dependent
     torch = None
 
 from optional_deps import HAS_TORCH, TORCH_REASON
+
+from sandboxai.bc import (
+    load_bc_checkpoint,
+    load_bc_into_sb3_policy,
+    train_behavior_cloning,
+)
+from sandboxai.config import BCConfig
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.dataset import (
     ACTION_NVECS,
@@ -17,12 +24,6 @@ from sandboxai.dataset import (
     action_to_multidiscrete,
     discrete_to_multidiscrete,
 )
-from sandboxai.bc import (
-    load_bc_checkpoint,
-    train_behavior_cloning,
-    load_bc_into_sb3_policy,
-)
-from sandboxai.config import BCConfig
 from sandboxai.self_play import PolicySlot, SelfPlayCoordinator
 
 
@@ -50,7 +51,7 @@ class SimulationIntegrationTests(unittest.TestCase):
     def test_demonstration_dataset_roundtrip_and_arrays(self):
         recorder = DemonstrationRecorder({"env": "test", "curriculum": 3})
         recorder.start()
-        
+
         # 3 episodes of 10 steps
         for ep in range(3):
             for step in range(10):
@@ -58,7 +59,7 @@ class SimulationIntegrationTests(unittest.TestCase):
                 next_obs = [float(ep * 10 + step + 1) / 100.0] * OBSERVATION_FIELD_COUNT
                 action = [1, 0, 0, 0, 1 if step % 2 == 0 else 0, 0.0, 0.0]
                 reward = 1.0 if step == 9 else 0.01
-                done = (step == 9)
+                done = step == 9
                 recorder.append(obs, action, next_obs, reward, done, episode_id=ep)
         recorder.stop()
 
@@ -119,9 +120,11 @@ class SimulationIntegrationTests(unittest.TestCase):
 
             class SimpleEnv(gym.Env):
                 def __init__(self):
-                    self.observation_space = gym.spaces.Box(-1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,))
+                    self.observation_space = gym.spaces.Box(
+                        -1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,)
+                    )
                     self.action_space = gym.spaces.MultiDiscrete(list(ACTION_NVEC))
-            
+
             ppo_model = PPO(
                 "MlpPolicy",
                 SimpleEnv(),
@@ -130,13 +133,17 @@ class SimulationIntegrationTests(unittest.TestCase):
                 batch_size=16,
                 device="cpu",
             )
-            transfer_info = load_bc_into_sb3_policy(ppo_model.policy, result["best_checkpoint"], device="cpu")
+            transfer_info = load_bc_into_sb3_policy(
+                ppo_model.policy, result["best_checkpoint"], device="cpu"
+            )
             self.assertTrue(transfer_info["transferred"])
 
     def test_self_play_coordinator_and_pool_sampling(self):
         slot_a = PolicySlot(name="agent_main")
         slot_b = PolicySlot(name="agent_frozen", checkpoint="path/to/c1.zip")
-        coord = SelfPlayCoordinator(slot_a, slot_b, opponent_pool=["path/to/c1.zip", "path/to/c2.zip", "path/to/c3.zip"])
+        coord = SelfPlayCoordinator(
+            slot_a, slot_b, opponent_pool=["path/to/c1.zip", "path/to/c2.zip", "path/to/c3.zip"]
+        )
         self.assertEqual(len(coord.opponent_pool), 3)
 
         # Add new checkpoint

@@ -19,12 +19,13 @@ Consumers: ``sandboxai inspect-runs`` (text or JSON) and, through it, the
 Control Center HISTORY page. The JSON is a stable contract - documents
 carry a ``format`` field and new fields are additive.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import time
+from pathlib import Path
+from typing import Any
 
 from .control_center_schema import validate_status
 
@@ -166,8 +167,7 @@ def _checkpoint_inventory(run_dir: Path) -> dict[str, Any]:
         "entries": entries,
         "has_latest": (directory / "latest.zip").is_file(),
         "has_best": (directory / "best_eval.zip").is_file(),
-        "has_final": (run_dir / "final.zip").is_file()
-        or (directory / "final.zip").is_file(),
+        "has_final": (run_dir / "final.zip").is_file() or (directory / "final.zip").is_file(),
     }
 
 
@@ -413,9 +413,7 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
     return report
 
 
-def inspect_runs(
-    root: str | Path, limit: int = 0, event_limit: int = 0
-) -> dict[str, Any]:
+def inspect_runs(root: str | Path, limit: int = 0, event_limit: int = 0) -> dict[str, Any]:
     """Read-only index of every run under ``root`` (newest last)."""
     directories = discover_run_directories(root)
     if limit > 0:

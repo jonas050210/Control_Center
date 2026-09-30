@@ -11,13 +11,14 @@ periodic evaluation/checkpoint work, and CUDA kernel launch/synchronization
 for a very small policy.  Timings are aggregate counters, not a trace, so a
 100k-step run does not create a large profiling artifact.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -193,7 +194,9 @@ class TrainingProfiler:
     def write(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(json.dumps(self.report(), indent=2, default=str) + "\n", encoding="utf-8")
+        destination.write_text(
+            json.dumps(self.report(), indent=2, default=str) + "\n", encoding="utf-8"
+        )
         return destination
 
 

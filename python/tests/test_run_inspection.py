@@ -1,4 +1,5 @@
 """Read-only run inspection: discovery, tolerance and honest reporting."""
+
 import json
 import unittest
 from pathlib import Path

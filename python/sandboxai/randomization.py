@@ -26,14 +26,16 @@ Determinism model: one ``episode_plan(index)`` call is a pure function of
 sixteen parallel environments asking for episode 137 all get the same
 episode, and a resumed run continues the same stream.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import hashlib
 import json
-from pathlib import Path
 import random
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 from .conditions import LIGHTING_IDS, MAP_IDS, Condition, ConditionTracker
 from .contract import OBSERVATION_SPEC
@@ -106,7 +108,7 @@ def _derive(master_seed: int, index: int, salt: str) -> int:
     must be identical on the machine that trained and the machine that
     replays.
     """
-    payload = f"{master_seed}:{index}:{salt}".encode("utf-8")
+    payload = f"{master_seed}:{index}:{salt}".encode()
     return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "big") >> 1
 
 
@@ -275,7 +277,10 @@ class TrainingDistribution:
         """
         if environment_index < 0:
             raise ValueError("environment_index must be >= 0")
-        return [self.episode_plan(self.stream_index(environment_index, offset)) for offset in range(count)]
+        return [
+            self.episode_plan(self.stream_index(environment_index, offset))
+            for offset in range(count)
+        ]
 
     def coverage(self, count: int) -> dict[str, Any]:
         """How much of the distribution ``count`` episodes actually touch."""
@@ -311,7 +316,7 @@ class TrainingDistribution:
         return target
 
     @classmethod
-    def load(cls, path: str | Path) -> "TrainingDistribution":
+    def load(cls, path: str | Path) -> TrainingDistribution:
         return cls(**json.loads(Path(path).read_text(encoding="utf-8")))
 
 

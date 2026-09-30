@@ -10,6 +10,7 @@ Covers (no Godot needed):
 * replay modes/cap and the skill-metrics sink;
 * the TrainingPipeline driving a fake vec env end to end.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,14 +18,17 @@ import re
 import unittest
 from pathlib import Path
 
-from sandboxai.config import TrainingConfig
 from sandboxai.conditions import Condition
+from sandboxai.config import TrainingConfig
 from sandboxai.curriculum_stages import (
     MULTI_ENEMY_MAX_LEVEL,
     MULTI_ENEMY_MIN,
     WORLD_MIN_LEVEL,
     applied_condition,
+    distribution_for,
+    stage_for,
 )
+from sandboxai.manifest import MANIFEST_FORMAT
 from sandboxai.pipeline import (
     CurriculumDriver,
     ReplayController,
@@ -33,17 +37,21 @@ from sandboxai.pipeline import (
     contract_fingerprint,
     write_manifest,
 )
-from sandboxai.manifest import MANIFEST_FORMAT
 from sandboxai.randomization import STREAM_STRIDE, EpisodePlan
-from sandboxai.curriculum_stages import distribution_for, stage_for
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _plan(seed: int, level: int = 5, map_id: str = "open_field", enemy_count: int = 1) -> EpisodePlan:
+def _plan(
+    seed: int, level: int = 5, map_id: str = "open_field", enemy_count: int = 1
+) -> EpisodePlan:
     condition = Condition(
-        map_id=map_id, scenario="", lighting="normal",
-        enemy_count=enemy_count, level=level, seed=seed,
+        map_id=map_id,
+        scenario="",
+        lighting="normal",
+        enemy_count=enemy_count,
+        level=level,
+        seed=seed,
     )
     return EpisodePlan(index=0, condition=condition, layout_seed=0, spawn=None)
 
@@ -71,7 +79,9 @@ class MirrorDriftTest(unittest.TestCase):
         # The same literal must also appear in the self-play environment
         # itself (it derives slot B from slot A) so the mirror covers the
         # whole chain.
-        env_source = (REPO_ROOT / "scripts/self_play/self_play_environment.gd").read_text(encoding="utf-8")
+        env_source = (REPO_ROOT / "scripts/self_play/self_play_environment.gd").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("1000003", env_source)
 
     def test_world_min_level_mirrors_obstacles_cover(self):
@@ -155,8 +165,12 @@ class AppliedConditionTest(unittest.TestCase):
         for level in range(1, WORLD_MIN_LEVEL):
             applied = applied_condition(
                 Condition(
-                    map_id="open_field", scenario="cover_fight", lighting="fog",
-                    enemy_count=1, level=level, seed=42,
+                    map_id="open_field",
+                    scenario="cover_fight",
+                    lighting="fog",
+                    enemy_count=1,
+                    level=level,
+                    seed=42,
                 )
             )
             self.assertEqual(applied.map_id, "")
@@ -180,11 +194,17 @@ class AppliedConditionTest(unittest.TestCase):
     def test_world_levels_keep_world_axes(self):
         applied = applied_condition(
             Condition(
-                map_id="pillar_hall", scenario="ambush", lighting="night",
-                enemy_count=5, level=WORLD_MIN_LEVEL, seed=9,
+                map_id="pillar_hall",
+                scenario="ambush",
+                lighting="night",
+                enemy_count=5,
+                level=WORLD_MIN_LEVEL,
+                seed=9,
             )
         )
-        self.assertEqual((applied.map_id, applied.scenario, applied.lighting), ("pillar_hall", "ambush", "night"))
+        self.assertEqual(
+            (applied.map_id, applied.scenario, applied.lighting), ("pillar_hall", "ambush", "night")
+        )
         self.assertEqual(applied.enemy_count, 5)
 
 
@@ -223,7 +243,9 @@ class CurriculumDriverTest(unittest.TestCase):
         for ordinal in range(20):
             env_index = ordinal % 2
             metrics = {"win": ordinal % 3 == 0, "episode_length": 42}
-            self.assertEqual(a.finish_episode(env_index, metrics), b.finish_episode(env_index, metrics))
+            self.assertEqual(
+                a.finish_episode(env_index, metrics), b.finish_episode(env_index, metrics)
+            )
             self.assertEqual(a.stage_next(env_index), b.stage_next(env_index))
 
     def test_adaptive_disabled_never_changes_level(self):
@@ -247,7 +269,10 @@ class CurriculumDriverTest(unittest.TestCase):
             seen_levels.add(driver.level)
         self.assertGreater(driver.level, 1)
         self.assertTrue(
-            any(entry.get("to_level", entry.get("level")) == driver.level for entry in driver.decision_log)
+            any(
+                entry.get("to_level", entry.get("level")) == driver.level
+                for entry in driver.decision_log
+            )
             or driver.decision_log
         )
 
@@ -278,14 +303,25 @@ class ReplayControllerTest(unittest.TestCase):
         kwargs.setdefault("environment_count", 1)
         return ReplayController(tmp, **kwargs)
 
-    def _episode(self, controller: ReplayController, env_index: int, seed: int, level: int = 5,
-                 metrics: dict | None = None, change: dict | None = None) -> bool:
+    def _episode(
+        self,
+        controller: ReplayController,
+        env_index: int,
+        seed: int,
+        level: int = 5,
+        metrics: dict | None = None,
+        change: dict | None = None,
+    ) -> bool:
         plan = _plan(seed=seed, level=level)
         controller.begin(env_index, plan)
         controller.record_step(env_index, [0, 0, 0, 0, 0, 0], 0.1)
-        saved_before = len(list(controller.directory.glob("*.jsonl"))) if controller.directory.is_dir() else 0
+        saved_before = (
+            len(list(controller.directory.glob("*.jsonl"))) if controller.directory.is_dir() else 0
+        )
         path = controller.finish(env_index, metrics or {"win": True}, curriculum_change=change)
-        saved_now = len(list(controller.directory.glob("*.jsonl"))) if controller.directory.is_dir() else 0
+        saved_now = (
+            len(list(controller.directory.glob("*.jsonl"))) if controller.directory.is_dir() else 0
+        )
         if path is None:
             self.assertEqual(saved_now, saved_before)
             return False
@@ -294,6 +330,7 @@ class ReplayControllerTest(unittest.TestCase):
 
     def test_off_records_nothing(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             controller = self._controller(Path(tmp), mode="off")
             self.assertFalse(controller.active)
@@ -301,6 +338,7 @@ class ReplayControllerTest(unittest.TestCase):
 
     def test_all_records_every_episode_and_filename_is_stable(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             controller = self._controller(Path(tmp), mode="all", max_per_run=0)
             self.assertTrue(self._episode(controller, 0, seed=77, level=5))
@@ -318,6 +356,7 @@ class ReplayControllerTest(unittest.TestCase):
 
     def test_every_n_records_only_multiples(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             controller = self._controller(Path(tmp), mode="every_n", every_n=3, max_per_run=0)
             # Episodes are numbered 1-based inside the controller; every_n
@@ -327,6 +366,7 @@ class ReplayControllerTest(unittest.TestCase):
 
     def test_interesting_records_losses_and_curriculum_changes_not_plain_wins(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             controller = self._controller(Path(tmp), mode="interesting")
             self.assertTrue(self._episode(controller, 0, seed=1, metrics={"win": False}))
@@ -334,16 +374,20 @@ class ReplayControllerTest(unittest.TestCase):
             self.assertTrue(
                 self._episode(controller, 0, seed=3, metrics={"win": True}, change={"to_level": 2})
             )
-            self.assertTrue(self._episode(controller, 0, seed=4, metrics={"win": True, "truncated": True}))
+            self.assertTrue(
+                self._episode(controller, 0, seed=4, metrics={"win": True, "truncated": True})
+            )
 
     def test_evaluation_mode_ignores_training_episodes(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             controller = self._controller(Path(tmp), mode="evaluation")
             self.assertFalse(self._episode(controller, 0, seed=1, metrics={"win": False}))
 
     def test_cap_halts_recording(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             controller = self._controller(Path(tmp), mode="all", max_per_run=2)
             results = [self._episode(controller, 0, seed=i + 1) for i in range(4)]
@@ -435,6 +479,7 @@ class TrainingPipelineTest(unittest.TestCase):
 
     def test_attach_stages_one_plan_per_environment(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             config = self._config(Path(tmp))
             pipe = TrainingPipeline(config, config.run_directory(), _Telemetry(), device="cpu")
@@ -457,6 +502,7 @@ class TrainingPipelineTest(unittest.TestCase):
 
     def test_step_records_episode_rows_with_plan_and_metrics(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             config = self._config(Path(tmp))
             telemetry = _Telemetry()
@@ -465,7 +511,11 @@ class TrainingPipelineTest(unittest.TestCase):
             pipe.attach(env)
             pipe.on_reset(None)
             infos = [
-                {"events": {}, "metrics": {"win": True, "episode_reward": 2.0, "episode_length": 30}, "done_reason": "won"},
+                {
+                    "events": {},
+                    "metrics": {"win": True, "episode_reward": 2.0, "episode_length": 30},
+                    "done_reason": "won",
+                },
                 {"events": {}},
             ]
             pipe.timesteps = 1234
@@ -487,6 +537,7 @@ class TrainingPipelineTest(unittest.TestCase):
 
     def test_resume_restages_identical_plans(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             config = self._config(Path(tmp))
             pipe = TrainingPipeline(config, config.run_directory(), _Telemetry(), device="cpu")
@@ -495,10 +546,16 @@ class TrainingPipelineTest(unittest.TestCase):
             pipe.on_reset(None)
             for i in range(6):
                 infos = [
-                    {"events": {}, "metrics": {"win": i % 2 == 0, "episode_length": 20}, "done_reason": ""},
+                    {
+                        "events": {},
+                        "metrics": {"win": i % 2 == 0, "episode_length": 20},
+                        "done_reason": "",
+                    },
                     {"events": {}},
                 ]
-                pipe.on_step([[0] * 6, [0] * 6], [[0.0] * 84, [0.0] * 84], [0.0, 0.0], [True, False], infos)
+                pipe.on_step(
+                    [[0] * 6, [0] * 6], [[0.0] * 84, [0.0] * 84], [0.0, 0.0], [True, False], infos
+                )
             pipe.timesteps = 400
             state_path = pipe.save_state()
             staged_before = pipe.driver.state_dict()
@@ -516,6 +573,7 @@ class TrainingPipelineTest(unittest.TestCase):
 
     def test_manifest_shape_and_fingerprint(self):
         import tempfile
+
         with tempfile.TemporaryDirectory() as tmp:
             config = self._config(Path(tmp))
             pipe = TrainingPipeline(config, config.run_directory(), _Telemetry(), device="cpu")

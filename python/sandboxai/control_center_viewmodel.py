@@ -20,12 +20,13 @@ Nothing here invents a value. A field that is not present in the adapter's
 data stays ``None`` (rendered as "n/a" by the formatters); no default,
 estimate or placeholder is substituted for missing data.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
 import math
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .config import TrainingConfig
@@ -98,7 +99,9 @@ def format_timestamp(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def downsample_series(points: list[tuple[float, float]], max_points: int = 400) -> list[tuple[float, float]]:
+def downsample_series(
+    points: list[tuple[float, float]], max_points: int = 400
+) -> list[tuple[float, float]]:
     """Stride-decimates ``points`` to at most ``max_points``.
 
     Charts already receive a bounded series from the adapter
@@ -170,14 +173,18 @@ def dashboard_view(
         # same callback that publishes status.json and is at least as
         # fresh; it also carries fields the status merge does not keep
         # (e.g. this event's own elapsed_seconds).
-        control.update({key: value for key, value in telemetry.get("latest", {}).items() if value is not None})
+        control.update(
+            {key: value for key, value in telemetry.get("latest", {}).items() if value is not None}
+        )
 
     config = latest_run.get("config") or {}
     checkpoints = latest_run.get("checkpoints") or {}
     evaluation = latest_run.get("evaluation") or {}
     progress = latest_run.get("progress") or {}
 
-    view["run_id"] = latest_run.get("run_id") or Path(str(latest_run.get("run_dir", ""))).name or None
+    view["run_id"] = (
+        latest_run.get("run_id") or Path(str(latest_run.get("run_dir", ""))).name or None
+    )
     view["run_dir"] = latest_run.get("run_dir")
     view["state"] = control.get("state") or (latest_run.get("status") or {}).get("state")
     view["timesteps"] = control.get("timesteps", progress.get("timesteps"))
@@ -200,7 +207,14 @@ def dashboard_view(
     view["loss_rate"] = control.get("loss_rate")
     view["ppo_diagnostics"] = {
         key: control.get(f"ppo_{key}")
-        for key in ("approx_kl", "clip_fraction", "explained_variance", "entropy", "value_loss", "loss")
+        for key in (
+            "approx_kl",
+            "clip_fraction",
+            "explained_variance",
+            "entropy",
+            "value_loss",
+            "loss",
+        )
         if control.get(f"ppo_{key}") is not None
     }
     view["latest_evaluation"] = evaluation.get("latest")
@@ -243,23 +257,27 @@ def runs_table_rows(list_runs_result: dict[str, Any]) -> list[dict[str, Any]]:
         config = report.get("config", {}) or {}
         latest_eval = evaluation.get("latest") or {}
         fraction = progress.get("fraction")
-        rows.append({
-            "run_id": report.get("run_id"),
-            "state": (report.get("status") or {}).get("state"),
-            "timesteps": progress.get("timesteps"),
-            "target_timesteps": progress.get("target_timesteps"),
-            "progress_percent": fraction * 100.0 if isinstance(fraction, (int, float)) else None,
-            "device": config.get("device"),
-            "environment_count": config.get("environment_count"),
-            "env_workers": config.get("env_workers"),
-            "checkpoints": checkpoints.get("count"),
-            "has_best": checkpoints.get("has_best"),
-            "reward": latest_eval.get("mean_episode_reward"),
-            "win_rate": latest_eval.get("win_rate"),
-            "modified_utc": report.get("modified_utc"),
-            "warning_count": len(report.get("warnings") or []),
-            "run_dir": report.get("run_dir"),
-        })
+        rows.append(
+            {
+                "run_id": report.get("run_id"),
+                "state": (report.get("status") or {}).get("state"),
+                "timesteps": progress.get("timesteps"),
+                "target_timesteps": progress.get("target_timesteps"),
+                "progress_percent": fraction * 100.0
+                if isinstance(fraction, (int, float))
+                else None,
+                "device": config.get("device"),
+                "environment_count": config.get("environment_count"),
+                "env_workers": config.get("env_workers"),
+                "checkpoints": checkpoints.get("count"),
+                "has_best": checkpoints.get("has_best"),
+                "reward": latest_eval.get("mean_episode_reward"),
+                "win_rate": latest_eval.get("win_rate"),
+                "modified_utc": report.get("modified_utc"),
+                "warning_count": len(report.get("warnings") or []),
+                "run_dir": report.get("run_dir"),
+            }
+        )
     return rows
 
 
@@ -281,20 +299,24 @@ def process_table_rows(processes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for process in processes:
         backend = process.get("backend") or {}
         meta = process.get("meta") or {}
-        rows.append({
-            "id": process.get("id"),
-            "kind": process.get("kind"),
-            "run_id": meta.get("run_id") or Path(str(process.get("run_dir", ""))).name,
-            "status": backend.get("state") or process.get("state"),
-            "pid": process.get("pid"),
-            "environment_count": backend.get("environment_count", meta.get("environment_count")),
-            "env_workers": meta.get("env_workers"),
-            "progress_percent": _process_progress_percent(backend),
-            "started_at": process.get("started_at"),
-            "updated_at": backend.get("updated_at"),
-            "error": process.get("error") or backend.get("error"),
-            "run_dir": process.get("run_dir"),
-        })
+        rows.append(
+            {
+                "id": process.get("id"),
+                "kind": process.get("kind"),
+                "run_id": meta.get("run_id") or Path(str(process.get("run_dir", ""))).name,
+                "status": backend.get("state") or process.get("state"),
+                "pid": process.get("pid"),
+                "environment_count": backend.get(
+                    "environment_count", meta.get("environment_count")
+                ),
+                "env_workers": meta.get("env_workers"),
+                "progress_percent": _process_progress_percent(backend),
+                "started_at": process.get("started_at"),
+                "updated_at": backend.get("updated_at"),
+                "error": process.get("error") or backend.get("error"),
+                "run_dir": process.get("run_dir"),
+            }
+        )
     return rows
 
 
@@ -360,19 +382,21 @@ def evaluation_comparison_rows(summaries: list[dict[str, Any]]) -> list[dict[str
         view = evaluation_view(summary)
         if not view.get("available"):
             continue
-        rows.append({
-            "path": view["path"],
-            "timesteps": view["timesteps"],
-            "episodes": view["episodes"],
-            "reward": view["reward"],
-            "win_rate": view["outcomes"]["win_rate"],
-            "loss_rate": view["outcomes"]["loss_rate"],
-            "timeout_rate": view["outcomes"]["timeout_rate"],
-            "accuracy": view["accuracy"]["mean_accuracy"],
-            "shoot_request_rate": view["action_head_diagnostics"]["policy_shoot_request_rate"],
-            "discharge_rate": view["action_head_diagnostics"]["discharge_rate"],
-            "localization": view["action_head_diagnostics"]["localization"],
-        })
+        rows.append(
+            {
+                "path": view["path"],
+                "timesteps": view["timesteps"],
+                "episodes": view["episodes"],
+                "reward": view["reward"],
+                "win_rate": view["outcomes"]["win_rate"],
+                "loss_rate": view["outcomes"]["loss_rate"],
+                "timeout_rate": view["outcomes"]["timeout_rate"],
+                "accuracy": view["accuracy"]["mean_accuracy"],
+                "shoot_request_rate": view["action_head_diagnostics"]["policy_shoot_request_rate"],
+                "discharge_rate": view["action_head_diagnostics"]["discharge_rate"],
+                "localization": view["action_head_diagnostics"]["localization"],
+            }
+        )
     return rows
 
 
@@ -381,25 +405,29 @@ def evaluation_comparison_rows(summaries: list[dict[str, Any]]) -> list[dict[str
 # ---------------------------------------------------------------------------
 
 
-def benchmark_result_rows(results: list[dict[str, Any]], source: str | None = None) -> list[dict[str, Any]]:
+def benchmark_result_rows(
+    results: list[dict[str, Any]], source: str | None = None
+) -> list[dict[str, Any]]:
     rows = []
     for row in results:
         resources = row.get("resources") or {}
-        rows.append({
-            "source": source,
-            "environments": row.get("environments"),
-            "workers": row.get("workers"),
-            "total_steps": row.get("total_steps"),
-            "steps_per_second": row.get("steps_per_second"),
-            "episodes_per_second": row.get("episodes_per_second"),
-            "p50_ms": row.get("vector_step_latency_p50_ms"),
-            "p95_ms": row.get("vector_step_latency_p95_ms"),
-            "elapsed_seconds": row.get("elapsed_seconds"),
-            "info_mode": row.get("info_mode"),
-            "cpu_percent": resources.get("cpu_percent"),
-            "gpu_utilization_percent": resources.get("gpu_utilization_percent"),
-            "gpu_vram_used_mb": resources.get("gpu_vram_used_mb"),
-        })
+        rows.append(
+            {
+                "source": source,
+                "environments": row.get("environments"),
+                "workers": row.get("workers"),
+                "total_steps": row.get("total_steps"),
+                "steps_per_second": row.get("steps_per_second"),
+                "episodes_per_second": row.get("episodes_per_second"),
+                "p50_ms": row.get("vector_step_latency_p50_ms"),
+                "p95_ms": row.get("vector_step_latency_p95_ms"),
+                "elapsed_seconds": row.get("elapsed_seconds"),
+                "info_mode": row.get("info_mode"),
+                "cpu_percent": resources.get("cpu_percent"),
+                "gpu_utilization_percent": resources.get("gpu_utilization_percent"),
+                "gpu_vram_used_mb": resources.get("gpu_vram_used_mb"),
+            }
+        )
     return rows
 
 
@@ -430,24 +458,52 @@ class TrainingFieldSpec:
 
 TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
     # --- Basic: what almost every run changes. ---------------------------
-    TrainingFieldSpec("run_id", "Run ID", "str", "basic",
-                       help="Blank = timestamped automatically."),
-    TrainingFieldSpec("experiment_id", "Experiment ID", "str", "basic",
-                       help="Optional grouping prefix for the run directory."),
-    TrainingFieldSpec("environment_count", "Environments", "int", "basic",
-                       help="Parallel Godot environments simulated."),
-    TrainingFieldSpec("env_workers", "Godot workers", "int", "basic",
-                       help="Bridge processes hosting the environments. 0 = auto."),
+    TrainingFieldSpec(
+        "run_id", "Run ID", "str", "basic", help="Blank = timestamped automatically."
+    ),
+    TrainingFieldSpec(
+        "experiment_id",
+        "Experiment ID",
+        "str",
+        "basic",
+        help="Optional grouping prefix for the run directory.",
+    ),
+    TrainingFieldSpec(
+        "environment_count",
+        "Environments",
+        "int",
+        "basic",
+        help="Parallel Godot environments simulated.",
+    ),
+    TrainingFieldSpec(
+        "env_workers",
+        "Godot workers",
+        "int",
+        "basic",
+        help="Bridge processes hosting the environments. 0 = auto.",
+    ),
     TrainingFieldSpec("total_training_steps", "Total timesteps", "int", "basic"),
     TrainingFieldSpec("device", "Device", "choice", "basic", choices=("auto", "cpu", "cuda")),
-    TrainingFieldSpec("curriculum_mode", "Curriculum mode", "choice", "basic", choices=("auto", "fixed")),
+    TrainingFieldSpec(
+        "curriculum_mode", "Curriculum mode", "choice", "basic", choices=("auto", "fixed")
+    ),
     # --- Advanced: PPO/optimizer/curriculum internals. --------------------
-    TrainingFieldSpec("curriculum_level", "Fixed curriculum level", "int", "advanced",
-                       help="Used only when curriculum mode is 'fixed'."),
+    TrainingFieldSpec(
+        "curriculum_level",
+        "Fixed curriculum level",
+        "int",
+        "advanced",
+        help="Used only when curriculum mode is 'fixed'.",
+    ),
     TrainingFieldSpec("curriculum_start_level", "Auto curriculum start level", "int", "advanced"),
     TrainingFieldSpec("adaptive_curriculum", "Adaptive curriculum", "bool", "advanced"),
-    TrainingFieldSpec("rollout_length", "Rollout length", "int", "advanced",
-                       help="Per-environment horizon. 0 = auto-sized."),
+    TrainingFieldSpec(
+        "rollout_length",
+        "Rollout length",
+        "int",
+        "advanced",
+        help="Per-environment horizon. 0 = auto-sized.",
+    ),
     TrainingFieldSpec("batch_size", "Batch size", "int", "advanced"),
     TrainingFieldSpec("ppo_epochs", "PPO epochs", "int", "advanced"),
     TrainingFieldSpec("learning_rate", "Learning rate", "float", "advanced"),
@@ -455,22 +511,45 @@ TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
     TrainingFieldSpec("gae_lambda", "GAE lambda", "float", "advanced"),
     TrainingFieldSpec("entropy_coefficient", "Entropy coefficient", "float", "advanced"),
     TrainingFieldSpec("clip_range", "PPO clip range", "float", "advanced"),
-    TrainingFieldSpec("torch_threads", "Torch CPU threads", "int", "advanced",
-                       help="0 = bounded auto."),
-    TrainingFieldSpec("inference_device", "Inference device", "choice", "advanced",
-                       choices=("auto", "cpu", "cuda")),
+    TrainingFieldSpec(
+        "torch_threads", "Torch CPU threads", "int", "advanced", help="0 = bounded auto."
+    ),
+    TrainingFieldSpec(
+        "inference_device",
+        "Inference device",
+        "choice",
+        "advanced",
+        choices=("auto", "cpu", "cuda"),
+    ),
     TrainingFieldSpec("checkpoint_frequency", "Checkpoint every N steps", "int", "advanced"),
     TrainingFieldSpec("evaluation_frequency", "Evaluate every N steps", "int", "advanced"),
     TrainingFieldSpec("evaluation_episodes", "Evaluation episodes", "int", "advanced"),
-    TrainingFieldSpec("checkpoint_selection_metric", "Checkpoint selection metric", "str", "advanced"),
-    TrainingFieldSpec("checkpoint_selection_goal", "Checkpoint selection goal", "choice", "advanced",
-                       choices=("max", "min")),
+    TrainingFieldSpec(
+        "checkpoint_selection_metric", "Checkpoint selection metric", "str", "advanced"
+    ),
+    TrainingFieldSpec(
+        "checkpoint_selection_goal",
+        "Checkpoint selection goal",
+        "choice",
+        "advanced",
+        choices=("max", "min"),
+    ),
     TrainingFieldSpec("enemy_count", "Enemy count", "int", "advanced"),
     TrainingFieldSpec("seed", "Seed", "int", "advanced"),
-    TrainingFieldSpec("bc_checkpoint", "BC warm-start checkpoint", "str", "advanced",
-                       help="Optional .pt behavior-cloning checkpoint."),
-    TrainingFieldSpec("godot_executable", "Godot executable", "str", "advanced",
-                       help="Blank uses the configured/remembered default."),
+    TrainingFieldSpec(
+        "bc_checkpoint",
+        "BC warm-start checkpoint",
+        "str",
+        "advanced",
+        help="Optional .pt behavior-cloning checkpoint.",
+    ),
+    TrainingFieldSpec(
+        "godot_executable",
+        "Godot executable",
+        "str",
+        "advanced",
+        help="Blank uses the configured/remembered default.",
+    ),
     TrainingFieldSpec("profile_training", "Enable wall-clock profiling", "bool", "advanced"),
 )
 

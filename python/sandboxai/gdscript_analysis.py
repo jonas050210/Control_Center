@@ -26,12 +26,13 @@ is skipped rather than reported, so a finding is a real finding. This is
 static analysis, NOT a substitute for running the engine test-suite
 (``godot --headless --path . --script res://tests/run_tests.gd``).
 """
+
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
-from typing import Iterable
 
 RES_PREFIX = "res://"
 
@@ -62,32 +63,167 @@ _NESTED_ENUM_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]*)\.([A-Z][A-Za-z0-9_]*)\.([A
 ## Godot built-in globals whose members we intentionally never check.
 BUILTIN_TYPES = frozenset(
     {
-        "Vector2", "Vector2i", "Vector3", "Vector3i", "Vector4", "Color", "Rect2", "Rect2i",
-        "Transform2D", "Transform3D", "Basis", "Quaternion", "Plane", "AABB", "Projection",
-        "String", "StringName", "NodePath", "RID", "Callable", "Signal", "Dictionary", "Array",
-        "PackedByteArray", "PackedInt32Array", "PackedInt64Array", "PackedFloat32Array",
-        "PackedFloat64Array", "PackedStringArray", "PackedVector2Array", "PackedVector3Array",
-        "PackedColorArray", "JSON", "OS", "Engine", "Input", "InputEvent", "InputEventKey",
-        "InputEventMouseButton", "InputEventMouseMotion", "Time", "ProjectSettings", "ResourceLoader",
-        "DisplayServer", "ThemeDB", "Control", "Node", "Node3D", "Node2D", "CanvasItem", "Label",
-        "Button", "CheckButton", "CheckBox", "HSlider", "VSlider", "SpinBox", "OptionButton",
-        "LineEdit", "TextEdit", "RichTextLabel", "ItemList", "Tree", "PanelContainer", "VBoxContainer",
-        "HBoxContainer", "GridContainer", "MarginContainer", "ScrollContainer", "TabContainer",
-        "SplitContainer", "HSplitContainer", "VSplitContainer", "Camera3D", "MeshInstance3D",
-        "BoxMesh", "SphereMesh", "CapsuleMesh", "CylinderMesh", "PlaneMesh", "QuadMesh",
-        "StandardMaterial3D", "BaseMaterial3D", "ORMMaterial3D", "Material", "Mesh", "ArrayMesh",
-        "ImmediateMesh", "SurfaceTool", "DirectionalLight3D", "OmniLight3D", "SpotLight3D",
-        "WorldEnvironment", "Environment", "Sky", "Texture2D", "Image", "ImageTexture", "Font",
-        "FontFile", "Theme", "StyleBox", "StyleBoxFlat", "StyleBoxEmpty", "RandomNumberGenerator",
-        "SceneTree", "Window", "Viewport", "SubViewport", "SubViewportContainer", "Timer", "Tween",
-        "FileAccess", "DirAccess", "Resource", "RefCounted", "Object", "Script", "GDScript",
-        "PackedScene", "Performance", "RenderingServer", "PhysicsServer3D", "Geometry3D", "Geometry2D",
-        "TranslationServer", "AudioServer", "EditorInterface", "ClassDB", "Marshalls", "Shader",
-        "ShaderMaterial", "Label3D", "Sprite3D", "Skeleton3D", "AnimationPlayer", "Curve", "Gradient",
-        "MultiMesh", "MultiMeshInstance3D", "TextServer", "Expression", "SceneState", "ConfigFile",
-        "SystemFont", "CanvasLayer", "ColorRect", "TextureRect", "NinePatchRect", "Separator",
-        "HSeparator", "VSeparator", "ProgressBar", "TextureProgressBar", "AcceptDialog",
-        "ConfirmationDialog", "FileDialog", "PopupMenu", "MenuButton", "LinkButton", "TextureButton",
+        "Vector2",
+        "Vector2i",
+        "Vector3",
+        "Vector3i",
+        "Vector4",
+        "Color",
+        "Rect2",
+        "Rect2i",
+        "Transform2D",
+        "Transform3D",
+        "Basis",
+        "Quaternion",
+        "Plane",
+        "AABB",
+        "Projection",
+        "String",
+        "StringName",
+        "NodePath",
+        "RID",
+        "Callable",
+        "Signal",
+        "Dictionary",
+        "Array",
+        "PackedByteArray",
+        "PackedInt32Array",
+        "PackedInt64Array",
+        "PackedFloat32Array",
+        "PackedFloat64Array",
+        "PackedStringArray",
+        "PackedVector2Array",
+        "PackedVector3Array",
+        "PackedColorArray",
+        "JSON",
+        "OS",
+        "Engine",
+        "Input",
+        "InputEvent",
+        "InputEventKey",
+        "InputEventMouseButton",
+        "InputEventMouseMotion",
+        "Time",
+        "ProjectSettings",
+        "ResourceLoader",
+        "DisplayServer",
+        "ThemeDB",
+        "Control",
+        "Node",
+        "Node3D",
+        "Node2D",
+        "CanvasItem",
+        "Label",
+        "Button",
+        "CheckButton",
+        "CheckBox",
+        "HSlider",
+        "VSlider",
+        "SpinBox",
+        "OptionButton",
+        "LineEdit",
+        "TextEdit",
+        "RichTextLabel",
+        "ItemList",
+        "Tree",
+        "PanelContainer",
+        "VBoxContainer",
+        "HBoxContainer",
+        "GridContainer",
+        "MarginContainer",
+        "ScrollContainer",
+        "TabContainer",
+        "SplitContainer",
+        "HSplitContainer",
+        "VSplitContainer",
+        "Camera3D",
+        "MeshInstance3D",
+        "BoxMesh",
+        "SphereMesh",
+        "CapsuleMesh",
+        "CylinderMesh",
+        "PlaneMesh",
+        "QuadMesh",
+        "StandardMaterial3D",
+        "BaseMaterial3D",
+        "ORMMaterial3D",
+        "Material",
+        "Mesh",
+        "ArrayMesh",
+        "ImmediateMesh",
+        "SurfaceTool",
+        "DirectionalLight3D",
+        "OmniLight3D",
+        "SpotLight3D",
+        "WorldEnvironment",
+        "Environment",
+        "Sky",
+        "Texture2D",
+        "Image",
+        "ImageTexture",
+        "Font",
+        "FontFile",
+        "Theme",
+        "StyleBox",
+        "StyleBoxFlat",
+        "StyleBoxEmpty",
+        "RandomNumberGenerator",
+        "SceneTree",
+        "Window",
+        "Viewport",
+        "SubViewport",
+        "SubViewportContainer",
+        "Timer",
+        "Tween",
+        "FileAccess",
+        "DirAccess",
+        "Resource",
+        "RefCounted",
+        "Object",
+        "Script",
+        "GDScript",
+        "PackedScene",
+        "Performance",
+        "RenderingServer",
+        "PhysicsServer3D",
+        "Geometry3D",
+        "Geometry2D",
+        "TranslationServer",
+        "AudioServer",
+        "EditorInterface",
+        "ClassDB",
+        "Marshalls",
+        "Shader",
+        "ShaderMaterial",
+        "Label3D",
+        "Sprite3D",
+        "Skeleton3D",
+        "AnimationPlayer",
+        "Curve",
+        "Gradient",
+        "MultiMesh",
+        "MultiMeshInstance3D",
+        "TextServer",
+        "Expression",
+        "SceneState",
+        "ConfigFile",
+        "SystemFont",
+        "CanvasLayer",
+        "ColorRect",
+        "TextureRect",
+        "NinePatchRect",
+        "Separator",
+        "HSeparator",
+        "VSeparator",
+        "ProgressBar",
+        "TextureProgressBar",
+        "AcceptDialog",
+        "ConfirmationDialog",
+        "FileDialog",
+        "PopupMenu",
+        "MenuButton",
+        "LinkButton",
+        "TextureButton",
     }
 )
 
@@ -95,14 +231,52 @@ BUILTIN_TYPES = frozenset(
 ## a project class may inherit them through a non-project base.
 UNIVERSAL_MEMBERS = frozenset(
     {
-        "new", "duplicate", "get", "set", "call", "call_deferred", "has_method", "get_script",
-        "free", "queue_free", "is_instance_valid", "connect", "disconnect", "emit", "emit_signal",
-        "name", "get_parent", "add_child", "remove_child", "get_children", "get_node",
-        "get_node_or_null", "set_script", "to_string", "get_class", "is_class", "resource_path",
-        "instantiate", "can_instantiate", "get_instance_id", "notification", "set_process",
-        "set_physics_process", "set_process_unhandled_input", "set_process_input", "propagate_call",
-        "get_property_list", "get_method_list", "has_signal", "get_signal_list", "reference",
-        "unreference", "get_reference_count", "set_meta", "get_meta", "has_meta",
+        "new",
+        "duplicate",
+        "get",
+        "set",
+        "call",
+        "call_deferred",
+        "has_method",
+        "get_script",
+        "free",
+        "queue_free",
+        "is_instance_valid",
+        "connect",
+        "disconnect",
+        "emit",
+        "emit_signal",
+        "name",
+        "get_parent",
+        "add_child",
+        "remove_child",
+        "get_children",
+        "get_node",
+        "get_node_or_null",
+        "set_script",
+        "to_string",
+        "get_class",
+        "is_class",
+        "resource_path",
+        "instantiate",
+        "can_instantiate",
+        "get_instance_id",
+        "notification",
+        "set_process",
+        "set_physics_process",
+        "set_process_unhandled_input",
+        "set_process_input",
+        "propagate_call",
+        "get_property_list",
+        "get_method_list",
+        "has_signal",
+        "get_signal_list",
+        "reference",
+        "unreference",
+        "get_reference_count",
+        "set_meta",
+        "get_meta",
+        "has_meta",
     }
 )
 
@@ -114,16 +288,38 @@ UNIVERSAL_MEMBERS = frozenset(
 ENGINE_VIRTUAL_METHODS = frozenset(
     {
         # Object
-        "_init", "_notification", "_to_string", "_get", "_set", "_get_property_list",
-        "_validate_property", "_property_can_revert", "_property_get_revert", "_script_exited",
+        "_init",
+        "_notification",
+        "_to_string",
+        "_get",
+        "_set",
+        "_get_property_list",
+        "_validate_property",
+        "_property_can_revert",
+        "_property_get_revert",
+        "_script_exited",
         # Node / SceneTree main loop
-        "_ready", "_enter_tree", "_exit_tree", "_process", "_physics_process", "_input",
-        "_unhandled_input", "_unhandled_key_input", "_initialize", "_finalize",
+        "_ready",
+        "_enter_tree",
+        "_exit_tree",
+        "_process",
+        "_physics_process",
+        "_input",
+        "_unhandled_input",
+        "_unhandled_key_input",
+        "_initialize",
+        "_finalize",
         # CanvasItem / Control
-        "_draw", "_gui_input", "_has_point", "_clips_input", "_make_custom_tooltip",
-        "_get_minimum_size", "_theme_changed",
+        "_draw",
+        "_gui_input",
+        "_has_point",
+        "_clips_input",
+        "_make_custom_tooltip",
+        "_get_minimum_size",
+        "_theme_changed",
         # BaseButton / Range virtual signal handlers
-        "_pressed", "_toggled",
+        "_pressed",
+        "_toggled",
     }
 )
 
@@ -411,7 +607,9 @@ class ProjectIndex:
             return None
         return members | parent_members
 
-    def all_static_functions(self, info: ScriptInfo, _seen: set[str] | None = None) -> set[str] | None:
+    def all_static_functions(
+        self, info: ScriptInfo, _seen: set[str] | None = None
+    ) -> set[str] | None:
         """Static functions of ``info`` plus its project-local base classes.
 
         Static functions are inherited like any other member, so a call
@@ -444,11 +642,9 @@ def check_resource_paths(index: ProjectIndex) -> list[Finding]:
     findings: list[Finding] = []
     for info in index.by_res.values():
         for res_path in sorted(info.res_references):
-            relative = res_path[len(RES_PREFIX):]
+            relative = res_path[len(RES_PREFIX) :]
             if not (index.root / relative).exists():
-                line = next(
-                    (i + 1 for i, text in enumerate(info.lines) if res_path in text), 1
-                )
+                line = next((i + 1 for i, text in enumerate(info.lines) if res_path in text), 1)
                 findings.append(
                     Finding(
                         info.res_path,
@@ -876,7 +1072,7 @@ def check_typed_local_calls(index: ProjectIndex) -> list[Finding]:
     return findings
 
 
-def _enum_members(index: "ProjectIndex", info: ScriptInfo, name: str) -> set[str] | None:
+def _enum_members(index: ProjectIndex, info: ScriptInfo, name: str) -> set[str] | None:
     """Members of the named enum ``name`` on ``info`` or a project base."""
     seen: set[str] = set()
     current: ScriptInfo | None = info
@@ -980,8 +1176,10 @@ def lint_all(root: Path | str | None = None) -> list[Finding]:
     """
     root = Path(root) if root else project_root()
     try:
-        from gdtoolkit.linter import lint_code  # type: ignore
-        from gdtoolkit.linter import DEFAULT_CONFIG  # type: ignore
+        from gdtoolkit.linter import (
+            DEFAULT_CONFIG,  # type: ignore
+            lint_code,  # type: ignore
+        )
     except ImportError:
         return [
             Finding(

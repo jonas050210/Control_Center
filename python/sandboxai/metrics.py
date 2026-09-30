@@ -31,14 +31,16 @@ per-category score.
 Aggregation supports grouping by episode, policy, map, scenario, lighting,
 enemy count, curriculum level and seed, and exports to JSON and CSV.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import csv
 import json
 import math
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from .contract import observation_slice, observation_value
 
@@ -252,7 +254,9 @@ class EpisodeMetrics:
         if events.get("shot_fired"):
             self.shots += 1
             self.projectiles_fired += int(events.get("projectiles_fired", 1))
-            self.projectiles_hit += int(events.get("projectiles_hit", 1 if events.get("hit") else 0))
+            self.projectiles_hit += int(
+                events.get("projectiles_hit", 1 if events.get("hit") else 0)
+            )
             self._shot_aim_error_sum += bearing
             if events.get("hit"):
                 self.hits += 1
@@ -509,7 +513,9 @@ class EpisodeMetrics:
         )
         return {
             # 1.0 = walked in a straight line; near 0 = wandered in circles.
-            "path_efficiency": displacement / self._path_length if self._path_length > 1e-9 else 0.0,
+            "path_efficiency": displacement / self._path_length
+            if self._path_length > 1e-9
+            else 0.0,
             "path_length": self._path_length,
             "displacement": displacement,
             "navigation_failures": self.navigation_failures,
@@ -523,7 +529,9 @@ class EpisodeMetrics:
             "damage_dealt": self.damage_dealt,
             "damage_received": self.damage_received,
             "damage_ratio": (
-                self.damage_dealt / self.damage_received if self.damage_received > 0.0 else float(self.damage_dealt > 0.0)
+                self.damage_dealt / self.damage_received
+                if self.damage_received > 0.0
+                else float(self.damage_dealt > 0.0)
             ),
             "kills": self.kills,
             "deaths": self.deaths,
@@ -598,7 +606,9 @@ class EpisodeMetrics:
 
 def flatten_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Flattens a :meth:`EpisodeMetrics.summary` payload into a CSV row."""
-    row: dict[str, Any] = {f"label.{key}": value for key, value in summary.get("labels", {}).items()}
+    row: dict[str, Any] = {
+        f"label.{key}": value for key, value in summary.get("labels", {}).items()
+    }
     row["ticks"] = summary.get("ticks", 0)
     row["elapsed"] = summary.get("elapsed", 0.0)
     for category, values in summary.get("categories", {}).items():
@@ -700,7 +710,9 @@ class MetricsAggregator:
 
     # -- export ------------------------------------------------------------
 
-    def to_json(self, path: str | Path, group_keys: Sequence[str] = ("policy_id", "map_id")) -> Path:
+    def to_json(
+        self, path: str | Path, group_keys: Sequence[str] = ("policy_id", "map_id")
+    ) -> Path:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = {

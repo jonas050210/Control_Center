@@ -3,6 +3,7 @@
 Each page translates UI intent into adapter calls; formatting and validation
 remain in the independently tested viewmodel.
 """
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -26,8 +27,14 @@ from .control_center_widgets import (
 )
 
 STATE_COLORS = {
-    "Running": COLOR_OK, "Starting": COLOR_WARN, "Stopping": COLOR_WARN, "Paused": COLOR_WARN,
-    "Finished": COLOR_MUTED, "Error": COLOR_ERROR, "running": COLOR_OK, "finished": COLOR_MUTED,
+    "Running": COLOR_OK,
+    "Starting": COLOR_WARN,
+    "Stopping": COLOR_WARN,
+    "Paused": COLOR_WARN,
+    "Finished": COLOR_MUTED,
+    "Error": COLOR_ERROR,
+    "running": COLOR_OK,
+    "finished": COLOR_MUTED,
     "failed": COLOR_ERROR,
 }
 
@@ -77,12 +84,22 @@ class DashboardPage(Page):
     subtitle = "Live overview of the most recent training run - real, persisted/live data only."
 
     STAT_LABELS = (
-        "state", "run id", "progress", "fps", "elapsed / eta", "envs / workers",
-        "rollout length", "ppo updates", "device", "reward",
+        "state",
+        "run id",
+        "progress",
+        "fps",
+        "elapsed / eta",
+        "envs / workers",
+        "rollout length",
+        "ppo updates",
+        "device",
+        "reward",
     )
 
     def build(self) -> None:
-        self.warning_banner = ttk.Label(self, text="", style="Warning.TLabel", wraplength=900, justify="left")
+        self.warning_banner = ttk.Label(
+            self, text="", style="Warning.TLabel", wraplength=900, justify="left"
+        )
         self.stats = StatRow(self, self.STAT_LABELS)
         self.stats.pack(fill="x")
         self.warning_banner.pack(fill="x", pady=(8, 0))
@@ -109,7 +126,9 @@ class DashboardPage(Page):
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(10, 0))
         ttk.Button(actions, text="Open run folder", command=self._open_run_folder).pack(side="left")
-        ttk.Button(actions, text="View in Runs / Checkpoints", command=self._open_in_runs).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="View in Runs / Checkpoints", command=self._open_in_runs).pack(
+            side="left", padx=(8, 0)
+        )
 
         self._last_run_dir: str | None = None
 
@@ -122,26 +141,38 @@ class DashboardPage(Page):
             return
         view = vm.dashboard_view(snapshot)
         self._last_run_dir = view.get("run_dir")
-        self.stats.update_values({
-            "state": (view["state"] or "no runs yet", STATE_COLORS.get(view["state"] or "")),
-            "run id": (view["run_id"] or "n/a", None),
-            "progress": (
-                f"{vm.format_fraction_as_percent((view['progress_percent'] or 0) / 100.0)}"
-                f" ({vm.format_number(view['timesteps'])}/{vm.format_number(view['target_timesteps'])})"
-                if view["progress_percent"] is not None else "n/a", None,
-            ),
-            "fps": (vm.format_number(view["fps"], 1), None),
-            "elapsed / eta": (f"{vm.format_duration(view['elapsed_seconds'])} / {vm.format_duration(view['eta_seconds'])}", None),
-            "envs / workers": (f"{vm.format_number(view['environment_count'])} / {vm.format_number(view['env_workers'])}", None),
-            "rollout length": (vm.format_number(view["rollout_length"]), None),
-            "ppo updates": (vm.format_number(view["ppo_updates"]), None),
-            "device": (view["device"] or "n/a", None),
-            "reward": (vm.format_number(view["reward"], 3), None),
-        })
+        self.stats.update_values(
+            {
+                "state": (view["state"] or "no runs yet", STATE_COLORS.get(view["state"] or "")),
+                "run id": (view["run_id"] or "n/a", None),
+                "progress": (
+                    f"{vm.format_fraction_as_percent((view['progress_percent'] or 0) / 100.0)}"
+                    f" ({vm.format_number(view['timesteps'])}/{vm.format_number(view['target_timesteps'])})"
+                    if view["progress_percent"] is not None
+                    else "n/a",
+                    None,
+                ),
+                "fps": (vm.format_number(view["fps"], 1), None),
+                "elapsed / eta": (
+                    f"{vm.format_duration(view['elapsed_seconds'])} / {vm.format_duration(view['eta_seconds'])}",
+                    None,
+                ),
+                "envs / workers": (
+                    f"{vm.format_number(view['environment_count'])} / {vm.format_number(view['env_workers'])}",
+                    None,
+                ),
+                "rollout length": (vm.format_number(view["rollout_length"]), None),
+                "ppo updates": (vm.format_number(view["ppo_updates"]), None),
+                "device": (view["device"] or "n/a", None),
+                "reward": (vm.format_number(view["reward"], 3), None),
+            }
+        )
         if view["stale"]:
             self.warning_banner.configure(text="\n".join(view["warnings"]), style="Error.TLabel")
         elif view["warnings"] or view["problems"]:
-            self.warning_banner.configure(text="\n".join(view["warnings"] + view["problems"]), style="Warning.TLabel")
+            self.warning_banner.configure(
+                text="\n".join(view["warnings"] + view["problems"]), style="Warning.TLabel"
+            )
         else:
             self.warning_banner.configure(text="")
 
@@ -152,7 +183,8 @@ class DashboardPage(Page):
         if view["best_checkpoint"]:
             best = view["best_checkpoint"]
             checkpoint_lines.append(
-                "best evaluation: reward=" + vm.format_number(best.get("mean_episode_reward"), 3)
+                "best evaluation: reward="
+                + vm.format_number(best.get("mean_episode_reward"), 3)
                 + f", win rate={vm.format_fraction_as_percent(best.get('win_rate'))}"
             )
         else:
@@ -160,7 +192,8 @@ class DashboardPage(Page):
         if view["ppo_diagnostics"]:
             diag = view["ppo_diagnostics"]
             checkpoint_lines.append(
-                "PPO diagnostics: approx_kl=" + vm.format_number(diag.get("approx_kl"), 4)
+                "PPO diagnostics: approx_kl="
+                + vm.format_number(diag.get("approx_kl"), 4)
                 + f", clip_fraction={vm.format_number(diag.get('clip_fraction'), 3)}"
                 + f", explained_variance={vm.format_number(diag.get('explained_variance'), 3)}"
                 + f", entropy={vm.format_number(diag.get('entropy'), 3)}"
@@ -168,7 +201,9 @@ class DashboardPage(Page):
         self.checkpoints_label.configure(text="\n".join(checkpoint_lines))
 
         if view["run_dir"]:
-            self.app.background.submit(lambda: self.adapter.telemetry_series(view["run_dir"]), self._on_telemetry)
+            self.app.background.submit(
+                lambda: self.adapter.telemetry_series(view["run_dir"]), self._on_telemetry
+            )
         else:
             for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
                 chart.set_points([])
@@ -185,7 +220,9 @@ class DashboardPage(Page):
         if self._last_run_dir:
             _open_in_file_manager(Path(self._last_run_dir))
         else:
-            messagebox.showinfo("No run yet", "No training run has been found under the output root.")
+            messagebox.showinfo(
+                "No run yet", "No training run has been found under the output root."
+            )
 
     def _open_in_runs(self) -> None:
         self.app.show_page("Runs / Checkpoints")
@@ -211,26 +248,44 @@ class TrainingPage(Page):
         self._build_fields(basic_frame, groups["basic"], defaults)
 
         self._advanced_visible = tk.BooleanVar(value=False)
-        toggle = ttk.Checkbutton(form_container, text="Show advanced options", variable=self._advanced_visible,
-                                  command=self._toggle_advanced)
+        toggle = ttk.Checkbutton(
+            form_container,
+            text="Show advanced options",
+            variable=self._advanced_visible,
+            command=self._toggle_advanced,
+        )
         toggle.pack(anchor="w", pady=(8, 0))
-        self.advanced_frame = ttk.LabelFrame(form_container, text="Advanced (PPO / curriculum / checkpoints)", padding=10)
+        self.advanced_frame = ttk.LabelFrame(
+            form_container, text="Advanced (PPO / curriculum / checkpoints)", padding=10
+        )
         self._build_fields(self.advanced_frame, groups["advanced"], defaults)
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(10, 4))
-        self.start_button = ttk.Button(actions, text="Start training", command=self._start, style="Primary.TButton")
+        self.start_button = ttk.Button(
+            actions, text="Start training", command=self._start, style="Primary.TButton"
+        )
         self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(actions, text="Stop safely", command=self._stop, state="disabled")
+        self.stop_button = ttk.Button(
+            actions, text="Stop safely", command=self._stop, state="disabled"
+        )
         self.stop_button.pack(side="left", padx=(8, 0))
-        self.force_stop_button = ttk.Button(actions, text="Force stop", command=self._force_stop, state="disabled", style="Danger.TButton")
+        self.force_stop_button = ttk.Button(
+            actions,
+            text="Force stop",
+            command=self._force_stop,
+            state="disabled",
+            style="Danger.TButton",
+        )
         self.force_stop_button.pack(side="left", padx=(8, 0))
         self.state_label = ttk.Label(actions, text="idle", foreground=COLOR_MUTED)
         self.state_label.pack(side="left", padx=(16, 0))
 
         info_frame = ttk.Frame(self)
         info_frame.pack(fill="x")
-        self.run_dir_label = ttk.Label(info_frame, text="run directory: n/a", foreground=COLOR_MUTED)
+        self.run_dir_label = ttk.Label(
+            info_frame, text="run directory: n/a", foreground=COLOR_MUTED
+        )
         self.run_dir_label.pack(anchor="w")
 
         log_frame = ttk.LabelFrame(self, text="Process output", padding=8)
@@ -240,22 +295,29 @@ class TrainingPage(Page):
 
         self.process_id: str | None = None
 
-    def _build_fields(self, parent: ttk.Frame, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]) -> None:
+    def _build_fields(
+        self, parent: ttk.Frame, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]
+    ) -> None:
         parent.columnconfigure(1, weight=1)
         parent.columnconfigure(2, weight=2)
         for row_index, spec in enumerate(specs):
-            ttk.Label(parent, text=spec.label, width=26).grid(row=row_index, column=0, sticky="w", pady=2)
+            ttk.Label(parent, text=spec.label, width=26).grid(
+                row=row_index, column=0, sticky="w", pady=2
+            )
             var = tk.StringVar(value=defaults.get(spec.name, ""))
             self.field_vars[spec.name] = var
             if spec.kind == "choice" and spec.choices:
-                widget: tk.Widget = ttk.Combobox(parent, textvariable=var, values=spec.choices, state="readonly", width=28)
+                widget: tk.Widget = ttk.Combobox(
+                    parent, textvariable=var, values=spec.choices, state="readonly", width=28
+                )
             elif spec.kind == "bool":
                 widget = ttk.Checkbutton(parent, variable=var, onvalue="true", offvalue="false")
             elif spec.name in ("bc_checkpoint", "godot_executable"):
                 widget = ttk.Frame(parent)
                 ttk.Entry(widget, textvariable=var, width=30).pack(side="left")
-                ttk.Button(widget, text="Browse", width=8,
-                           command=lambda v=var: self._browse_file(v)).pack(side="left", padx=(4, 0))
+                ttk.Button(
+                    widget, text="Browse", width=8, command=lambda v=var: self._browse_file(v)
+                ).pack(side="left", padx=(4, 0))
             else:
                 widget = ttk.Entry(parent, textvariable=var, width=30)
             widget.grid(row=row_index, column=1, sticky="ew", pady=4, padx=(8, 16))
@@ -277,7 +339,9 @@ class TrainingPage(Page):
 
     def refresh(self) -> None:
         if self.process_id:
-            self.app.background.submit(lambda: self.adapter.process_status(self.process_id), self._on_process_status)
+            self.app.background.submit(
+                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+            )
 
     def _start(self) -> None:
         values = {name: var.get() for name, var in self.field_vars.items()}
@@ -309,17 +373,26 @@ class TrainingPage(Page):
         if not self.process_id:
             return
         self.app.background.submit(lambda: self.adapter.cancel(self.process_id), lambda *_: None)
-        self.app.set_status("Stop requested - the trainer will save a final checkpoint before exiting")
+        self.app.set_status(
+            "Stop requested - the trainer will save a final checkpoint before exiting"
+        )
 
     def _force_stop(self) -> None:
         if not self.process_id:
             return
-        if not messagebox.askyesno("Force stop", "This skips the cooperative shutdown; the final checkpoint will "
-                                                  "NOT be saved. Continue?"):
+        if not messagebox.askyesno(
+            "Force stop",
+            "This skips the cooperative shutdown; the final checkpoint will "
+            "NOT be saved. Continue?",
+        ):
             return
-        self.app.background.submit(lambda: self.adapter.force_stop(self.process_id), lambda *_: None)
+        self.app.background.submit(
+            lambda: self.adapter.force_stop(self.process_id), lambda *_: None
+        )
 
-    def _on_process_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
+    def _on_process_status(
+        self, status: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
         if error is not None or status is None:
             return
         state = status.get("state", "unknown")
@@ -333,7 +406,9 @@ class TrainingPage(Page):
             if state == "failed" and status.get("error"):
                 self.app.set_status(f"Training process failed: {status['error']}", error=True)
         self.app.background.submit(
-            lambda: self.adapter.process_log(self.process_id, self.log_panel.stdout_after, self.log_panel.stderr_after),
+            lambda: self.adapter.process_log(
+                self.process_id, self.log_panel.stdout_after, self.log_panel.stderr_after
+            ),
             self._on_log,
         )
 
@@ -348,9 +423,15 @@ class AgentsPage(Page):
     subtitle = "Every training/evaluation/benchmark process this Control Center has launched or is tracking."
 
     COLUMNS = (
-        ("kind", "Type", 90), ("run_id", "Run", 140), ("status", "Status", 90), ("pid", "PID", 70),
-        ("environment_count", "Envs", 60), ("env_workers", "Workers", 70), ("progress_percent", "Progress", 80),
-        ("started_at", "Started", 140), ("error", "Error", 220),
+        ("kind", "Type", 90),
+        ("run_id", "Run", 140),
+        ("status", "Status", 90),
+        ("pid", "PID", 70),
+        ("environment_count", "Envs", 60),
+        ("env_workers", "Workers", 70),
+        ("progress_percent", "Progress", 80),
+        ("started_at", "Started", 140),
+        ("error", "Error", 220),
     )
 
     def build(self) -> None:
@@ -369,9 +450,17 @@ class AgentsPage(Page):
         paned.add(bottom, weight=1)
         actions = ttk.Frame(bottom)
         actions.pack(fill="x")
-        self.stop_button = ttk.Button(actions, text="Stop safely", command=self._stop, state="disabled")
+        self.stop_button = ttk.Button(
+            actions, text="Stop safely", command=self._stop, state="disabled"
+        )
         self.stop_button.pack(side="left")
-        self.force_stop_button = ttk.Button(actions, text="Force stop", command=self._force_stop, state="disabled", style="Danger.TButton")
+        self.force_stop_button = ttk.Button(
+            actions,
+            text="Force stop",
+            command=self._force_stop,
+            state="disabled",
+            style="Danger.TButton",
+        )
         self.force_stop_button.pack(side="left", padx=(8, 0))
         self.log_panel = LogPanel(bottom)
         self.log_panel.pack(fill="both", expand=True, pady=(6, 0))
@@ -384,12 +473,16 @@ class AgentsPage(Page):
         if self._selected_process_id:
             self.app.background.submit(
                 lambda: self.adapter.process_log(
-                    self._selected_process_id, self.log_panel.stdout_after, self.log_panel.stderr_after
+                    self._selected_process_id,
+                    self.log_panel.stdout_after,
+                    self.log_panel.stderr_after,
                 ),
                 self._on_log,
             )
 
-    def _on_processes(self, processes: list[dict[str, Any]] | None, error: BaseException | None) -> None:
+    def _on_processes(
+        self, processes: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
         if error is not None or processes is None:
             self.report_error("Agents refresh failed", error or RuntimeError("unknown"))
             return
@@ -398,12 +491,23 @@ class AgentsPage(Page):
         self.tree.delete(*self.tree.get_children())
         self._row_to_process.clear()
         for row in rows:
-            item_id = self.tree.insert("", "end", values=(
-                row["kind"], row["run_id"], row["status"] or "n/a", row["pid"] if row["pid"] is not None else "n/a",
-                vm.format_number(row["environment_count"]), vm.format_number(row["env_workers"]),
-                vm.format_fraction_as_percent((row["progress_percent"] or 0) / 100.0) if row["progress_percent"] is not None else "n/a",
-                vm.format_timestamp(row["started_at"]), row["error"] or "",
-            ))
+            item_id = self.tree.insert(
+                "",
+                "end",
+                values=(
+                    row["kind"],
+                    row["run_id"],
+                    row["status"] or "n/a",
+                    row["pid"] if row["pid"] is not None else "n/a",
+                    vm.format_number(row["environment_count"]),
+                    vm.format_number(row["env_workers"]),
+                    vm.format_fraction_as_percent((row["progress_percent"] or 0) / 100.0)
+                    if row["progress_percent"] is not None
+                    else "n/a",
+                    vm.format_timestamp(row["started_at"]),
+                    row["error"] or "",
+                ),
+            )
             self._row_to_process[item_id] = row["id"]
             if row["id"] == selected:
                 self.tree.selection_set(item_id)
@@ -431,24 +535,36 @@ class AgentsPage(Page):
 
     def _stop(self) -> None:
         if self._selected_process_id:
-            self.app.background.submit(lambda: self.adapter.cancel(self._selected_process_id), lambda *_: None)
+            self.app.background.submit(
+                lambda: self.adapter.cancel(self._selected_process_id), lambda *_: None
+            )
 
     def _force_stop(self) -> None:
         if self._selected_process_id and messagebox.askyesno(
             "Force stop", "Skip cooperative shutdown and kill this process now?"
         ):
-            self.app.background.submit(lambda: self.adapter.force_stop(self._selected_process_id), lambda *_: None)
+            self.app.background.submit(
+                lambda: self.adapter.force_stop(self._selected_process_id), lambda *_: None
+            )
 
 
 class BenchmarkPage(Page):
     title = "Benchmarks"
-    subtitle = "Runs python -m sandboxai benchmark and compares measured throughput across configurations."
+    subtitle = (
+        "Runs python -m sandboxai benchmark and compares measured throughput across configurations."
+    )
 
     RESULT_COLUMNS = (
-        ("source", "Sweep", 160), ("environments", "Envs", 60), ("workers", "Workers", 70),
-        ("total_steps", "Total steps", 90), ("steps_per_second", "Steps/s", 90),
-        ("episodes_per_second", "Episodes/s", 90), ("p50_ms", "p50 ms", 70), ("p95_ms", "p95 ms", 70),
-        ("elapsed_seconds", "Elapsed", 80), ("info_mode", "Info mode", 90),
+        ("source", "Sweep", 160),
+        ("environments", "Envs", 60),
+        ("workers", "Workers", 70),
+        ("total_steps", "Total steps", 90),
+        ("steps_per_second", "Steps/s", 90),
+        ("episodes_per_second", "Episodes/s", 90),
+        ("p50_ms", "p50 ms", 70),
+        ("p95_ms", "p95 ms", 70),
+        ("elapsed_seconds", "Elapsed", 80),
+        ("info_mode", "Info mode", 90),
     )
 
     def build(self) -> None:
@@ -459,25 +575,35 @@ class BenchmarkPage(Page):
         self.steps_var = tk.StringVar(value="2000")
         self.enemy_count_var = tk.StringVar(value="1")
         self.compact_var = tk.BooleanVar(value=True)
-        for row, (label, var, width) in enumerate((
-            ("Environment counts (comma-separated)", self.env_counts_var, 24),
-            ("Worker counts (comma-separated)", self.worker_counts_var, 24),
-            ("Steps per configuration", self.steps_var, 10),
-            ("Enemy count", self.enemy_count_var, 10),
-        )):
+        for row, (label, var, width) in enumerate(
+            (
+                ("Environment counts (comma-separated)", self.env_counts_var, 24),
+                ("Worker counts (comma-separated)", self.worker_counts_var, 24),
+                ("Steps per configuration", self.steps_var, 10),
+                ("Enemy count", self.enemy_count_var, 10),
+            )
+        ):
             ttk.Label(form, text=label, width=32).grid(row=row, column=0, sticky="w", pady=2)
-            ttk.Entry(form, textvariable=var, width=width).grid(row=row, column=1, sticky="w", pady=2)
-        ttk.Checkbutton(form, text="Compact training-path infos (uncheck for full diagnostic infos)",
-                         variable=self.compact_var).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
+            ttk.Entry(form, textvariable=var, width=width).grid(
+                row=row, column=1, sticky="w", pady=2
+            )
+        ttk.Checkbutton(
+            form,
+            text="Compact training-path infos (uncheck for full diagnostic infos)",
+            variable=self.compact_var,
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=8)
-        self.run_button = ttk.Button(actions, text="Run benchmark", command=self._start, style="Primary.TButton")
+        self.run_button = ttk.Button(
+            actions, text="Run benchmark", command=self._start, style="Primary.TButton"
+        )
         self.run_button.pack(side="left")
         self.state_label = ttk.Label(actions, text="idle", foreground=COLOR_MUTED)
         self.state_label.pack(side="left", padx=(12, 0))
 
-        history_frame = ttk.LabelFrame(self, text="Result history (click a column to sort; select rows to compare)",
-                                        padding=8)
+        history_frame = ttk.LabelFrame(
+            self, text="Result history (click a column to sort; select rows to compare)", padding=8
+        )
         history_frame.pack(fill="both", expand=True)
         self.tree = _sortable_table(history_frame, self.RESULT_COLUMNS)
         self.tree.pack(fill="both", expand=True, side="left")
@@ -493,23 +619,34 @@ class BenchmarkPage(Page):
     def refresh(self) -> None:
         self.app.background.submit(self.adapter.benchmark_history, self._on_history)
         if self.process_id:
-            self.app.background.submit(lambda: self.adapter.process_status(self.process_id), self._on_process_status)
+            self.app.background.submit(
+                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+            )
 
     def _start(self) -> None:
         try:
-            environment_counts = [int(v.strip()) for v in self.env_counts_var.get().split(",") if v.strip()]
-            worker_counts = [int(v.strip()) for v in self.worker_counts_var.get().split(",") if v.strip()]
+            environment_counts = [
+                int(v.strip()) for v in self.env_counts_var.get().split(",") if v.strip()
+            ]
+            worker_counts = [
+                int(v.strip()) for v in self.worker_counts_var.get().split(",") if v.strip()
+            ]
             steps = int(self.steps_var.get())
             enemy_count = int(self.enemy_count_var.get())
         except ValueError:
-            messagebox.showerror("Invalid benchmark configuration", "Environment/worker counts, steps and enemy "
-                                                                      "count must be integers.")
+            messagebox.showerror(
+                "Invalid benchmark configuration",
+                "Environment/worker counts, steps and enemy count must be integers.",
+            )
             return
 
         def _launch() -> dict[str, Any]:
             return self.adapter.start_benchmark(
-                environment_counts=environment_counts, worker_counts=worker_counts, steps=steps,
-                enemy_count=enemy_count, compact_infos=self.compact_var.get(),
+                environment_counts=environment_counts,
+                worker_counts=worker_counts,
+                steps=steps,
+                enemy_count=enemy_count,
+                compact_infos=self.compact_var.get(),
             )
 
         self.run_button.configure(state="disabled")
@@ -523,26 +660,43 @@ class BenchmarkPage(Page):
         self.process_id = result["process_id"]
         self.app.set_status(f"Benchmark started ({self.process_id[:8]})")
 
-    def _on_process_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
+    def _on_process_status(
+        self, status: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
         if error is not None or status is None:
             return
-        self.state_label.configure(text=status.get("state", "unknown"), foreground=STATE_COLORS.get(status.get("state"), COLOR_MUTED))
+        self.state_label.configure(
+            text=status.get("state", "unknown"),
+            foreground=STATE_COLORS.get(status.get("state"), COLOR_MUTED),
+        )
         if status.get("state") in ("finished", "failed"):
             self.process_id = None
 
-    def _on_history(self, history: list[dict[str, Any]] | None, error: BaseException | None) -> None:
+    def _on_history(
+        self, history: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
         if error is not None or history is None:
             self.report_error("Benchmark history refresh failed", error or RuntimeError("unknown"))
             return
         rows = vm.benchmark_history_rows(history)
         self.tree.delete(*self.tree.get_children())
         for row in rows:
-            self.tree.insert("", "end", values=(
-                row["source"], row["environments"], row["workers"], vm.format_number(row["total_steps"]),
-                vm.format_number(row["steps_per_second"], 1), vm.format_number(row["episodes_per_second"], 2),
-                vm.format_number(row["p50_ms"], 2), vm.format_number(row["p95_ms"], 2),
-                vm.format_duration(row["elapsed_seconds"]), row["info_mode"] or "n/a",
-            ))
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    row["source"],
+                    row["environments"],
+                    row["workers"],
+                    vm.format_number(row["total_steps"]),
+                    vm.format_number(row["steps_per_second"], 1),
+                    vm.format_number(row["episodes_per_second"], 2),
+                    vm.format_number(row["p50_ms"], 2),
+                    vm.format_number(row["p95_ms"], 2),
+                    vm.format_duration(row["elapsed_seconds"]),
+                    row["info_mode"] or "n/a",
+                ),
+            )
         if history:
             scaling = history[0].get("scaling") or {}
             if scaling:
@@ -557,7 +711,9 @@ class BenchmarkPage(Page):
                         "environments onward"
                     )
                 if scaling.get("worker_scaling"):
-                    lines.append("  worker sharding speed-up measured vs. single-process baseline (see table)")
+                    lines.append(
+                        "  worker sharding speed-up measured vs. single-process baseline (see table)"
+                    )
                 self.scaling_label.configure(text="\n".join(lines))
             else:
                 self.scaling_label.configure(text="")
@@ -567,11 +723,20 @@ class EvaluationPage(Page):
     title = "Evaluations"
     subtitle = "Evaluates a frozen checkpoint with the existing evaluator; action-head diagnostics included."
 
-    CHECKPOINT_COLUMNS = (("run_id", "Run", 140), ("kind", "Kind", 80), ("path", "Path", 320),
-                           ("modified_utc", "Modified", 160))
-    EVAL_COLUMNS = (("path", "Path", 260), ("timesteps", "Timesteps", 90), ("episodes", "Episodes", 80),
-                     ("win_rate", "Win rate", 80), ("loss_rate", "Loss rate", 80),
-                     ("mean_episode_reward", "Reward", 80))
+    CHECKPOINT_COLUMNS = (
+        ("run_id", "Run", 140),
+        ("kind", "Kind", 80),
+        ("path", "Path", 320),
+        ("modified_utc", "Modified", 160),
+    )
+    EVAL_COLUMNS = (
+        ("path", "Path", 260),
+        ("timesteps", "Timesteps", 90),
+        ("episodes", "Episodes", 80),
+        ("win_rate", "Win rate", 80),
+        ("loss_rate", "Loss rate", 80),
+        ("mean_episode_reward", "Reward", 80),
+    )
 
     def build(self) -> None:
         paned = ttk.Panedwindow(self, orient="horizontal")
@@ -588,27 +753,42 @@ class EvaluationPage(Page):
         self.episodes_var = tk.StringVar(value="20")
         self.env_count_var = tk.StringVar(value="1")
         self.device_var = tk.StringVar(value="auto")
-        for row, (label, var, kind) in enumerate((
-            ("Episodes", self.episodes_var, "entry"), ("Environment count", self.env_count_var, "entry"),
-            ("Device", self.device_var, "choice"),
-        )):
+        for row, (label, var, kind) in enumerate(
+            (
+                ("Episodes", self.episodes_var, "entry"),
+                ("Environment count", self.env_count_var, "entry"),
+                ("Device", self.device_var, "choice"),
+            )
+        ):
             ttk.Label(form, text=label, width=16).grid(row=row, column=0, sticky="w", pady=2)
             if kind == "choice":
-                ttk.Combobox(form, textvariable=var, values=("auto", "cpu", "cuda"), state="readonly",
-                             width=16).grid(row=row, column=1, sticky="w")
+                ttk.Combobox(
+                    form,
+                    textvariable=var,
+                    values=("auto", "cpu", "cuda"),
+                    state="readonly",
+                    width=16,
+                ).grid(row=row, column=1, sticky="w")
             else:
                 ttk.Entry(form, textvariable=var, width=18).grid(row=row, column=1, sticky="w")
-        self.run_button = ttk.Button(form, text="Start evaluation", command=self._start, style="Primary.TButton")
+        self.run_button = ttk.Button(
+            form, text="Start evaluation", command=self._start, style="Primary.TButton"
+        )
         self.run_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        self.selected_checkpoint_label = ttk.Label(left, text="selected checkpoint: none", foreground=COLOR_MUTED,
-                                                    wraplength=380)
+        self.selected_checkpoint_label = ttk.Label(
+            left, text="selected checkpoint: none", foreground=COLOR_MUTED, wraplength=380
+        )
         self.selected_checkpoint_label.pack(anchor="w")
         self.state_label = ttk.Label(left, text="", foreground=COLOR_MUTED)
         self.state_label.pack(anchor="w")
 
         right = ttk.Frame(paned, padding=(8, 0, 0, 0))
         paned.add(right, weight=1)
-        ttk.Label(right, text="Evaluation results (select multiple rows to compare)", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(
+            right,
+            text="Evaluation results (select multiple rows to compare)",
+            style="Section.TLabel",
+        ).pack(anchor="w")
         self.eval_tree = _sortable_table(right, self.EVAL_COLUMNS)
         self.eval_tree.pack(fill="both", expand=False)
         self.eval_tree.configure(selectmode="extended")
@@ -616,9 +796,21 @@ class EvaluationPage(Page):
 
         detail_frame = ttk.LabelFrame(right, text="Structured result / comparison", padding=8)
         detail_frame.pack(fill="both", expand=True, pady=(8, 0))
-        self.detail_text = tk.Text(detail_frame, wrap="word", state="disabled", height=18, font=("Consolas", 9),
-                                   background=COLOR_SURFACE, foreground=COLOR_TEXT, insertbackground=COLOR_TEXT,
-                                   selectbackground="#164e63", relief="flat", borderwidth=0, padx=10, pady=10)
+        self.detail_text = tk.Text(
+            detail_frame,
+            wrap="word",
+            state="disabled",
+            height=18,
+            font=("Consolas", 9),
+            background=COLOR_SURFACE,
+            foreground=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
+            selectbackground="#164e63",
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=10,
+        )
         self.detail_text.pack(fill="both", expand=True)
 
         self._checkpoint_paths: dict[str, str] = {}
@@ -635,18 +827,29 @@ class EvaluationPage(Page):
         self.app.background.submit(self.adapter.discover_checkpoints, self._on_checkpoints)
         self.app.background.submit(self.adapter.discover_evaluations, self._on_evaluations)
         if self.process_id:
-            self.app.background.submit(lambda: self.adapter.process_status(self.process_id), self._on_process_status)
+            self.app.background.submit(
+                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+            )
 
-    def _on_checkpoints(self, entries: list[dict[str, Any]] | None, error: BaseException | None) -> None:
+    def _on_checkpoints(
+        self, entries: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
         if error is not None or entries is None:
             self.report_error("Checkpoint list refresh failed", error or RuntimeError("unknown"))
             return
         self.checkpoint_tree.delete(*self.checkpoint_tree.get_children())
         self._checkpoint_paths.clear()
         for entry in entries:
-            item_id = self.checkpoint_tree.insert("", "end", values=(
-                entry["run_id"], entry["kind"], entry["path"], entry.get("modified_utc") or "n/a",
-            ))
+            item_id = self.checkpoint_tree.insert(
+                "",
+                "end",
+                values=(
+                    entry["run_id"],
+                    entry["kind"],
+                    entry["path"],
+                    entry.get("modified_utc") or "n/a",
+                ),
+            )
             self._checkpoint_paths[item_id] = entry["path"]
 
     def _on_checkpoint_select(self, _event: object) -> None:
@@ -656,20 +859,26 @@ class EvaluationPage(Page):
 
     def _start(self) -> None:
         if not self.selected_checkpoint:
-            messagebox.showwarning("Checkpoint required", "Select a checkpoint from the list on the left.")
+            messagebox.showwarning(
+                "Checkpoint required", "Select a checkpoint from the list on the left."
+            )
             return
         try:
             episodes = int(self.episodes_var.get())
             environment_count = int(self.env_count_var.get())
         except ValueError:
-            messagebox.showerror("Invalid evaluation configuration", "Episodes and environment count must be integers.")
+            messagebox.showerror(
+                "Invalid evaluation configuration",
+                "Episodes and environment count must be integers.",
+            )
             return
         checkpoint = self.selected_checkpoint
         device = self.device_var.get()
 
         def _launch() -> dict[str, Any]:
-            return self.adapter.start_evaluation(checkpoint, episodes=episodes, environment_count=environment_count,
-                                                  device=device)
+            return self.adapter.start_evaluation(
+                checkpoint, episodes=episodes, environment_count=environment_count, device=device
+            )
 
         self.run_button.configure(state="disabled")
         self.app.background.submit(_launch, self._on_started)
@@ -682,26 +891,39 @@ class EvaluationPage(Page):
         self.process_id = result["process_id"]
         self.app.set_status(f"Evaluation started ({self.process_id[:8]})")
 
-    def _on_process_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
+    def _on_process_status(
+        self, status: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
         if error is not None or status is None:
             return
-        self.state_label.configure(text=f"evaluation process: {status.get('state')}",
-                                    foreground=STATE_COLORS.get(status.get("state"), COLOR_MUTED))
+        self.state_label.configure(
+            text=f"evaluation process: {status.get('state')}",
+            foreground=STATE_COLORS.get(status.get("state"), COLOR_MUTED),
+        )
         if status.get("state") in ("finished", "failed"):
             self.process_id = None
 
-    def _on_evaluations(self, entries: list[dict[str, Any]] | None, error: BaseException | None) -> None:
+    def _on_evaluations(
+        self, entries: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
         if error is not None or entries is None:
             self.report_error("Evaluation list refresh failed", error or RuntimeError("unknown"))
             return
         self.eval_tree.delete(*self.eval_tree.get_children())
         self._eval_paths.clear()
         for entry in entries:
-            item_id = self.eval_tree.insert("", "end", values=(
-                entry["path"], vm.format_number(entry.get("timesteps")), vm.format_number(entry.get("episodes")),
-                vm.format_fraction_as_percent(entry.get("win_rate")), vm.format_fraction_as_percent(entry.get("loss_rate")),
-                vm.format_number(entry.get("mean_episode_reward"), 3),
-            ))
+            item_id = self.eval_tree.insert(
+                "",
+                "end",
+                values=(
+                    entry["path"],
+                    vm.format_number(entry.get("timesteps")),
+                    vm.format_number(entry.get("episodes")),
+                    vm.format_fraction_as_percent(entry.get("win_rate")),
+                    vm.format_fraction_as_percent(entry.get("loss_rate")),
+                    vm.format_number(entry.get("mean_episode_reward"), 3),
+                ),
+            )
             self._eval_paths[item_id] = entry["path"]
 
     def _on_eval_select(self, _event: object) -> None:
@@ -709,16 +931,22 @@ class EvaluationPage(Page):
         paths = [self._eval_paths[item_id] for item_id in selection if item_id in self._eval_paths]
         if not paths:
             return
-        self.app.background.submit(lambda: [self.adapter.evaluation_detail(path) for path in paths], self._on_details)
+        self.app.background.submit(
+            lambda: [self.adapter.evaluation_detail(path) for path in paths], self._on_details
+        )
 
-    def _on_details(self, details: list[dict[str, Any]] | None, error: BaseException | None) -> None:
+    def _on_details(
+        self, details: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
         if error is not None or details is None:
             self.report_error("Evaluation detail failed", error or RuntimeError("unknown"))
             return
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")
         if len(details) == 1:
-            self.detail_text.insert("end", _render_evaluation_detail(vm.evaluation_view(details[0])))
+            self.detail_text.insert(
+                "end", _render_evaluation_detail(vm.evaluation_view(details[0]))
+            )
         else:
             rows = vm.evaluation_comparison_rows(details)
             self.detail_text.insert("end", _render_evaluation_comparison(rows))
@@ -774,10 +1002,18 @@ class RunsPage(Page):
     title = "Runs / Checkpoints"
     subtitle = "Read-only inventory from run_inspection.py - selecting a run shows its full detail."
 
-    COLUMNS = (("run_id", "Run", 160), ("state", "State", 90), ("progress_percent", "Progress", 80),
-               ("device", "Device", 70), ("environment_count", "Envs", 55), ("env_workers", "Workers", 65),
-               ("checkpoints", "Checkpoints", 90), ("reward", "Reward", 80), ("win_rate", "Win rate", 80),
-               ("modified_utc", "Modified", 160))
+    COLUMNS = (
+        ("run_id", "Run", 160),
+        ("state", "State", 90),
+        ("progress_percent", "Progress", 80),
+        ("device", "Device", 70),
+        ("environment_count", "Envs", 55),
+        ("env_workers", "Workers", 65),
+        ("checkpoints", "Checkpoints", 90),
+        ("reward", "Reward", 80),
+        ("win_rate", "Win rate", 80),
+        ("modified_utc", "Modified", 160),
+    )
 
     def build(self) -> None:
         paned = ttk.Panedwindow(self, orient="vertical")
@@ -793,14 +1029,27 @@ class RunsPage(Page):
 
         bottom = ttk.LabelFrame(paned, text="Run detail", padding=8)
         paned.add(bottom, weight=1)
-        self.detail_text = tk.Text(bottom, wrap="word", state="disabled", font=("Consolas", 9),
-                                   background=COLOR_SURFACE, foreground=COLOR_TEXT, insertbackground=COLOR_TEXT,
-                                   selectbackground="#164e63", relief="flat", borderwidth=0, padx=10, pady=10)
+        self.detail_text = tk.Text(
+            bottom,
+            wrap="word",
+            state="disabled",
+            font=("Consolas", 9),
+            background=COLOR_SURFACE,
+            foreground=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
+            selectbackground="#164e63",
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=10,
+        )
         self.detail_text.pack(fill="both", expand=True)
         actions = ttk.Frame(bottom)
         actions.pack(fill="x", pady=(6, 0))
         ttk.Button(actions, text="Open run folder", command=self._open_folder).pack(side="left")
-        ttk.Button(actions, text="Evaluate latest checkpoint", command=self._evaluate).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Evaluate latest checkpoint", command=self._evaluate).pack(
+            side="left", padx=(8, 0)
+        )
 
         self._row_to_dir: dict[str, str] = {}
         self._selected_run_dir: str | None = None
@@ -840,13 +1089,24 @@ class RunsPage(Page):
         self.tree.delete(*self.tree.get_children())
         self._row_to_dir.clear()
         for row in rows:
-            item_id = self.tree.insert("", "end", values=(
-                row["run_id"], row["state"] or "n/a",
-                vm.format_fraction_as_percent((row["progress_percent"] or 0) / 100.0) if row["progress_percent"] is not None else "n/a",
-                row["device"] or "n/a", vm.format_number(row["environment_count"]), vm.format_number(row["env_workers"]),
-                vm.format_number(row["checkpoints"]), vm.format_number(row["reward"], 3),
-                vm.format_fraction_as_percent(row["win_rate"]), row["modified_utc"] or "n/a",
-            ))
+            item_id = self.tree.insert(
+                "",
+                "end",
+                values=(
+                    row["run_id"],
+                    row["state"] or "n/a",
+                    vm.format_fraction_as_percent((row["progress_percent"] or 0) / 100.0)
+                    if row["progress_percent"] is not None
+                    else "n/a",
+                    row["device"] or "n/a",
+                    vm.format_number(row["environment_count"]),
+                    vm.format_number(row["env_workers"]),
+                    vm.format_number(row["checkpoints"]),
+                    vm.format_number(row["reward"], 3),
+                    vm.format_fraction_as_percent(row["win_rate"]),
+                    row["modified_utc"] or "n/a",
+                ),
+            )
             self._row_to_dir[item_id] = row["run_dir"]
             if row["run_dir"] == selected:
                 self.tree.selection_set(item_id)
@@ -939,8 +1199,11 @@ class SystemPage(Page):
         self.deps_label = ttk.Label(deps_frame, text="n/a", justify="left")
         self.deps_label.pack(anchor="w")
 
-        chart_frame = ttk.LabelFrame(self, text="Host resource usage (sampled each refresh, bounded to the last "
-                                                  "300 samples)", padding=10)
+        chart_frame = ttk.LabelFrame(
+            self,
+            text="Host resource usage (sampled each refresh, bounded to the last 300 samples)",
+            padding=10,
+        )
         chart_frame.pack(fill="both", expand=True, pady=(12, 0))
         self.cpu_chart = LineChart(chart_frame, "CPU percent (this process)")
         self.cpu_chart.pack(fill="both", expand=True, pady=(0, 4))
@@ -949,8 +1212,8 @@ class SystemPage(Page):
 
         from collections import deque
 
-        self._cpu_series: "deque[tuple[float, float]]" = deque(maxlen=300)
-        self._rss_series: "deque[tuple[float, float]]" = deque(maxlen=300)
+        self._cpu_series: deque[tuple[float, float]] = deque(maxlen=300)
+        self._rss_series: deque[tuple[float, float]] = deque(maxlen=300)
         self._sample_index = 0.0
 
     def refresh(self) -> None:
@@ -964,21 +1227,36 @@ class SystemPage(Page):
         if status.get("godot_available"):
             version = status.get("godot_version")
             godot_text = f"available ({version})" if version else "available (version unknown)"
-        self.stats.update_values({
-            "cpu": (vm.format_fraction_as_percent((status.get("cpu_percent") or 0) / 100.0), None),
-            "process memory": (vm.format_bytes((status.get("process_rss_mb") or 0) * 1024 * 1024)
-                                if status.get("process_rss_mb") is not None else "n/a", None),
-            "python": (status.get("python_version", "n/a"), None),
-            "godot": (godot_text, COLOR_OK if status.get("godot_available") else COLOR_WARN),
-            "torch": ("available" if status.get("torch_available") else "not installed",
-                      COLOR_OK if status.get("torch_available") else COLOR_MUTED),
-            "cuda": ("available" if status.get("cuda_available") else "not available",
-                     COLOR_OK if status.get("cuda_available") else COLOR_MUTED),
-        })
+        self.stats.update_values(
+            {
+                "cpu": (
+                    vm.format_fraction_as_percent((status.get("cpu_percent") or 0) / 100.0),
+                    None,
+                ),
+                "process memory": (
+                    vm.format_bytes((status.get("process_rss_mb") or 0) * 1024 * 1024)
+                    if status.get("process_rss_mb") is not None
+                    else "n/a",
+                    None,
+                ),
+                "python": (status.get("python_version", "n/a"), None),
+                "godot": (godot_text, COLOR_OK if status.get("godot_available") else COLOR_WARN),
+                "torch": (
+                    "available" if status.get("torch_available") else "not installed",
+                    COLOR_OK if status.get("torch_available") else COLOR_MUTED,
+                ),
+                "cuda": (
+                    "available" if status.get("cuda_available") else "not available",
+                    COLOR_OK if status.get("cuda_available") else COLOR_MUTED,
+                ),
+            }
+        )
         deps = status.get("dependencies", {})
-        self.deps_label.configure(text="   ".join(
-            f"{name}: {'yes' if available else 'no'}" for name, available in deps.items()
-        ))
+        self.deps_label.configure(
+            text="   ".join(
+                f"{name}: {'yes' if available else 'no'}" for name, available in deps.items()
+            )
+        )
         self._sample_index += 1.0
         if status.get("cpu_percent") is not None:
             self._cpu_series.append((self._sample_index, float(status["cpu_percent"])))
@@ -997,10 +1275,16 @@ class SettingsPage(Page):
         self.project_root_label.pack(anchor="w", pady=2)
         self.output_root_label = ttk.Label(self, text="")
         self.output_root_label.pack(anchor="w", pady=2)
-        ttk.Button(self, text="Change output root...", command=self._change_output_root).pack(anchor="w", pady=(8, 0))
-        ttk.Label(self, text="Changing the output root points this session's Runs/Checkpoints/Evaluations/"
-                              "Benchmarks pages at a different directory; it does not move existing runs.",
-                  foreground=COLOR_MUTED, wraplength=700).pack(anchor="w", pady=(4, 0))
+        ttk.Button(self, text="Change output root...", command=self._change_output_root).pack(
+            anchor="w", pady=(8, 0)
+        )
+        ttk.Label(
+            self,
+            text="Changing the output root points this session's Runs/Checkpoints/Evaluations/"
+            "Benchmarks pages at a different directory; it does not move existing runs.",
+            foreground=COLOR_MUTED,
+            wraplength=700,
+        ).pack(anchor="w", pady=(4, 0))
 
     def refresh(self) -> None:
         self.project_root_label.configure(text=f"project root: {self.adapter.project_root}")
@@ -1014,7 +1298,12 @@ class SettingsPage(Page):
 
 
 PAGE_CLASSES: tuple[type[Page], ...] = (
-    DashboardPage, TrainingPage, AgentsPage, BenchmarkPage, EvaluationPage, RunsPage, SystemPage, SettingsPage,
+    DashboardPage,
+    TrainingPage,
+    AgentsPage,
+    BenchmarkPage,
+    EvaluationPage,
+    RunsPage,
+    SystemPage,
+    SettingsPage,
 )
-
-

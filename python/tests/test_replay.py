@@ -4,20 +4,21 @@ Every test here runs without Godot: the determinism check is driven by a
 scripted environment whose dynamics are a pure function of (seed, action
 history), which is exactly the property a replay is supposed to verify.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 from sandboxai.replay import (
-    DetailLevel,
     IMPORTANT_EVENT_KINDS,
     READABLE_VERSIONS,
     REPLAY_FORMAT_VERSION,
-    ReplayError,
+    DetailLevel,
     ReplayEpisode,
+    ReplayError,
     ReplayHeader,
     ReplayIncompatibleError,
     ReplayPlayer,

@@ -8,6 +8,7 @@ same episodes and the same opponents, a frozen policy must stay frozen, and
 per-condition statistics must not be silently pooled into a flattering
 average.
 """
+
 from __future__ import annotations
 
 import random
@@ -42,9 +43,9 @@ class ConditionSpaceTests(unittest.TestCase):
         godot_map_ids = re.findall(r'^\t\t"id": "([a-z_]+)",', map_source, flags=re.MULTILINE)
         self.assertEqual(tuple(godot_map_ids), MAP_IDS)
 
-        lighting_source = (
-            REPO_ROOT / "scripts/perception/lighting_profile.gd"
-        ).read_text(encoding="utf-8")
+        lighting_source = (REPO_ROOT / "scripts/perception/lighting_profile.gd").read_text(
+            encoding="utf-8"
+        )
         match = re.search(r"const MODE_IDS: Array = \[(.*?)\]", lighting_source, flags=re.DOTALL)
         self.assertIsNotNone(match)
         godot_lighting_ids = tuple(re.findall(r'"([a-z_]+)"', match.group(1)))
@@ -237,9 +238,7 @@ class LeagueTests(unittest.TestCase):
 
     def test_latest_strategy_always_picks_the_newest_snapshot(self):
         league = self._league(strategy="latest")
-        self.assertEqual(
-            {league.sample_opponent("learner") for _ in range(10)}, {"learner@300"}
-        )
+        self.assertEqual({league.sample_opponent("learner") for _ in range(10)}, {"learner@300"})
 
     def test_uniform_strategy_eventually_uses_the_whole_pool(self):
         league = self._league(strategy="uniform")
@@ -366,9 +365,7 @@ class AutoCurriculumTests(unittest.TestCase):
         for _ in range(10):
             curriculum.record(success=True)
         self.assertEqual(curriculum.level, 4)
-        promotions_during_cooldown = [
-            curriculum.record(success=True) for _ in range(4)
-        ]
+        promotions_during_cooldown = [curriculum.record(success=True) for _ in range(4)]
         self.assertTrue(all(event is None for event in promotions_during_cooldown))
         self.assertEqual(curriculum.level, 4)
 

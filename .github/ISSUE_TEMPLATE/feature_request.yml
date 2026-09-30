@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose a capability, experiment or tooling improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check `PROJECT.md` first — it labels work as **CURRENT**, **PLANNED**,
+        **RESEARCH** or **CONSTRAINT**. If your idea is already **PLANNED**,
+        say so and describe what you would change about the plan.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard, impossible or unreliable today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What you would like to exist, concretely.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contracts
+    attributes:
+      label: Does this change a non-negotiable contract?
+      description: |
+        Observation size (84 floats), action space (`MultiDiscrete([3,3,3,3,2,2])`),
+        structured-state-only training, or the determinism/reproducibility rules.
+      options:
+        - "No"
+        - "Yes — and the proposal above describes the migration"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "do nothing" and why that is not enough.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This stays inside the project's stated scope — a local, offline research sandbox, not a cheat, exploit, live-game bot or client modifier.
+          required: true

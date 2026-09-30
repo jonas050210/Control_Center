@@ -1,53 +1,102 @@
 name: Python tests
 
+# The Python half of the repository: lint, formatting, the test suite on the
+# two real target platforms, coverage, and a dependency audit. The Godot half
+# lives in godot-tests.yml; neither workflow runs the other's suite, so a
+# push costs one run of each instead of two runs of the Python suite.
+
 on:
   push:
+    branches: ["main", "arena/**"]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A new push to the same ref makes the in-flight run obsolete. `main` is
+# exempt so the history of what actually landed stays complete.
+concurrency:
+  group: python-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  PYTHON_VERSION: "3.11"
+
 jobs:
   lint:
-    name: Ruff (pyflakes-equivalent checks)
+    name: Ruff (lint + format)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install lint tooling
         run: pip install -e ".[lint]"
 
-      - name: Run ruff
-        run: ruff check .
+      - name: Run ruff (lint)
+        run: ruff check --output-format=github .
+
+      - name: Run ruff (formatting)
+        run: ruff format --check --diff .
 
   core-tests:
     name: pytest (core, numpy-only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install the package with only the hard/test dependencies
         run: pip install -e ".[test]"
 
+      # Proves the "core Python needs only NumPy" constraint from PROJECT.md:
+      # every optional-extra test must skip here rather than fail.
       - name: Run the Python suite
-        run: PYTHONPATH=python python -m pytest python/tests -q
+        run: python -m pytest python/tests -q
+
+  gdscript-checks:
+    name: GDScript (static analysis, lint, format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the GDScript tooling extra
+        run: pip install -e ".[test,gdscript]"
+
+      # On a runner without the engine this is the only thing between a
+      # GDScript typo and a runtime failure, so it must not be allowed to
+      # skip: the extra is installed above and the tests assert on it.
+      - name: Static analysis (real grammar parse, symbols, call arity)
+        run: python -m pytest python/tests/test_gdscript_static.py -q
+
+      - name: gdlint
+        run: gdlint scripts tests
+
+      - name: gdformat
+        run: gdformat --check scripts tests
 
   desktop-ui-tests:
     name: Desktop UI tests (virtual display)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install virtual display and Tk
         run: |
@@ -64,8 +113,6 @@ jobs:
 
       - name: Build every desktop page on a real Tk interpreter
         run: xvfb-run -a .ui-venv/bin/python -m pytest python/tests/test_control_center_desktop.py -q
-        env:
-          PYTHONPATH: python
 
   full-tests:
     name: pytest (full training extras, ${{ matrix.os }})
@@ -84,25 +131,93 @@ jobs:
     # opened from Ubuntu/WSL is a real Linux userspace - is_wsl() sees a
     # genuine POSIX host - not native Windows), and macOS is explicitly out
     # of scope.
-
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install the package with training + test extras
         run: pip install -e ".[test,training]"
 
-      - name: Run the Python suite (bash)
-        if: runner.os != 'Windows'
-        run: PYTHONPATH=python python -m pytest python/tests -q
+      - name: Run the Python suite
+        run: python -m pytest python/tests -q
 
-      - name: Run the Python suite (PowerShell)
-        if: runner.os == 'Windows'
-        shell: pwsh
+  coverage:
+    name: Coverage (training extras, gate 70%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install the package with training + test extras
+        run: pip install -e ".[test,training]" coverage
+
+      # The Tk desktop pages cannot be imported on a headless runner without
+      # the system Tk package; they are covered by desktop-ui-tests instead
+      # and excluded in pyproject's [tool.coverage.run].
+      - name: Measure coverage
         run: |
-          $env:PYTHONPATH = "python"
-          python -m pytest python/tests -q
+          coverage run -m pytest python/tests -q
+          coverage report
+          coverage xml
+
+      - name: Publish coverage to the job summary
+        if: always()
+        run: |
+          {
+            echo "### Python coverage"
+            echo ''
+            echo '```'
+            coverage report || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
+
+  audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      # Audits the declared dependency graph, not a lockfile: the lockfile in
+      # the repo is Linux/CPU-only on purpose (see its header) and would give
+      # a misleading picture for the Windows leg.
+      - name: Collect the declared dependencies
+        run: |
+          python - <<'PY' > audited-requirements.txt
+          import tomllib
+
+          with open("pyproject.toml", "rb") as handle:
+              project = tomllib.load(handle)["project"]
+          requirements = list(project["dependencies"])
+          requirements += project["optional-dependencies"]["training"]
+          print("\n".join(requirements))
+          PY
+          cat audited-requirements.txt
+
+      - name: Audit
+        run: pip-audit --strict --progress-spinner=off -r audited-requirements.txt

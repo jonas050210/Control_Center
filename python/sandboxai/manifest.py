@@ -18,16 +18,17 @@ gracefully: a missing git binary, an absent Godot executable or a torch
 build without CUDA produce ``None``/``false`` entries, never an
 exception. A manifest must never be the reason a run fails to start.
 """
+
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
 import json
 import os
 import platform
 import subprocess
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
 #: Bumped from v1: additive host/godot/code-provenance sections. Readers
 #: that only look up known keys are unaffected.

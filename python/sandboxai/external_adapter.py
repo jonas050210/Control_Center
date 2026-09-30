@@ -27,13 +27,15 @@ adapter that cannot supply a channel honestly must emit that encoding
 rather than substituting privileged state. ``validate_observation`` and
 ``AdapterContractChecker`` turn that from a docstring into a test.
 """
+
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
 import math
 import random
-from typing import Any, Iterable, Sequence
+from abc import ABC, abstractmethod
+from collections.abc import Iterable, Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 from .contract import (
     ACTION_NVEC,
@@ -41,8 +43,8 @@ from .contract import (
     OBSERVATION_FIELD_COUNT,
     OBSERVATION_GROUPS,
     OBSERVATION_HIGH,
-    OBSERVATION_LOW,
     OBSERVATION_INDEX,
+    OBSERVATION_LOW,
     OBSERVATION_SPEC,
     GameAdapter,
 )
@@ -360,7 +362,9 @@ class MockExternalEnvironment(ExternalEnvironment):
 
         yaw = int(action[2]) - 1
         shooting = int(action[4]) == 1
-        self._bearing = max(-1.0, min(1.0, self._bearing - yaw * 0.05 + self._rng.uniform(-0.01, 0.01)))
+        self._bearing = max(
+            -1.0, min(1.0, self._bearing - yaw * 0.05 + self._rng.uniform(-0.01, 0.01))
+        )
 
         reward = 0.0
         hit = False
@@ -377,12 +381,16 @@ class MockExternalEnvironment(ExternalEnvironment):
         truncated = self._status.tick >= self.episode_length
         if terminated:
             self._status = EpisodeStatus(
-                state="terminated", tick=self._status.tick, elapsed=self._status.elapsed,
+                state="terminated",
+                tick=self._status.tick,
+                elapsed=self._status.elapsed,
                 reason="target_eliminated",
             )
         elif truncated:
             self._status = EpisodeStatus(
-                state="truncated", tick=self._status.tick, elapsed=self._status.elapsed,
+                state="truncated",
+                tick=self._status.tick,
+                elapsed=self._status.elapsed,
                 reason="time_limit",
             )
         info = {
@@ -462,7 +470,9 @@ class AdapterContractChecker:
 
         status = self.adapter.status()
         if status.state != "running":
-            problems.append(f"after reset the episode state is {status.state!r}, expected 'running'")
+            problems.append(
+                f"after reset the episode state is {status.state!r}, expected 'running'"
+            )
 
         idle_action = [1, 1, 1, 1, 0, 0]
         for index in range(steps):

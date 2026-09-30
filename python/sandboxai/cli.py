@@ -1,13 +1,14 @@
 """Command-line workflow for recording, BC, PPO, evaluation, benchmarks and smoke tests."""
+
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import shutil
 import subprocess  # noqa: F401  (kept as the documented mock seam for CLI launch tests)
 import sys
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from .config import (
@@ -335,11 +336,17 @@ def _remember_godot_executable(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="sandboxai", description="SandboxAI local Godot + PyTorch research workflow")
+    parser = argparse.ArgumentParser(
+        prog="sandboxai", description="SandboxAI local Godot + PyTorch research workflow"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    install = sub.add_parser("install", help="print the recommended local dependency installation command")
-    install.add_argument("--cuda", action="store_true", help="also print the CUDA PyTorch index example")
+    install = sub.add_parser(
+        "install", help="print the recommended local dependency installation command"
+    )
+    install.add_argument(
+        "--cuda", action="store_true", help="also print the CUDA PyTorch index example"
+    )
 
     train = sub.add_parser("train", help="train PPO against headless Godot")
     _add_training_options(train)
@@ -362,7 +369,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     record = sub.add_parser("record", help="open the graphical Godot human demonstration recorder")
     record.add_argument("--output", default="training/datasets/human_demo.jsonl")
-    record.add_argument("--duration", type=float, default=0.0, help="seconds; 0 means until the window closes")
+    record.add_argument(
+        "--duration", type=float, default=0.0, help="seconds; 0 means until the window closes"
+    )
     record.add_argument("--enemy-count", type=int, default=1)
     record.add_argument("--godot-executable", default="godot")
     record.add_argument("--project-path", default="")
@@ -546,12 +555,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="compare measured human TTK against the analytic TTK parsed from WeaponState",
     )
     ttk.add_argument("--distance-bucket", type=float, default=3.0)
-    ttk.add_argument("--seed", type=int, default=1234, help="bootstrap seed (reports are reproducible)")
+    ttk.add_argument(
+        "--seed", type=int, default=1234, help="bootstrap seed (reports are reproducible)"
+    )
 
     adapter = sub.add_parser(
         "adapter-contract", help="print the external-game adapter contract (Roblox boundary)"
     )
-    adapter.add_argument("--check-mock", action="store_true", help="run the mock adapter contract check")
+    adapter.add_argument(
+        "--check-mock", action="store_true", help="run the mock adapter contract check"
+    )
 
     validate_rt = sub.add_parser(
         "validate-runtime",
@@ -569,17 +582,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_exp.add_argument("--baseline", required=True, help="path to baseline summary.json")
     compare_exp.add_argument("--candidate", required=True, help="path to candidate summary.json")
-    compare_exp.add_argument("--threshold", type=float, default=0.05, help="regression threshold (default 0.05)")
+    compare_exp.add_argument(
+        "--threshold", type=float, default=0.05, help="regression threshold (default 0.05)"
+    )
     compare_exp.add_argument("--json", action="store_true")
 
     summarize_exp = sub.add_parser(
         "summarize-experiment",
         help="summarize multi-seed experiment runs in a directory",
     )
-    summarize_exp.add_argument("--path", required=True, help="directory containing seed run summaries")
+    summarize_exp.add_argument(
+        "--path", required=True, help="directory containing seed run summaries"
+    )
     summarize_exp.add_argument("--json", action="store_true")
 
-    smoke = sub.add_parser("smoke-test", help="run end-to-end sanity verification of the Python & ML stack")
+    smoke = sub.add_parser(
+        "smoke-test", help="run end-to-end sanity verification of the Python & ML stack"
+    )
     smoke.add_argument("--device", default="cpu", choices=["cpu", "cuda", "auto"])
 
     return parser
@@ -607,13 +626,14 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     # observation space.
     from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
     from .dataset import DemonstrationDataset, DemonstrationRecorder
+
     recorder = DemonstrationRecorder({"source": "smoke_test"})
     recorder.start()
     for i in range(20):
         obs = [0.1 * ((i + j) % 10) for j in range(OBSERVATION_FIELD_COUNT)]
         next_obs = [0.1 * ((i + j + 1) % 10) for j in range(OBSERVATION_FIELD_COUNT)]
         action = [0, 0, 1, 0, 1 if i % 4 == 0 else 0, 0.0, 0.0]
-        done = (i == 19)
+        done = i == 19
         recorder.append(obs, action, next_obs, 1.0 if done else 0.01, done, episode_id=0)
     recorder.stop()
 
@@ -625,12 +645,17 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
         results["dataset_transitions"] = summary["transitions"]
         results["observation_dim"] = summary["observation_dim"]
         if summary["observation_dim"] != OBSERVATION_FIELD_COUNT:
-            failures.append(f"observation_dim {summary['observation_dim']} != contract {OBSERVATION_FIELD_COUNT}")
+            failures.append(
+                f"observation_dim {summary['observation_dim']} != contract {OBSERVATION_FIELD_COUNT}"
+            )
 
         # 3. BC training
-        from .bc import train_behavior_cloning, load_bc_checkpoint, load_bc_into_sb3_policy
+        from .bc import load_bc_checkpoint, load_bc_into_sb3_policy, train_behavior_cloning
+
         bc_config = BCConfig(epochs=2, batch_size=4, device=device, output_root=tmp_dir)
-        bc_result = train_behavior_cloning(dataset_path, bc_config, output_dir=Path(tmp_dir) / "bc_out")
+        bc_result = train_behavior_cloning(
+            dataset_path, bc_config, output_dir=Path(tmp_dir) / "bc_out"
+        )
         results["bc_best_checkpoint"] = bc_result["best_checkpoint"]
 
         # 4. BC checkpoint load & predict
@@ -639,12 +664,15 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
         results["bc_prediction_shape"] = list(sample_pred.shape)
         expected_action_dim = [len(ACTION_NVEC)]
         if list(sample_pred.shape) != expected_action_dim:
-            failures.append(f"BC prediction shape {list(sample_pred.shape)} != {expected_action_dim}")
+            failures.append(
+                f"BC prediction shape {list(sample_pred.shape)} != {expected_action_dim}"
+            )
 
         # 5. SB3 warm start verification
         try:
             import gymnasium as gym
             from stable_baselines3 import PPO
+
             action_space = gym.spaces.MultiDiscrete(list(ACTION_NVEC))
             obs_space = gym.spaces.Box(-1.0, 1.0, shape=(OBSERVATION_FIELD_COUNT,))
 
@@ -653,8 +681,17 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
                     self.observation_space = obs_space
                     self.action_space = action_space
 
-            ppo_model = PPO("MlpPolicy", MockGymEnv(), n_steps=16, batch_size=16, policy_kwargs={"net_arch": {"pi": [128, 128], "vf": [128, 128]}}, device=device)
-            transfer_res = load_bc_into_sb3_policy(ppo_model.policy, bc_result["best_checkpoint"], device=device)
+            ppo_model = PPO(
+                "MlpPolicy",
+                MockGymEnv(),
+                n_steps=16,
+                batch_size=16,
+                policy_kwargs={"net_arch": {"pi": [128, 128], "vf": [128, 128]}},
+                device=device,
+            )
+            transfer_res = load_bc_into_sb3_policy(
+                ppo_model.policy, bc_result["best_checkpoint"], device=device
+            )
             results["sb3_weight_transfer"] = transfer_res["transferred"]
             if not transfer_res["transferred"]:
                 failures.append("SB3 weight transfer reported transferred=False")
@@ -682,11 +719,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "install":
         print("python -m pip install -e '.[training]'")
         if args.cuda:
-            print("For CUDA, install the matching PyTorch wheel from https://pytorch.org/ before the command above.")
-        print("Godot 4.7.2 must be installed separately and available as 'godot' (or pass --godot-executable).")
+            print(
+                "For CUDA, install the matching PyTorch wheel from https://pytorch.org/ before the command above."
+            )
+        print(
+            "Godot 4.7.2 must be installed separately and available as 'godot' (or pass --godot-executable)."
+        )
         return 0
     if args.command == "control-center-desktop":
         from .control_center_desktop import main as desktop_main
+
         return desktop_main(project_root=args.project_path or None, output_root=args.output_root)
     if args.command == "smoke-test":
         res = run_smoke_test(args.device)
@@ -694,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if res.get("all_passed") else 1
     if args.command == "inspect-dataset":
         from .dataset import DemonstrationDataset
+
         dataset = DemonstrationDataset.load(args.dataset)
         report = dataset.statistics() if args.statistics else dataset.summary()
         print(json.dumps(report, indent=2, default=str))
@@ -703,12 +746,18 @@ def main(argv: list[str] | None = None) -> int:
             format_run_index,
             format_run_report,
             inspect_run,
+        )
+        from .run_inspection import (
             inspect_runs as inspect_runs_index,
         )
 
         if args.run:
             report = inspect_run(args.run, event_limit=max(0, args.events))
-            print(json.dumps(report, indent=2, default=str) if args.json else format_run_report(report))
+            print(
+                json.dumps(report, indent=2, default=str)
+                if args.json
+                else format_run_report(report)
+            )
             return 0 if report.get("exists") else 1
         index = inspect_runs_index(
             args.root, limit=max(0, args.limit), event_limit=max(0, args.events)
@@ -808,8 +857,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "evaluate":
         from stable_baselines3 import PPO  # type: ignore
-        from .evaluation import evaluate_model, format_summary
+
         from .config import TrainingConfig
+        from .evaluation import evaluate_model, format_summary
+
         config = TrainingConfig(
             environment_count=args.environment_count,
             enemy_count=args.enemy_count,
@@ -835,10 +886,17 @@ def main(argv: list[str] | None = None) -> int:
             args.output_dir,
         )
         print(format_summary(result))
-        print(json.dumps({key: value for key, value in result.items() if key != "episodes_detail"}, indent=2, default=str))
+        print(
+            json.dumps(
+                {key: value for key, value in result.items() if key != "episodes_detail"},
+                indent=2,
+                default=str,
+            )
+        )
         return 0
     if args.command == "benchmark":
         from .benchmark import benchmark_simulation, summarize_scaling
+
         project = _resolve_project_path(args.project_path)
         counts = [int(value) for value in args.env_counts.split(",") if value.strip()]
         workers = [int(value) for value in str(args.worker_counts).split(",") if value.strip()]
@@ -860,6 +918,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "benchmark-suites":
         from .benchmark_suites import describe_plan, format_report, run_suites
+
         if args.plan_only:
             print(json.dumps(describe_plan(), indent=2, default=str))
             return 0
@@ -869,6 +928,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "replay":
         from .replay import load_replay, validate_replay
+
         episode = load_replay(args.path, strict_contract=not args.allow_contract_mismatch)
         problems = validate_replay(episode, strict_contract=not args.allow_contract_mismatch)
         print(json.dumps(episode.summary(), indent=2, default=str))
@@ -880,6 +940,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "curriculum":
         from .curriculum_stages import describe_progression, format_progression
+
         if args.json:
             print(json.dumps(describe_progression(), indent=2, default=str))
         else:
@@ -905,6 +966,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "weapon-table":
         from .weapons import format_ttk_table, role_ranking, ttk_table
+
         distances = [float(v) for v in str(args.distances).split(",") if v.strip()]
         table = ttk_table(distances, target_health=args.health)
         if args.json:
@@ -930,6 +992,7 @@ def main(argv: list[str] | None = None) -> int:
             MockExternalEnvironment,
             contract_summary,
         )
+
         print(json.dumps(contract_summary(), indent=2, default=str))
         if args.check_mock:
             problems = AdapterContractChecker(MockExternalEnvironment()).run()
@@ -938,6 +1001,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "validate-runtime":
         from .runtime_validation import RuntimeValidator, format_validation_report
+
         validator = RuntimeValidator(
             project_path=args.project_path,
             godot_executable=args.godot_executable,
@@ -951,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.status in {"passed", "unavailable"} else 1
     if args.command == "compare-experiments":
         from .experiment import compare_experiments, format_experiment_report
+
         base_data = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
         cand_data = json.loads(Path(args.candidate).read_text(encoding="utf-8"))
         res = compare_experiments(base_data, cand_data, threshold=args.threshold)
@@ -961,8 +1026,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if res["status"] != "regression_warning" else 1
     if args.command == "summarize-experiment":
         from .experiment import aggregate_seed_runs, format_experiment_report
+
         target_dir = Path(args.path)
-        summary_files = list(target_dir.glob("**/run_summary.json")) or list(target_dir.glob("*.json"))
+        summary_files = list(target_dir.glob("**/run_summary.json")) or list(
+            target_dir.glob("*.json")
+        )
         run_dicts = [json.loads(p.read_text(encoding="utf-8")) for p in summary_files]
         agg = aggregate_seed_runs(run_dicts)
         if args.json:

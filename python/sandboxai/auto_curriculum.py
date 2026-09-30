@@ -18,6 +18,7 @@ Demotion matters as much as promotion. A curriculum that can only go up
 turns a temporary regression into permanent failure, because the agent is
 left on a level it can no longer solve.
 """
+
 from __future__ import annotations
 
 from collections import deque

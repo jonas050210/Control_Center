@@ -17,7 +17,9 @@ from sandboxai.config import (
 
 class ConfigTests(unittest.TestCase):
     def test_training_config_validates_and_detects_cpu(self):
-        config = TrainingConfig(environment_count=2, rollout_length=32, batch_size=16, device="cpu").validate()
+        config = TrainingConfig(
+            environment_count=2, rollout_length=32, batch_size=16, device="cpu"
+        ).validate()
         self.assertEqual(config.resolved_device(), "cpu")
         self.assertEqual(config.to_dict()["environment_count"], 2)
 
@@ -148,7 +150,11 @@ class GodotExecutableResolutionTests(unittest.TestCase):
         which_patcher = mock.patch("sandboxai.config.shutil.which", return_value=None)
         which_patcher.start()
         self.addCleanup(which_patcher.stop)
-        env = {key: value for key, value in os.environ.items() if key not in ("GODOT_PATH", "GODOT_EXECUTABLE")}
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("GODOT_PATH", "GODOT_EXECUTABLE")
+        }
         env_patcher = mock.patch.dict(os.environ, env, clear=True)
         env_patcher.start()
         self.addCleanup(env_patcher.stop)

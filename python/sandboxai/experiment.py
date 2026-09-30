@@ -4,11 +4,13 @@ Provides structured multi-seed experiment tracking, statistical distributions
 (mean, sample standard deviation, 95% confidence intervals, standard error),
 automated comparison against baseline checkpoints/runs, and regression detection.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import math
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -29,7 +31,7 @@ class ExperimentConfig:
     description: str = ""
     tags: list[str] = field(default_factory=list)
 
-    def validate(self) -> "ExperimentConfig":
+    def validate(self) -> ExperimentConfig:
         if not self.name or not self.name.strip():
             raise ValueError("experiment name must not be empty")
         if not self.seeds:
@@ -48,7 +50,7 @@ class ExperimentConfig:
         return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ExperimentConfig":
+    def from_dict(cls, data: dict[str, Any]) -> ExperimentConfig:
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "net_arch" in known and isinstance(known["net_arch"], list):
             known["net_arch"] = tuple(known["net_arch"])
@@ -88,9 +90,7 @@ def compute_statistics(values: Sequence[float]) -> dict[str, float]:
     sorted_vals = sorted(clean)
     mean_val = sum(clean) / n
     median_val = (
-        sorted_vals[n // 2]
-        if n % 2 != 0
-        else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2.0
+        sorted_vals[n // 2] if n % 2 != 0 else (sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2.0
     )
     min_val = sorted_vals[0]
     max_val = sorted_vals[-1]
@@ -266,7 +266,9 @@ def format_experiment_report(
         lines.append("-" * 78)
         lines.append(f"Comparative Status: {comparison.get('status', 'unknown').upper()}")
         lines.append("-" * 78)
-        lines.append(f"{'Metric':<22}{'Baseline':>10}{'Candidate':>10}{'Delta':>10}{'Rel Change':>12}{'p-val':>8}")
+        lines.append(
+            f"{'Metric':<22}{'Baseline':>10}{'Candidate':>10}{'Delta':>10}{'Rel Change':>12}{'p-val':>8}"
+        )
         lines.append("-" * 78)
         comp_dict = comparison.get("comparison", {})
         for k, row in comp_dict.items():
