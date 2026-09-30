@@ -9,6 +9,13 @@ from sandboxai.bc import create_bc_policy
 from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
 
 
+def _touch(path: str) -> None:
+    """Stand-in for a malicious payload: observable, harmless, picklable."""
+    from pathlib import Path
+
+    Path(path).touch()
+
+
 @unittest.skipUnless(torch is not None, "PyTorch is optional in the static test environment")
 class BehaviorCloningTests(unittest.TestCase):
     def test_model_creation_and_action_shape(self):
@@ -164,89 +171,91 @@ class CheckpointLoadingIsSandboxedTests(unittest.TestCase):
 
     The first test is the one that matters: it builds an actual hostile
     checkpoint and asserts the loader refuses it instead of running it.
+
+    These use ``mkdtemp`` rather than ``TemporaryDirectory`` on purpose.
+    A ``torch.load`` that fails part-way leaves its file handle open, and
+    Windows refuses to delete an open file (WinError 32), so the context
+    manager's cleanup - not the assertion - would fail the test there.
     """
 
-    @staticmethod
-    def _hostile_checkpoint(path):
-        """A checkpoint whose unpickling would execute ``marker.touch()``."""
-        import pathlib
+    def _workspace(self):
+        import tempfile
+        from pathlib import Path
 
-        marker = path.parent / "code_executed.marker"
+        return Path(tempfile.mkdtemp())
+
+    @staticmethod
+    def _hostile_checkpoint(directory):
+        """Write a checkpoint whose unpickling would create a marker file.
+
+        The payload is a module-level function rather than a closure or a
+        bound method so that it pickles identically on every platform.
+        """
+        marker = directory / "code_executed.marker"
 
         class Payload:
             def __reduce__(self):
-                return (pathlib.Path(str(marker)).touch, ())
+                return (_touch, (str(marker),))
 
-        torch.save({"model_state_dict": {}, "payload": Payload()}, path)
-        return marker
+        torch.save({"model_state_dict": {}, "payload": Payload()}, directory / "hostile.pt")
+        return directory / "hostile.pt", marker
 
     def test_a_checkpoint_that_wants_to_run_code_is_refused(self):
-        import tempfile
-        from pathlib import Path
-
         from sandboxai.bc import _load_checkpoint
 
-        with tempfile.TemporaryDirectory() as tmp:
-            checkpoint = Path(tmp) / "hostile.pt"
-            marker = self._hostile_checkpoint(checkpoint)
+        checkpoint, marker = self._hostile_checkpoint(self._workspace())
+        with self.assertRaises(ValueError) as caught:
+            _load_checkpoint(checkpoint, "cpu")
+        self.assertFalse(
+            marker.exists(),
+            "loading the checkpoint executed its payload - weights_only is not in effect",
+        )
+        self.assertIn("weights_only=True", str(caught.exception))
 
-            with self.assertRaises(ValueError) as caught:
-                _load_checkpoint(checkpoint, "cpu")
-
-            self.assertFalse(
-                marker.exists(),
-                "loading the checkpoint executed its payload - weights_only is not in effect",
-            )
-            self.assertIn("weights_only=True", str(caught.exception))
+    def test_the_payload_really_would_have_run_without_the_guard(self):
+        """Proves the fixture is hostile, not just inert."""
+        checkpoint, marker = self._hostile_checkpoint(self._workspace())
+        self.assertFalse(marker.exists())
+        torch.load(checkpoint, map_location="cpu", weights_only=False)
+        self.assertTrue(
+            marker.exists(),
+            "the test fixture does not actually execute code, so the guard test proves nothing",
+        )
 
     def test_load_bc_checkpoint_refuses_it_too(self):
-        import tempfile
-        from pathlib import Path
-
         from sandboxai.bc import load_bc_checkpoint
 
-        with tempfile.TemporaryDirectory() as tmp:
-            checkpoint = Path(tmp) / "hostile.pt"
-            marker = self._hostile_checkpoint(checkpoint)
-
-            with self.assertRaises(ValueError):
-                load_bc_checkpoint(checkpoint)
-            self.assertFalse(marker.exists())
+        checkpoint, marker = self._hostile_checkpoint(self._workspace())
+        with self.assertRaises(ValueError):
+            load_bc_checkpoint(checkpoint)
+        self.assertFalse(marker.exists())
 
     def test_a_real_checkpoint_still_round_trips(self):
         """The safe loader must not have broken the normal path."""
-        import tempfile
-        from pathlib import Path
-
         from sandboxai.bc import _atomic_torch_save, load_bc_checkpoint
         from sandboxai.contract import OBSERVATION_FIELD_COUNT
 
         model = create_bc_policy(OBSERVATION_FIELD_COUNT)
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "best.pt"
-            _atomic_torch_save(
-                {
-                    "format": "sandboxai.bc.v1",
-                    "observation_dim": model.observation_dim,
-                    "hidden_sizes": list(model.hidden_sizes),
-                    "action_nvec": list(model.action_nvec),
-                    "model_state_dict": model.state_dict(),
-                    "metrics": {"epoch": 1, "train_loss": 0.25},
-                },
-                path,
-            )
-            restored = load_bc_checkpoint(path)
-            self.assertEqual(restored.observation_dim, model.observation_dim)
-            self.assertEqual(tuple(restored.hidden_sizes), tuple(model.hidden_sizes))
+        path = self._workspace() / "best.pt"
+        _atomic_torch_save(
+            {
+                "format": "sandboxai.bc.v1",
+                "observation_dim": model.observation_dim,
+                "hidden_sizes": list(model.hidden_sizes),
+                "action_nvec": list(model.action_nvec),
+                "model_state_dict": model.state_dict(),
+                "metrics": {"epoch": 1, "train_loss": 0.25},
+            },
+            path,
+        )
+        restored = load_bc_checkpoint(path)
+        self.assertEqual(restored.observation_dim, model.observation_dim)
+        self.assertEqual(tuple(restored.hidden_sizes), tuple(model.hidden_sizes))
 
     def test_a_non_checkpoint_file_is_reported_clearly(self):
-        import tempfile
-        from pathlib import Path
-
         from sandboxai.bc import _load_checkpoint
 
-        with tempfile.TemporaryDirectory() as tmp:
-            junk = Path(tmp) / "junk.pt"
-            junk.write_bytes(b"this is not a torch archive")
-            with self.assertRaises(ValueError):
-                _load_checkpoint(junk, "cpu")
+        junk = self._workspace() / "junk.pt"
+        junk.write_bytes(b"this is not a torch archive")
+        with self.assertRaises(ValueError):
+            _load_checkpoint(junk, "cpu")

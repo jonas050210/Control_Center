@@ -168,8 +168,34 @@ jobs:
       - name: Install the package with training + test extras
         run: pip install -e ".[test,training]"
 
+      # tee'd to a file so the failure survives into the job summary below.
+      # Downloading raw Actions logs needs network access to the blob
+      # store, which is not always available to whoever is debugging;
+      # the summary is rendered in the web UI and costs nothing.
       - name: Run the Python suite
-        run: python -m pytest python/tests -q
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest python/tests -q -rf 2>&1 | tee pytest-output.txt
+
+      - name: Publish the failures to the job summary
+        if: failure()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
+
+          path = "pytest-output.txt"
+          raw = (
+              open(path, encoding="utf-8", errors="replace").read()
+              if os.path.exists(path)
+              else "(no output captured)"
+          )
+          print(f"### pytest failed on {os.environ.get('RUNNER_OS', '?')}\n")
+          print("```text")
+          print(raw[-40000:])
+          print("```")
+          PY
 
   coverage:
     name: Coverage (training extras, gate 70%)
