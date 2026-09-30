@@ -386,6 +386,11 @@ def build_parser() -> argparse.ArgumentParser:
     control_center.add_argument("--godot-executable", default="godot")
     control_center.add_argument("--project-path", default="")
 
+    desktop = sub.add_parser(
+        "control-center-desktop",
+        help="open the real Python desktop Control Center backed by SandboxAIAdapter",
+    )
+
     bc = sub.add_parser("bc-train", help="train a PyTorch behavior-cloning policy")
     bc.add_argument("--dataset", required=True)
     bc.add_argument("--epochs", type=int, default=25)
@@ -667,6 +672,9 @@ def main(argv: list[str] | None = None) -> int:
             print("For CUDA, install the matching PyTorch wheel from https://pytorch.org/ before the command above.")
         print("Godot 4.7.2 must be installed separately and available as 'godot' (or pass --godot-executable).")
         return 0
+    if args.command == "control-center-desktop":
+        from .control_center_desktop import main as desktop_main
+        return desktop_main()
     if args.command == "smoke-test":
         res = run_smoke_test(args.device)
         print(json.dumps(res, indent=2, default=str))

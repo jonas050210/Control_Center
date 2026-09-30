@@ -24,4 +24,8 @@ __all__ = [
     "SelfPlayConfig",
     "TrainingConfig",
     "generalization_report",
+    "ProcessManager",
+    "SandboxAIAdapter",
 ]
+
+from .adapter import ProcessManager, SandboxAIAdapter
