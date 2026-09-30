@@ -298,6 +298,8 @@ scripts/
               MapAnalyzer (exploration mode + Control Center payload)
   scenario/   ScenarioLibrary (twelve seedable encounters)
   env/        EnvironmentCore, EnvironmentReset (episode setup),
+              EnvironmentCombat (shot resolution and hit zones),
+              EnvironmentEnemies (per-tick opponent update),
               EnvironmentIntrospection (read-only Control Center views),
               optional EnvironmentView
   agent/      Agent state/view

@@ -1,5 +1,4 @@
 # gdlint:ignore=max-public-methods
-# gdlint:disable=max-file-lines
 # The public surface is intentionally wide: it is the RL interface
 # (reset/step/get_*), plus the seven read-only introspection hooks
 # PerceptionModel probes by name for the Control Center. Splitting the
@@ -27,6 +26,20 @@
 ## beyond what it always made. That is deliberate — it keeps the cheap
 ## levels cheap for massively parallel training and keeps previously
 ## trained policies reproducible.
+##
+## The file is also split into collaborators, all of them stateless static
+## helpers that take this environment as their first argument:
+##
+##   EnvironmentReset          episode setup: spawns, geometry, lighting
+##   EnvironmentCombat         what the agent's shot did
+##   EnvironmentEnemies        what the opponents did, and the sounds of it
+##   EnvironmentIntrospection  the read-only Control Center hooks
+##
+## The seams are real ones - each answers a question the rest of the step
+## does not need the working-out of - and every public entry point keeps a
+## wrapper here, so `step()` still reads as a list of named sub-steps and
+## `has_method()` still finds the introspection hooks on the environment
+## itself.
 class_name EnvironmentCore
 extends RefCounted
 
@@ -37,8 +50,9 @@ const AgentState = preload("res://scripts/agent/agent_state.gd")
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
-const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const EnvironmentCombat = preload("res://scripts/env/environment_combat.gd")
+const EnvironmentEnemies = preload("res://scripts/env/environment_enemies.gd")
 const EnvironmentIntrospection = preload("res://scripts/env/environment_introspection.gd")
 const EnvironmentReset = preload("res://scripts/env/environment_reset.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
@@ -48,7 +62,6 @@ const MapLibrary = preload("res://scripts/world/map_library.gd")
 const NavigationGraph = preload("res://scripts/world/navigation_graph.gd")
 const Observation = preload("res://scripts/core/observation.gd")
 const PerceptionSystem = preload("res://scripts/perception/perception_system.gd")
-const ReactionProfile = preload("res://scripts/perception/reaction_profile.gd")
 const RewardSystem = preload("res://scripts/reward/reward_system.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
@@ -583,310 +596,29 @@ func step(
 
 
 func _target_alignment(target: EnemyState) -> float:
-	if target == null or not target.is_targetable():
-		return 0.0
-	var direction: Vector3 = (target.get_chest_position() - agent.get_eye_position()).normalized()
-	return agent.get_forward_vector().dot(direction)
-
-
-## Resolves the agent's trigger pull.
-##
-## The center-screen crosshair and this function both use
-## AgentState.get_eye_position() + AgentState.get_forward_vector(): the red
-## dot is the exact hitscan ray, not an approximate UI marker. A fired shot
-## is classified into three distinct cases:
-##   * hit: exact ray/sphere hit, with geometry tested along the same ray;
-##   * missed_shot: near-miss at a clear, in-range live target;
-##   * useless_shot: cooldown/no target/out of range/blocked/random spray.
-##
-## That distinction matters for PPO: near misses should be cheap while the
-## policy learns fine aim, but wall shots and trigger spam must be strongly
-## negative.
-func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
-	var result: Dictionary = {
-		"hit": false,
-		"kill": false,
-		"useless_shot": false,
-		"missed_shot": false,
-		"trigger_discipline": false,
-		"headshot": false,
-		"shot_fired": false,
-		"shot_result": "none",
-		"damage_dealt": 0.0,
-		"projectiles_fired": 0,
-		"projectiles_hit": 0,
-		"spread_deg": 0.0,
-	}
-	if not agent.alive:
-		# Still consume the trigger edge so a dead-then-respawned agent does
-		# not inherit a stale "already held" state.
-		agent.weapon.trigger_held = false
-		return result
-
-	var trigger: Dictionary = agent.weapon.pull_trigger(
-		action.shoot, agent.speed_fraction, not agent.on_ground
-	)
-	if not bool(trigger["fired"]):
-		_classify_blocked_trigger(str(trigger["blocked_reason"]), result)
-		return result
-	result["shot_fired"] = true
-	result["spread_deg"] = float(trigger["spread_deg"])
-	if sound_on:
-		sound_bus.emit_sound(SoundBus.Category.SHOT, agent.position, AGENT_SOUND_SOURCE)
-
-	var any_alive: bool = false
-	var plausible_target: bool = false
-	var eye: Vector3 = agent.get_eye_position()
-	var forward: Vector3 = agent.get_forward_vector()
-
-	# First classify whether the trigger pull was aimed near a real target.
-	# This uses the INTENDED aim ray, never the bloom-perturbed one: a shot
-	# is judged on where the agent pointed, not on where the cone happened
-	# to throw the bullet. Pellet profiles likewise use the center ray, so
-	# spread can still land a close hit but cannot turn random spray into a
-	# cheap near-miss reward.
-	for enemy_value in enemies:
-		var enemy: EnemyState = enemy_value
-		if not enemy.is_targetable():
-			continue
-		any_alive = true
-		if _shot_is_near_live_target(eye, forward, enemy):
-			plausible_target = true
-
-	# Bloom deviates the whole pattern; the pellet pattern is then built
-	# around the deviated axis, so a shotgun keeps its shape while moving.
-	var aim_dir: Vector3 = agent.weapon.apply_spread(
-		forward, float(trigger["spread_deg"]), int(trigger["shot_index"])
-	)
-	var head_zones: bool = curriculum.hit_zones_enabled()
-	var impact_sources: Dictionary = {}
-	var projectile_dirs: Array = agent.weapon.projectile_directions(aim_dir)
-	result["projectiles_fired"] = projectile_dirs.size()
-	for projectile_dir_value in projectile_dirs:
-		var projectile_dir: Vector3 = projectile_dir_value
-		var best_hit_enemy: EnemyState = null
-		var best_hit_distance: float = INF
-		var best_zone: String = WeaponState.ZONE_NONE
-		var best_multiplier: float = 1.0
-		for enemy_value in enemies:
-			var enemy: EnemyState = enemy_value
-			if not enemy.is_targetable():
-				continue
-			var zone_hit: Dictionary = agent.weapon.resolve_hit_zone(
-				eye,
-				projectile_dir,
-				enemy.get_chest_position(),
-				enemy.get_head_position(),
-				head_zones
-			)
-			var hit_dist: float = float(zone_hit["distance"])
-			if hit_dist < 0.0 or hit_dist >= best_hit_distance:
-				continue
-			if _weapon_ray_blocked_before(eye, projectile_dir, hit_dist):
-				continue
-			best_hit_distance = hit_dist
-			best_hit_enemy = enemy
-			best_zone = str(zone_hit["zone"])
-			best_multiplier = float(zone_hit["multiplier"])
-		if best_hit_enemy == null:
-			continue
-		var applied: float = best_hit_enemy.take_damage(
-			agent.weapon.projectile_damage_at_distance(best_hit_distance) * best_multiplier
-		)
-		if applied <= 0.0:
-			continue
-		result["hit"] = true
-		if best_zone == WeaponState.ZONE_HEAD:
-			result["headshot"] = true
-		result["projectiles_hit"] = int(result["projectiles_hit"]) + 1
-		result["shot_result"] = "hit"
-		result["damage_dealt"] = float(result["damage_dealt"]) + applied
-		episode.record_damage_dealt(applied)
-		if sound_on and not impact_sources.has(best_hit_enemy.enemy_id):
-			sound_bus.emit_sound(
-				SoundBus.Category.IMPACT, best_hit_enemy.position, best_hit_enemy.enemy_id
-			)
-		impact_sources[best_hit_enemy.enemy_id] = true
-		if not best_hit_enemy.alive:
-			result["kill"] = true
-			episode.record_kill()
-			_on_enemy_died(best_hit_enemy, sound_on)
-
-	# A genuine miss requires a plausible target close to the true aim ray.
-	# Shooting into empty space, through a wall, out of range or nowhere near a
-	# target is useless-shot spam and receives the larger penalty.
-	result["missed_shot"] = any_alive and plausible_target and not bool(result["hit"])
-	result["useless_shot"] = (not any_alive) or (not bool(result["hit"]) and not plausible_target)
-	if bool(result["missed_shot"]):
-		result["shot_result"] = "near_miss"
-	elif bool(result["useless_shot"]):
-		result["shot_result"] = "useless_spam" if any_alive else "useless_no_target"
-	episode.record_shot(bool(result["hit"]), bool(result["headshot"]))
-	# The kick lands AFTER the shot is resolved: recoil disturbs the NEXT
-	# shot, never the one that produced it. That ordering is what makes
-	# recoil something the policy learns to pre-compensate.
-	agent.apply_recoil(float(trigger["recoil_pitch_deg"]), float(trigger["recoil_yaw_deg"]))
-	return result
-
-
-## Turns a `WeaponState.pull_trigger()` refusal into the reward-facing shot
-## classification.
-##
-## Legacy (handling off) keeps the original contract exactly: any trigger
-## pull on a cycling weapon is a `useless_shot` worth PENALTY_USELESS_SHOT.
-##
-## With handling on, holding the trigger on an automatic weapon is CORRECT
-## play, so the cycling/reloading/empty cases move to the much cheaper
-## `trigger_discipline` term. Waste is punished organically instead: bloom
-## widens, the magazine drains and the reload leaves the agent exposed.
-func _classify_blocked_trigger(reason: String, result: Dictionary) -> void:
-	match reason:
-		"released":
-			return
-		"cycling":
-			result["shot_result"] = "cooldown"
-		"reloading":
-			result["shot_result"] = "reloading"
-		"empty":
-			result["shot_result"] = "reload_started"
-		"needs_release":
-			result["shot_result"] = "needs_release"
-		_:
-			result["shot_result"] = "cooldown"
-	if agent.weapon.handling_enabled:
-		result["trigger_discipline"] = true
-	else:
-		result["useless_shot"] = true
+	return EnvironmentCombat.target_alignment(self, target)
 
 
 ## True when the primary target is a valid aim-shaping target: alive, within
 ## weapon range and not geometrically hidden. It intentionally does NOT
-## require the crosshair to already be inside the near-miss cone — this is
+## require the crosshair to already be inside the near-miss cone - this is
 ## what lets the agent receive bounded reward while turning toward a real,
 ## shootable threat, but not while staring at a wall or a stale memory.
 func _target_is_hittable(target: EnemyState) -> bool:
-	if target == null or not target.is_targetable() or not agent.alive:
-		return false
-	var eye: Vector3 = agent.get_eye_position()
-	var chest: Vector3 = target.get_chest_position()
-	if eye.distance_to(chest) > agent.weapon.range_m + agent.weapon.hit_radius:
-		return false
-	if world != null and world.segment_blocked(eye, chest):
-		return false
-	return true
+	return EnvironmentCombat.target_is_hittable(self, target)
 
 
-## Near-miss classifier only. It never changes whether a shot hits; it only
-## decides whether an exact miss was a meaningful aiming attempt or spam.
-func _shot_is_near_live_target(eye: Vector3, forward: Vector3, enemy: EnemyState) -> bool:
-	if enemy == null or not enemy.is_targetable() or forward.is_zero_approx():
-		return false
-	var chest: Vector3 = enemy.get_chest_position()
-	var to_target: Vector3 = chest - eye
-	var distance: float = to_target.length()
-	if distance <= 0.0001 or distance > agent.weapon.range_m + agent.weapon.hit_radius:
-		return false
-	var dir: Vector3 = forward.normalized()
-	var target_dir: Vector3 = to_target / distance
-	var angle_deg: float = rad_to_deg(acos(clampf(dir.dot(target_dir), -1.0, 1.0)))
-	if angle_deg > SandboxConfig.WEAPON_NEAR_MISS_CONE_DEG:
-		return false
-	return not _weapon_ray_blocked_before(eye, dir, minf(distance, agent.weapon.range_m))
-
-
-## Whether sight-blocking geometry intersects the exact weapon ray before a
-## target distance. This is the same occlusion test used by hit resolution.
-func _weapon_ray_blocked_before(eye: Vector3, forward: Vector3, distance: float) -> bool:
-	if world == null or distance <= 0.0:
-		return false
-	var wall_distance: float = world.ray_hit_distance(
-		eye, forward, minf(distance, agent.weapon.range_m)
-	)
-	return wall_distance >= 0.0 and wall_distance + 0.001 < distance
-
-
-## Death bookkeeping. A corpse must stop being a target, stop being
-## perceived and stop being remembered by anyone, immediately.
-func _on_enemy_died(enemy: EnemyState, sound_on: bool) -> void:
-	enemy.mark_dead(episode.step_count * SandboxConfig.SIMULATION_DT)
-	if sound_on:
-		sound_bus.emit_sound(SoundBus.Category.DEATH, enemy.death_position, enemy.enemy_id)
-	perception.forget(enemy.enemy_id)
-	if last_damage_source == enemy.enemy_id:
-		last_damage_source = -1
+## Resolves the agent's trigger pull into the reward-facing shot record.
+## See `EnvironmentCombat` for the hit/near-miss/useless-shot rules.
+func _resolve_agent_shot(action: Action, sound_on: bool) -> Dictionary:
+	return EnvironmentCombat.resolve_agent_shot(self, action, sound_on)
 
 
 ## Advances every enemy and returns the total damage applied to the agent.
 func _update_enemies(dt: float, sound_on: bool) -> float:
-	var damage_taken: float = 0.0
-	var tactical: bool = curriculum.tactical_enemies_enabled()
-	# The brain context is a REUSED member dictionary rather than a fresh
-	# literal per step: with 64 parallel environments at 60 Hz this would
-	# otherwise allocate ~230k short-lived dictionaries per simulated
-	# second, all of which the GC then has to sweep.
-	var context: Dictionary = _brain_context
-	if tactical:
-		context["world"] = world
-		# Preserve the navigation layer's exception-path contract: baking the
-		# A* grid for every tactical episode up front made the first step pay
-		# the full graph cost even when every enemy moved directly forever.
-		# A null graph still lets NavigationAgent accumulate stuck_time; the
-		# per-enemy loop below bakes once only after that evidence exists.
-		context["navigation"] = navigation
-		context["lighting"] = lighting
-		context["sound_bus"] = sound_bus if sound_on else null
-		context["rng"] = rng
-		context["dt"] = dt
-		context["arena_half_extent"] = arena_half_extent
-		context["agent_position"] = agent.position
-		context["agent_eye"] = agent.get_eye_position()
-		context["agent_height"] = agent.height
-		context["agent_alive"] = agent.alive
-		context["allow_movement"] = curriculum.enemy_movement_enabled()
-		context["allow_attack"] = curriculum.enemy_attacks_enabled()
-		context["allow_ranged"] = curriculum.ranged_enemies_enabled()
-		context["allow_strafe"] = curriculum.strafing_enabled()
-		context["allow_jump"] = curriculum.vertical_enabled()
-
-	for enemy_value in enemies:
-		var enemy: EnemyState = enemy_value
-		if not enemy.is_targetable():
-			continue
-		var damage: float = 0.0
-		if tactical:
-			# NavigationAgent increments stuck_time even with a null graph. On
-			# the following tick this supplies the shared graph and planning can
-			# begin. Once baked, later enemies reuse the same graph.
-			if navigation == null and enemy.navigation.stuck_time >= SandboxConfig.NAV_STUCK_TIME:
-				context["navigation"] = _ensure_navigation()
-			var brain_events: Dictionary = EnemyBrain.update(enemy, context)
-			damage = float(brain_events["damage"])
-			if sound_on:
-				if bool(brain_events["shot"]):
-					sound_bus.emit_sound(SoundBus.Category.SHOT, enemy.position, enemy.enemy_id)
-				_emit_motion_sounds(brain_events, enemy.position, enemy.enemy_id)
-		else:
-			damage = enemy.update_ai(
-				dt,
-				agent.position,
-				arena_half_extent,
-				curriculum.enemy_movement_enabled(),
-				curriculum.enemy_attacks_enabled(),
-				curriculum.strafing_enabled()
-			)
-		if damage > 0.0:
-			var applied: float = agent.take_damage(damage)
-			if applied > 0.0:
-				damage_taken += applied
-				last_damage_source = enemy.enemy_id
-				if sound_on:
-					sound_bus.emit_sound(
-						SoundBus.Category.IMPACT, agent.position, AGENT_SOUND_SOURCE
-					)
-	return damage_taken
+	return EnvironmentEnemies.update_enemies(self, dt, sound_on)
 
 
-## Turns a CharacterMotor/EnemyBrain motion event dictionary into sounds.
 ## Runs target selection over this tick's beliefs.
 ##
 ## `unreachable` is only populated when the navigation graph has ALREADY
@@ -942,13 +674,9 @@ func _update_exploration(dt: float, damage_taken: float) -> Dictionary:
 	return exploration.update(dt, _exploration_context)
 
 
+## Turns a CharacterMotor/EnemyBrain motion event dictionary into sounds.
 func _emit_motion_sounds(motion: Dictionary, position: Vector3, source_id: int) -> void:
-	if bool(motion.get("footstep", false)):
-		sound_bus.emit_sound(SoundBus.Category.FOOTSTEP, position, source_id)
-	if bool(motion.get("jumped", false)):
-		sound_bus.emit_sound(SoundBus.Category.JUMP, position, source_id)
-	if bool(motion.get("landed", false)):
-		sound_bus.emit_sound(SoundBus.Category.LAND, position, source_id)
+	EnvironmentEnemies.emit_motion_sounds(self, motion, position, source_id)
 
 
 ## Assembles the observation, feeding the perception context only when the

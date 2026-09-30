@@ -91,6 +91,17 @@ records what changed and why.
   dispatcher, `RuntimeValidator.validate`, the evaluation battery, the
   plan scheduler, dataset validation, replay parsing, run inspection,
   adapter checking, BC training and the GDScript analyzer.
+- `scripts/env/environment_core.gd` no longer suppresses gdlint's
+  file-length rule. Two cohesive blocks moved out into the same kind of
+  stateless static helper the file already used for `EnvironmentReset`
+  and `EnvironmentIntrospection`: `EnvironmentCombat` (the agent's shot -
+  hitscan, hit zones, the hit / near-miss / useless-shot classification,
+  occlusion and the death bookkeeping) and `EnvironmentEnemies` (the
+  per-tick opponent update and its motion sounds). Every function body
+  moved unchanged, `EnvironmentCore` keeps a wrapper for each entry
+  point so `step()` still reads as a sequence of named sub-steps, and
+  the file went from 1235 lines to 963. No `.gd` file suppresses
+  `max-file-lines` any more, so the limit is a limit again.
 - Every `.gd` file is now `gdformat`-clean (123 of 153 files were
   reformatted), and both `gdformat --check` and `gdlint` gate CI.
 - `AUDIT_REPORT.md` moved to `docs/AUDIT_REPORT.md`, where the rest of
