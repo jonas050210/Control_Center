@@ -48,16 +48,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # Windows CI previously found 10 pre-existing, Windows-only test-fixture
     # bugs (see git history around commits 86cdff8/386c341 for the full
     # diagnosis of each). All ten are fixed and this leg has run green on
     # windows-latest since; continue-on-error was removed once that was
     # confirmed so a genuine future regression here blocks merges like any
-    # other leg. macos-latest is new and unverified until its first green
-    # run, so it stays non-blocking until then.
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
+    # other leg. No macOS leg: the project's two real target environments
+    # are native Windows and Linux/WSL (a Windows-desktop project folder
+    # opened from Ubuntu/WSL is a real Linux userspace - is_wsl() sees a
+    # genuine POSIX host - not native Windows), and macOS is explicitly out
+    # of scope.
 
     steps:
       - uses: actions/checkout@v4

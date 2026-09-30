@@ -11,8 +11,11 @@ records what changed and why.
 ### Added
 - Python CI workflow (`.github/workflows/python-tests.yml`): ruff lint,
   a numpy-only core-tests job, and a full-tests job (training extras) run
-  on a `ubuntu-latest` / `windows-latest` / `macos-latest` matrix. The
-  Python suite previously only ran on Linux via `godot-tests.yml`.
+  on a `ubuntu-latest` / `windows-latest` matrix - the project's two real
+  target environments (native Windows, and Linux/WSL, which is a genuine
+  POSIX host even when the project folder lives on a Windows desktop).
+  macOS is explicitly out of scope. The Python suite previously only ran
+  on Linux via `godot-tests.yml`.
 - `requirements-lock-linux-py311-cpu.txt`: a real, generated-and-verified
   pip-freeze snapshot of the exact dependency versions this repo's Linux/
   CPU CI resolves to. Not a cross-platform lock (torch/CUDA wheels differ
