@@ -146,21 +146,28 @@ def godot_snapshot(config: Any, probe: bool = True) -> dict[str, Any]:
     that ran is worth one subprocess per run. ``probe=False`` skips the
     launch for callers that only want the configured path.
     """
-    from .config import find_godot_executable
+    from .config import _resolve_executable, find_godot_executable
 
     raw = str(getattr(config, "godot_executable", "godot") or "godot")
     snapshot: dict[str, Any] = {"configured": raw, "resolved": raw, "version": None}
-    try:
-        snapshot["resolved"] = find_godot_executable(raw)
-    except Exception:
-        pass
+    if raw and raw != "godot":
+        resolved = _resolve_executable(raw)
+        if resolved:
+            snapshot["resolved"] = resolved
+    else:
+        try:
+            detected = find_godot_executable(raw)
+            if _resolve_executable(detected):
+                snapshot["resolved"] = detected
+        except Exception:
+            pass
     if not probe:
         return snapshot
     try:
         from .runtime_validation import RuntimeValidator
 
-        validator = RuntimeValidator(godot_executable=raw)
-        if validator.is_godot_available():
+        if _resolve_executable(snapshot["resolved"]):
+            validator = RuntimeValidator(godot_executable=snapshot["resolved"])
             snapshot["version"] = validator.probe_version(snapshot["resolved"])
     except Exception:
         snapshot["version"] = None

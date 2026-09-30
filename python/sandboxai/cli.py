@@ -201,6 +201,7 @@ def build_record_command(
     """
     executable = find_godot_executable(godot_executable)
     project = _resolve_project_path(project_path)
+    output_path = Path(normalize_host_path(output)).expanduser().resolve()
     interop = WindowsInterop(executable)
     return [
         executable,
@@ -210,7 +211,7 @@ def build_record_command(
         "res://scripts/recording/record_demo.gd",
         "--",
         "--output",
-        interop.windows_path(Path(output).expanduser().resolve()),
+        interop.windows_path(output_path),
         "--duration",
         str(duration),
         "--enemy-count",
