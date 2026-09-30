@@ -33,6 +33,7 @@ import time
 import uuid
 from typing import Any, Iterable
 
+from .artifact_repository import ArtifactRepository
 from .benchmark import summarize_scaling
 from .config import TrainingConfig, find_godot_executable
 from .run_inspection import (
@@ -437,6 +438,7 @@ class SandboxAIAdapter:
             else (self.project_root / expanded_output_root).resolve()
         )
         self.processes = ProcessManager()
+        self.artifacts = ArtifactRepository(self.output_root)
         self._series_cache: "OrderedDict[str, _RunSeries]" = OrderedDict()
         self._series_cache_limit = 6
 
@@ -500,55 +502,21 @@ class SandboxAIAdapter:
         exist, unlike calling ``inspect_runs`` with a small ``limit``
         (which reports the *sliced* count, not the true total).
         """
-        run_dirs = discover_run_directories(self.output_root)
-        latest_run = inspect_run(run_dirs[-1], event_limit=5) if run_dirs else None
-        return {
-            "output_root": str(self.output_root),
-            "run_count": len(run_dirs),
-            "latest_run": latest_run,
-            "active_processes": self.list_processes(active_only=True),
-        }
+        return self.artifacts.dashboard(lambda: self.list_processes(active_only=True))
 
     def list_runs(self, limit: int = 100) -> dict[str, Any]:
-        return inspect_runs(self.output_root, limit=limit, event_limit=0)
+        return self.artifacts.list_runs(limit)
 
     def inspect_run(self, run: str | Path, event_limit: int = 50) -> dict[str, Any]:
-        return inspect_run(run, event_limit=event_limit)
+        return self.artifacts.inspect_run(run, event_limit)
 
     def list_checkpoints(self, run: str | Path) -> dict[str, Any]:
         report = self.inspect_run(run)
         return report.get("checkpoints", {}) if isinstance(report, dict) else {}
 
     def discover_checkpoints(self, limit: int = 300) -> list[dict[str, Any]]:
-        """Flat, newest-first checkpoint inventory across every run.
-
-        Powers the Evaluation page's checkpoint picker. Reuses
-        ``run_inspection``'s per-run checkpoint inventory instead of
-        re-walking run directories with new logic.
-        """
-        entries: list[dict[str, Any]] = []
-        for run_dir in discover_run_directories(self.output_root):
-            report = inspect_run(run_dir)
-            checkpoints = report.get("checkpoints", {})
-            run_id = report.get("run_id") or run_dir.name
-            directory = Path(checkpoints.get("directory", run_dir / "checkpoints"))
-            for item in checkpoints.get("entries", []):
-                name = item.get("name", "")
-                kind = {"latest.zip": "latest", "best_eval.zip": "best"}.get(name, "checkpoint")
-                entries.append({
-                    "run_id": run_id, "run_dir": str(run_dir), "kind": kind,
-                    "path": str(directory / name), "bytes": item.get("bytes"),
-                    "modified_utc": item.get("modified_utc"),
-                })
-            final_path = run_dir / "final.zip"
-            if final_path.is_file():
-                entries.append({
-                    "run_id": run_id, "run_dir": str(run_dir), "kind": "final",
-                    "path": str(final_path), "bytes": final_path.stat().st_size,
-                    "modified_utc": _modified_utc(final_path),
-                })
-        entries.sort(key=lambda item: item.get("modified_utc") or "", reverse=True)
-        return entries[:limit]
+        """Newest-first checkpoint inventory from the central artifact repository."""
+        return self.artifacts.checkpoints(limit)
 
     def run_metrics(self, run: str | Path) -> dict[str, Any]:
         report = self.inspect_run(run, event_limit=100)
