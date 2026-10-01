@@ -455,7 +455,7 @@ if gym is not None:
     class GodotGymEnv(gym.Env):  # type: ignore[misc]
         """Single-environment Gymnasium wrapper, useful for evaluation."""
 
-        metadata = {"render_modes": []}
+        metadata: dict[str, list[str]] = {"render_modes": []}
 
         def __init__(self, **kwargs: Any) -> None:
             kwargs["environment_count"] = 1
