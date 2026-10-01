@@ -859,6 +859,8 @@ class EvaluationPage(Page):
 
         self._checkpoint_paths: dict[str, str] = {}
         self._eval_paths: dict[str, str] = {}
+        self._selected_evaluation_paths: tuple[str, ...] = ()
+        self._evaluation_detail_generation = 0
         self.selected_checkpoint: str | None = None
         self.checkpoint_tree.bind("<<TreeviewSelect>>", self._on_checkpoint_select)
         self.process_id: str | None = None
@@ -953,14 +955,17 @@ class EvaluationPage(Page):
         if error is not None or entries is None:
             self.report_error("Evaluation list refresh failed", error or RuntimeError("unknown"))
             return
+        selected = set(self._selected_evaluation_paths)
+        restored_paths: list[str] = []
         self.eval_tree.delete(*self.eval_tree.get_children())
         self._eval_paths.clear()
         for entry in entries:
+            path = str(entry["path"])
             item_id = self.eval_tree.insert(
                 "",
                 "end",
                 values=(
-                    entry["path"],
+                    path,
                     vm.format_number(entry.get("timesteps")),
                     vm.format_number(entry.get("episodes")),
                     vm.format_fraction_as_percent(entry.get("win_rate")),
@@ -968,20 +973,54 @@ class EvaluationPage(Page):
                     vm.format_number(entry.get("mean_episode_reward"), 3),
                 ),
             )
-            self._eval_paths[item_id] = entry["path"]
+            self._eval_paths[item_id] = path
+            if path in selected:
+                self.eval_tree.selection_add(item_id)
+                restored_paths.append(path)
+        restored = tuple(restored_paths)
+        if restored != self._selected_evaluation_paths:
+            self._selected_evaluation_paths = restored
+            self._evaluation_detail_generation += 1
+            if not restored:
+                self._clear_evaluation_detail()
 
     def _on_eval_select(self, _event: object) -> None:
         selection = self.eval_tree.selection()
-        paths = [self._eval_paths[item_id] for item_id in selection if item_id in self._eval_paths]
+        paths = tuple(
+            self._eval_paths[item_id] for item_id in selection if item_id in self._eval_paths
+        )
+        if paths == self._selected_evaluation_paths:
+            return
+        self._selected_evaluation_paths = paths
+        self._evaluation_detail_generation += 1
+        generation = self._evaluation_detail_generation
         if not paths:
+            self._clear_evaluation_detail()
             return
         self.app.background.submit(
-            lambda: [self.adapter.evaluation_detail(path) for path in paths], self._on_details
+            lambda: [self.adapter.evaluation_detail(path) for path in paths],
+            lambda details, error: self._on_details(paths, generation, details, error),
         )
 
+    def _clear_evaluation_detail(self) -> None:
+        self.detail_text.configure(state="normal")
+        self.detail_text.delete("1.0", "end")
+        self.detail_text.configure(state="disabled")
+
     def _on_details(
-        self, details: list[dict[str, Any]] | None, error: BaseException | None
+        self,
+        paths: tuple[str, ...],
+        generation: int,
+        details: list[dict[str, Any]] | None,
+        error: BaseException | None,
     ) -> None:
+        # A slow comparison from an earlier multi-selection must never
+        # overwrite the report for the selection the operator currently sees.
+        if (
+            paths != self._selected_evaluation_paths
+            or generation != self._evaluation_detail_generation
+        ):
+            return
         if error is not None or details is None:
             self.report_error("Evaluation detail failed", error or RuntimeError("unknown"))
             return
@@ -1093,6 +1132,7 @@ class RunsPage(Page):
 
         self._row_to_dir: dict[str, str] = {}
         self._selected_run_dir: str | None = None
+        self._run_detail_generation = 0
         self._pending_run_selection: str | None = None
 
     def select_run(self, run_dir: str) -> None:
@@ -1126,6 +1166,7 @@ class RunsPage(Page):
             return
         rows = vm.runs_table_rows(result)
         selected = self._selected_run_dir
+        selected_still_present = False
         self.tree.delete(*self.tree.get_children())
         self._row_to_dir.clear()
         for row in rows:
@@ -1149,7 +1190,10 @@ class RunsPage(Page):
             )
             self._row_to_dir[item_id] = row["run_dir"]
             if row["run_dir"] == selected:
+                selected_still_present = True
                 self.tree.selection_set(item_id)
+        if selected is not None and not selected_still_present:
+            self._clear_run_selection()
         if self._pending_run_selection is not None and self._select_existing_row(
             self._pending_run_selection
         ):
@@ -1158,14 +1202,42 @@ class RunsPage(Page):
     def _on_select(self, _event: object) -> None:
         selection = self.tree.selection()
         if not selection:
+            self._clear_run_selection()
             return
         run_dir = self._row_to_dir.get(selection[0])
+        if run_dir is None:
+            self._clear_run_selection()
+            return
+        if run_dir == self._selected_run_dir:
+            return
         self._selected_run_dir = run_dir
-        if run_dir:
-            self.app.background.submit(lambda: self.adapter.inspect_run(run_dir), self._on_detail)
+        self._run_detail_generation += 1
+        generation = self._run_detail_generation
+        self.app.background.submit(
+            lambda: self.adapter.inspect_run(run_dir),
+            lambda report, error: self._on_detail(run_dir, generation, report, error),
+        )
 
-    def _on_detail(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or report is None:
+    def _clear_run_selection(self) -> None:
+        self._selected_run_dir = None
+        self._run_detail_generation += 1
+        self.detail_text.configure(state="normal")
+        self.detail_text.delete("1.0", "end")
+        self.detail_text.configure(state="disabled")
+
+    def _on_detail(
+        self,
+        run_dir: str,
+        generation: int,
+        report: dict[str, Any] | None,
+        error: BaseException | None,
+    ) -> None:
+        if (
+            run_dir != self._selected_run_dir
+            or generation != self._run_detail_generation
+            or error is not None
+            or report is None
+        ):
             return
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")

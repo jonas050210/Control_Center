@@ -164,7 +164,9 @@ dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
   captures a process selection and its incremental log cursors per request,
   coalesces a slow poll, and discards a late result for an old selection; a
   scoped Stop/Force Stop request captures the clicked process id before the
-  worker starts.
+  worker starts. Evaluation comparisons and Runs/Checkpoints detail panes use
+  the same generation guard, so an older disk read cannot replace the report
+  for a newer selection.
 * `LineChart` is a small dependency-free Tk Canvas widget; it redraws from
   the adapter's already-bounded series, decimated again to the canvas width
   (`control_center_viewmodel.downsample_series`), so render cost does not

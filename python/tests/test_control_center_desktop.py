@@ -239,6 +239,22 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.update()
         self.assertGreater(panel.text.yview()[1], 0.98)
 
+    def test_evaluation_and_run_details_reject_late_selections(self):
+        """Slow disk reads must not overwrite the newer selected detail pane."""
+        self.app.show_page("Evaluations")
+        evaluation = self.app.pages["Evaluations"]
+        evaluation._selected_evaluation_paths = ("evaluation-new.json",)
+        evaluation._evaluation_detail_generation = 4
+        evaluation._on_details(("evaluation-old.json",), 3, [{}], None)
+        self.assertEqual(evaluation.detail_text.get("1.0", "end-1c"), "")
+
+        self.app.show_page("Runs / Checkpoints")
+        runs = self.app.pages["Runs / Checkpoints"]
+        runs._selected_run_dir = "run-new"
+        runs._run_detail_generation = 4
+        runs._on_detail("run-old", 3, {}, None)
+        self.assertEqual(runs.detail_text.get("1.0", "end-1c"), "")
+
     def test_agents_page_rejects_late_logs_and_binds_stop_to_the_clicked_process(self):
         """Background output/commands must stay attached to the selected agent.
 
