@@ -477,19 +477,23 @@ class LogPanel(ttk.Frame):
     def _on_manual_scroll(self, _event: object) -> None:
         self._user_scrolled_up = True
 
-    def _on_text_scroll(self, first: str, last: str) -> None:
+    def _on_text_scroll(self, first: float | str, last: float | str) -> None:
         """Synchronize the native scrollbar and restore follow-at-bottom.
 
-        A manual wheel event must pause live-follow while an operator reads
-        historical output, but reaching the newest line again should make
-        the already-enabled Auto-scroll checkbox useful immediately.
+        Tk may invoke a registered callback with Tcl strings while its type
+        stubs describe numeric fractions, so both forms are accepted here.
+        A manual wheel event pauses live-follow while an operator reads
+        historical output; reaching the newest line makes the already-enabled
+        Auto-scroll checkbox useful immediately.
         """
-        self._yscroll.set(first, last)
         try:
-            if float(last) >= 0.999:
-                self._user_scrolled_up = False
-        except ValueError:  # pragma: no cover - Tk always sends float strings
-            pass
+            first_fraction = float(first)
+            last_fraction = float(last)
+        except ValueError:  # pragma: no cover - Tk sends numeric fractions
+            return
+        self._yscroll.set(first_fraction, last_fraction)
+        if last_fraction >= 0.999:
+            self._user_scrolled_up = False
 
     def _on_autoscroll_toggled(self) -> None:
         if self._autoscroll.get():

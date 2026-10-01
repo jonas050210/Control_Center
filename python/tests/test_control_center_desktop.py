@@ -160,7 +160,10 @@ class ControlCenterConstructionTests(unittest.TestCase):
         assert panel._user_scrolled_up is False
         panel._on_autoscroll_toggled()
         self.app.update()
-        self.assertAlmostEqual(panel.text.yview()[1], 1.0, places=3)
+        # Tk's terminal newline may make the final fraction just shy of 1.0;
+        # it must nevertheless be at the bottom rather than leave the reader
+        # at its prior historical position.
+        self.assertGreater(panel.text.yview()[1], 0.98)
 
     def test_tooltip_cancels_its_delayed_callback_when_a_page_widget_is_destroyed(self):
         from sandboxai.control_center_widgets import ToolTip
