@@ -165,6 +165,55 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # at its prior historical position.
         self.assertGreater(panel.text.yview()[1], 0.98)
 
+    def test_log_scrollbar_and_keyboard_reading_pause_follow_without_hiding_wide_output(self):
+        """The log must not snap a reader away from a traceback they are inspecting.
+
+        Wheel events already had a regression test, but actual desktop readers
+        also drag the visible scrollbar or use Home/Page Up. This pins both
+        paths and verifies the horizontal scrollbar that makes unwrapped
+        command lines/tracebacks reachable.
+        """
+        from sandboxai.control_center_widgets import LogPanel
+
+        panel = LogPanel(self.app, max_lines=300)
+        panel.pack(fill="both", expand=True)
+        self.app.update()
+        panel.apply_log(
+            {
+                "stdout": [
+                    f"line {index}: " + ("very-wide-traceback-segment " * 24)
+                    for index in range(120)
+                ]
+            }
+        )
+        self.app.update()
+        self.assertLess(
+            panel.text.xview()[1],
+            1.0,
+            "unwrapped process output exposes a horizontal scrollbar instead of clipping",
+        )
+
+        # This is the command path used by scrollbar arrows/track dragging,
+        # not a synthetic wheel event.
+        panel._scroll_text_y("moveto", "0.0")
+        self.assertTrue(panel._user_scrolled_up)
+        panel.apply_log({"stdout": ["a newer line must not steal the reading position"]})
+        self.app.update()
+        self.assertLess(
+            panel.text.yview()[1],
+            0.98,
+            "new process output preserves a scrollbar reader's historical position",
+        )
+
+        # Keyboard navigation uses the same delayed follow-state check. A
+        # reader returning to the end resumes live-follow on the next update.
+        panel._on_manual_scroll()
+        panel._scroll_text_y("moveto", "1.0")
+        self.assertFalse(panel._user_scrolled_up)
+        panel.apply_log({"stdout": ["follow resumes at the newest line"]})
+        self.app.update()
+        self.assertGreater(panel.text.yview()[1], 0.98)
+
     def test_tooltip_cancels_its_delayed_callback_when_a_page_widget_is_destroyed(self):
         from sandboxai.control_center_widgets import ToolTip
 

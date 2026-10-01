@@ -188,6 +188,12 @@ records what changed and why.
   one off the Tk thread reaches into Tcl from a thread that does not own
   it. `BackgroundRunner` now suspends automatic collection while it is
   alive and collects from its Tk-thread poll instead.
+- The Tk process-log reader no longer steals focus from an operator reading
+  older output after they drag its scrollbar or navigate with the keyboard;
+  either path now pauses live follow until the viewport returns to the newest
+  line. It also exposes the horizontal scrollbar required to inspect long
+  commands, file paths and tracebacks while keeping the deliberately
+  unwrapped log text readable.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

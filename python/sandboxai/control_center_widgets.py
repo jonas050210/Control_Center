@@ -491,18 +491,55 @@ class LogPanel(ttk.Frame):
             insertbackground=COLOR_TEXT,
             font=("Consolas", 9),
         )
-        self._yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=self._on_text_scroll)
-        self.text.pack(side="left", fill="both", expand=True)
-        self._yscroll.pack(side="right", fill="y")
+        # Process output routinely contains wide commands, paths and tracebacks.
+        # With ``wrap=\"none\"`` a horizontal scrollbar is therefore a
+        # readability requirement, not a decorative extra. Grid lets both
+        # native scrollbars share the same data surface without clipping each
+        # other on compact windows.
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        self._yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self._scroll_text_y)
+        self._xscroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.text.xview)
+        self.text.configure(yscrollcommand=self._on_text_scroll, xscrollcommand=self._xscroll.set)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        self._yscroll.grid(row=0, column=1, sticky="ns")
+        self._xscroll.grid(row=1, column=0, sticky="ew")
         self.text.tag_configure("stderr", foreground=COLOR_ERROR)
         self.text.tag_configure("meta", foreground=COLOR_MUTED)
-        self.text.bind("<MouseWheel>", self._on_manual_scroll)
-        self.text.bind("<Button-4>", self._on_manual_scroll)
-        self.text.bind("<Button-5>", self._on_manual_scroll)
+        # Wheel input covers the common pointer path, while the wrapped
+        # scrollbar command and navigation keys cover track dragging,
+        # scrollbar arrows and keyboard readers. Previously only wheel
+        # events paused follow-mode, so dragging the visible scrollbar up
+        # could still snap a reader back to the newest log line on refresh.
+        self.text.bind("<MouseWheel>", self._on_manual_scroll, add="+")
+        self.text.bind("<Button-4>", self._on_manual_scroll, add="+")
+        self.text.bind("<Button-5>", self._on_manual_scroll, add="+")
+        for sequence in ("<Prior>", "<Next>", "<Home>", "<End>", "<Up>", "<Down>"):
+            self.text.bind(sequence, self._on_manual_scroll, add="+")
 
-    def _on_manual_scroll(self, _event: object) -> None:
+    def _on_manual_scroll(self, _event: object = None) -> None:
         self._user_scrolled_up = True
+        # Instance bindings run before Tk's class binding moves the viewport.
+        # Re-check after that binding so a downward wheel/key action at the
+        # newest line immediately resumes follow mode instead of leaving it
+        # silently paused.
+        with contextlib.suppress(tk.TclError):
+            self.text.after_idle(self._sync_follow_state)
+
+    def _scroll_text_y(self, *args: str) -> None:
+        """Forward scrollbar input and preserve an operator's reading position."""
+        self._user_scrolled_up = True
+        self.text.yview(*args)
+        self._sync_follow_state()
+
+    def _sync_follow_state(self) -> None:
+        """Resume live follow only when the viewport is genuinely at the end."""
+        try:
+            _first, last = self.text.yview()
+        except tk.TclError:
+            return
+        if last >= 0.999:
+            self._user_scrolled_up = False
 
     def _on_text_scroll(self, first: float | str, last: float | str) -> None:
         """Synchronize the native scrollbar and restore follow-at-bottom.
