@@ -470,18 +470,40 @@ class AgentsPage(Page):
 
         self._row_to_process: dict[str, str] = {}
         self._selected_process_id: str | None = None
+        # The process id alone is not sufficient: A -> B -> A can happen
+        # while A's first disk read is still in flight. The generation keeps
+        # that old A result from filling a freshly reset A log view.
+        self._log_selection_generation = 0
+        self._log_in_flight: tuple[str, int] | None = None
 
     def refresh(self) -> None:
         self.app.background.submit(self.adapter.list_processes, self._on_processes)
-        if self._selected_process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_log(
-                    self._selected_process_id,
-                    self.log_panel.stdout_after,
-                    self.log_panel.stderr_after,
-                ),
-                self._on_log,
-            )
+        process_id = self._selected_process_id
+        if process_id:
+            self._request_log(process_id)
+
+    def _request_log(self, process_id: str) -> None:
+        """Fetch one selected process log without duplicate or stale updates.
+
+        Process metadata and output are read on separate worker calls. An
+        operator can click a second agent while the first call is still
+        reading its files, so both the id and the incremental cursors must be
+        captured at submission time. A per-selection generation distinguishes
+        even A -> B -> A, and the in-flight token coalesces slow polls: a
+        process-log read must not queue up behind itself and replay the same
+        output after the panel has already caught up.
+        """
+        generation = self._log_selection_generation
+        token = (process_id, generation)
+        if token == self._log_in_flight:
+            return
+        self._log_in_flight = token
+        stdout_after = self.log_panel.stdout_after
+        stderr_after = self.log_panel.stderr_after
+        self.app.background.submit(
+            lambda: self.adapter.process_log(process_id, stdout_after, stderr_after),
+            lambda log, error: self._on_log(process_id, generation, log, error),
+        )
 
     def _on_processes(
         self, processes: list[dict[str, Any]] | None, error: BaseException | None
@@ -491,6 +513,7 @@ class AgentsPage(Page):
             return
         rows = vm.process_table_rows(processes)
         selected = self._selected_process_id
+        selected_still_present = False
         self.tree.delete(*self.tree.get_children())
         self._row_to_process.clear()
         for row in rows:
@@ -513,42 +536,70 @@ class AgentsPage(Page):
             )
             self._row_to_process[item_id] = row["id"]
             if row["id"] == selected:
+                selected_still_present = True
                 self.tree.selection_set(item_id)
+        if selected is not None and not selected_still_present:
+            # The process inventory can legitimately change between polling
+            # ticks (for example after a run is cleared). Do not leave its
+            # old output on screen with active lifecycle buttons.
+            self._clear_selection()
 
     def _on_select(self, _event: object) -> None:
         selection = self.tree.selection()
         if not selection:
-            self._selected_process_id = None
-            self.stop_button.configure(state="disabled")
-            self.force_stop_button.configure(state="disabled")
+            self._clear_selection()
             return
         process_id = self._row_to_process.get(selection[0])
+        if process_id is None:
+            self._clear_selection()
+            return
         if process_id != self._selected_process_id:
             self._selected_process_id = process_id
+            self._log_selection_generation += 1
             self.log_panel.reset_cursor()
         self.stop_button.configure(state="normal")
         self.force_stop_button.configure(state="normal")
-        if process_id:
-            self.app.background.submit(lambda: self.adapter.process_log(process_id), self._on_log)
+        self._request_log(process_id)
 
-    def _on_log(self, log: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or log is None:
+    def _clear_selection(self) -> None:
+        self._selected_process_id = None
+        self._log_selection_generation += 1
+        self.stop_button.configure(state="disabled")
+        self.force_stop_button.configure(state="disabled")
+        self.log_panel.reset_cursor()
+
+    def _on_log(
+        self,
+        process_id: str,
+        generation: int,
+        log: dict[str, Any] | None,
+        error: BaseException | None,
+    ) -> None:
+        token = (process_id, generation)
+        if token == self._log_in_flight:
+            self._log_in_flight = None
+        # See _request_log: a late result belongs to the process/selection it
+        # was read from, not necessarily the one the operator is viewing now.
+        if (
+            process_id != self._selected_process_id
+            or generation != self._log_selection_generation
+            or error is not None
+            or log is None
+        ):
             return
         self.log_panel.apply_log(log)
 
     def _stop(self) -> None:
-        if self._selected_process_id:
-            self.app.background.submit(
-                lambda: self.adapter.cancel(self._selected_process_id), lambda *_: None
-            )
+        process_id = self._selected_process_id
+        if process_id:
+            self.app.background.submit(lambda: self.adapter.cancel(process_id), lambda *_: None)
 
     def _force_stop(self) -> None:
-        if self._selected_process_id and messagebox.askyesno(
+        process_id = self._selected_process_id
+        if process_id and messagebox.askyesno(
             "Force stop", "Skip cooperative shutdown and kill this process now?"
         ):
-            self.app.background.submit(
-                lambda: self.adapter.force_stop(self._selected_process_id), lambda *_: None
-            )
+            self.app.background.submit(lambda: self.adapter.force_stop(process_id), lambda *_: None)
 
 
 class BenchmarkPage(Page):

@@ -193,7 +193,11 @@ records what changed and why.
   either path now pauses live follow until the viewport returns to the newest
   line. It also exposes the horizontal scrollbar required to inspect long
   commands, file paths and tracebacks while keeping the deliberately
-  unwrapped log text readable.
+  unwrapped log text readable. Agent-log reads now capture the selected
+  process and incremental cursors at submission time, coalesce a slow poll,
+  discard a late result for a prior selection (including A → B → A), clear
+  output on deselection, and bind Stop/Force Stop to the process that was
+  selected when the button was pressed.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

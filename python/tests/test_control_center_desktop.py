@@ -219,6 +219,42 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.update()
         self.assertGreater(panel.text.yview()[1], 0.98)
 
+    def test_agents_page_rejects_late_logs_and_binds_stop_to_the_clicked_process(self):
+        """Background output/commands must stay attached to the selected agent.
+
+        A slow file read for Agent A may finish after the operator selected
+        Agent B. Rendering A's output under B would make the telemetry
+        misleading; resolving a stop lambda after the selection changed could
+        act on B instead of the clicked A.
+        """
+        from unittest import mock
+
+        self.app.show_page("Agents")
+        _drain_background(self.app)
+        page = self.app.pages["Agents"]
+        page._selected_process_id = "agent-b"
+        page._log_selection_generation = 2
+        page._on_log("agent-a", 1, {"stdout": ["stale agent-a output"]}, None)
+        self.assertNotIn("stale agent-a output", page.log_panel.text.get("1.0", "end"))
+        page._on_log("agent-b", 2, {"stdout": ["current agent-b output"]}, None)
+        self.assertIn("current agent-b output", page.log_panel.text.get("1.0", "end"))
+
+        # A deselection clears the now-unattributed output and disables
+        # commands rather than leaving an old process apparently actionable.
+        page._clear_selection()
+        self.assertEqual(page.log_panel.text.get("1.0", "end-1c"), "")
+        self.assertEqual(str(page.stop_button.cget("state")), "disabled")
+
+        # The queued action captures the id that was selected when the
+        # operator pressed the button, rather than resolving the mutable
+        # selection later on a worker thread.
+        page._selected_process_id = "agent-a"
+        with mock.patch.object(page.adapter, "cancel") as cancel:
+            page._stop()
+            page._selected_process_id = "agent-b"
+            _drain_background(self.app)
+        cancel.assert_called_once_with("agent-a")
+
     def test_tooltip_cancels_its_delayed_callback_when_a_page_widget_is_destroyed(self):
         from sandboxai.control_center_widgets import ToolTip
 
