@@ -19,8 +19,8 @@ import unittest
 from pathlib import Path
 
 from sandboxai.conditions import Condition
-from sandboxai.contract import observation_index
 from sandboxai.config import TrainingConfig
+from sandboxai.contract import observation_index
 from sandboxai.curriculum_stages import (
     MULTI_ENEMY_MAX_LEVEL,
     MULTI_ENEMY_MIN,
@@ -404,9 +404,7 @@ class ReplayControllerTest(unittest.TestCase):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            controller = self._controller(
-                Path(tmp), mode="all", max_per_run=1, environment_count=2
-            )
+            controller = self._controller(Path(tmp), mode="all", max_per_run=1, environment_count=2)
             # Both recorders are legitimately allocated below the cap. Their
             # terminals then arrive in one vector step, one after the other.
             controller.begin(0, _plan(seed=1))

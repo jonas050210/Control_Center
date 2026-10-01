@@ -366,9 +366,7 @@ class TrainingConfig:
         if self.rollout_length > 0:
             resolved_rollout = int(self.rollout_length)
         else:
-            resolved_rollout = self._auto_rollout_length(
-                safe_environment_count, safe_batch_size
-            )
+            resolved_rollout = self._auto_rollout_length(safe_environment_count, safe_batch_size)
         rollout_batch = resolved_rollout * safe_environment_count
         return [
             (self.environment_count >= 1, "environment_count must be >= 1"),

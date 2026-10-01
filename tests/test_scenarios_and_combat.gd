@@ -27,7 +27,9 @@ func test_all_sixteen_scenarios_resolve() -> SandboxTest:
 	var ids: PackedStringArray = ScenarioLibrary.ids()
 	t.assert_eq(ids.size(), 16, "the library must ship all sixteen scenarios")
 	t.assert_eq(
-		ScenarioLibrary.training_ids().size(), 12, "twelve scenarios belong to the regular training pool"
+		ScenarioLibrary.training_ids().size(),
+		12,
+		"twelve scenarios belong to the regular training pool"
 	)
 	for scenario_id in ids:
 		var resolved: Dictionary = ScenarioLibrary.resolve(scenario_id, 17)
