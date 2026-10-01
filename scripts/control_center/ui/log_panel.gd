@@ -17,11 +17,11 @@ const ControlCenterEventLog = preload("res://scripts/control_center/control_cent
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 
 const CATEGORY_COLORS: Dictionary = {
-	ControlCenterEventLog.Category.SYSTEM: Color(0.62, 0.68, 0.76, 1.0),
-	ControlCenterEventLog.Category.COMBAT: Color(1.0, 0.72, 0.45, 1.0),
-	ControlCenterEventLog.Category.PERCEPTION: Color(0.45, 0.85, 0.95, 1.0),
-	ControlCenterEventLog.Category.REWARD: Color(0.60, 0.90, 0.62, 1.0),
-	ControlCenterEventLog.Category.ERROR: Color(0.98, 0.45, 0.45, 1.0),
+	ControlCenterEventLog.Category.SYSTEM: ControlCenterTheme.COLOR_MUTED,
+	ControlCenterEventLog.Category.COMBAT: ControlCenterTheme.COLOR_WARN,
+	ControlCenterEventLog.Category.PERCEPTION: ControlCenterTheme.COLOR_AI,
+	ControlCenterEventLog.Category.REWARD: ControlCenterTheme.COLOR_OK,
+	ControlCenterEventLog.Category.ERROR: ControlCenterTheme.COLOR_BAD,
 }
 
 var session

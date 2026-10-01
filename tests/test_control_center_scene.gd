@@ -12,6 +12,7 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
+const ControlCenterMetricSparkline = preload("res://scripts/control_center/ui/metric_sparkline.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
@@ -180,6 +181,35 @@ func test_gui_mode_switch_keeps_panels_alive() -> SandboxTest:
 		instance.session.simulation_manager.environments.size(), 2, "no rebuild on mode switch"
 	)
 	_teardown(instance)
+	return t
+
+
+## Theme coverage for controls built directly by specialist panels. Without
+## this, Tree, ItemList, RichTextLabel and tooltips silently fall back to the
+## engine default visual language instead of the operator surface.
+func test_telemetry_theme_covers_direct_data_controls() -> SandboxTest:
+	var t := SandboxTest.new("control_center_telemetry_theme")
+	var theme := ControlCenterTheme.build_theme()
+	for control_type in ["Tree", "ItemList", "RichTextLabel"]:
+		t.assert_true(
+			theme.has_stylebox(
+				"panel" if control_type != "RichTextLabel" else "normal", control_type
+			),
+			"%s receives the Control Center data-surface style" % control_type
+		)
+	t.assert_true(theme.has_stylebox("panel", "TooltipPanel"))
+
+	var source: Array = [1.0, 1.0]
+	var sparkline := ControlCenterMetricSparkline.new()
+	sparkline.set_samples(source)
+	source.clear()
+	t.assert_eq(sparkline.sample_count(), 2, "sparkline owns an immutable sample copy")
+	t.assert_eq(
+		sparkline.mouse_filter,
+		Control.MOUSE_FILTER_IGNORE,
+		"a chart never intercepts dashboard input"
+	)
+	sparkline.free()
 	return t
 
 

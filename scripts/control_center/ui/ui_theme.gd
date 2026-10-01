@@ -141,6 +141,19 @@ static func control_style(background: Color, border: Color = COLOR_BORDER) -> St
 	return style
 
 
+## Compact fill style for data-heavy controls such as lists, logs and meters.
+## Unlike `control_style`, it deliberately has no content margins or shadow so
+## it cannot inflate tight telemetry rows.
+static func inset_style(background: Color, border: Color = COLOR_BORDER_SUBTLE) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.border_color = border
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(RADIUS_CONTROL)
+	style.anti_aliasing = true
+	return style
+
+
 static func make_button(text: String, tooltip: String = "") -> Button:
 	var button := Button.new()
 	button.text = text
@@ -170,9 +183,13 @@ static func make_primary_button(text: String, tooltip: String = "") -> Button:
 	var button := make_button(text, tooltip)
 	button.add_theme_color_override("font_color", Color("#06131d"))
 	button.add_theme_color_override("font_hover_color", Color("#06131d"))
+	button.add_theme_color_override("font_pressed_color", Color("#06131d"))
 	button.add_theme_stylebox_override("normal", control_style(COLOR_ACCENT, COLOR_ACCENT))
-	button.add_theme_stylebox_override("hover", control_style(Color("#7dd3fc"), Color("#7dd3fc")))
-	button.add_theme_stylebox_override("pressed", control_style(Color("#0ea5e9"), Color("#0ea5e9")))
+	button.add_theme_stylebox_override("hover", control_style(Color("#75e8ff"), Color("#75e8ff")))
+	button.add_theme_stylebox_override("pressed", control_style(Color("#179dc1"), Color("#179dc1")))
+	button.add_theme_stylebox_override(
+		"hover_pressed", control_style(Color("#179dc1"), Color("#179dc1"))
+	)
 	return button
 
 
@@ -182,6 +199,7 @@ static func make_danger_button(text: String, tooltip: String = "") -> Button:
 	button.add_theme_color_override("font_hover_color", Color("#fff1f2"))
 	button.add_theme_stylebox_override("hover", control_style(Color("#4c1d2a"), COLOR_BAD))
 	button.add_theme_stylebox_override("pressed", control_style(Color("#881337"), COLOR_BAD))
+	button.add_theme_stylebox_override("hover_pressed", control_style(Color("#881337"), COLOR_BAD))
 	return button
 
 
@@ -215,8 +233,28 @@ static func build_theme() -> Theme:
 	theme.set_color("font_unselected_color", "TabBar", COLOR_MUTED)
 	theme.set_color("font_selected_color", "TabBar", COLOR_ACCENT)
 	theme.set_font_size("font_size", "TabBar", FONT_SIZE_SMALL)
-	var progress_background := control_style(Color("#08111f"), COLOR_BORDER_SUBTLE)
-	var progress_fill := control_style(COLOR_ACCENT, COLOR_ACCENT)
+	# Dense data surfaces intentionally use the inset style: logs, history
+	# tables and replay lists remain legible without inheriting button padding.
+	var inset_surface := inset_style(COLOR_BACKGROUND_SOLID, COLOR_BORDER_SUBTLE)
+	var inset_focus := inset_style(COLOR_SURFACE_HOVER, COLOR_ACCENT)
+	for type_name in ["Tree", "ItemList"]:
+		theme.set_font_size("font_size", type_name, FONT_SIZE_SMALL)
+		theme.set_color("font_color", type_name, COLOR_TEXT)
+		theme.set_color("font_selected_color", type_name, COLOR_TEXT)
+		theme.set_color("font_hovered_color", type_name, COLOR_TITLE)
+		theme.set_stylebox("panel", type_name, inset_surface)
+		theme.set_stylebox("focus", type_name, inset_focus)
+	theme.set_color("guide_color", "Tree", COLOR_BORDER_SUBTLE)
+	theme.set_color("title_button_color", "Tree", COLOR_MUTED)
+	theme.set_color("title_button_hover_color", "Tree", COLOR_ACCENT)
+	theme.set_color("default_color", "RichTextLabel", COLOR_TEXT)
+	theme.set_stylebox("normal", "RichTextLabel", inset_surface)
+	theme.set_stylebox("focus", "RichTextLabel", inset_focus)
+
+	var progress_background := inset_style(Color("#08111f"), COLOR_BORDER_SUBTLE)
+	var progress_fill := inset_style(COLOR_ACCENT, COLOR_ACCENT)
+	progress_background.set_corner_radius_all(99)
+	progress_fill.set_corner_radius_all(99)
 	theme.set_stylebox("background", "ProgressBar", progress_background)
 	theme.set_stylebox("fill", "ProgressBar", progress_fill)
 	var separator := StyleBoxFlat.new()
@@ -224,6 +262,15 @@ static func build_theme() -> Theme:
 	separator.content_margin_top = 1.0
 	separator.content_margin_bottom = 1.0
 	theme.set_stylebox("separator", "HSeparator", separator)
+
+	var tooltip_panel := panel_style(COLOR_BACKGROUND_SOLID, COLOR_ACCENT_SECONDARY)
+	tooltip_panel.content_margin_left = 10.0
+	tooltip_panel.content_margin_right = 10.0
+	tooltip_panel.content_margin_top = 7.0
+	tooltip_panel.content_margin_bottom = 7.0
+	theme.set_stylebox("panel", "TooltipPanel", tooltip_panel)
+	theme.set_color("font_color", "TooltipLabel", COLOR_TEXT)
+	theme.set_font_size("font_size", "TooltipLabel", FONT_SIZE_SMALL)
 	return theme
 
 
@@ -269,9 +316,12 @@ static func make_option_button(tooltip: String = "") -> OptionButton:
 	option.tooltip_text = tooltip
 	option.custom_minimum_size = Vector2(0.0, 36.0)
 	option.add_theme_font_size_override("font_size", FONT_SIZE_NORMAL)
-	option.add_theme_stylebox_override("normal", control_style(COLOR_SURFACE))
+	option.add_theme_stylebox_override("normal", control_style(COLOR_SURFACE, COLOR_BORDER_SUBTLE))
 	option.add_theme_stylebox_override("hover", control_style(COLOR_SURFACE_HOVER, COLOR_ACCENT))
-	option.add_theme_stylebox_override("pressed", control_style(Color("#243b53"), COLOR_ACCENT))
+	option.add_theme_stylebox_override("pressed", control_style(Color("#193a55"), COLOR_ACCENT))
+	option.add_theme_stylebox_override(
+		"hover_pressed", control_style(Color("#193a55"), COLOR_ACCENT)
+	)
 	option.focus_mode = Control.FOCUS_ALL
 	return option
 
