@@ -1,5 +1,6 @@
 import argparse
 import contextlib
+import io
 import json
 import os
 import subprocess
@@ -133,6 +134,7 @@ class CliTests(unittest.TestCase):
             "bc-train",
             "resume",
             "benchmark",
+            "hardware-wizard",
             "inspect-dataset",
             "smoke-test",
             "validate-runtime",
@@ -144,6 +146,33 @@ class CliTests(unittest.TestCase):
     def test_validate_runtime_cli_dispatched(self):
         exit_code = main(["validate-runtime", "--godot-executable", "missing_godot", "--json"])
         self.assertEqual(exit_code, 0)
+
+    def test_hardware_wizard_falls_back_without_engine(self):
+        # No reachable Godot: the wizard reports a documented CPU fallback
+        # and a non-zero status rather than crashing or inventing numbers.
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            exit_code = main(
+                [
+                    "hardware-wizard",
+                    "--godot-executable",
+                    "definitely-not-a-real-godot-binary",
+                    "--steps",
+                    "10",
+                    "--no-save",
+                ]
+            )
+        self.assertEqual(exit_code, 1)
+        payload = json.loads(out.getvalue())
+        self.assertTrue(payload["fallback"])
+        self.assertEqual(payload["selected_device"], "cpu")
+        self.assertFalse(payload["godot_available"])
+
+    def test_hardware_wizard_show_without_profile_reports_absence(self):
+        with mock.patch("sandboxai.hardware_profile.load_profile", return_value=None):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                exit_code = main(["hardware-wizard", "--show"])
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(json.loads(out.getvalue())["available"])
 
     def test_compare_experiments_cli_dispatched(self):
         import json

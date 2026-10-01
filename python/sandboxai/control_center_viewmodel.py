@@ -442,6 +442,65 @@ def benchmark_history_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Hardware wizard
+# ---------------------------------------------------------------------------
+
+
+def hardware_measurement_rows(measurements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One display row per measured device candidate.
+
+    Throughput is shown only for candidates that were actually measured;
+    everything else shows its status (unavailable / failed / cancelled) and
+    never a fabricated number, matching the measurement layer's own honesty.
+    """
+    rows: list[dict[str, Any]] = []
+    for measurement in measurements:
+        status = measurement.get("status")
+        measured = status == "measured" and measurement.get("steps_per_second") is not None
+        rows.append(
+            {
+                "label": measurement.get("label"),
+                "status": status,
+                "steps_per_second": (
+                    format_number(measurement.get("steps_per_second"), 1) if measured else "n/a"
+                ),
+                "wall": (format_duration(measurement.get("wall_seconds")) if measured else "n/a"),
+                "detail": measurement.get("error") or ("measured" if measured else status),
+            }
+        )
+    return rows
+
+
+def hardware_profile_view(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Presentation view of a persisted hardware profile.
+
+    Returns ``available: False`` when the wizard has not run yet, so the
+    Settings page can offer to start it. Permanently-unavailable fields are
+    left out entirely rather than rendered as ``n/a`` (Phase 2: hide fields
+    this machine can never fill).
+    """
+    if not profile:
+        return {"available": False, "note": "No hardware profile yet — run the wizard."}
+    view: dict[str, Any] = {
+        "available": True,
+        "selected_device": profile.get("selected_device"),
+        "device": profile.get("device"),
+        "inference_device": profile.get("inference_device"),
+        "measurement_steps": profile.get("measurement_steps"),
+        "fallback": bool(profile.get("fallback")),
+        "note": profile.get("note", ""),
+        "godot_available": bool(profile.get("godot_available")),
+        "measurements": hardware_measurement_rows(profile.get("measurements") or []),
+    }
+    host = profile.get("host") or {}
+    # Only surface accelerator facts that exist on this host: a CPU-only
+    # machine should not show a blank CUDA line.
+    if host.get("cuda_available"):
+        view["cuda_device"] = host.get("cuda_device")
+    return view
+
+
+# ---------------------------------------------------------------------------
 # Training form: basic vs. advanced, validated before launch
 # ---------------------------------------------------------------------------
 
@@ -567,6 +626,28 @@ def default_training_values() -> dict[str, str]:
             values[spec.name] = "true" if default else "false"
         else:
             values[spec.name] = "" if default is None else str(default)
+    return values
+
+
+def training_values_from_profile(profile: dict[str, Any] | None) -> dict[str, str]:
+    """Training-form defaults with the hardware profile's device applied.
+
+    Starts from :func:`default_training_values` and overlays the persisted
+    profile's ``device``/``inference_device`` (the concrete pair its
+    ``config_overrides`` recommends) so the Training page opens with the
+    wizard's measured choice already selected. A fallback profile — one
+    where nothing could be measured — is ignored, because it carries no
+    measured preference worth imposing on the form.
+    """
+    values = default_training_values()
+    if not profile or profile.get("fallback"):
+        return values
+    device = profile.get("device")
+    inference = profile.get("inference_device")
+    if isinstance(device, str) and device:
+        values["device"] = device
+    if isinstance(inference, str) and inference:
+        values["inference_device"] = inference
     return values
 
 

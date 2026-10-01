@@ -30,7 +30,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from importlib.util import find_spec
 from pathlib import Path
@@ -524,6 +524,83 @@ class SandboxAIAdapter:
             )
         }
         return status
+
+    # ------------------------------------------------------------------
+    # Hardware profile / first-start wizard
+    # ------------------------------------------------------------------
+
+    def _hardware_profile_path(self) -> Path:
+        """Where this adapter's project keeps its hardware profile.
+
+        Anchored to ``project_root`` rather than the installed package, so an
+        adapter pointed at a specific checkout reads and writes that
+        checkout's profile — and tests are hermetic under a temp root.
+        """
+        return self.project_root / ".sandboxai" / "hardware_profile.json"
+
+    def hardware_profile(self) -> dict[str, Any] | None:
+        """The persisted hardware profile, or ``None`` if the wizard has not run.
+
+        A thin pass-through to :mod:`sandboxai.hardware_profile` so the GUI
+        never grows its own profile-reading logic.
+        """
+        from .hardware_profile import load_profile
+
+        profile = load_profile(self._hardware_profile_path())
+        return profile.to_dict() if profile is not None else None
+
+    def hardware_candidates(self) -> list[dict[str, str]]:
+        """The device candidates measurable on this host (CPU-only or all three)."""
+        from .hardware_profile import available_candidates
+
+        return [
+            {
+                "label": candidate.label,
+                "device": candidate.device,
+                "inference_device": candidate.inference_device,
+                "description": candidate.description,
+            }
+            for candidate in available_candidates()
+        ]
+
+    def run_hardware_wizard(
+        self,
+        *,
+        godot_executable: str | None = None,
+        steps: int | None = None,
+        cancel: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+        save: bool = True,
+    ) -> dict[str, Any]:
+        """Measure the available devices and persist a hardware profile.
+
+        The single measurement implementation lives in
+        :mod:`sandboxai.hardware_profile`; this only forwards the GUI's
+        cancel/progress hooks and the project root. Never raises for a
+        missing engine — that becomes an honest ``fallback`` profile.
+        """
+        from .hardware_profile import (
+            DEFAULT_MEASUREMENT_STEPS,
+            DeviceMeasurement,
+            run_hardware_wizard,
+        )
+
+        progress_adapter = None
+        if on_progress is not None:
+
+            def progress_adapter(measurement: DeviceMeasurement) -> None:
+                on_progress(measurement.to_dict())
+
+        profile = run_hardware_wizard(
+            project_path=self.project_root,
+            godot_executable=godot_executable,
+            steps=steps if steps is not None else DEFAULT_MEASUREMENT_STEPS,
+            cancel=cancel,
+            on_progress=progress_adapter,
+            save=save,
+            save_path=self._hardware_profile_path() if save else None,
+        )
+        return profile.to_dict()
 
     # ------------------------------------------------------------------
     # Runs, checkpoints, evaluations, benchmarks (read-only)

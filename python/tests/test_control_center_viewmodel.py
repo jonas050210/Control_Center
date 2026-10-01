@@ -318,3 +318,79 @@ def test_training_field_groups_partition_basic_and_advanced():
     assert "environment_count" in basic_names
     assert "learning_rate" in advanced_names
     assert basic_names.isdisjoint(advanced_names)
+
+
+def test_hardware_profile_view_reports_not_run_when_absent():
+    view = vm.hardware_profile_view(None)
+    assert view["available"] is False
+    assert "wizard" in view["note"].lower()
+
+
+def test_hardware_profile_view_shows_only_measured_throughput():
+    profile = {
+        "selected_device": "cpu",
+        "device": "cpu",
+        "inference_device": "cpu",
+        "measurement_steps": 5000,
+        "fallback": False,
+        "note": "Selected cpu",
+        "godot_available": True,
+        "host": {"cuda_available": False},
+        "measurements": [
+            {
+                "label": "cpu",
+                "status": "measured",
+                "steps_per_second": 123.4,
+                "wall_seconds": 40.5,
+                "error": None,
+            },
+            {"label": "cuda", "status": "unavailable", "steps_per_second": None, "error": None},
+        ],
+    }
+    view = vm.hardware_profile_view(profile)
+    assert view["available"] is True
+    assert view["selected_device"] == "cpu"
+    # No CUDA on this host -> no cuda_device line surfaced.
+    assert "cuda_device" not in view
+    rows = view["measurements"]
+    assert rows[0]["steps_per_second"] == "123.4"
+    assert rows[1]["steps_per_second"] == "n/a"
+
+
+def test_hardware_profile_view_surfaces_cuda_device_when_present():
+    profile = {
+        "selected_device": "hybrid",
+        "device": "cuda",
+        "inference_device": "cpu",
+        "measurement_steps": 5000,
+        "fallback": False,
+        "note": "",
+        "godot_available": True,
+        "host": {"cuda_available": True, "cuda_device": "RTX 4060 Ti"},
+        "measurements": [],
+    }
+    view = vm.hardware_profile_view(profile)
+    assert view["cuda_device"] == "RTX 4060 Ti"
+
+
+def test_training_values_from_profile_applies_measured_device():
+    profile = {
+        "selected_device": "hybrid",
+        "device": "cuda",
+        "inference_device": "cpu",
+        "fallback": False,
+    }
+    values = vm.training_values_from_profile(profile)
+    assert values["device"] == "cuda"
+    assert values["inference_device"] == "cpu"
+
+
+def test_training_values_from_profile_ignores_fallback():
+    profile = {"device": "cpu", "inference_device": "cpu", "fallback": True}
+    baseline = vm.default_training_values()
+    values = vm.training_values_from_profile(profile)
+    assert values["device"] == baseline["device"]
+
+
+def test_training_values_from_profile_without_profile_is_defaults():
+    assert vm.training_values_from_profile(None) == vm.default_training_values()

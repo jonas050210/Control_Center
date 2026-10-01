@@ -590,10 +590,14 @@ class CheckpointBatteryBatchingTest(unittest.TestCase):
     def _config(checkpoint_env_count: int):
         class _Config:
             seed = 5
+            run_id = "perf_regression_battery"
+            experiment_id = ""
             project = Path("/tmp/proj")
             godot_executable = "godot"
             enemy_count = 1
             curriculum_level = 3
+            evaluation_episodes = 1
+            evaluation_environment_count = 1
             checkpoint_eval_environment_count = checkpoint_env_count
             checkpoint_condition_eval = True
             checkpoint_generalization_eval = False

@@ -281,7 +281,24 @@ commit, not the branch head, so comments do not appear on your HEAD.
 `pytest` also has `faulthandler_timeout = 300`, so a wedged test dumps
 every thread's stack instead of sitting there silently.
 
-## 11. Session/branch hygiene
+## 11. The hardware wizard — one measurement, no second benchmark
+
+`hardware_profile.py` is the **single** device-comparison implementation
+behind the first-start wizard. Do not add a second benchmark to any GUI;
+both Control Centers reach it through `adapter.run_hardware_wizard`. It
+compares CPU / Hybrid (`device=cuda`, `inference_device=cpu`) / CUDA, and
+`available_candidates()` hides Hybrid and CUDA unless a CUDA device is
+present, so a CPU-only host never shows a permanently-`n/a` row.
+
+Live measurement times a short real `train_ppo` slice per candidate, so it
+needs a Godot bridge and a torch build — the CPU path is verified against
+the fake bridge in `test_hardware_profile.py`, but the Hybrid/CUDA paths
+have **never been measured here** (no GPU in the usual environment) and are
+covered only through injected measurement functions. Do not fabricate GPU
+throughput numbers; a device that cannot be measured is recorded with a
+status and no number, exactly like `benchmark.py`.
+
+## 12. Session/branch hygiene
 
 Arena sessions are pinned to one branch (`arena/<id>-sandboxai`). Commit
 and push only there, and open PRs from there. Do not create or switch to
