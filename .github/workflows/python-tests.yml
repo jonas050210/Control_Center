@@ -199,7 +199,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The Windows training stack can consume most of the former 20-minute
+    # budget while resolving native scientific wheels before pytest starts.
+    # Let the required full suite complete rather than cancelling it without
+    # a test result; the matrix remains fail-fast false for clear diagnostics.
+    timeout-minutes: 30
     # Windows CI previously found 10 pre-existing, Windows-only test-fixture
     # bugs (see git history around commits 86cdff8/386c341 for the full
     # diagnosis of each). All ten are fixed and this leg has run green on
