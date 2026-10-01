@@ -204,6 +204,16 @@ jobs:
     # Let the required full suite complete rather than cancelling it without
     # a test result; the matrix remains fail-fast false for clear diagnostics.
     timeout-minutes: 30
+    # The tests create many deliberately tiny torch/SB3 models. Letting a
+    # high-core Windows runner fan each tiny operation out across all native
+    # worker threads made the required suite take longer than its timeout.
+    # The suite verifies behavior, not CPU scaling, so a single controlled
+    # math thread is both deterministic and dramatically more responsive.
+    env:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      PYTHONUNBUFFERED: "1"
     # Windows CI previously found 10 pre-existing, Windows-only test-fixture
     # bugs (see git history around commits 86cdff8/386c341 for the full
     # diagnosis of each). All ten are fixed and this leg has run green on
@@ -234,7 +244,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest python/tests -q -rf 2>&1 | tee pytest-output.txt
+          # Verbose names + unbuffered output make a platform-specific stall
+          # diagnosable from the live Actions log instead of a row of dots.
+          python -m pytest python/tests -vv -rf 2>&1 | tee pytest-output.txt
 
       - name: Publish the failures to the job summary
         if: failure()

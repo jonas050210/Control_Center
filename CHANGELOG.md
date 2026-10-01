@@ -130,10 +130,13 @@ records what changed and why.
   `godot-tests.yml` was also running; adds pip caching, a
   `concurrency` group that cancels superseded runs, and pins every
   third-party action to a commit SHA rather than a mutable tag. The full
-  training matrix has a 30-minute budget: on Windows, native scientific
-  dependency setup left too little time for a real full-suite verdict at
-  20 minutes. Job order: lint, typecheck, core-tests, gdscript-checks,
-  desktop-ui-tests, full-tests, coverage, audit.
+  training matrix has a 30-minute budget and explicitly bounds native math
+  threads to one: its tiny torch/SB3 test models were dramatically slower
+  when a high-core Windows runner fanned their work out across every CPU.
+  Its unbuffered, verbose pytest output now identifies the last test if a
+  platform-specific stall ever reappears. Job order: lint, typecheck,
+  core-tests, gdscript-checks, desktop-ui-tests, full-tests, coverage,
+  audit.
 - Ruff now enforces `E,W,F,I,UP,B,SIM,C901` instead of `F` alone, with
   `max-complexity = 15`, and `ruff format` is the formatter of record
   for the Python half. Clearing the new rules touched most of the
