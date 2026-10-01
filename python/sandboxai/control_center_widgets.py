@@ -101,6 +101,11 @@ class BackgroundRunner:
         # second and wasteful ten times a second.
         self._pumps_between_collections = max(1, 1000 // max(poll_ms, 1))
         self._pumps_since_collection = 0
+        # Exactly one Tk `after` callback may be outstanding. Tests manually
+        # drain `_pump()` without mainloop; scheduling unconditionally from
+        # those direct calls used to grow a second, third, then unbounded
+        # callback chain, most visibly as a Windows desktop-test timeout.
+        self._pump_after_id: str | None = None
         _suspend_automatic_gc()
         # Tied to the object, not just to close(): a runner that is dropped
         # without being closed - a constructor that raised half-way, a test
@@ -151,8 +156,29 @@ class BackgroundRunner:
         except queue.Empty:
             pass
         self._collect_if_due()
+        self._schedule_pump()
+
+    def _schedule_pump(self) -> None:
+        """Queue one future pump, including when tests call `_pump` directly."""
+        if self._closed or self._pump_after_id is not None:
+            return
+        self._pump_after_id = self._root.after(self._poll_ms, self._scheduled_pump)
+
+    def _scheduled_pump(self) -> None:
+        # Only Tk invokes this wrapper. A direct `_pump()` must leave its
+        # already-pending timer in place rather than multiplying callbacks.
+        self._pump_after_id = None
         if not self._closed:
-            self._root.after(self._poll_ms, self._pump)
+            self._pump()
+
+    def _cancel_scheduled_pump(self) -> None:
+        if self._pump_after_id is None:
+            return
+        cancel = getattr(self._root, "after_cancel", None)
+        if callable(cancel):
+            with contextlib.suppress(tk.TclError):
+                cancel(self._pump_after_id)
+        self._pump_after_id = None
 
     def _collect_if_due(self) -> None:
         """Run the cyclic collector here, on the thread that owns Tk."""
@@ -186,6 +212,7 @@ class BackgroundRunner:
         if self._closed:
             return
         self._closed = True
+        self._cancel_scheduled_pump()
         with self._pending_lock:
             pending = set(self._pending)
         for future in pending:

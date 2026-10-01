@@ -125,7 +125,10 @@ records what changed and why.
   existing controls reachable on narrow desktop windows; the first-person
   reticle's centre point now agrees with its local ready/range state. The Tk
   log reader now resumes its existing auto-follow behavior when an operator
-  scrolls back to the newest line instead of silently remaining paused.
+  scrolls back to the newest line instead of silently remaining paused. Its
+  Tk background runner now owns exactly one pending pump callback and
+  cancels it during close, avoiding an unbounded callback chain during
+  manual test/drain calls and late callbacks after window destruction.
 - CI (`python-tests.yml`) no longer duplicates the Python suite that
   `godot-tests.yml` was also running; adds pip caching, a
   `concurrency` group that cancels superseded runs, and pins every

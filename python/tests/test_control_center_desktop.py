@@ -212,6 +212,20 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
             self.scheduled += 1
             return "timer"
 
+    class _TimerRoot(_StubRoot):
+        """Timer-aware root used to prove manual pumps cannot multiply work."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled: list[str] = []
+
+        def after(self, _delay_ms: int, _callback) -> str:
+            self.scheduled += 1
+            return f"timer-{self.scheduled}"
+
+        def after_cancel(self, timer_id: str) -> None:
+            self.cancelled.append(timer_id)
+
     def _runner(self):
         from sandboxai.control_center_widgets import BackgroundRunner
 
@@ -311,6 +325,23 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
         runner.submit(lambda: calls.append("ran"), lambda _result, _error: None)
         time.sleep(0.1)
         self.assertEqual(calls, [])
+
+    def test_manual_pumps_keep_one_pending_timer_and_close_cancels_it(self) -> None:
+        from sandboxai.control_center_widgets import BackgroundRunner
+
+        root = self._TimerRoot()
+        runner = BackgroundRunner(root)  # type: ignore[arg-type]
+        self.addCleanup(runner.close)
+        self.assertEqual(root.scheduled, 1, "runner starts with one future pump")
+        for _ in range(8):
+            runner._pump()
+        self.assertEqual(
+            root.scheduled,
+            1,
+            "a test/manual drain does not build an unbounded Tk callback chain",
+        )
+        runner.close()
+        self.assertEqual(root.cancelled, ["timer-1"], "close removes the pending Tk callback")
 
 
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
