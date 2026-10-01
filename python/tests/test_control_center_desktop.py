@@ -184,6 +184,59 @@ class ControlCenterConstructionTests(unittest.TestCase):
         dialog.assert_not_called()
         launch.assert_not_called()
 
+    def test_benchmark_page_runs_the_whole_workflow_from_one_button(self):
+        """The Benchmark tab is zero-configuration: Start runs the pipeline
+        with its own defaults and the winning configuration is applied
+        automatically - no form fields, no manual apply step."""
+        from unittest import mock
+
+        # Build the Agents page first so the automatic apply step has a
+        # live launch form to mirror the winning configuration into.
+        self.app.show_page("Agents")
+        self.app.show_page("Benchmarks")
+        page = self.app.pages["Benchmarks"]
+        # No manual configuration inputs exist on this page any more.
+        self.assertFalse(hasattr(page, "pipeline_vars"))
+        self.assertFalse(hasattr(page, "custom_env_var"))
+        recommendation = {
+            "environment_count": 8,
+            "env_workers": 2,
+            "device": "cpu",
+            "inference_device": "cpu",
+            "expected_steps_per_second": 100.0,
+            "basis": "validated_training_slice",
+            "rationale": ["measured"],
+            "warnings": [],
+        }
+        report = {
+            "status": "completed",
+            "elapsed_seconds": 1.0,
+            "stages": [
+                {"name": "discovery", "status": "completed"},
+                {"name": "screening", "status": "completed", "configurations": []},
+            ],
+            "recommendation": recommendation,
+        }
+        applied = dict(recommendation, applied_utc="2026-01-01T00:00:00Z")
+        with (
+            mock.patch.object(page.adapter, "run_benchmark_pipeline", return_value=report) as run,
+            mock.patch.object(
+                page.adapter, "apply_recommended_configuration", return_value=applied
+            ) as apply_call,
+        ):
+            page._start()
+            _drain_background(self.app)
+        run.assert_called_once()
+        # Only the workflow callbacks are passed - no user-entered budget,
+        # grid or finalist parameters.
+        self.assertEqual(set(run.call_args.kwargs), {"cancel", "on_progress"})
+        apply_call.assert_called_once()
+        self.assertIs(page._applied, True)
+        # The Agents launch form mirrors the applied topology.
+        agents = self.app.pages["Agents"]
+        self.assertEqual(agents.field_vars["environment_count"].get(), "8")
+        self.assertEqual(agents.field_vars["env_workers"].get(), "2")
+
     def test_settings_page_shows_the_real_project_and_output_roots(self):
         self.app.show_page("Settings")
         page = self.app.pages["Settings"]

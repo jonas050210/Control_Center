@@ -203,10 +203,15 @@ class AgentManager:
 
     def _view(self, record: AgentRecord, snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
         lifecycle = derive_lifecycle(record, snapshot)
-        error = record.error or (snapshot or {}).get("error") or ""
         backend = (snapshot or {}).get("backend") or {}
-        if not error and backend.get("error"):
-            error = str(backend["error"])
+        # Error precedence: the launch failure first, then the backend's own
+        # published root cause (status.json "error"), then the process
+        # layer's account. The backend error outranks the process error
+        # because "process exited with code 1" describes the symptom of the
+        # very failure the backend already named.
+        error = (
+            record.error or str(backend.get("error") or "") or (snapshot or {}).get("error") or ""
+        )
         spec = dict(record.spec)
         view = {
             "agent_id": record.agent_id,

@@ -356,7 +356,27 @@ class AgentsPage(Page):
         form_frame = ttk.LabelFrame(self, text="Launch configuration", padding=10)
         form_frame.pack(fill="x")
         self.field_vars: dict[str, tk.StringVar] = {}
-        defaults = vm.training_values_from_profile(None)
+        # Real measured defaults: the hardware wizard's device choice and -
+        # when the automatic benchmark has been applied - its winning
+        # topology. Both are single small JSON reads of persisted state.
+        profile = None
+        recommendation = None
+        try:
+            profile = self.adapter.hardware_profile()
+            recommendation = self.adapter.recommended_configuration()
+        except OSError:
+            pass
+        defaults = vm.training_values_from_profile(profile)
+        if recommendation and recommendation.get("applied_utc"):
+            for field, key in (
+                ("environment_count", "environment_count"),
+                ("env_workers", "env_workers"),
+                ("device", "device"),
+                ("inference_device", "inference_device"),
+            ):
+                value = recommendation.get(key)
+                if value is not None and str(value):
+                    defaults[field] = str(value)
         groups = vm.training_field_groups()
         basic_frame = ttk.Frame(form_frame)
         basic_frame.pack(fill="x")
@@ -385,6 +405,12 @@ class AgentsPage(Page):
         table_frame.pack(fill="both", expand=True, pady=(10, 0))
         self.tree = _scrollable_table(table_frame, self.COLUMNS)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        # Lifecycle at a glance: failures red, live work green, terminal
+        # states muted - same palette the rest of the GUI uses.
+        self.tree.tag_configure("lifecycle-failed", foreground=COLOR_ERROR)
+        self.tree.tag_configure("lifecycle-running", foreground=COLOR_OK)
+        self.tree.tag_configure("lifecycle-attention", foreground=COLOR_WARN)
+        self.tree.tag_configure("lifecycle-done", foreground=COLOR_MUTED)
 
         actions = ttk.Frame(self)
         actions.pack(fill="x", pady=(6, 0))
@@ -549,13 +575,20 @@ class AgentsPage(Page):
             )
             self.launch_button.configure(state="disabled")
         # Runtime compatibility (worker topology vs. this host, CUDA
-        # availability) is a separate, slower check: it probes the runtime.
+        # availability, a resolvable Godot executable) is a separate,
+        # slower check: it probes the runtime. The form's explicit Godot
+        # executable is forwarded so the verdict matches what a launch
+        # would actually run.
         if slot["state"] == "AVAILABLE":
             summary = slot["summary"]
+            godot_override = (values.get("godot_executable") or "").strip() or None
             self.submit_poll(
                 "launch-compatibility",
                 lambda: self.adapter.validate_runtime_configuration(
-                    summary["environment_count"], summary["env_workers"], summary["device"]
+                    summary["environment_count"],
+                    summary["env_workers"],
+                    summary["device"],
+                    godot_executable=godot_override,
                 ),
                 self._on_compatibility,
             )
@@ -616,11 +649,23 @@ class AgentsPage(Page):
         selected_still_present = False
         self.tree.delete(*self.tree.get_children())
         self._row_to_agent.clear()
+        lifecycle_tags = {
+            "FAILED": "lifecycle-failed",
+            "RUNNING": "lifecycle-running",
+            "LAUNCHING": "lifecycle-attention",
+            "PAUSED": "lifecycle-attention",
+            "STOPPING": "lifecycle-attention",
+            "RESTARTING": "lifecycle-attention",
+            "FINISHED": "lifecycle-done",
+            "STOPPED": "lifecycle-done",
+        }
         for row in rows:
             progress = vm.agent_progress_percent(row)
+            tag = lifecycle_tags.get(str(row["lifecycle"] or ""))
             item_id = self.tree.insert(
                 "",
                 "end",
+                tags=(tag,) if tag else (),
                 values=(
                     row["name"],
                     row["kind"] or "n/a",
@@ -866,12 +911,21 @@ class AgentsPage(Page):
 
 
 class BenchmarkPage(Page):
-    """The staged benchmark pipeline, its recommendation, and history."""
+    """The one-button automatic benchmark: measure, pick best, apply it.
+
+    There is deliberately nothing to configure here. Start runs the staged
+    pipeline (runtime discovery, env/worker screening, device comparison,
+    real PPO validation slices) with the project's host-scaled defaults,
+    the recommendation is chosen by the pipeline's own criteria (validated
+    throughput, stability over an unstable peak) and the winning
+    configuration is persisted and applied to the launch configuration
+    automatically. Every number shown was measured; failures stay visible.
+    """
 
     title = "Benchmarks"
     subtitle = (
-        "Measures this machine's real runtime (bridge sweep, device comparison, PPO "
-        "validation slices) and recommends a configuration. No estimated numbers."
+        "Fully automatic - one click measures this machine, picks the best stable "
+        "configuration and applies it to every new agent launch. No parameters, no estimates."
     )
 
     RESULT_COLUMNS = (
@@ -890,53 +944,30 @@ class BenchmarkPage(Page):
     )
 
     def build(self) -> None:
-        paned = ttk.Panedwindow(self, orient="vertical")
-        paned.pack(fill="both", expand=True)
-
-        top = ttk.Frame(paned, padding=(0, 0, 0, 8))
-        paned.add(top, weight=0)
-
-        form = ttk.LabelFrame(top, text="Benchmark pipeline", padding=10)
-        form.pack(fill="x")
-        defaults = vm.benchmark_pipeline_form_defaults()
-        self.pipeline_vars = {name: tk.StringVar(value=value) for name, value in defaults.items()}
-        ttk.Label(form, text="Budget", width=22).grid(row=0, column=0, sticky="w")
-        budget_frame = ttk.Frame(form)
-        budget_frame.grid(row=0, column=1, sticky="w")
-        self.budget_mode_var = tk.StringVar(value=defaults["budget_mode"])
-        ttk.Radiobutton(
-            budget_frame, text="Time (minutes)", value="time", variable=self.budget_mode_var
-        ).pack(side="left")
-        ttk.Radiobutton(
-            budget_frame, text="Steps per config", value="steps", variable=self.budget_mode_var
-        ).pack(side="left", padx=(12, 0))
-        ttk.Label(form, text="Budget value", width=22).grid(row=1, column=0, sticky="w")
-        # Both entries live in the same grid cell; exactly one is managed
-        # at a time, so switching modes swaps the field instead of stacking
-        # two inputs (or leaving a dead one on screen).
-        self.minutes_entry = ttk.Entry(form, textvariable=self.pipeline_vars["minutes"], width=8)
-        self.steps_entry = ttk.Entry(form, textvariable=self.pipeline_vars["steps"], width=10)
-        self.budget_mode_var.trace_add("write", lambda *_: self._sync_budget_inputs())
-        self._sync_budget_inputs()
-        for row, key in enumerate(("environment_counts", "worker_counts", "finalists"), start=2):
-            ttk.Label(form, text=self._FIELD_LABELS[key], width=22).grid(
-                row=row, column=0, sticky="w"
-            )
-            ttk.Entry(form, textvariable=self.pipeline_vars[key], width=24).grid(
-                row=row, column=1, sticky="w"
-            )
+        intro = ttk.LabelFrame(self, text="Automatic benchmark", padding=10)
+        intro.pack(fill="x")
         ttk.Label(
-            form,
-            text="Blank environment/worker lists sweep a host-scaled default grid.",
+            intro,
+            text=(
+                "Start measures the real runtime end to end: it screens a host-scaled "
+                "grid of environment/worker topologies through the actual bridge, compares "
+                "devices where more than one exists, validates the best candidates with "
+                "short real PPO training slices, then picks the fastest stable "
+                "configuration and applies it automatically. Results and the winning "
+                "configuration are persisted and reused across restarts."
+            ),
+            wraplength=980,
+            justify="left",
             foreground=COLOR_MUTED,
-        ).grid(row=5, column=0, columnspan=2, sticky="w")
+        ).pack(anchor="w")
 
-        run_bar = ttk.Frame(top)
-        run_bar.pack(fill="x", pady=(8, 0))
+        run_bar = ttk.Frame(intro)
+        run_bar.pack(fill="x", pady=(10, 0))
         self.run_button = ttk.Button(
-            run_bar, text="Run benchmark", command=self._start, style="Primary.TButton"
+            run_bar, text="Start benchmark", command=self._start, style="Primary.TButton"
         )
         self.run_button.pack(side="left")
+        ToolTip(self.run_button, "Run the complete automatic benchmark workflow")
         self.cancel_button = ttk.Button(
             run_bar, text="Cancel", command=self._cancel, state="disabled"
         )
@@ -945,93 +976,33 @@ class BenchmarkPage(Page):
             run_bar, text="idle", foreground=COLOR_MUTED, wraplength=620, justify="left"
         )
         self.progress_label.pack(side="left", padx=(14, 0))
+        self.phase_label = ttk.Label(intro, text="", foreground=COLOR_MUTED, justify="left")
+        self.phase_label.pack(anchor="w", pady=(8, 0))
 
-        # ---- Recommendation vs custom ---------------------------------
-        cards = ttk.Frame(top)
-        cards.pack(fill="x", pady=(10, 0))
-        recommended = ttk.LabelFrame(cards, text="Recommended configuration", padding=10)
-        recommended.pack(side="left", fill="both", expand=True)
-        self.recommendation_label = ttk.Label(recommended, text="n/a", justify="left")
+        best = ttk.LabelFrame(
+            self, text="Best configuration (selected and applied automatically)", padding=10
+        )
+        best.pack(fill="x", pady=(10, 0))
+        self.recommendation_label = ttk.Label(best, text="n/a", justify="left")
         self.recommendation_label.pack(anchor="nw")
-        self.apply_button = ttk.Button(
-            recommended, text="Apply to launch configuration", command=self._apply, state="disabled"
-        )
-        self.apply_button.pack(anchor="w", pady=(8, 0))
+        self.applied_label = ttk.Label(best, text="", justify="left", foreground=COLOR_MUTED)
+        self.applied_label.pack(anchor="w", pady=(4, 0))
 
-        custom = ttk.LabelFrame(cards, text="Custom configuration", padding=10)
-        custom.pack(side="left", fill="both", expand=True, padx=(10, 0))
-        custom_grid = ttk.Frame(custom)
-        custom_grid.pack(fill="x")
-        self.custom_env_var = tk.StringVar()
-        self.custom_workers_var = tk.StringVar()
-        self.custom_device_var = tk.StringVar(value="cpu")
-        for row, (label, var, kind) in enumerate(
-            (
-                ("Environments", self.custom_env_var, "entry"),
-                ("Workers", self.custom_workers_var, "entry"),
-                ("Device", self.custom_device_var, "choice"),
-            )
-        ):
-            ttk.Label(custom_grid, text=label, width=14).grid(row=row, column=0, sticky="w")
-            if kind == "choice":
-                ttk.Combobox(
-                    custom_grid,
-                    textvariable=var,
-                    values=("cpu", "cuda"),
-                    state="readonly",
-                    width=10,
-                ).grid(row=row, column=1, sticky="w")
-            else:
-                ttk.Entry(custom_grid, textvariable=var, width=10).grid(
-                    row=row, column=1, sticky="w"
-                )
-        custom_buttons = ttk.Frame(custom)
-        custom_buttons.pack(fill="x", pady=(6, 0))
-        self.validate_custom_button = ttk.Button(
-            custom_buttons, text="Validate", command=self._validate_custom
-        )
-        self.validate_custom_button.pack(side="left")
-        self.apply_custom_button = ttk.Button(
-            custom_buttons,
-            text="Apply to launch configuration",
-            command=self._apply_custom,
-            state="disabled",
-        )
-        self.apply_custom_button.pack(side="left", padx=(8, 0))
-        self.custom_result_label = ttk.Label(custom, text="", justify="left", wraplength=340)
-        self.custom_result_label.pack(anchor="w", pady=(6, 0))
-
-        # ---- Results + history -----------------------------------------
-        bottom = ttk.Frame(paned)
-        paned.add(bottom, weight=1)
         results_frame = ttk.LabelFrame(
-            bottom, text="Latest pipeline results (click a column to sort)", padding=8
+            self, text="Measurements (every configuration actually tested)", padding=8
         )
-        results_frame.pack(fill="both", expand=True)
+        results_frame.pack(fill="both", expand=True, pady=(10, 0))
         self.tree = _scrollable_table(results_frame, self.RESULT_COLUMNS)
 
         self._cancel_event: threading.Event | None = None
         self._latest_progress: dict[str, Any] | None = None
         self._progress_lock = threading.Lock()
         self._latest_report: dict[str, Any] | None = None
-        self._custom_validation: dict[str, Any] | None = None
+        self._applied: bool | None = None
+        self._failure_text: str | None = None
         self._running = False
 
-    _FIELD_LABELS = {
-        "environment_counts": "Environment counts",
-        "worker_counts": "Worker counts",
-        "finalists": "Validated finalists",
-    }
-
-    def _sync_budget_inputs(self) -> None:
-        """Swap the budget input; the other mode keeps its value untouched."""
-        steps_mode = self.budget_mode_var.get() == "steps"
-        if steps_mode:
-            self.minutes_entry.grid_remove()
-            self.steps_entry.grid(row=1, column=1, sticky="w")
-        else:
-            self.steps_entry.grid_remove()
-            self.minutes_entry.grid(row=1, column=1, sticky="w")
+    # -- workflow ----------------------------------------------------------
 
     def refresh(self) -> None:
         self.submit_poll(
@@ -1040,77 +1011,135 @@ class BenchmarkPage(Page):
         self.submit_poll(
             "recommendation", self.adapter.recommended_configuration, self._on_recommendation
         )
-        with self._progress_lock:
-            progress = dict(self._latest_progress) if self._latest_progress else None
-        view = vm.pipeline_progress_view(progress)
-        if self._running:
-            self.progress_label.configure(text=view["text"])
+        self._refresh_workflow_labels()
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
         self.run_button.configure(state="disabled" if self._running else "normal")
         self.cancel_button.configure(state="normal" if self._running else "disabled")
 
+    def _refresh_workflow_labels(self) -> None:
+        with self._progress_lock:
+            progress = dict(self._latest_progress) if self._latest_progress else None
+        view = vm.benchmark_workflow_view(
+            running=self._running,
+            event=progress,
+            report=self._latest_report,
+            applied=self._applied,
+        )
+        self.phase_label.configure(text=view["phase_line"])
+        self.progress_label.configure(
+            text=self._failure_text or view["detail"],
+            foreground=COLOR_ERROR if self._failure_text else COLOR_MUTED,
+        )
+
     def _start(self) -> None:
-        values = {
-            "budget_mode": self.budget_mode_var.get(),
-            "minutes": self.pipeline_vars["minutes"].get(),
-            "steps": self.pipeline_vars["steps"].get(),
-            "environment_counts": self.pipeline_vars["environment_counts"].get(),
-            "worker_counts": self.pipeline_vars["worker_counts"].get(),
-            "finalists": self.pipeline_vars["finalists"].get(),
-        }
-        try:
-            parsed = vm.parse_benchmark_pipeline_form(values)
-        except ValueError as exc:
-            messagebox.showerror("Invalid benchmark configuration", str(exc))
+        """Run the complete workflow - no form, no parameters to validate."""
+        if self._running:
             return
         self._running = True
+        self._latest_report = None
+        self._applied = None
+        self._failure_text = None
         self._cancel_event = threading.Event()
+        with self._progress_lock:
+            self._latest_progress = None
+        self._update_buttons()
+        self.progress_label.configure(text="starting...", foreground=COLOR_MUTED)
+        self.app.set_status("Benchmark started - measuring this machine")
 
         def on_progress(event: dict[str, Any]) -> None:
             with self._progress_lock:
                 self._latest_progress = dict(event)
 
+        cancel_event = self._cancel_event
+
         def _run() -> dict[str, Any]:
             return self.adapter.run_benchmark_pipeline(
-                budget_mode=parsed["budget_mode"],
-                steps=parsed["steps"],
-                minutes=parsed["minutes"],
-                environment_counts=parsed["environment_counts"],
-                worker_counts=parsed["worker_counts"],
-                finalists=parsed["finalists"],
-                cancel=self._cancel_event.is_set if self._cancel_event else None,
+                cancel=cancel_event.is_set if cancel_event else None,
                 on_progress=on_progress,
             )
 
         self.app.background.submit(_run, self._on_finished)
-
-    def _on_finished(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
-        self._running = False
-        if error is not None or report is None:
-            self.progress_label.configure(text=f"failed: {error}")
-            self.app.set_status(f"Benchmark failed: {error}", error=True)
-            return
-        self._latest_report = report
-        status = report.get("status")
-        self.progress_label.configure(
-            text=f"finished ({status}, {vm.format_duration(report.get('elapsed_seconds'))})"
-        )
-        if report.get("recommendation"):
-            self.app.set_status("Benchmark finished - recommendation available")
-        else:
-            self.app.set_status(
-                f"Benchmark finished without a recommendation: "
-                f"{report.get('recommendation_reason') or status}",
-                error=status != "completed",
-            )
-        self._render_report(report)
-        self._render_recommendation(report.get("recommendation"))
 
     def _cancel(self) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
             self.progress_label.configure(text="cancelling - the in-flight measurement finishes")
 
-    # -- results/history --------------------------------------------------
+    def _on_finished(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
+        self._running = False
+        self._update_buttons()
+        if error is not None or report is None:
+            self._applied = False
+            self._failure_text = f"failed: {error}"
+            self.app.set_status(f"Benchmark failed: {error}", error=True)
+            self._refresh_workflow_labels()
+            return
+        self._latest_report = report
+        self._render_report(report)
+        recommendation = report.get("recommendation")
+        if recommendation:
+            self._render_recommendation(recommendation)
+            self._apply_automatically()
+        else:
+            self._applied = False
+            reason = report.get("recommendation_reason") or report.get("status") or "unknown"
+            self._render_recommendation(None, reason=str(reason))
+            self.app.set_status(
+                f"Benchmark finished without a usable configuration: {reason}",
+                error=report.get("status") != "completed",
+            )
+        self._refresh_workflow_labels()
+
+    def _apply_automatically(self) -> None:
+        """Final workflow step: activate the persisted winning configuration."""
+
+        def _run() -> dict[str, Any] | None:
+            return self.adapter.apply_recommended_configuration()
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result:
+                self._applied = False
+                self.applied_label.configure(
+                    text=f"could not apply automatically: {error or 'no persisted recommendation'}",
+                    foreground=COLOR_ERROR,
+                )
+                self.app.set_status(f"Benchmark: applying the result failed: {error}", error=True)
+            else:
+                self._applied = True
+                self._push_to_launch_form(result)
+                self.applied_label.configure(
+                    text=(
+                        "applied automatically - the launch configuration (Agents page) "
+                        "now uses this topology"
+                    ),
+                    foreground=COLOR_OK,
+                )
+                self.app.set_status("Benchmark finished - best configuration applied")
+            self._refresh_workflow_labels()
+
+        self.app.background.submit(_run, _done)
+
+    def _push_to_launch_form(self, recommendation: dict[str, Any]) -> None:
+        """Mirror the applied configuration into an already-built Agents page.
+
+        A not-yet-built Agents page needs nothing here: its build() reads
+        the persisted applied recommendation itself.
+        """
+        agents_page = self.app.pages.get("Agents")
+        if agents_page is None or not getattr(agents_page, "_built", False):
+            return
+        agents_page.apply_launch_values(
+            {
+                "environment_count": str(recommendation.get("environment_count", "")),
+                "env_workers": str(recommendation.get("env_workers", "")),
+                "device": recommendation.get("device") or "auto",
+                "inference_device": recommendation.get("inference_device") or "auto",
+            }
+        )
+
+    # -- results/history ---------------------------------------------------
 
     def _on_history(
         self, history: list[dict[str, Any]] | None, error: BaseException | None
@@ -1118,7 +1147,7 @@ class BenchmarkPage(Page):
         if error is not None or history is None:
             self.report_error("Benchmark history refresh failed", error or RuntimeError("unknown"))
             return
-        if self._latest_report is None and history:
+        if self._latest_report is None and not self._running and history:
             self._render_report(history[0].get("report"))
 
     def _render_report(self, report: dict[str, Any] | None) -> None:
@@ -1142,9 +1171,11 @@ class BenchmarkPage(Page):
                     vm.format_number(row["startup_seconds"], 2),
                     row["error"] or "",
                 ),
+                tags=("failed",) if (row["status"] or "ok") not in ("ok", "measured") else (),
             )
+        self.tree.tag_configure("failed", foreground=COLOR_ERROR)
 
-    # -- recommendation ---------------------------------------------------
+    # -- best configuration --------------------------------------------------
 
     def _on_recommendation(
         self, recommendation: dict[str, Any] | None, error: BaseException | None
@@ -1154,117 +1185,29 @@ class BenchmarkPage(Page):
         if not self._running and not self._latest_report:
             self._render_recommendation(recommendation)
 
-    def _render_recommendation(self, recommendation: dict[str, Any] | None) -> None:
+    def _render_recommendation(
+        self, recommendation: dict[str, Any] | None, reason: str | None = None
+    ) -> None:
         view = vm.benchmark_recommendation_view(recommendation)
         if not view.get("available"):
             self.recommendation_label.configure(
-                text=f"{view.get('reason')}\nRun the benchmark pipeline to measure this machine."
+                text=(reason or str(view.get("reason")))
+                + "\nPress Start - the benchmark measures this machine and applies the result."
             )
-            self.apply_button.configure(state="disabled")
+            self.applied_label.configure(text="")
             return
         lines = [
             view["summary"],
             f"basis: {view['basis']}",
-            f"measured: {view['created_utc'] or 'n/a'}"
-            + (f", applied: {view['applied_utc']}" if view.get("applied_utc") else ""),
+            f"measured: {view['created_utc'] or 'n/a'}",
         ]
-        lines.extend(f"• {line}" for line in view["rationale"])
+        lines.extend(f"- {line}" for line in view["rationale"])
         lines.extend(f"warning: {warning}" for warning in view["warnings"])
         self.recommendation_label.configure(text="\n".join(lines))
-        self.apply_button.configure(state="normal")
-
-    def _apply(self) -> None:
-        recommendation = None
-        if self._latest_report and self._latest_report.get("recommendation"):
-            recommendation = self._latest_report["recommendation"]
-        if recommendation is None:
-            return
-
-        def _run() -> dict[str, Any] | None:
-            self.adapter.apply_recommended_configuration()
-            return recommendation
-
-        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
-            if error is not None or not result:
-                self.app.set_status(f"Apply failed: {error}", error=True)
-                return
-            agents_page = self.app.pages.get("Agents")
-            if agents_page is not None:
-                agents_page.apply_launch_values(
-                    {
-                        "environment_count": str(result["environment_count"]),
-                        "env_workers": str(result["env_workers"]),
-                        "device": result.get("device") or "auto",
-                        "inference_device": result.get("inference_device") or "auto",
-                    }
-                )
-            self.app.set_status(
-                "Recommended configuration applied to the launch form (Agents page)"
+        if view.get("applied_utc") and self._applied is None:
+            self.applied_label.configure(
+                text=f"active since {view['applied_utc']} (persisted)", foreground=COLOR_OK
             )
-            self._render_recommendation(result | {"applied_utc": "just now"})
-
-        self.app.background.submit(_run, _done)
-
-    def _validate_custom(self) -> None:
-        try:
-            environment_count = int(self.custom_env_var.get())
-            env_workers = int(self.custom_workers_var.get())
-        except ValueError:
-            self.custom_result_label.configure(
-                text="Environments and workers must be integers.", foreground=COLOR_ERROR
-            )
-            self.apply_custom_button.configure(state="disabled")
-            return
-        device = self.custom_device_var.get()
-
-        def _run() -> dict[str, Any]:
-            return self.adapter.validate_runtime_configuration(
-                environment_count, env_workers, device
-            )
-
-        def _done(validation: dict[str, Any] | None, error: BaseException | None) -> None:
-            if error is not None or validation is None:
-                self.custom_result_label.configure(
-                    text=f"validation failed: {error}", foreground=COLOR_ERROR
-                )
-                self.apply_custom_button.configure(state="disabled")
-                return
-            self._custom_validation = validation
-            view = vm.custom_configuration_view(validation)
-            text = "VALID" if view["valid"] else "INVALID"
-            lines = [text] + [f"error: {item}" for item in view["errors"]]
-            lines.extend(f"warning: {item}" for item in view["warnings"])
-            if view["shards"]:
-                lines.append(
-                    "workers: "
-                    + ", ".join(f"w{shard['worker']}={shard['count']}" for shard in view["shards"])
-                )
-            self.custom_result_label.configure(
-                text="\n".join(lines),
-                foreground=COLOR_OK if view["valid"] else COLOR_ERROR,
-            )
-            self.apply_custom_button.configure(state="normal" if view["valid"] else "disabled")
-
-        self.app.background.submit(_run, _done)
-
-    def _apply_custom(self) -> None:
-        validation = self._custom_validation
-        if not validation or not validation.get("valid"):
-            return
-        environment_count = validation["environment_count"]
-        env_workers = validation["env_workers"]
-        device = self.custom_device_var.get()
-        agents_page = self.app.pages.get("Agents")
-        if agents_page is None:
-            return
-        agents_page.apply_launch_values(
-            {
-                "environment_count": str(environment_count),
-                "env_workers": str(env_workers),
-                "device": device,
-            }
-        )
-        self.app.set_status("Custom configuration applied to the launch form (Agents page)")
 
 
 class EvaluationPage(Page):
@@ -1889,27 +1832,117 @@ class SystemPage(Page):
 
 class SettingsPage(Page):
     title = "Settings"
-    subtitle = "Project and output roots this Control Center reads from and writes runs into."
+    subtitle = "Project/output roots and the machine-local Godot executable every launch resolves."
 
     def build(self) -> None:
-        self.project_root_label = ttk.Label(self, text="")
+        roots = ttk.LabelFrame(self, text="Directories", padding=10)
+        roots.pack(fill="x")
+        self.project_root_label = ttk.Label(roots, text="")
         self.project_root_label.pack(anchor="w", pady=2)
-        self.output_root_label = ttk.Label(self, text="")
+        self.output_root_label = ttk.Label(roots, text="")
         self.output_root_label.pack(anchor="w", pady=2)
-        ttk.Button(self, text="Change output root...", command=self._change_output_root).pack(
+        ttk.Button(roots, text="Change output root...", command=self._change_output_root).pack(
             anchor="w", pady=(8, 0)
         )
         ttk.Label(
-            self,
+            roots,
             text="Changing the output root points this session's Runs/Checkpoints/Evaluations/"
             "Benchmarks pages at a different directory; it does not move existing runs.",
             foreground=COLOR_MUTED,
             wraplength=700,
         ).pack(anchor="w", pady=(4, 0))
 
+        # ---- Godot executable (the #1 reason launches fail) -------------
+        godot = ttk.LabelFrame(self, text="Godot executable", padding=10)
+        godot.pack(fill="x", pady=(12, 0))
+        ttk.Label(
+            godot,
+            text="Training, benchmarks and evaluations all resolve the engine through this "
+            "remembered setting when none is given explicitly (resolution order: explicit "
+            "path, GODOT_PATH/GODOT_EXECUTABLE, this setting, PATH). Verify & save probes "
+            "the executable before persisting it, so a saved value was actually seen "
+            "working.",
+            foreground=COLOR_MUTED,
+            wraplength=700,
+            justify="left",
+        ).pack(anchor="w")
+        entry_row = ttk.Frame(godot)
+        entry_row.pack(fill="x", pady=(8, 0))
+        self.godot_var = tk.StringVar(value=self.adapter.godot_executable_setting() or "")
+        ttk.Entry(entry_row, textvariable=self.godot_var, width=60).pack(side="left")
+        ttk.Button(entry_row, text="Browse", width=8, command=self._browse_godot).pack(
+            side="left", padx=(4, 0)
+        )
+        self.godot_save_button = ttk.Button(
+            entry_row, text="Verify && save", command=self._save_godot, style="Primary.TButton"
+        )
+        self.godot_save_button.pack(side="left", padx=(8, 0))
+        self.godot_status_label = ttk.Label(godot, text="", justify="left", wraplength=700)
+        self.godot_status_label.pack(anchor="w", pady=(6, 0))
+
     def refresh(self) -> None:
         self.project_root_label.configure(text=f"project root: {self.adapter.project_root}")
         self.output_root_label.configure(text=f"output root: {self.adapter.output_root}")
+        self.submit_poll("godot-status", self.adapter.system_status, self._on_system_status)
+
+    def _on_system_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
+        if error is not None or status is None:
+            return
+        if status.get("godot_available"):
+            resolved = status.get("godot_resolved_executable") or "?"
+            version = status.get("godot_version") or "version unknown"
+            self.godot_status_label.configure(
+                text=f"currently resolves to: {resolved} ({version})", foreground=COLOR_OK
+            )
+        else:
+            self.godot_status_label.configure(
+                text="no usable Godot executable found - launches will fail until one is "
+                "configured here, put on PATH or set via GODOT_PATH",
+                foreground=COLOR_ERROR,
+            )
+
+    def _browse_godot(self) -> None:
+        path = filedialog.askopenfilename()
+        if path:
+            self.godot_var.set(path)
+
+    def _save_godot(self) -> None:
+        candidate = self.godot_var.get().strip()
+        if not candidate:
+            self.godot_status_label.configure(
+                text="enter or browse to a Godot executable first", foreground=COLOR_WARN
+            )
+            return
+        self.godot_save_button.configure(state="disabled")
+        self.godot_status_label.configure(text="verifying...", foreground=COLOR_MUTED)
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            self.godot_save_button.configure(state="normal")
+            if error is not None or not result:
+                self.godot_status_label.configure(
+                    text=f"verification failed: {error}", foreground=COLOR_ERROR
+                )
+                return
+            if result.get("ok"):
+                saved = (
+                    "remembered in .sandboxai/settings.json"
+                    if result.get("settings_path")
+                    else "verified (settings file not writable here)"
+                )
+                version = result.get("version") or "version unknown"
+                self.godot_status_label.configure(
+                    text=f"OK: {result.get('resolved')} ({version}) - {saved}",
+                    foreground=COLOR_OK,
+                )
+                self.app.set_status("Godot executable verified and remembered")
+            else:
+                self.godot_status_label.configure(
+                    text=str(result.get("error")), foreground=COLOR_ERROR
+                )
+
+        self.app.background.submit(
+            lambda: self.adapter.configure_godot_executable(candidate), _done
+        )
 
     def _change_output_root(self) -> None:
         directory = filedialog.askdirectory(initialdir=str(self.adapter.output_root))

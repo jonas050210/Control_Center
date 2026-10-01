@@ -270,6 +270,18 @@ class ProcessManager:
                 "error": "process not found",
             }
         with self._lock:
+            error_text = record.error or ""
+            if error_text.startswith("process exited with code"):
+                # A bare exit code is useless in an error column. The last
+                # non-empty stderr line is the process's own account of why
+                # it died; appending it here (instead of in _wait) avoids
+                # racing the stderr drain thread, which may still be
+                # delivering that line when wait() returns.
+                detail = next(
+                    (text.strip() for _, text in reversed(record.stderr) if text.strip()), ""
+                )
+                if detail:
+                    error_text = f"{error_text}: {detail}"
             result: ProcessSnapshot = {
                 "id": record.id,
                 "kind": record.kind,
@@ -283,7 +295,7 @@ class ProcessManager:
                 "pid": record.process.pid,
                 "stdout": [text for _, text in record.stdout[-100:]],
                 "stderr": [text for _, text in record.stderr[-100:]],
-                "error": record.error or "",
+                "error": error_text,
                 "run_dir": str(record.run_dir),
                 "meta": dict(record.meta),
                 "command": list(record.command),
@@ -526,9 +538,11 @@ class SandboxAIAdapter:
         self.agents = AgentManager(self.processes, self)
         self._series_cache: OrderedDict[str, _RunSeries] = OrderedDict()
         self._series_cache_limit = 6
-        #: (monotonic time, runtime facts) for compatibility checks; probing
-        #: the Godot version is a subprocess call, too slow for every poll.
-        self._runtime_status: tuple[float, dict[str, Any]] | None = None
+        #: executable -> (monotonic time, runtime facts) for compatibility
+        #: checks; probing the Godot version is a subprocess call, too slow
+        #: for every poll. Keyed by the requested executable (None = the
+        #: default resolution chain) so a form override is probed honestly.
+        self._runtime_status: dict[str | None, tuple[float, dict[str, Any]]] = {}
 
     def _python_command(self, *args: str) -> list[str]:
         return [sys.executable, "-m", "sandboxai", *args]
@@ -922,26 +936,80 @@ class SandboxAIAdapter:
         return mark_recommendation_applied(self.project_root)
 
     def validate_runtime_configuration(
-        self, environment_count: int, env_workers: int, device: str
+        self,
+        environment_count: int,
+        env_workers: int,
+        device: str,
+        godot_executable: str | None = None,
     ) -> dict[str, Any]:
         """Compatibility verdict shared with the benchmark's own planning.
 
         Uses the same runtime facts the pipeline discovers, so a
         configuration the benchmark would reject is also refused by the
-        launcher — and vice versa.
+        launcher — and vice versa. ``godot_executable`` is the launch
+        form's explicit override; when the executable (explicit or the
+        default resolution chain) does not resolve, that is reported as an
+        error *before* a doomed launch instead of a dead process after it.
         """
         from .benchmark_pipeline import validate_configuration
 
-        runtime = self._runtime_status_cached()
-        return validate_configuration(
+        runtime = self._runtime_status_cached(executable=godot_executable or None)
+        verdict = validate_configuration(
             environment_count,
             env_workers,
             device,
             runtime=runtime,
             cpu_count=int(runtime.get("cpu_count_available_to_process") or 1),
         )
+        if runtime.get("godot_available") is False:
+            requested = godot_executable or str(runtime.get("godot_executable") or "godot")
+            verdict["errors"] = list(verdict.get("errors", [])) + [
+                f"Godot executable '{requested}' was not found - configure it on the "
+                "Settings page (or install Godot and put it on PATH); a launch now "
+                "would fail at startup"
+            ]
+            verdict["valid"] = False
+        return verdict
 
-    def _runtime_status_cached(self, max_age_seconds: float = 30.0) -> dict[str, Any]:
+    def godot_executable_setting(self) -> str | None:
+        """The remembered machine-local Godot executable, or ``None``."""
+        from .config import load_godot_executable_setting
+
+        return load_godot_executable_setting()
+
+    def configure_godot_executable(self, executable: str) -> dict[str, Any]:
+        """Verify ``executable`` and remember it for every later launch.
+
+        The exact probe the benchmark pipeline uses decides: the setting is
+        only persisted when the executable actually resolves, so the
+        remembered value can never be a path that was not seen working.
+        """
+        from .benchmark_pipeline import available_runtime
+        from .config import save_godot_executable_setting
+
+        text = str(executable or "").strip()
+        if not text:
+            return {"ok": False, "error": "no executable path given"}
+        runtime = available_runtime(self.project_root, text)
+        if not runtime.get("godot_available"):
+            return {
+                "ok": False,
+                "error": f"'{text}' did not resolve to a usable Godot executable",
+                "runtime": runtime,
+            }
+        resolved = str(runtime.get("godot_resolved_executable") or text)
+        settings_path = save_godot_executable_setting(resolved)
+        self._runtime_status.clear()
+        return {
+            "ok": True,
+            "resolved": resolved,
+            "version": runtime.get("godot_version"),
+            "settings_path": str(settings_path) if settings_path else None,
+        }
+
+    def _runtime_status_cached(
+        self, max_age_seconds: float = 30.0, executable: str | None = None
+    ) -> dict[str, Any]:
         """Runtime facts for compatibility checks, cached briefly.
 
         ``available_runtime`` probes the Godot binary's version (a
@@ -949,12 +1017,13 @@ class SandboxAIAdapter:
         a custom-configuration form.
         """
         now = time.monotonic()
-        if self._runtime_status is not None and now - self._runtime_status[0] < max_age_seconds:
-            return self._runtime_status[1]
+        cached = self._runtime_status.get(executable)
+        if cached is not None and now - cached[0] < max_age_seconds:
+            return cached[1]
         from .benchmark_pipeline import available_runtime
 
-        runtime = available_runtime(self.project_root)
-        self._runtime_status = (now, runtime)
+        runtime = available_runtime(self.project_root, executable)
+        self._runtime_status[executable] = (now, runtime)
         return runtime
 
     # ------------------------------------------------------------------

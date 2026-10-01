@@ -92,8 +92,13 @@ place.
 
 ### Benchmarks
 
-The staged **benchmark pipeline** that measures what this machine's
-runtime can actually do, then recommends a configuration.
+The **one-button automatic benchmark**: a single *Start benchmark*
+button runs the complete staged pipeline with host-scaled defaults —
+there are no parameters to fill in. The tab shows the live phase strip
+(discover → screen → devices → validate → pick → apply), the current
+measurement, every tested configuration, and the winning configuration;
+when the pipeline completes, the recommendation is persisted and
+**applied automatically** to the launch configuration.
 
 1. **Discovery** — probe the Godot executable/version, torch, CUDA, CPU
    count, RAM. No Godot binary means an honest "unavailable" report with
@@ -114,19 +119,21 @@ runtime can actually do, then recommends a configuration.
    latency jitter, no errors, fewer workers) over an unstable peak. The
    `rationale` and `warnings` quote only measured numbers.
 
-**Budgets:** *Steps* (screen until a step count per configuration) or
-*Time* (1–60 minutes total, split across stages, candidate grid thinned
-to fit). Planning estimates size the slices; only measured values are
-reported.
+The GUI always uses the pipeline's own defaults (the time budget split
+across stages, the candidate grid scaled to this host's cores and
+thinned to fit). Planning estimates size the slices; only measured
+values are reported. Budget/grid knobs remain available on the CLI for
+scripted sweeps.
 
-**Result:** the *Recommended Configuration* card (config, expected
-steps/s, basis, rationale, warnings) with an **Apply** action that fills
-the Agents launch form, and a *Custom configuration* card validated by
-the same compatibility check the launcher enforces. The full report is
-persisted under `training/benchmarks/pipelines/<timestamp>/`
-(`pipeline.json` + benchmark-history-shaped `benchmark.json`), the
-recommendation machine-locally in `.sandboxai/recommended_config.json`,
-and past runs are listed from the history.
+**Result:** the *Best configuration* card (config, expected steps/s,
+basis, rationale, warnings). After a completed run the tab marks the
+recommendation applied and mirrors it into the Agents launch form by
+itself; a not-yet-opened Agents page picks the applied recommendation
+up when it is built. The full report is persisted under
+`training/benchmarks/pipelines/<timestamp>/` (`pipeline.json` +
+benchmark-history-shaped `benchmark.json`), the recommendation
+machine-locally in `.sandboxai/recommended_config.json`, and the latest
+persisted report is shown again on the next start.
 
 The same pipeline runs from the shell:
 
@@ -156,8 +163,14 @@ shown as such, never estimated.
 
 ### Settings
 
-Project and output roots and the Godot executable, with the hardware
-profile surfaced where one is persisted.
+Project and output roots, plus the machine-local **Godot executable**:
+*Verify & save* probes the given path with the same runtime check the
+benchmark uses and only then remembers it in
+`.sandboxai/settings.json`, so training, benchmarks and evaluations all
+resolve a binary that was actually seen working. The page also shows
+what the current resolution chain (explicit path →
+`GODOT_PATH`/`GODOT_EXECUTABLE` → remembered setting → PATH) resolves
+to right now.
 
 ## Honesty rules
 
