@@ -134,7 +134,9 @@ records what changed and why.
   threads to one: its tiny torch/SB3 test models were dramatically slower
   when a high-core Windows runner fanned their work out across every CPU.
   Its unbuffered, verbose pytest output now identifies the last test if a
-  platform-specific stall ever reappears. Job order: lint, typecheck,
+  platform-specific stall ever reappears, and `pytest-timeout` turns a
+  wedged individual test into a failure with a stack after three minutes
+  rather than an opaque job-level cancellation. Job order: lint, typecheck,
   core-tests, gdscript-checks, desktop-ui-tests, full-tests, coverage,
   audit.
 - Ruff now enforces `E,W,F,I,UP,B,SIM,C901` instead of `F` alone, with

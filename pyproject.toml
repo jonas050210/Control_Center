@@ -52,6 +52,9 @@ training = [
 ]
 test = [
   "pytest>=7.4",
+  # A wedged subprocess/model test must become a real, actionable failure
+  # before the job-level CI timeout hides the offending test name.
+  "pytest-timeout>=2.3,<3",
 ]
 # GDScript tooling: real grammar parsing (gdparse) and style rules (gdlint)
 # used by python/sandboxai/gdscript_analysis.py. Optional because it is only
@@ -158,11 +161,15 @@ testpaths = ["python/tests"]
 # `-ra` surfaces the skip reasons: a green run with 60 silent skips because
 # an optional extra is missing looks identical to a genuinely complete one.
 addopts = "-ra --strict-markers --strict-config"
-# Dump every thread's stack and abort if a single test runs this long.
-# A hung test otherwise sits there until the CI job's own timeout and
-# reports nothing at all; the whole suite takes about a minute, so any
-# test reaching five is wedged, not slow.
-faulthandler_timeout = 300
+# A hung subprocess/model test must fail on its own with the current test
+# name and stack instead of sitting until the CI job timeout reports nothing.
+# The complete suite normally takes a few minutes even with training extras,
+# so a single test reaching three minutes is wedged, not slow. `thread` is
+# portable to Windows (the project has no macOS CI) and pytest-timeout makes
+# the timeout a real failure rather than faulthandler's diagnostic-only dump.
+timeout = 180
+timeout_method = "thread"
+faulthandler_timeout = 180
 markers = [
   "slow: wall-clock heavy; opt in with `-m slow`",
   "requires_godot: needs a real Godot 4.7.2 executable on the machine",
