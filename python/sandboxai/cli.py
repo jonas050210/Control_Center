@@ -199,11 +199,22 @@ def build_record_command(
 ) -> list[str]:
     """Build the Godot invocation for the graphical demonstration recorder.
 
-    The output path is resolved to an absolute path so the recording is saved
-    predictably regardless of the Godot process working directory. Paths are
-    handed to a Windows Godot binary from WSL in Windows form.
+    The executable is used exactly as supplied; the CLI resolves it through
+    ``find_godot_executable`` (explicit flag, GODOT_PATH, the remembered
+    setting, PATH probing) before calling, so this builder stays a pure
+    function of its arguments. Resolving it inside instead made the command
+    depend on machine-local state: on WSL, where the default ``godot``
+    resolves to a Windows binary, the interop silently rewrote the output
+    into ``C:\\...`` form — which pathlib does not consider an absolute
+    path, so the resolved dataset location never reached the command.
+
+    The output path is resolved to an absolute path so the recording is
+    saved predictably regardless of the Godot process working directory.
+    Paths are handed to a Windows Godot binary from WSL in Windows form;
+    with any other executable the resolved absolute path passes through
+    unchanged.
     """
-    executable = find_godot_executable(godot_executable)
+    executable = godot_executable or "godot"
     project = _resolve_project_path(project_path)
     output_path = Path(normalize_host_path(output)).expanduser().resolve()
     interop = WindowsInterop(executable)
@@ -804,8 +815,11 @@ def _cmd_inspect_runs(args: argparse.Namespace) -> int:
 
 def _cmd_record(args: argparse.Namespace) -> int:
     try:
+        # Resolve the executable here (flag > GODOT_PATH > remembered
+        # setting > PATH) rather than inside build_record_command, which
+        # stays a pure builder: see its docstring.
         command = build_record_command(
-            args.godot_executable,
+            find_godot_executable(args.godot_executable),
             args.project_path,
             args.output,
             args.duration,

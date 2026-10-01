@@ -171,6 +171,14 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- `sandboxai record` builds its Godot command from the executable exactly as
+  the CLI resolved it (flag, `GODOT_PATH`, remembered setting, PATH probing)
+  instead of re-resolving inside `build_record_command`. On WSL, where the
+  default `godot` resolves to a Windows binary, that internal resolution let
+  the interop rewrite the `--output` dataset path into `C:\...` form — which
+  `pathlib` does not consider absolute, so the resolved location the builder
+  computed never reached the command. The builder is now a pure function of
+  its arguments; every real invocation produces the same argv as before.
 - The checkpoint-evaluation battery perf-regression tests raised
   `AttributeError` on `config.run_id`: the evaluation report gained
   `run_id`/`experiment_id` and the normal-evaluation episode/environment
