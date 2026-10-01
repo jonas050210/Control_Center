@@ -110,6 +110,10 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 		"reduced-motion preference stops the ambient backdrop loop"
 	)
 	t.assert_not_null(ui.status_bar, "top status bar")
+	t.assert_true(
+		ui.status_bar.get_child(0) is ScrollContainer,
+		"narrow windows keep the full command strip reachable via horizontal scrolling"
+	)
 	t.assert_not_null(ui.agent_panel, "live agent view panel")
 	t.assert_not_null(ui.perception_panel, "what-does-the-AI-see panel")
 	t.assert_not_null(ui.observation_panel, "observation inspector panel")

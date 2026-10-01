@@ -28,8 +28,16 @@ func setup(p_session) -> void:
 		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
 	)
 
+	# The command strip has several real selectors. Keep them all reachable on
+	# narrow windows instead of clipping the right-most state and camera tools.
+	var strip_scroll := ScrollContainer.new()
+	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	strip_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(strip_scroll)
 	var row := ControlCenterTheme.make_row()
-	add_child(row)
+	row.custom_minimum_size = Vector2(1120.0, 0.0)
+	strip_scroll.add_child(row)
 
 	row.add_child(
 		ControlCenterTheme.make_label(
