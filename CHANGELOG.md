@@ -171,6 +171,32 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- The JSON-lines bridge no longer dies on engine output that happens to be
+  valid JSON. `GodotProcessTransport.receive` called `.get("ok")` on
+  whatever `json.loads` returned, so a single `print(0)` or `print([1, 2])`
+  anywhere on Godot's startup path took the transport down with
+  `AttributeError: 'int' object has no attribute 'get'` instead of being
+  skipped like every other informational line. Only JSON *objects* are now
+  treated as protocol frames.
+- `EpisodeMetrics` no longer reports a negative `reaction.shot_latency`.
+  The first trigger pull was latched whenever it happened, so an agent that
+  fired blind before ever seeing the enemy reported a negative "reaction
+  time" — neither the -1 "never happened" sentinel nor a latency. The first
+  shot is now latched only at or after first contact; the shots themselves
+  are still counted in `aim`.
+- `MetricsAggregator` no longer turns "never happened" into "happened
+  instantly". It correctly excluded the -1 sentinel from latency means, but
+  then returned 0.0 for the empty remainder, so a policy that never
+  detected, never fired and never reached half map coverage aggregated to
+  the fastest possible detection, shot and exploration times. When every
+  episode reported the sentinel, the aggregate keeps it.
+- The Control Center formatters render non-finite numbers as `n/a`.
+  `format_number(float("inf"))` raised `OverflowError` from
+  `int(round(inf))` and took down the page rendering it, while
+  `format_fraction_as_percent` / `format_bytes` printed `nan%` and
+  `inf PB` as if they were measurements. NaN and infinity survive a
+  `json.dump`/`json.loads` round trip, so a diverged run's own summaries
+  deliver them to the GUI.
 - `sandboxai record` builds its Godot command from the executable exactly as
   the CLI resolved it (flag, `GODOT_PATH`, remembered setting, PATH probing)
   instead of re-resolving inside `build_record_command`. On WSL, where the

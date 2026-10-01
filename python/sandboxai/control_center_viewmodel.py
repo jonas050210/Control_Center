@@ -43,28 +43,44 @@ STALE_STATUS_SECONDS = 30.0
 # ---------------------------------------------------------------------------
 
 
-def format_number(value: Any, decimals: int = 0) -> str:
+def _finite_number(value: Any) -> float | None:
+    """`value` as a float when it is a real, finite number, else ``None``.
+
+    Every formatter below funnels through this. NaN and +/-inf are *not*
+    displayable quantities: ``json`` round-trips them happily (a diverged
+    run writes ``NaN``/``Infinity`` into its own summaries, and
+    ``json.loads`` reads them straight back), so they do reach the GUI.
+    Rendering them as "nan" or "inf" would be an estimate of a value that
+    does not exist, and ``int(round(inf))`` raises OverflowError, which
+    took a whole page down. Both become "n/a" instead.
+    """
     if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
-        return "n/a"
-    if isinstance(value, float) and math.isnan(value):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def format_number(value: Any, decimals: int = 0) -> str:
+    number = _finite_number(value)
+    if number is None:
         return "n/a"
     if decimals:
-        return f"{value:,.{decimals}f}"
-    return f"{int(round(value)):,}"
+        return f"{number:,.{decimals}f}"
+    return f"{int(round(number)):,}"
 
 
 def format_fraction_as_percent(value: Any, decimals: int = 1) -> str:
-    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+    number = _finite_number(value)
+    if number is None:
         return "n/a"
-    return f"{value * 100:.{decimals}f}%"
+    return f"{number * 100:.{decimals}f}%"
 
 
 def format_duration(seconds: Any) -> str:
-    if seconds is None or isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+    number = _finite_number(seconds)
+    if number is None or number < 0:
         return "n/a"
-    if seconds < 0 or math.isnan(seconds) or math.isinf(seconds):
-        return "n/a"
-    total = int(seconds)
+    total = int(number)
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
@@ -75,9 +91,9 @@ def format_duration(seconds: Any) -> str:
 
 
 def format_bytes(value: Any) -> str:
-    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+    amount = _finite_number(value)
+    if amount is None:
         return "n/a"
-    amount = float(value)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if abs(amount) < 1024.0:
             return f"{amount:.1f} {unit}"
@@ -86,10 +102,11 @@ def format_bytes(value: Any) -> str:
 
 
 def format_timestamp(value: Any) -> str:
-    if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+    number = _finite_number(value)
+    if number is None:
         return "n/a"
     try:
-        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(number))
     except (OverflowError, OSError, ValueError):
         return "n/a"
 

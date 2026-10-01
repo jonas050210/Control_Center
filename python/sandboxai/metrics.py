@@ -71,6 +71,13 @@ GROUP_KEYS: tuple[str, ...] = (
     "map_bucket",
 )
 
+## Value used by latency and time-to-coverage metrics for "this never
+## happened in the episode". It is deliberately negative and not 0.0,
+## because a 0.0 would be indistinguishable from "happened instantly" —
+## the best possible outcome. Aggregation preserves it (see
+## ``MetricsAggregator._mean_of``) rather than averaging it in.
+SENTINEL_NEVER_HAPPENED: float = -1.0
+
 ## An exposure longer than this while a contact is visible counts as "bad
 ## exposure": standing in the open in front of something that can shoot
 ## back. Seconds.
@@ -148,10 +155,6 @@ class EpisodeMetrics:
         self._first_visible_tick: int = -1
         self._first_confirm_tick: int = -1
         self._first_shot_tick: int = -1
-        self._contact_started_tick: int = -1
-        self.detection_latency: float = -1.0
-        self.confirmation_latency: float = -1.0
-        self.shot_latency: float = -1.0
 
         # awareness
         self.visible_contacts: int = 0
@@ -210,8 +213,8 @@ class EpisodeMetrics:
         self.explored_fraction: float = 0.0
         self.new_area_events: int = 0
         self._last_explored: float = 0.0
-        self.time_to_half_coverage: float = -1.0
-        self.time_to_target_coverage: float = -1.0
+        self.time_to_half_coverage: float = SENTINEL_NEVER_HAPPENED
+        self.time_to_target_coverage: float = SENTINEL_NEVER_HAPPENED
 
         self.result: dict[str, Any] = {}
 
@@ -271,13 +274,15 @@ class EpisodeMetrics:
     def _record_reaction(self, visible: bool, los: bool, events: dict[str, Any]) -> None:
         tick = self.ticks - 1
         if visible:
-            if self._contact_started_tick < 0:
-                self._contact_started_tick = tick
             if self._first_visible_tick < 0:
                 self._first_visible_tick = tick
             if self._first_confirm_tick < 0 and los:
                 self._first_confirm_tick = tick
-        if events.get("shot_fired") and self._first_shot_tick < 0:
+        # Only a shot fired at or after the first sighting is a *reaction*
+        # to it. Latching a blind shot that preceded contact produced a
+        # negative "latency" — a number that is neither the -1 sentinel nor
+        # a reaction time, and that silently entered reports.
+        if events.get("shot_fired") and self._first_shot_tick < 0 and self._first_visible_tick >= 0:
             self._first_shot_tick = tick
 
     def _record_awareness(
@@ -461,16 +466,19 @@ class EpisodeMetrics:
 
     def reaction(self) -> dict[str, Any]:
         dt = self._dt()
-        detection = self._first_visible_tick * dt if self._first_visible_tick >= 0 else -1.0
+        never = SENTINEL_NEVER_HAPPENED
+        detection = self._first_visible_tick * dt if self._first_visible_tick >= 0 else never
         confirmation = (
             (self._first_confirm_tick - self._first_visible_tick) * dt
             if self._first_confirm_tick >= 0 and self._first_visible_tick >= 0
-            else -1.0
+            else never
         )
+        # `_first_shot_tick` is only latched at or after the first sighting,
+        # so this difference can never be negative.
         shot = (
             (self._first_shot_tick - self._first_visible_tick) * dt
             if self._first_shot_tick >= 0 and self._first_visible_tick >= 0
-            else -1.0
+            else never
         )
         return {
             # -1 means "never happened"; a 0 would claim an instant reaction.
@@ -652,14 +660,22 @@ class MetricsAggregator:
         Averaging a -1 in with real latencies produces a number that is
         not a latency at all, so those episodes are excluded rather than
         silently poisoning the mean.
+
+        When *every* episode reported the sentinel the aggregate keeps it
+        instead of collapsing to 0.0: the sentinel means "it never
+        happened", and a 0.0 latency (or a 0.0 time-to-coverage) claims the
+        opposite — that it happened instantly. A policy that never fires
+        must not read as the fastest possible reaction.
         """
-        values = [
+        present = [
             float(row["categories"][category][metric])
             for row in rows
             if metric in row["categories"].get(category, {})
         ]
-        values = [value for value in values if value >= 0.0 or metric.endswith("_norm")]
-        return sum(values) / len(values) if values else 0.0
+        measured = [value for value in present if value >= 0.0]
+        if measured:
+            return sum(measured) / len(measured)
+        return SENTINEL_NEVER_HAPPENED if present else 0.0
 
     def aggregate(self, rows: Sequence[dict[str, Any]] | None = None) -> dict[str, Any]:
         selected = list(rows if rows is not None else self._episodes)

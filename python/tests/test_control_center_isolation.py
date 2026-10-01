@@ -10,6 +10,8 @@ tests parse sources instead of launching Godot or Tk so they run anywhere.
 from __future__ import annotations
 
 import ast
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -46,11 +48,57 @@ PYTHON_TRAINING_MODULES = (
 
 GUI_MODULE_NAMES = ("control_center_desktop", "control_center_pages", "control_center_widgets")
 
+# Leftovers that Windows/OneDrive, Godot and editors drop into a directory
+# whose tracked files are already deleted. None of them carries GDScript or
+# scene data, so none of them can resurrect the operator UI; they only mark a
+# working tree that still has to be swept. ``.uid``/``.import`` are Godot
+# sidecars that point at resources which no longer exist, and the editor
+# regenerates or drops them on the next import.
+INERT_LEFTOVER_NAMES = frozenset(
+    {"desktop.ini", "thumbs.db", ".ds_store", ".gitkeep", ".gitignore", ".directory"}
+)
+INERT_LEFTOVER_SUFFIXES = frozenset(
+    {".uid", ".import", ".tmp", ".temp", ".swp", ".swo", ".bak", ".orig", ".rej", ".pyc", ".log"}
+)
+# Directories that only ever hold regenerated caches.
+INERT_LEFTOVER_DIRS = frozenset({"__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"})
+
 
 def read(relative: str) -> str:
     path = PROJECT_ROOT / relative
     assert path.is_file(), f"missing source file: {path}"
     return path.read_text(encoding="utf-8")
+
+
+def _is_inert_leftover(path: Path) -> bool:
+    """True when ``path`` is sync/editor cruft rather than restorable source."""
+    if any(part.lower() in INERT_LEFTOVER_DIRS for part in path.parts):
+        return True
+    return (
+        path.name.lower() in INERT_LEFTOVER_NAMES or path.suffix.lower() in INERT_LEFTOVER_SUFFIXES
+    )
+
+
+def _restorable_entries(directory: Path) -> list[str]:
+    """Files under ``directory`` that could put the operator UI back.
+
+    Git does not track empty directories, and a Windows/OneDrive checkout
+    keeps the folder (plus a ``desktop.ini``) around long after its tracked
+    files are gone. Those machine-local remnants are not a second Control
+    Center, so the guard looks for real content: any file that is neither
+    inert cruft nor inside a regenerated cache directory.
+    """
+    if not directory.is_dir():
+        return []
+    found: list[str] = []
+    for child in sorted(directory.rglob("*")):
+        if child.is_dir():
+            continue
+        relative = child.relative_to(directory)
+        if _is_inert_leftover(relative):
+            continue
+        found.append(relative.as_posix())
+    return found
 
 
 def _module_level_imports(path: Path) -> set[str]:
@@ -63,16 +111,6 @@ def _module_level_imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
     return names
-
-
-def _describe(path: Path) -> str:
-    """Human-readable contents of ``path``, for actionable guard failures."""
-    if not path.exists():
-        return "nothing (the path does not exist)"
-    if not path.is_dir():
-        return "a file"
-    entries = sorted(child.name for child in path.iterdir())
-    return ", ".join(entries) if entries else "no entries (empty directory)"
 
 
 class TrainingPathIsolationTests(unittest.TestCase):
@@ -124,18 +162,64 @@ class TrainingPathIsolationTests(unittest.TestCase):
             "in-simulator operator scene would be a second, visual Control Center",
         )
         directory = PROJECT_ROOT / "scripts" / "control_center"
-        # Git does not track empty directories, and tools such as OneDrive or an
-        # editor may leave the directory itself behind after its tracked files are
-        # deleted.  An empty directory cannot restore the operator UI, so guard
-        # against content rather than a machine-local directory entry.
-        directory_has_entries = directory.is_dir() and any(directory.iterdir())
+        # A plain file at that path is never legitimate, whatever it holds.
         self.assertFalse(
-            directory_has_entries or (directory.exists() and not directory.is_dir()),
+            directory.exists() and not directory.is_dir(),
+            f"{directory} must not exist; the Control Center is the desktop application",
+        )
+        # Guard against restorable content, not against a machine-local
+        # directory entry: git cannot track an empty directory, and a
+        # Windows/OneDrive working copy routinely keeps the folder (and a
+        # desktop.ini inside it) after the tracked GDScript files are deleted.
+        restorable = _restorable_entries(directory)
+        self.assertEqual(
+            restorable,
+            [],
             "scripts/control_center/ was removed with the rendered operator UI, "
-            f"but {directory} still exists and contains {_describe(directory)}. "
-            "If these are only stale build artefacts from before the headless-only "
-            "refactor, clean the working tree (git clean -xdf scripts/control_center); "
-            "do not restore files in the directory",
+            f"but {directory} still contains {', '.join(restorable)}. "
+            "Do not restore the directory: delete those files (git clean -xdf "
+            "scripts/control_center, or rm -rf scripts/control_center in a "
+            "non-git copy of the sources)",
+        )
+
+
+class RestorableEntryDetectionTests(unittest.TestCase):
+    """The leftover filter must stay strict about anything that is source."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp()) / "control_center"
+        self.directory.mkdir()
+        self.addCleanup(shutil.rmtree, self.directory.parent, True)
+
+    def write(self, relative: str) -> None:
+        path = self.directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+
+    def test_missing_or_empty_directory_has_no_restorable_entries(self):
+        self.assertEqual(_restorable_entries(self.directory / "absent"), [])
+        self.assertEqual(_restorable_entries(self.directory), [])
+
+    def test_sync_and_cache_leftovers_are_not_restorable(self):
+        for relative in (
+            "desktop.ini",
+            "Thumbs.db",
+            ".DS_Store",
+            "control_center_main.gd.uid",
+            "icon.png.import",
+            "__pycache__/stale.pyc",
+            "notes.txt.bak",
+        ):
+            self.write(relative)
+        self.assertEqual(_restorable_entries(self.directory), [])
+
+    def test_operator_ui_sources_are_reported(self):
+        self.write("control_center_main.gd")
+        self.write("panels/inspector.tscn")
+        self.write("desktop.ini")
+        self.assertEqual(
+            _restorable_entries(self.directory),
+            ["control_center_main.gd", "panels/inspector.tscn"],
         )
 
 

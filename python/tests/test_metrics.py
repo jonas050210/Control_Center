@@ -117,6 +117,43 @@ class AimAndReactionTests(unittest.TestCase):
         self.assertEqual(reaction["detection_latency"], -1.0)
         self.assertEqual(reaction["shot_latency"], -1.0)
 
+    def test_a_shot_fired_before_contact_is_not_a_reaction_to_it(self):
+        """Blind fire must not produce a negative shot latency.
+
+        The first trigger pull used to be latched whenever it happened, so
+        an agent that sprayed before ever seeing the enemy reported
+        ``(shot_tick - first_visible_tick) * dt`` — a negative number that
+        is neither the -1 "never happened" sentinel nor a reaction time.
+        """
+        metrics = EpisodeMetrics()
+        for _ in range(3):  # firing blind, nothing visible yet
+            metrics.record(
+                StepSample(
+                    observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT
+                )
+            )
+        for _ in range(5):
+            metrics.record(StepSample(observation=obs(), action=IDLE_ACTION, dt=DT))
+        metrics.record(
+            StepSample(observation=obs(primary_enemy_visible=1.0), action=IDLE_ACTION, dt=DT)
+        )
+        self.assertEqual(metrics.reaction()["shot_latency"], -1.0)
+        self.assertEqual(metrics.aim()["shots"], 3)  # the shots are still counted
+
+    def test_shot_latency_measures_the_first_shot_after_the_sighting(self):
+        metrics = EpisodeMetrics()
+        metrics.record(
+            StepSample(observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT)
+        )
+        metrics.record(
+            StepSample(observation=obs(primary_enemy_visible=1.0), action=IDLE_ACTION, dt=DT)
+        )
+        metrics.record(StepSample(observation=obs(), action=IDLE_ACTION, dt=DT))
+        metrics.record(
+            StepSample(observation=obs(), events={"shot_fired": True}, action=IDLE_ACTION, dt=DT)
+        )
+        self.assertAlmostEqual(metrics.reaction()["shot_latency"], 2 * DT, places=6)
+
 
 class AwarenessTests(unittest.TestCase):
     def test_contacts_seen_and_lost(self):
@@ -449,6 +486,30 @@ class AggregationAndExportTests(unittest.TestCase):
         self.assertGreaterEqual(
             aggregator.aggregate()["categories"]["reaction"]["detection_latency"], 0.0
         )
+
+    def test_aggregate_keeps_the_sentinel_when_it_never_happened_at_all(self):
+        """A "never happened" aggregate must not become "happened instantly".
+
+        Dropping every -1 and then returning 0.0 for the empty remainder
+        reported a policy that never detected, never fired and never
+        explored as having the fastest possible latencies — the exact
+        misreading the per-episode sentinel exists to prevent.
+        """
+        aggregator = MetricsAggregator()
+        for _ in range(3):
+            episode = EpisodeMetrics({"policy_id": "idle"})
+            for _ in range(10):
+                episode.record(StepSample(observation=obs(), action=IDLE_ACTION, dt=DT))
+            self.assertEqual(episode.reaction()["shot_latency"], -1.0)
+            aggregator.add(episode.finish({}))
+
+        categories = aggregator.aggregate()["categories"]
+        for name in ("detection_latency", "confirmation_latency", "shot_latency"):
+            self.assertEqual(categories["reaction"][name], -1.0, name)
+        for name in ("time_to_half_coverage", "time_to_target_coverage"):
+            self.assertEqual(categories["exploration"][name], -1.0, name)
+        # Ordinary counters are unaffected: no episode fired a shot.
+        self.assertEqual(categories["aim"]["shots"], 0.0)
 
     def test_empty_aggregate_is_well_formed(self):
         aggregate = MetricsAggregator().aggregate()

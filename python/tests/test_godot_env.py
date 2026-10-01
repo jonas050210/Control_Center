@@ -40,7 +40,15 @@ def env_count_from_argv(default=1):
 
 ENV_COUNT = env_count_from_argv()
 
+# Engine-side prints that happen to be parseable JSON but are not protocol
+# frames. A real Godot `print(0)` / `print([1, 2])` anywhere on the startup
+# path lands on the same stdout the bridge speaks over.
+STRAY_JSON = os.environ.get("FAKE_BRIDGE_STRAY_JSON", "") == "1"
+
 def out(payload):
+    if STRAY_JSON:
+        for noise in ("0", "true", "null", '"loading map"', "[1, 2]", "3.5"):
+            sys.stdout.write(noise + "\n")
     sys.stdout.write(json.dumps(payload) + "\n")
     sys.stdout.flush()
 
@@ -244,6 +252,24 @@ class FakeBridgeTestCase(unittest.TestCase):
                 self.assertIn("warning spam", transport.stderr_tail())
         finally:
             del os.environ["FAKE_BRIDGE_STDERR_FLOOD"]
+
+    def test_stray_non_object_json_lines_are_skipped(self):
+        """Engine chatter that happens to be valid JSON is not a response.
+
+        `receive` called `.get("ok")` on whatever `json.loads` returned, so
+        a bare `print(0)` from any GDScript file killed the bridge with
+        `AttributeError: 'int' object has no attribute 'get'` instead of
+        being ignored like every other informational line.
+        """
+        os.environ["FAKE_BRIDGE_STRAY_JSON"] = "1"
+        try:
+            with self.make_transport() as transport:
+                self.assertEqual(
+                    transport.spaces["observation_space"]["size"], OBSERVATION_FIELD_COUNT
+                )
+                self.assertTrue(transport.request({"cmd": "ping"}).get("pong"))
+        finally:
+            del os.environ["FAKE_BRIDGE_STRAY_JSON"]
 
     def test_request_timeout_is_enforced(self):
         os.environ["FAKE_BRIDGE_SILENT"] = "1"
