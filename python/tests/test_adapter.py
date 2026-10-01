@@ -37,6 +37,34 @@ def test_process_manager_captures(tmp_path):
     assert isinstance(manager.snapshot(record.id)["pid"], int)
 
 
+def test_failed_process_error_includes_the_last_stderr_line(tmp_path):
+    """ "process exited with code 1" alone is useless; the snapshot appends
+    the process's own last words so the Agents table can show the cause."""
+    manager = ProcessManager()
+    record = manager.start(
+        "test",
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('boom: engine missing', file=sys.stderr); sys.exit(1)",
+        ],
+        tmp_path,
+        tmp_path,
+    )
+    record.process.wait(timeout=5)
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        snapshot = manager.snapshot(record.id)
+        if snapshot.get("returncode") is not None and snapshot.get("stderr"):
+            break
+        time.sleep(0.02)
+    snapshot = manager.snapshot(record.id)
+    assert snapshot["state"] == "failed"
+    assert snapshot["error"].startswith("process exited with code 1")
+    assert "boom: engine missing" in snapshot["error"]
+    manager.close()
+
+
 def test_process_manager_log_since_is_incremental(tmp_path):
     manager = ProcessManager()
     record = manager.start(
@@ -509,8 +537,9 @@ def test_validate_runtime_configuration_shares_the_pipeline_verdict(tmp_path):
     import time as _time
 
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
-    # Deterministic runtime facts: no CUDA, 8 usable cores.
-    adapter._runtime_status = (_time.monotonic(), {"cuda_available": False, "cpu_count": 8})
+    # Deterministic runtime facts: godot present, no CUDA, 8 usable cores.
+    runtime = {"godot_available": True, "cuda_available": False, "cpu_count": 8}
+    adapter._runtime_status = {None: (_time.monotonic(), runtime)}
 
     valid = adapter.validate_runtime_configuration(12, 4, "cpu")
     assert valid["valid"], valid["errors"]
@@ -522,3 +551,59 @@ def test_validate_runtime_configuration_shares_the_pipeline_verdict(tmp_path):
     no_cuda = adapter.validate_runtime_configuration(8, 2, "cuda")
     assert not no_cuda["valid"]
     assert any("CUDA" in error for error in no_cuda["errors"])
+
+
+def test_validate_runtime_configuration_reports_a_missing_godot_before_launch(tmp_path):
+    import time as _time
+
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    runtime = {
+        "godot_available": False,
+        "godot_executable": "godot",
+        "cuda_available": False,
+        "cpu_count": 8,
+    }
+    adapter._runtime_status = {None: (_time.monotonic(), runtime)}
+
+    verdict = adapter.validate_runtime_configuration(8, 2, "cpu")
+    assert not verdict["valid"]
+    assert any("Godot executable" in error for error in verdict["errors"])
+
+    # A form override is probed under its own cache key, not the default's.
+    adapter._runtime_status["/custom/godot"] = (
+        _time.monotonic(),
+        {"godot_available": True, "cuda_available": False, "cpu_count": 8},
+    )
+    override = adapter.validate_runtime_configuration(8, 2, "cpu", godot_executable="/custom/godot")
+    assert override["valid"], override["errors"]
+
+
+def test_configure_godot_executable_only_persists_a_verified_executable(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    settings_path = tmp_path / ".sandboxai" / "settings.json"
+    (tmp_path / "project.godot").write_text("", encoding="utf-8")
+    monkeypatch.setattr("sandboxai.config._settings_path", lambda: settings_path)
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    # Nothing given / nothing resolvable: refused, nothing written.
+    assert not adapter.configure_godot_executable("")["ok"]
+    missing = adapter.configure_godot_executable(str(tmp_path / "missing-binary"))
+    assert not missing["ok"]
+    assert not settings_path.exists()
+
+    # A real executable that answers --version is verified and remembered.
+    fake = tmp_path / "fake_godot.sh"
+    fake.write_text("#!/bin/sh\necho 4.7.2.fake\n", encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    if os.name == "nt":  # pragma: no cover - POSIX shell script
+        import pytest
+
+        pytest.skip("POSIX shell executable")
+    result = adapter.configure_godot_executable(str(fake))
+    assert result["ok"], result
+    assert result["version"] == "4.7.2.fake"
+    assert settings_path.is_file()
+    assert adapter.godot_executable_setting() == str(fake)
+    adapter.close()

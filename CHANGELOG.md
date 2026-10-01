@@ -8,6 +8,33 @@ records what changed and why.
 
 ## Unreleased
 
+### Control Center
+- The Benchmarks page is now a zero-configuration workflow: one *Start
+  benchmark* button runs the full staged pipeline with host-scaled
+  defaults, shows a live phase strip (discover → screen → devices →
+  validate → pick → apply) and applies the winning configuration
+  automatically (persisted recommendation + Agents launch form). The
+  budget/grid/finalist form and the custom-configuration card are gone
+  from the GUI; the CLI keeps every knob for scripted sweeps.
+- Failed launches now surface their real cause: a failing process's
+  snapshot appends its last stderr line to the bare
+  "process exited with code N", and the agent view prefers the backend's
+  published `status.json` error over that process-level symptom.
+- The launch slot refuses a doomed launch up front:
+  `adapter.validate_runtime_configuration` reports an unresolvable Godot
+  executable (including the launch form's explicit override, probed under
+  its own cache key) as an error before a subprocess is ever spawned.
+- Settings gained a *Godot executable* section backed by
+  `adapter.configure_godot_executable`: Verify & save probes the given
+  path with the same runtime check the benchmark uses and only persists
+  an executable that was actually seen working
+  (`.sandboxai/settings.json`), which training, benchmarks and
+  evaluations all already resolve.
+- The Agents launch form opens with measured defaults: the hardware
+  profile's device choice and, once the automatic benchmark has been
+  applied, its winning topology. Agent rows are colour-coded by
+  lifecycle (failed red, running green, transitional amber).
+
 ### TTK Testing scope
 - `sandboxai ttk-status` plus `sandboxai.ttk_testing`: one source-traceable
   TTK Testing evidence manifest. It separates verified controls and

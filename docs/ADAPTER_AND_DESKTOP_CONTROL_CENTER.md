@@ -132,9 +132,9 @@ in this Tkinter-free module (`dashboard_view`, `runs_table_rows`,
 `process_table_rows`, `agent_table_rows`/`agent_action_availability`,
 `launch_slot_view`/`topology_rows`,
 `evaluation_view`/`evaluation_comparison_rows`, `benchmark_history_rows`,
-the benchmark-pipeline views (`parse_benchmark_pipeline_form`,
+the benchmark-workflow views (`benchmark_workflow_view`,
 `benchmark_pipeline_rows`, `benchmark_recommendation_view`,
-`custom_configuration_view`, `pipeline_progress_view`),
+`pipeline_progress_view`),
 `parse_training_form`, `format_*` helpers,
 `downsample_series`). It is unit-tested directly
 (`python/tests/test_control_center_viewmodel.py`) without constructing a Tk

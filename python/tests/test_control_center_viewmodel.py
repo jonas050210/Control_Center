@@ -560,57 +560,70 @@ def test_topology_rows_mirror_the_sharded_bridge_plan():
 # ---------------------------------------------------------------------------
 
 
-def test_benchmark_pipeline_form_defaults_parse_cleanly():
-    assert vm.parse_benchmark_pipeline_form(vm.benchmark_pipeline_form_defaults()) == {
-        "budget_mode": "time",
-        "steps": None,
-        "minutes": 15.0,
-        "environment_counts": None,
-        "worker_counts": None,
-        "finalists": 4,
-    }
+def test_benchmark_workflow_view_idle_shows_every_phase_pending():
+    view = vm.benchmark_workflow_view(running=False, event=None, report=None)
+    assert [phase["status"] for phase in view["phases"]] == ["pending"] * 6
+    assert "idle" in view["detail"]
+    assert [phase["key"] for phase in view["phases"]] == [
+        "discovery",
+        "screening",
+        "devices",
+        "validation",
+        "recommendation",
+        "apply",
+    ]
 
 
-def test_parse_benchmark_pipeline_form_accepts_a_full_custom_sweep():
-    parsed = vm.parse_benchmark_pipeline_form(
-        {
-            "budget_mode": "steps",
-            "steps": "2000",
-            "minutes": "",
-            "environment_counts": "4, 8,16",
-            "worker_counts": "1,4",
-            "finalists": "2",
-        }
+def test_benchmark_workflow_view_marks_the_active_stage_while_running():
+    view = vm.benchmark_workflow_view(
+        running=True,
+        event={"stage": "screening", "status": "started", "index": 1, "total": 4},
+        report=None,
     )
-    assert parsed == {
-        "budget_mode": "steps",
-        "steps": 2000,
-        "minutes": None,
-        "environment_counts": [4, 8, 16],
-        "worker_counts": [1, 4],
-        "finalists": 2,
+    states = {phase["key"]: phase["status"] for phase in view["phases"]}
+    assert states["screening"] == "active"
+    assert states["validation"] == "pending"
+    assert "screening" in view["detail"]
+    assert "2/4" in view["detail"]
+
+
+def test_benchmark_workflow_view_reads_real_stage_outcomes_from_the_report():
+    report = {
+        "status": "completed",
+        "elapsed_seconds": 61.0,
+        "stages": [
+            {"name": "discovery", "status": "completed"},
+            {"name": "screening", "status": "completed"},
+            {"name": "devices", "status": "skipped"},
+            {"name": "validation", "status": "completed"},
+        ],
+        "recommendation": {"environment_count": 8, "env_workers": 2},
     }
+    view = vm.benchmark_workflow_view(running=False, event=None, report=report, applied=True)
+    states = {phase["key"]: phase["status"] for phase in view["phases"]}
+    assert states == {
+        "discovery": "done",
+        "screening": "done",
+        "devices": "skipped",
+        "validation": "done",
+        "recommendation": "done",
+        "apply": "done",
+    }
+    assert "completed" in view["detail"]
 
 
-def test_parse_benchmark_pipeline_form_collects_every_error():
-    with pytest.raises(ValueError, match="budget mode"):
-        vm.parse_benchmark_pipeline_form(
-            {
-                "budget_mode": "energy",
-                "steps": "10",
-                "minutes": "500",
-                "environment_counts": "4,x",
-                "worker_counts": "0",
-                "finalists": "9",
-            }
-        )
-
-
-def test_parse_benchmark_pipeline_form_enforces_the_budget_ranges():
-    with pytest.raises(ValueError, match="at least 100"):
-        vm.parse_benchmark_pipeline_form({"budget_mode": "steps", "steps": "50"})
-    with pytest.raises(ValueError, match="between 1 and 60"):
-        vm.parse_benchmark_pipeline_form({"budget_mode": "time", "minutes": "0.5"})
+def test_benchmark_workflow_view_keeps_failures_visible():
+    report = {
+        "status": "unavailable",
+        "elapsed_seconds": 0.2,
+        "stages": [{"name": "discovery", "status": "failed", "reason": "no godot"}],
+        "recommendation": None,
+    }
+    view = vm.benchmark_workflow_view(running=False, event=None, report=report, applied=False)
+    states = {phase["key"]: phase["status"] for phase in view["phases"]}
+    assert states["discovery"] == "failed"
+    assert states["recommendation"] == "failed"
+    assert states["apply"] == "skipped"
 
 
 def test_benchmark_pipeline_rows_label_stages_and_keep_failures():
@@ -682,23 +695,6 @@ def test_benchmark_recommendation_view_requires_a_real_recommendation():
     assert view["available"]
     assert view["summary"].startswith("24 environments / 4 workers")
     assert view["basis"] == "validated_training_slice"
-
-
-def test_custom_configuration_view_reports_validation_verdicts():
-    empty = vm.custom_configuration_view(None)
-    assert not empty["valid"] and empty["errors"]
-    view = vm.custom_configuration_view(
-        {
-            "valid": True,
-            "errors": [],
-            "warnings": ["uneven shards"],
-            "environment_count": 10,
-            "env_workers": 3,
-            "shards": [{"worker": 0, "offset": 0, "count": 4}],
-        }
-    )
-    assert view["valid"] and view["warnings"] == ["uneven shards"]
-    assert view["shards"][0]["count"] == 4
 
 
 def test_pipeline_progress_view_formats_counts_and_messages():

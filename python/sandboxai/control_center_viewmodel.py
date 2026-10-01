@@ -611,73 +611,80 @@ def topology_rows(environment_count: Any, env_workers: Any) -> list[dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def benchmark_pipeline_form_defaults() -> dict[str, str]:
-    from .benchmark_pipeline import DEFAULT_SCREEN_STEPS, DEFAULT_TIME_BUDGET_MINUTES
+#: The phases the one-button Benchmark tab reports, in execution order.
+#: The first five mirror the pipeline's own stages; "apply" is the tab's
+#: final automatic step (persisting + activating the winning configuration).
+BENCHMARK_PHASES: tuple[tuple[str, str], ...] = (
+    ("discovery", "Discover runtime"),
+    ("screening", "Screen env/worker grid"),
+    ("devices", "Compare devices"),
+    ("validation", "Validate finalists (real PPO)"),
+    ("recommendation", "Pick best configuration"),
+    ("apply", "Apply best configuration"),
+)
 
-    return {
-        "budget_mode": "time",
-        "minutes": str(DEFAULT_TIME_BUDGET_MINUTES),
-        "steps": str(DEFAULT_SCREEN_STEPS),
-        "environment_counts": "",
-        "worker_counts": "",
-        "finalists": "4",
-    }
+_PHASE_MARKS = {
+    "pending": "·",
+    "active": "▶",
+    "done": "✓",
+    "skipped": "–",
+    "failed": "✗",
+}
 
 
-def parse_benchmark_pipeline_form(values: dict[str, str]) -> dict[str, Any]:
-    """Parse the pipeline form. Raises ``ValueError`` with every problem."""
-    errors: list[str] = []
-    budget_mode = str(values.get("budget_mode", "time")).strip().lower()
-    if budget_mode not in ("steps", "time"):
-        errors.append("budget mode must be 'steps' or 'time'")
-    steps: int | None = None
-    minutes: float | None = None
-    try:
-        if budget_mode == "steps":
-            steps = int(str(values.get("steps", "")).strip())
-            if steps < 100:
-                errors.append("steps must be at least 100 for a usable measurement")
+def benchmark_workflow_view(
+    *,
+    running: bool,
+    event: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+    applied: bool | None = None,
+) -> dict[str, Any]:
+    """Display model for the zero-configuration benchmark workflow.
+
+    Phase states are derived from what actually happened: the persisted
+    stage records of ``report`` and, while ``running``, the latest progress
+    ``event``. ``applied`` is the tab's own final step (None = not reached,
+    True = the recommendation was activated, False = there was nothing to
+    apply). Nothing is predicted; a phase that has not reported anything
+    is simply "pending".
+    """
+    stage_status: dict[str, str] = {}
+    for stage in (report or {}).get("stages", []):
+        name = str(stage.get("name", ""))
+        status = str(stage.get("status", "completed"))
+        if status in ("completed", "ok"):
+            stage_status[name] = "done"
+        elif status == "skipped":
+            stage_status[name] = "skipped"
         else:
-            minutes = float(str(values.get("minutes", "")).strip())
-            if not 1.0 <= minutes <= 60.0:
-                errors.append("time budget must be between 1 and 60 minutes")
-    except ValueError:
-        errors.append("budget value must be a number")
-    environment_counts: list[int] = []
-    worker_counts: list[int] = []
-    for key, target in (
-        ("environment_counts", environment_counts),
-        ("worker_counts", worker_counts),
-    ):
-        raw = str(values.get(key, "")).strip()
-        if not raw:
-            continue
-        try:
-            parsed = [int(part) for part in raw.replace(" ", "").split(",") if part]
-        except ValueError:
-            errors.append(f"{key} must be comma-separated integers")
-            continue
-        if any(value < 1 for value in parsed):
-            errors.append(f"{key} must contain only positive integers")
-            continue
-        target.extend(parsed)
-    finalists: int | None = None
-    try:
-        finalists = int(str(values.get("finalists", "4")).strip())
-        if finalists < 1 or finalists > 8:
-            errors.append("finalists must be between 1 and 8")
-    except ValueError:
-        errors.append("finalists must be an integer")
-    if errors:
-        raise ValueError("; ".join(errors))
-    return {
-        "budget_mode": budget_mode,
-        "steps": steps,
-        "minutes": minutes,
-        "environment_counts": environment_counts or None,
-        "worker_counts": worker_counts or None,
-        "finalists": finalists,
-    }
+            stage_status[name] = "failed"
+    if report is not None and report.get("recommendation") is not None:
+        stage_status.setdefault("recommendation", "done")
+    elif report is not None and not running:
+        stage_status.setdefault("recommendation", "failed")
+    if applied is True:
+        stage_status["apply"] = "done"
+    elif applied is False:
+        stage_status["apply"] = "skipped"
+    active_stage = str(event.get("stage", "")) if (running and event) else ""
+    phases: list[dict[str, str]] = []
+    for key, label in BENCHMARK_PHASES:
+        if key == active_stage and key not in stage_status:
+            status = "active"
+        else:
+            status = stage_status.get(key, "pending")
+        phases.append({"key": key, "label": label, "status": status})
+    phase_line = "   ".join(f"{_PHASE_MARKS[phase['status']]} {phase['label']}" for phase in phases)
+    if running:
+        detail = pipeline_progress_view(event)["text"]
+    elif report is not None:
+        detail = (
+            f"finished ({report.get('status', 'unknown')}, "
+            f"{format_duration(report.get('elapsed_seconds'))})"
+        )
+    else:
+        detail = "idle - press Start to measure this machine"
+    return {"phases": phases, "phase_line": phase_line, "detail": detail}
 
 
 def benchmark_pipeline_rows(report: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -740,20 +747,6 @@ def benchmark_recommendation_view(recommendation: dict[str, Any] | None) -> dict
             f"{recommendation.get('device')} — "
             f"{format_number(recommendation.get('expected_steps_per_second'), 1)} steps/s"
         ),
-    }
-
-
-def custom_configuration_view(validation: dict[str, Any] | None) -> dict[str, Any]:
-    """Display model for the Custom configuration card (valid + warnings)."""
-    if not validation:
-        return {"valid": False, "errors": ["not validated yet"], "warnings": [], "shards": []}
-    return {
-        "valid": bool(validation.get("valid")),
-        "errors": [str(error) for error in validation.get("errors", [])],
-        "warnings": [str(warning) for warning in validation.get("warnings", [])],
-        "environment_count": validation.get("environment_count"),
-        "env_workers": validation.get("env_workers"),
-        "shards": list(validation.get("shards", [])),
     }
 
 

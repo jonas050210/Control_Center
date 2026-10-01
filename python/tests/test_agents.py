@@ -242,6 +242,27 @@ class TestLifecycleActions:
         # A failed launch is not a live process: it can be removed again.
         assert manager_broken.remove(view["agent_id"])["ok"]
 
+    def test_backend_error_outranks_the_generic_process_exit_error(self, stack):
+        """The view must surface the backend's published root cause, not the
+        process layer's "exited with code N" symptom of the same failure."""
+        processes, launcher, manager = stack
+        record = AgentRecord(agent_id="a", kind="training", spec={}, process_id="p")
+        view = manager._view(
+            record,
+            {
+                "state": "failed",
+                "error": "process exited with code 1",
+                "backend": {"state": "Error", "error": "Could not launch Godot executable"},
+            },
+        )
+        assert view["lifecycle"] == LIFECYCLE_FAILED
+        assert "Could not launch Godot executable" in view["error"]
+        # Without a backend error the process layer's account still shows.
+        no_backend = manager._view(
+            record, {"state": "failed", "error": "process exited with code 1", "backend": {}}
+        )
+        assert no_backend["error"] == "process exited with code 1"
+
     def test_restart_resumes_from_the_latest_checkpoint(self, stack):
         processes, launcher, manager = stack
         view = manager.launch_training({"total_training_steps": 10})
