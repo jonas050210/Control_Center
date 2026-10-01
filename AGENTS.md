@@ -286,7 +286,7 @@ every thread's stack instead of sitting there silently.
 
 `hardware_profile.py` is the **single** device-comparison implementation
 behind the first-start wizard. Do not add a second benchmark to any GUI;
-both Control Centers reach it through `adapter.run_hardware_wizard`. It
+the Control Center reaches it through `adapter.run_hardware_wizard`. It
 compares CPU / Hybrid (`device=cuda`, `inference_device=cpu`) / CUDA, and
 `available_candidates()` hides Hybrid and CUDA unless a CUDA device is
 present, so a CPU-only host never shows a permanently-`n/a` row.

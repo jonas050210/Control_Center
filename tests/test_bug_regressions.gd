@@ -8,14 +8,11 @@ extends RefCounted
 const Action = preload("res://scripts/core/action.gd")
 const AgentState = preload("res://scripts/agent/agent_state.gd")
 const AIStubController = preload("res://scripts/input/ai_stub_controller.gd")
-const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
-const ControlCenterResults = preload("res://scripts/control_center/control_center_results.gd")
 const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnemyBrain = preload("res://scripts/enemy/enemy_brain.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const EpisodeState = preload("res://scripts/core/episode_state.gd")
-const PerceptionModel = preload("res://scripts/control_center/perception_model.gd")
 const ReplayPlayer = preload("res://scripts/replay/replay_player.gd")
 const ReplayRecorder = preload("res://scripts/replay/replay_recorder.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
@@ -241,24 +238,6 @@ func test_missed_point_blank_shot_does_not_also_melee() -> SandboxTest:
 		0.0001,
 		"melee damage must stay available when ranged is disabled"
 	)
-	return t
-
-
-## Bug (Godot 4.7 compile cascade): `const X: PackedStringArray =
-## PackedStringArray([...])` is not a constant expression, so
-## control_center_config.gd, control_center_results.gd and
-## perception_model.gd all failed to compile and every test that preloaded
-## them failed with them. Reading the constants proves they still exist,
-## still hold the same entries and are still usable as lookup tables.
-func test_string_list_constants_are_constant_expressions() -> SandboxTest:
-	var t := SandboxTest.new("string_list_constants_are_constant_expressions")
-	t.assert_true(ControlCenterConfig.REBUILD_SETTINGS.has("environment_count"))
-	t.assert_true(ControlCenterConfig.REBUILD_SETTINGS.has("enemy_count"))
-	t.assert_true(ControlCenterConfig.REBUILD_SETTINGS.has("seed"))
-	t.assert_false(ControlCenterConfig.REBUILD_SETTINGS.has("curriculum_level"))
-	t.assert_true(ControlCenterResults.AVERAGED_KEYS.has("reward"))
-	t.assert_eq(PerceptionModel.SLOT_LABELS.size(), 3)
-	t.assert_eq(str(PerceptionModel.SLOT_LABELS[0]), "primary")
 	return t
 
 

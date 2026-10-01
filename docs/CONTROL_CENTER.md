@@ -1,487 +1,180 @@
-# SandboxAI Control Center
+# Control Center (headless desktop application)
 
-The Control Center is the interactive front-end of the simulator: one
-window from which you can **operate**, **watch**, **play**, **inspect** and
-**evaluate** the exact same simulation the RL trainer uses.
-
-It is a presentation layer, not a second implementation. Local simulation
-values come from `EnvironmentCore` / `Observation` / `EpisodeState`; managed
-training values come from the existing Python PPO/BC telemetry. Every control
-calls an existing simulation method or sends a cooperative command to the
-Python backend. Anything the backend cannot actually do is shown as
-**unavailable** with the reason, never faked.
-
-```
-                      +---------------------------+
-                      |   ControlCenterUI (GUI)   |   presentation only
-                      +-------------+-------------+
-                                    | reads snapshots, calls session methods
-                      +-------------v-------------+
-                      |   ControlCenterSession    |   orchestration
-                      +-------------+-------------+
-                                    | step_all(), reset_indices(), set_controller()
-                      +-------------v-------------+
-                      |     SimulationManager     |   unchanged simulation
-                      |   -> EnvironmentCore * N  |
-                      +---------------------------+
-```
-
----
-
-## Dashboard pages
-
-The window is organised as a headless-training dashboard with a persistent
-navigation bar. The active page is saved in the preferences
-(`active_page`) and restored on the next start.
-
-| Page | Purpose |
-| --- | --- |
-| **HOME** | PC status strip (GPU / CPU / RAM, see below) + one compact card per launched agent (state, steps, episodes, reward, kills/deaths, accuracy, throughput, Pause/Stop/Details) including recently finished or failed agents. |
-| **AGENTS** | Agent management: every agent with lifecycle controls (Pause/Resume/Stop, clear finished), plus "new agent" launch that reuses the current training configuration. |
-| **HEADLESS** | The main monitoring page: one panel per managed agent with the full live status published by the Python trainer (steps, episodes, reward, kills, deaths, shots, hits, accuracy, damage, survival, wins/losses, steps/s, ETA when the backend reports one, checkpoint) and a live, bounded log fed from the trainer's `events.jsonl` (timestamps, severity, auto-follow, terminal events preserved). |
-| **TRAINING** | The existing PPO / Behavior-Cloning configuration editor, unchanged, hosted as a launch screen. START TRAINING starts the run and jumps to HEADLESS. |
-| **SIMULATION** | The classic visual layout described below (3D view, HUD, inspector docks). Unchanged behaviour. |
-| **ANALYTICS** | Lightweight reward trends per agent, sampled only when the backend publishes a new progress marker. Real metrics only. |
-| **HISTORY** | Previous managed runs read from the persisted `status.json` files: run id, algorithm, final state, duration, steps, episodes, reward, checkpoint, error. |
-| **SETTINGS** | The existing settings panel (simulation parameters, scenarios, layout). |
-
-### PC status (HOME)
-
-`ControlCenterSystemMonitor` samples local hardware on a slow timer in a
-worker thread, completely outside the simulation/training loop:
-
-* **GPU** — name, utilisation %, VRAM used/total, temperature via
-  `nvidia-smi` when present (any NVIDIA model; nothing is hard-coded).
-* **CPU** — utilisation from `/proc/stat` (Linux) or WMIC (Windows).
-* **RAM** — used/total/percent from `OS.get_memory_info()`.
-
-Every metric that cannot be measured on the current machine is shown as
-`N/A` — values are never estimated or invented. There is deliberately no
-network or disk monitoring.
-
-### Multi-agent training
-
-`TrainingAgentManager` keeps a registry of `TrainingRunController`s —
-Agent 1 wraps the classic single-run controller, additional agents get
-their own managed run directory (`user://control_center_runs/<run_id>/`)
-and process. Pause/Resume/Stop go through the same cooperative
-`command.json` protocol as before; nothing is force-killed beyond the
-controller's existing final fallback. All displayed training metrics come
-from the backend's `status.json`/`events.jsonl`; the UI only renders them.
-
----
-
-## Launching
+The Control Center is SandboxAI's operator application: one native
+Python/Tkinter window to launch, operate, benchmark and inspect the
+headless training stack. It is **headless-only** — it never renders the
+game, never opens a `.tscn`, and never plays the agent. Training always
+runs `scripts/rl/rl_server.gd` with `--headless` in separate processes;
+the GUI exchanges only cooperative command files and read-only status
+artifacts with them.
 
 ```bash
-# From the repository root, with Godot 4.7.2 on PATH:
-godot --path . res://scenes/control_center.tscn
+# from the repository root (no Godot editor needed):
+python3 main.py
 
-# Or through the Python CLI (identical command, plus settings):
-sandboxai control-center --mode watch --env-count 4 --enemy-count 1 \
-    --curriculum-level 3 --seed 1234
+# equivalent, through the CLI:
+sandboxai control-center-desktop
+sandboxai control-center-desktop --project-path /path/to/SandboxAI --output-root training
 ```
 
-Command-line settings are passed after `--` and parsed by
-`ControlCenterMain._apply_command_line`:
+On Windows, `tools\windows\start_control_center.bat` launches it from the
+project's Python environment (activates `.venv` if present, checks that
+`sandboxai` and Tkinter are importable, and reports a clear message
+instead of a stack trace if not).
 
-| Argument | Values | Meaning |
-| --- | --- | --- |
-| `--mode=` | `training` \| `watch` \| `human` | start mode |
-| `--env-count=` | 1..64 | parallel environments in the process |
-| `--enemy-count=` | 1..12 | enemies per environment |
-| `--curriculum-level=` | 1..11 | curriculum level (see `CurriculumConfig`) |
-| `--seed=` | int | base seed; environment *i* uses `seed + i` |
-| `--scenario=` | `target_practice`, `duel`, `three_way`, `overwhelmed`, `cover_fight`, `corner_fight`, `sound_only`, `lost_target`, `vertical`, `randomized` | preset bundle |
-| `--force-gui=` | `1` \| `0` | build the GUI even on a headless display server (test escape hatch; off by default) |
+## Requirements
 
-`scenes/main.tscn` is still the project's main scene, and headless training
-is unchanged: launching the project without arguments, or running
-`scripts/rl/rl_server.gd --headless`, never constructs a single Control
-Center node.
+The Control Center itself needs only Python 3.11+ with Tkinter (standard
+library). Training and benchmarking additionally need the Godot 4.7.2
+executable on this machine and the training extras
+(`pip install -e ".[train]"`) — the GUI reports exactly what is missing
+on the System page instead of guessing.
 
----
+## Architecture in one paragraph
 
-## Read-only run inspection backend
+`control_center_desktop.py` builds the window and navigation;
+`control_center_pages.py` holds the pages; `control_center_widgets.py`
+provides the reusable infrastructure (background runner, bounded log
+panel, tables, charts, tooltips); `control_center_viewmodel.py` is the
+Tk-free presentation logic, tested without a display. Every page reaches
+the system exclusively through `sandboxai.adapter.SandboxAIAdapter` —
+the same `train`/`resume`/`benchmark`/`evaluate` CLI commands and on-disk
+artifacts any shell user would use, never a parallel implementation. The
+agent lifecycle (launch/pause/resume/stop/restart bookkeeping) lives in
+`sandboxai.agents` on top of the adapter's process manager. See
+[ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](ADAPTER_AND_DESKTOP_CONTROL_CENTER.md)
+for the adapter contract.
 
-`python/sandboxai/run_inspection.py` is the backend interface for
-"what runs exist and what did they produce?". It is deliberately
-**read-only**: nothing in it opens a file for writing, so inspecting a
-run that is currently training cannot disturb it.
+## Pages
+
+### Dashboard
+
+Live state of the newest run and the agents launched this session:
+lifecycle state, run id, progress, steps/s, elapsed/ETA, environment and
+worker counts, an agent lifecycle summary (coloured red when anything
+failed), device, and reward. Stale status is labelled with its evidence,
+exactly as `run_inspection.py` reports it.
+
+### Agents
+
+The operational core: the launch form plus the agent registry in one
+place.
+
+- **Launch form** — basic and advanced fields over the same
+  `TrainingConfig` the CLI validates. The launch slot under it shows the
+  resolved configuration before anything starts: environment count,
+  resolved worker count (`0 = auto` becomes the concrete number), the
+  shard topology (`12+12+12+12`), device and step count — or every reason
+  the current values are invalid (parse errors, worker/environment
+  incompatibilities, a CUDA request on a host without CUDA). The verdict
+  comes from `benchmark_pipeline.validate_configuration`, the same check
+  the benchmark plan uses, so the launcher and the benchmark can never
+  disagree.
+- **Agent table** — every training/benchmark/evaluation agent launched
+  this session with name, kind, lifecycle, PID, environment/worker
+  topology, device, steps, progress, steps/s, reward and errors. All
+  values are backend-published facts; anything a kind does not publish
+  renders `n/a`, never a guess.
+- **Lifecycle** — `AVAILABLE -> LAUNCHING -> RUNNING -> PAUSED ->
+  STOPPING -> STOPPED`, plus `FINISHED`, `FAILED` and `RESTARTING`,
+  derived from the OS process state, the trainer's `status.json` and the
+  operator's requested action (see `sandboxai.agents.derive_lifecycle`).
+- **Actions** — Launch, Pause/Resume (training only; other kinds keep the
+  button disabled with a tooltip explaining why), Stop (cooperative for
+  training, terminate otherwise), Restart, Force stop, Remove, Stop all,
+  Clear exited. **Restart** stops the agent and relaunches it from the
+  run's newest checkpoint (`latest.zip`, else the highest periodic
+  `ppo_*_steps.zip`, else `best_eval.zip`/`final.zip`), continuing the
+  same run directory, status file and event log.
+- **Topology + log** — the selected agent's Environment -> Worker shard
+  plan (the same contiguous plan `sharded_env.plan_shards` builds) and
+  its bounded, incrementally polled process log.
+
+### Benchmarks
+
+The staged **benchmark pipeline** that measures what this machine's
+runtime can actually do, then recommends a configuration.
+
+1. **Discovery** — probe the Godot executable/version, torch, CUDA, CPU
+   count, RAM. No Godot binary means an honest "unavailable" report with
+   the command to fix it, never a fabricated number.
+2. **Screening** — the real bridge benchmark
+   (`benchmark.benchmark_simulation`) across every planned
+   `(environments, workers)` pair, each configuration time-capped:
+   startup, warmup, throughput, p50/p95 vector-step latency, episodes,
+   resources, errors.
+3. **Devices** — only when more than one device candidate exists and no
+   usable hardware profile is persisted; reuses `hardware_profile`
+   (the single device-comparison implementation).
+4. **Validation** — a short *real training slice* per surviving
+   finalist, on the selected device, so the recommendation reflects the
+   training path, not just bridge stepping.
+5. **Recommendation** — from validated throughput when available, within
+   a near-best band of the best measurement, preferring stability (low
+   latency jitter, no errors, fewer workers) over an unstable peak. The
+   `rationale` and `warnings` quote only measured numbers.
+
+**Budgets:** *Steps* (screen until a step count per configuration) or
+*Time* (1–60 minutes total, split across stages, candidate grid thinned
+to fit). Planning estimates size the slices; only measured values are
+reported.
+
+**Result:** the *Recommended Configuration* card (config, expected
+steps/s, basis, rationale, warnings) with an **Apply** action that fills
+the Agents launch form, and a *Custom configuration* card validated by
+the same compatibility check the launcher enforces. The full report is
+persisted under `training/benchmarks/pipelines/<timestamp>/`
+(`pipeline.json` + benchmark-history-shaped `benchmark.json`), the
+recommendation machine-locally in `.sandboxai/recommended_config.json`,
+and past runs are listed from the history.
+
+The same pipeline runs from the shell:
 
 ```bash
-sandboxai inspect-runs --root training              # table of every run
-sandboxai inspect-runs --run training/runs/<id>     # one run in full
-sandboxai inspect-runs --root training --json       # stable JSON contract
-sandboxai inspect-runs --root training --events 10  # + recent event tail
+sandboxai benchmark-pipeline --budget-mode time --minutes 15
+sandboxai benchmark-pipeline --budget-mode steps --steps 2000
+sandboxai benchmark-pipeline --show        # print the persisted recommendation
 ```
 
-| Function | Returns |
-| --- | --- |
-| `discover_run_directories(root)` | run directories under an output root, its `runs/`, or a single run dir |
-| `inspect_run(dir, event_limit=0)` | one `sandboxai.run_report/v1` document |
-| `inspect_runs(root, limit, event_limit)` | a `sandboxai.run_index/v1` document |
-| `tail_jsonl(path, limit)` | last N parsable JSONL objects (bounded to the trailing 1 MiB) |
-| `format_run_index` / `format_run_report` | dense text rendering |
+### Evaluations
 
-A report carries the run state **and the evidence it came from**
-(`run_summary.json`, `status.json`, or "no run_summary.json" →
-`incomplete`), progress, the checkpoint and evaluation inventory, log
-sizes, manifest provenance (code commit + dirty flag, host, Godot build,
-selection rule) and two explicitly separated lists: `problems` (files
-that could not be parsed) and `warnings` (a dirty code tree, a contract
-mismatch, no checkpoints, no `best_eval.zip`, an unfinished run). A
-half-written or corrupt run directory still produces a usable report;
-nothing is guessed and nothing is silently defaulted to zero.
+Win/loss/timeout outcomes, combat and accuracy diagnostics,
+action-head/zero-shot checks, and multi-run comparison over the
+evaluations the CLI writes.
 
-The HISTORY page consumes exactly this - GDScript does not re-implement
-the run layout.
+### Runs / Checkpoints
 
----
+A browser over the on-disk run artifacts (state with evidence, progress,
+checkpoint and evaluation inventory, log sizes, manifest provenance),
+read through `run_inspection.py`.
 
-## Managed training workspace
+### System / Telemetry
 
-The **Training** inspector tab configures and launches the repository's real
-Python backends. PPO maps to `sandboxai train`/`resume`; Behavior Cloning maps
-to `sandboxai bc-train`. Steps/epochs, environment count, curriculum, seed,
-device, checkpoint/resume selection and the backend's supported optimizer
-parameters are passed through unchanged. The exact command is visible before
-launch.
-
-Start, pause, resume and stop use a small file-based control boundary in
-`python/sandboxai/run_control.py`. Python acknowledges state only at safe
-callback/batch boundaries and atomically publishes status. Stop is graceful:
-the normal final checkpoint path runs before the process reports `Finished`.
-The GUI never suspends a process behind the trainer's back or infers a state
-from button clicks.
-
-* **Visual Mode** keeps the selected in-process simulation and observation
-  inspector visible as a deterministic preview using the same requested
-  environment settings. PPO itself still uses its separate headless Godot
-  bridge, so the preview is not claimed to be the learner's exact live arena.
-* **Headless Mode** disables local rendering/telemetry and gives the central
-  tile to backend progress, RL/BC metrics, measured CPU/VRAM values and the
-  backend event log. GPU utilization remains `n/a` because PyTorch does not
-  expose it here; allocator VRAM is shown when CUDA supplies it.
-* **Self-Play** is selectable and described, but Start is disabled. The
-  repository currently has a real two-slot match bridge and frozen-checkpoint
-  league for evaluation, not a self-play optimizer. It is not silently mapped
-  to single-agent PPO.
-
-The dashboard docks use split handles, visibility controls and persisted
-ordering/preferences (`user://control_center.cfg`). At narrow widths the agent
-preview collapses first; the training configuration or headless progress tile
-keeps the available space.
-
----
-
-## The three local simulation modes
-
-All three drive the **same** `EnvironmentCore`, the same `Action` struct and
-the same `Observation` vector. They differ only in who produces actions and
-how much presentation work is permitted.
-
-| Mode | Actions from | Rendering | Telemetry | Event log |
-| --- | --- | --- | --- | --- |
-| **TRAINING** | `AIStubController` (or idle) | off | off | off |
-| **WATCH** | `AIStubController` (or idle) | selected environment only | on | on |
-| **HUMAN** | `HumanController` (selected env only) | selected environment only | on | on |
-
-* TRAINING runs the **local preview session** as a frame-budgeted batch loop
-  (`TRAINING_FRAME_BUDGET_MS`, default 8 ms/frame) with views hidden,
-  telemetry short-circuited and the local log buffer disabled. Managed PPO
-  and BC weight updates remain in the Python trainer launched from the
-  Training tab; this local mode is not relabelled as gradient training.
-* HUMAN mode rebinds **only** the selected environment to the existing
-  `HumanController`. The other environments keep their AI controller, which
-  is what makes the HUMAN vs AI comparison meaningful.
-* Human input is *armed* separately from the mode (the "human input"
-  toggle in the controls row, or clicking the viewport). Leaving HUMAN
-  mode always disarms it and hands the mouse back, so the GUI never ends
-  up unclickable behind a captured cursor.
-* Mode switching never rebuilds environments, never touches
-  `Engine.time_scale`, and never creates a second gameplay implementation.
-
----
-
-## Layout (SIMULATION page)
-
-The inspector dock on the right has six tabs: **Run**, **Perception**,
-**Observation**, **Results**, **Metrics**, **Replay**. The settings and
-training-configuration editors live on their own pages (SETTINGS /
-TRAINING).
-
-```
-+----------------------------------------------------------------------+
-| STATUS BAR: mode | run state | env/agent/policy/camera | sps, fps     |
-+-------------+------------------------------------------+-------------+
-| AGENT PANEL |            3D VIEW + HUD                  | INSPECTOR   |
-| position    |  crosshair, health, weapon, target,       | Perception  |
-| health      |  timer, reward, kills, accuracy           | Observation |
-| target      |                                           | Results     |
-| action      |                                           | Settings    |
-| perception  |                                           |             |
-| mini-map    |                                           |             |
-+-------------+------------------------------------------+-------------+
-| CONTROLS: play/pause, step, reset, speed, human input arm             |
-| EVENT LOG: ALL | COMBAT | PERCEPTION | SYSTEM | REWARD | ERROR        |
-+----------------------------------------------------------------------+
-```
-
-Keyboard shortcuts (ignored while human input is armed, so gameplay keys
-always win):
-
-| Key | Action |
-| --- | --- |
-| `F1` / `F2` / `F3` | toggle left dock / right dock / bottom dock |
-| `Space` | pause / resume |
-| `N` | single simulation step |
-| `R` | reset the selected environment |
-| `Tab` | next inspector tab |
-| `W A S D`, mouse, LMB/`Space`, `Esc` | gameplay (HUMAN mode) |
-| right-drag, `W A S D`, `Q`/`E`, `Shift` | free camera (non-HUMAN modes) |
-
----
-
-## Panels
-
-### Status bar
-Mode switch, run state, live steps/second and render FPS, environment and
-agent selectors, action-source selector, camera selector, and a warning
-whenever settings are pending a rebuild.
-
-### Agent panel (live agent view)
-Position, velocity, yaw/pitch, health, weapon state and cooldown, current
-target with distance/health/in-range flag, the resolved action for this
-tick (move, strafe, look, shoot), episode time, step, reward, kills,
-deaths, damage dealt/taken, shots and accuracy, plus a top-down mini-map.
-
-### Perception — "what does the AI see?"
-Two explicitly separated sections, produced by `PerceptionModel`:
-
-* **REAL WORLD (ground truth, debug only)** — every enemy with true
-  distance, bearing, health and AI state.
-* **AI PERCEPTION (decoded from the observation vector)** — the three
-  tracked enemy slots, weapon readiness, in-combat flag and alive-enemy
-  ratio, all de-normalized from the observation only.
-
-Enemies that exist but are **not** in the observation (beyond the
-3-enemy contract budget) are listed in red as `HIDDEN FROM AI` with the
-reason. Debug visualization can therefore show hidden world state without
-ever leaking it into the policy's input: the AI branch is decoded
-exclusively from `Observation.to_array()`.
-
-`EnvironmentCore` currently implements field-of-view gating,
-line-of-sight/occlusion, sound, target memory, obstacles/cover, navigation,
-corpses, exploration and environment-condition hooks. The panel detects
-these through `has_method()` probes and renders their real state. A feature
-is marked **unavailable** only for another environment type that does not
-expose the corresponding hook (for example an incomplete future adapter),
-never replaced with invented data.
-
-The optional 3D overlay (`PerceptionOverlay3D`, 20 Hz) draws cyan lines to
-tracked enemies, dashed red lines to hidden enemies, a target ring, the
-agent's forward vector and the weapon-range circle.
-
-### Observation inspector
-All 84 fields of the observation vector with index, name, group and live
-value, plus the action rows (multi-discrete value + canonical value) and
-the reward components for the current episode.
-
-Field names come from `Observation.FIELD_SPEC` /
-`Observation.field_names()` and the action fields from
-`RLAdapter.action_space_info()`. The inspector keeps **no** list of its
-own; `python/tests/test_contract.py` fails if it ever tries to.
-
-### Results
-Current episode metrics, accumulated averages, the HUMAN vs AI comparison
-(per-source aggregates plus human-minus-AI deltas), a selectable history of
-finished episodes with per-episode detail, and a JSON export to
-`user://control_center_results.json`.
-
-Derived metrics that are only instrumented for the selected environment
-(reaction time, useless/missed shots, target switches) report `n/a`
-elsewhere instead of a fabricated number.
+Real dependency and device status (Python, torch, Godot binary/version,
+CPU/RAM) and bounded live telemetry charts. Unavailable metrics are
+shown as such, never estimated.
 
 ### Settings
-* **Live**: curriculum level, scenario preset.
-* **Requires reset** (marked, applied by *Apply & reset*): environment
-  count, enemy count, seed. A *Randomize seed* button is provided.
-* Panel visibility toggles.
-* Legacy local-preview settings and panel/tile visibility. The Training tab
-  owns the full PPO/BC configuration and exact managed command.
 
-### Controls
-Play/pause, single step, step ×10, reset environment (deterministic or with
-a fresh seed), reset all, speed presets `0.25x … 8x` plus a free slider up
-to 16x, and the human-input arm switch.
+Project and output roots and the Godot executable, with the hardware
+profile surfaced where one is persisted.
 
-Speed is implemented as *how many fixed 1/60 s simulation steps run per
-rendered frame* (capped at 32 per frame). `Engine.time_scale` is never
-touched, so trajectories are identical at any speed or frame rate.
+## Honesty rules
 
-### Event log
-Categorised (`COMBAT`, `PERCEPTION`, `SYSTEM`, `REWARD`, `ERROR`),
-filterable, colour-coded, follow-scrolling, with the count of buffered and
-dropped entries.
-
-Only **discrete** events are logged (a shot, a hit, a kill, damage taken, a
-target change, an episode boundary, a settings change) — never per-tick
-state. The log is a bounded ring buffer (400 entries) with per-key
-throttling (0.15 s) and a global budget (60 events/second); it is fully
-disabled in TRAINING mode.
-
----
-
-## Cameras
-
-Presentation only — the policy never receives camera data.
-
-| Mode | Behaviour |
-| --- | --- |
-| First person | the agent's own `Camera3D` from `AgentView` (what a human plays through) |
-| Third person | chase camera behind/above the agent |
-| Free | right-drag to look, `WASD`/`Q`/`E` to fly, `Shift` to sprint |
-| Top-down | overhead view of the whole arena |
-
-Free-flight input is disabled while human input is armed so the camera and
-the player never fight over `WASD`.
-
----
-
-## Performance rules
-
-The Control Center must never cost the trainer anything:
-
-1. **Headless is GUI-free.** `ControlCenterMain` checks
-   `DisplayServer.get_name() == "headless"` and returns before creating any
-   Control, camera rig or overlay. `SimulationManager.create_visuals` stays
-   `false`.
-2. **Only the selected environment is visual.** Views are created lazily
-   (`SimulationManager.ensure_view`) and only the selected one is visible
-   and synced.
-3. **Telemetry is opt-in per frame.** Panels refresh at 10 Hz (the 3D
-   overlay at 20 Hz) and `build_snapshot()` returns `{}` in TRAINING mode.
-   Only the visible inspector tab is refreshed, and the snapshot skips the
-   observation/perception sections that nothing is displaying.
-4. **Logging is bounded.** See the event-log rules above.
-5. **Stepping is explicit.** `auto_tick` is off and the session steps the
-   batch itself, so pause/step/speed are exact and the interactive path can
-   never run more than 32 steps in one frame.
-
----
+- No measurement is ever invented; every number shown was produced by
+  the engine-backed measurers or read from run artifacts.
+- Unavailable values render `n/a` (or the reason), never an estimate.
+- Actions that a backend cannot honour are disabled with the reason, not
+  silently faked.
+- The training path never imports the GUI; the GUI is a pure operator
+  over the adapter.
 
 ## Testing
 
-GDScript (requires Godot 4.7.2):
-
-```bash
-godot --headless --path . --script res://tests/run_tests.gd
-```
-
-* `tests/test_control_center_config.gd` — modes, clamping, scenarios,
-  rebuild classification, round-tripping.
-* `tests/test_control_center_event_log.gd` — filters, throttling, budget,
-  capacity, disabled early-out.
-* `tests/test_control_center_results.gd` — aggregates, comparison, history,
-  export.
-* `tests/test_observation_inspector.gd` — inspector rows follow the
-  contract exactly.
-* `tests/test_perception_model.gd` — REAL WORLD vs AI PERCEPTION
-  separation, hidden-enemy reporting, unavailable features.
-* `tests/test_control_center_session.gd` — mode switching, human action
-  pipeline, pause/step/speed, reset determinism, selection, settings
-  propagation, snapshot purity, and an equality check proving the Control
-  Center does not change simulation results.
-* `tests/test_control_center_scene.gd` — headless scene builds simulation
-  only; forced GUI builds every panel and refreshing never steps the
-  simulation.
-* `tests/test_system_monitor.gd` — PC telemetry: payload shape, `N/A` for
-  unavailable metrics, `nvidia-smi` / CPU-load / `/proc/stat` / RAM
-  parsing, no fabricated values.
-* `tests/test_training_agent_manager.gd` — multi-agent registry: identity,
-  lifecycle states, pause/resume/stop command propagation, bounded event
-  ingestion, terminal agents staying visible.
-* `tests/test_training_run_history.gd` — persisted run history parsing
-  (only published fields, non-final durations for live runs).
-* `tests/test_control_center_dashboard.gd` — dashboard shell: page
-  navigation with persistence, agent cards, headless monitors with a
-  bounded live log, PC-status rendering (`N/A`), history rows, launch
-  navigation.
-
-Python (no Godot required):
-
-```bash
-PYTHONPATH=python python -m unittest discover -s python/tests -v
-```
-
-* `python/tests/test_control_center_isolation.py` — static guards that the
-  training path never references the Control Center, that the entry point
-  is display-guarded, that no Control Center file touches
-  `Engine.time_scale`, and that the GUI does not duplicate simulation logic.
-* `python/tests/test_contract.py` — adds drift guards between
-  `Observation.FIELD_SPEC` and `python/sandboxai/contract.py`, and asserts
-  the inspector has no hard-coded field names.
-* `python/tests/test_cli.py` — the `control-center` command shape and
-  dispatch.
-
----
-
-## Known limitations
-
-* **No in-engine trained policy.** Godot has no neural-network runtime, so
-  the *Trained policy* action source is listed as unavailable. Trained
-  checkpoints run in the Python trainer over the JSON-lines bridge
-  (`sandboxai evaluate`).
-* **Agent slot 1 is unavailable.** `SimulationManager` builds single-agent
-  environments; slot 1 exists for the self-play foundation only and is
-  reported as unavailable rather than silently ignored.
-* **No FOV/LOS/sound/memory model.** The simulation has none, so the
-  perception panel reports those features as unavailable instead of
-  inventing them.
-* **Charting is textual.** Results are rendered as tables/summaries and a
-  JSON export; no plotting widget is included (the dependency-free rule).
-* **TRAINING mode inside the window is throughput-only.** It does not train
-  weights; use `sandboxai train` for that.
-
-## Perception visualization (world/perception milestone)
-
-`EnvironmentCore` now implements all seven optional hooks `PerceptionModel`
-probes for (`get_agent_field_of_view`, `has_line_of_sight`,
-`get_sound_events`, `get_target_memory`, `get_obstacles`,
-`get_navigation_state`, `get_dead_bodies`), so the Control Center picks
-them up automatically — no panel needed changing to light them up.
-
-The perception tab now separates five layers:
-
-- **REAL WORLD** — ground truth. Debug only; the policy never sees it.
-- **AI PERCEPTION** — decoded from the observation vector, so it is by
-  construction exactly what the policy received.
-- **AI MEMORY** — remembered contacts with their source (visual/sound),
-  age and decaying confidence, plus the reason the current target was
-  selected.
-- **SOUND** — audible events this tick with category, approximate bearing,
-  loudness after occlusion, age, and how many walls the sound passed
-  through.
-- **HIDDEN FROM AI** — alive enemies absent from the observation, now with
-  a distinguished reason: `beyond_tracked_enemy_budget` (the enemy is
-  perceivable but the contract only carries three) versus `not_perceived`
-  (outside the FOV cone or occluded).
-
-`PerceptionOverlay3D` draws the same data in-world: the FOV cone clipped to
-vision range, cover footprints, violet rings at remembered last-known
-positions (radius shrinking with confidence), orange rings for sound
-events, and grey crosses on corpses. `EnvironmentView` additionally renders
-the solid obstacle boxes, colour-coded by kind (olive = low cover you can
-shoot over, blue-grey = standable platform, grey = wall/high cover).
-
-### The isolation guarantee
-
-The session sets `EnvironmentCore.debug_perception = true` only for the
-selected environment, only while presentation is enabled, and only outside
-TRAINING mode. That flag makes the environment *evaluate* perception so it
-can be drawn; it deliberately does **not** feed the perception context into
-`Observation.build()`. Watching the AI can never change what the AI sees.
-`tests/test_perception_isolation.gd` asserts this by running the same
-seeded episode with the flag on and off and comparing every observation
-field at every step.
+`control_center_viewmodel.py` and the layers below it are tested
+display-free (`python/tests/test_control_center_viewmodel.py`,
+`test_agents.py`, `test_adapter.py`, `test_benchmark_pipeline.py`,
+`test_control_center_isolation.py`). The Tk window itself is exercised by
+`python/tests/test_control_center_desktop.py` against a real adapter and
+throwaway project — those tests skip where Tkinter or a display is
+unavailable (environment facts, not regressions).

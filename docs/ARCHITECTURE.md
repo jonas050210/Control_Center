@@ -244,31 +244,34 @@ subsystems layered on top of the simulator:
 ## Control Center
 
 [`docs/CONTROL_CENTER.md`](CONTROL_CENTER.md) documents the interactive
-front-end (`scenes/control_center.tscn` + `scripts/control_center/`). Its
-place in the architecture:
+front-end: the headless-only Python/Tk desktop application started with
+`python3 main.py` (`control_center_desktop.py` +
+`control_center_pages.py` + `control_center_widgets.py`, presentation
+logic in the Tk-free `control_center_viewmodel.py`). The rendered
+in-simulator operator scene (`scenes/control_center.tscn` +
+`scripts/control_center/`) was removed when the project went headless-only
+for training operation. The GUI's place in the architecture:
 
 ```text
-ControlCenterUI (CanvasLayer, Controls)      presentation only, 10 Hz refresh
-        | snapshots (read)      | method calls (play/pause/reset/select/settings)
-ControlCenterSession (Node)                  orchestration, owns stepping
-        | step_all() / reset_indices() / set_controller()
-SimulationManager -> EnvironmentCore * N     unchanged simulation
+Desktop Control Center (Tk)                  presentation only, thread pool
+        | read-only polls      | lifecycle commands
+SandboxAIAdapter (adapter.py)                application boundary
+        | launch + cooperative command files + status.json
+sandboxai train / benchmark / evaluate       unchanged CLI processes
+        | JSON-lines bridge (headless)
+Godot workers (rl_server.gd)                 unchanged simulation
 ```
 
-- The session sets `auto_tick = false` and advances the batch itself, so
-  pause/step/speed are exact and never use `Engine.time_scale`.
-- HUMAN mode rebinds only the selected environment to the existing
-  `HumanController`; there is no second gameplay implementation.
-- Telemetry is built by `ControlCenterTelemetry` from
-  `DebugOverlay.build_telemetry_dict`, `ObservationInspector` (driven by
-  `Observation.FIELD_SPEC`) and `PerceptionModel`, which keeps ground truth
-  and observation-derived data in separate branches.
-- Nothing is constructed when `DisplayServer.get_name() == "headless"`, so
-  training keeps its exact previous cost.
-- Tabs: Perception, Observation, Results, **Metrics**, **Replay**,
-  Settings. The Metrics tab separates AI-available metrics from a
-  red-labelled ground-truth block; the Replay tab scrubs a recorded
-  episode and never steps the live simulation.
+- The GUI owns no RL logic; it launches the same CLI commands a shell user
+  would and reads the artifacts they already produce. No training module
+  imports the GUI.
+- Agent lifecycle states (AVAILABLE -> LAUNCHING -> RUNNING -> PAUSED ->
+  STOPPING -> STOPPED, plus FINISHED/FAILED/RESTARTING) are derived from
+  real process and backend state by `sandboxai.agents`, never guessed.
+- Pause/Resume exist only on the training backend's cooperative
+  command-file protocol; other kinds explain why the action is unavailable.
+- The benchmark pipeline measures this machine's runtime and recommends a
+  configuration; it never ships a hard-coded one.
 
 ## Debug GUI, benchmarking and the TTK evidence boundary
 
@@ -295,12 +298,12 @@ scripts/
               ReactionProfile, AgentPerception, LightingProfile,
               TargetSelector
   exploration/ SpatialMemory (perception-built map knowledge with decay),
-              MapAnalyzer (exploration mode + Control Center payload)
+              MapAnalyzer (exploration mode payload)
   scenario/   ScenarioLibrary (twelve seedable calibration encounters; invented weapon drills removed)
   env/        EnvironmentCore, EnvironmentReset (episode setup),
               EnvironmentCombat (shot resolution and hit zones),
               EnvironmentEnemies (per-tick opponent update),
-              EnvironmentIntrospection (read-only Control Center views),
+              EnvironmentIntrospection (read-only introspection views),
               optional EnvironmentView
   agent/      Agent state/view
   enemy/      Enemy state/view, EnemyBrain (tactical behavior)
@@ -311,14 +314,7 @@ scripts/
   self_play/  two-agent match foundation
   input/      human and stub controllers
   debug/      optional presentation-only debug overlay
-  control_center/
-              Control Center data layer (config, session, event log,
-              results, telemetry, observation inspector, perception model,
-              spectator camera, 3D perception overlay)
-    ui/       Control Center presentation layer (status bar, agent panel,
-              perception/observation/results/settings tabs, controls, log,
-              HUD, perception map, shared theme)
-python/sandboxai/   47 modules, flat - see PYTHON_MODULE_MAP.md
+python/sandboxai/   49 modules, flat - see PYTHON_MODULE_MAP.md
 ```
 
 The Python side is not listed file-by-file here. It used to be, and the
@@ -349,14 +345,12 @@ docstring and a test that fails when the two disagree.
   66–69 describe them statistically (how many, how many visible, mean and
   minimum distance), so the observation shape is independent of the enemy
   count while still telling the policy it is outnumbered.
-- The Control Center cannot run a trained policy in-engine (no neural
-  network runtime in Godot); its TRAINING mode is a throughput mode, not a
-  trainer. Agent slot 1 still does not exist outside the self-play
-  foundation and is reported as unavailable. Field-of-view, line-of-sight,
-  sound, memory, obstacles, navigation state, corpses, exploration and
-  environment conditions DO exist now and are exposed through the dynamic
-  read-only hooks `PerceptionModel` probes; the Control Center picks them
-  up automatically.
+- (Historical: the rendered Control Center scene that could not run a
+  trained policy in-engine was removed with the headless-only focus; the
+  desktop Control Center never renders the game at all.) Field-of-view,
+  line-of-sight, sound, memory, obstacles, navigation state, corpses,
+  exploration and environment conditions exist and are exposed through the
+  dynamic read-only hooks the debug tooling probes.
 - No Roblox integration exists or is planned in this repository. TTK Testing
   calibration uses only official sources and manual player-visible evidence;
   see `docs/TTK_TESTING_REFERENCE.md`.
@@ -377,7 +371,7 @@ policy's observation is produced from `AgentPerception`, not from the
 simulation state. `EnvironmentCore._build_observation()` passes the
 perception context into `Observation.build()` only when
 `CurriculumConfig.perception_enabled()` is true, and the `debug_perception`
-flag used by the Control Center deliberately does **not** feed that context
+flag used by the debug tooling deliberately does **not** feed that context
 — the debug GUI may look at perception, but it can never change what the
 policy sees.
 

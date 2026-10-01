@@ -596,7 +596,7 @@ class ConfigWslResolutionTests(unittest.TestCase):
 
 
 class CliWslLaunchTests(unittest.TestCase):
-    """The graphical record/control-center commands under WSL."""
+    """The graphical record command under WSL."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -645,29 +645,6 @@ class CliWslLaunchTests(unittest.TestCase):
         self.assertTrue(output_value.startswith("C:\\wsl"), output_value)
         self.assertNotIn("/mnt/", " ".join(command))
 
-    @unittest.skipUnless(
-        os.name == "posix",
-        "build_control_center_command resolves project_path through "
-        "normalize_host_path()+Path.resolve(); with is_wsl() mocked True "
-        "that assumes a POSIX Path, as it would be under real WSL, but on "
-        "native Windows Path.resolve() is WindowsPath.resolve() and "
-        "invents a drive letter from cwd for the fake POSIX-ish "
-        "intermediate value instead (see module docstring)",
-    )
-    def test_control_center_command_converts_project_path(self):
-        from sandboxai.cli import build_control_center_command
-
-        patches = self._cli_patches()
-        for patcher in patches:
-            patcher.start()
-        self.addCleanup(lambda: [p.stop() for p in patches])
-        command = build_control_center_command(
-            str(self.executable), str(self.project), "watch", 1, 1, 3, 1234
-        )
-        self.assertEqual(
-            command[command.index("--path") + 1], r"C:\wsl" + str(self.project).replace("/", "\\")
-        )
-
     def test_record_dispatch_retries_through_cmd_after_permission_error(self):
         from sandboxai.cli import main
 
@@ -710,7 +687,7 @@ class CliWslLaunchTests(unittest.TestCase):
                 "sandboxai.cli.shutil.which", return_value="/mnt/c/Windows/System32/cmd.exe"
             ),
         ):
-            exit_code = main(["control-center", "--godot-executable", "cmd.exe"])
+            exit_code = main(["record", "--godot-executable", "cmd.exe"])
         self.assertEqual(exit_code, 1)
         # A shell workaround must never be remembered for later runs.
         self.assertFalse(save.called)

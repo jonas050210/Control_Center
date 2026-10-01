@@ -370,6 +370,47 @@ class ProcessManager:
                 _stop_process_tree(record.process, hard=False)
         return self.snapshot(process_id)
 
+    def send_command(self, process_id: str, command: str) -> ProcessSnapshot:
+        """Write one cooperative command (``pause``/``resume``/``stop``).
+
+        Only training processes speak the command-file protocol, so this
+        refuses every other kind instead of writing a file nothing reads.
+        Like :meth:`cancel` it never blocks: the trainer acknowledges at
+        its next safe callback boundary.
+        """
+        if command not in ("pause", "resume", "stop"):
+            raise ValueError(f"unsupported control command: {command!r}")
+        record = self.get(process_id)
+        if record is None:
+            return {
+                "state": "unknown",
+                "error_code": "process_not_found",
+                "error": "process not found",
+            }
+        if record.kind != "training":
+            return self.snapshot(process_id) | {
+                "error_code": "unsupported_command",
+                "error": f"process kind '{record.kind}' does not support the "
+                f"cooperative '{command}' command",
+            }
+        if record.returncode is not None:
+            return self.snapshot(process_id) | {
+                "error_code": "process_not_running",
+                "error": "the process has already exited",
+            }
+        command_file = record.run_dir / "command.json"
+        try:
+            command_file.write_text(
+                json.dumps({"command": command, "sequence": time.time_ns()}) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return self.snapshot(process_id) | {
+                "error_code": "command_unwritable",
+                "error": f"could not write the '{command}' command: {exc.__class__.__name__}",
+            }
+        return self.snapshot(process_id)
+
     def force_stop(self, process_id: str) -> ProcessSnapshot:
         """Immediately kills a process and its discoverable children.
 
@@ -477,8 +518,17 @@ class SandboxAIAdapter:
         )
         self.processes = ProcessManager()
         self.artifacts = ArtifactRepository(self.output_root)
+        # Agent lifecycle layer over the process registry. Constructed after
+        # the methods it calls exist; the manager only ever calls the three
+        # launch methods through the AgentLauncher protocol.
+        from .agents import AgentManager
+
+        self.agents = AgentManager(self.processes, self)
         self._series_cache: OrderedDict[str, _RunSeries] = OrderedDict()
         self._series_cache_limit = 6
+        #: (monotonic time, runtime facts) for compatibility checks; probing
+        #: the Godot version is a subprocess call, too slow for every poll.
+        self._runtime_status: tuple[float, dict[str, Any]] | None = None
 
     def _python_command(self, *args: str) -> list[str]:
         return [sys.executable, "-m", "sandboxai", *args]
@@ -800,6 +850,114 @@ class SandboxAIAdapter:
         return entries[:limit]
 
     # ------------------------------------------------------------------
+    # Benchmark pipeline (staged sizing benchmark + recommendation)
+    # ------------------------------------------------------------------
+
+    def run_benchmark_pipeline(
+        self,
+        *,
+        budget_mode: str = "time",
+        steps: int | None = None,
+        minutes: float | None = None,
+        environment_counts: list[int] | None = None,
+        worker_counts: list[int] | None = None,
+        finalists: int | None = None,
+        godot_executable: str | None = None,
+        cancel: Callable[[], bool] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+        output_dir: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Run the staged benchmark pipeline on this machine.
+
+        All measurement lives in
+        :mod:`sandboxai.benchmark_pipeline` (which itself reuses
+        ``benchmark.benchmark_simulation`` and ``hardware_profile``); this
+        only forwards the GUI's parameters and the project root. Like the
+        hardware wizard it can take many minutes — call it from a
+        background thread and hand ``on_progress`` events to the UI.
+        """
+        from .benchmark_pipeline import (
+            DEFAULT_FINALISTS,
+            DEFAULT_SCREEN_STEPS,
+            DEFAULT_TIME_BUDGET_MINUTES,
+            PipelineBudget,
+            run_benchmark_pipeline,
+        )
+
+        if budget_mode == "steps":
+            budget = PipelineBudget.for_steps(steps or DEFAULT_SCREEN_STEPS)
+        elif budget_mode == "time":
+            budget = PipelineBudget.for_time(minutes or DEFAULT_TIME_BUDGET_MINUTES)
+        else:
+            raise ValueError("budget_mode must be 'steps' or 'time'")
+        return run_benchmark_pipeline(
+            project_path=self.project_root,
+            godot_executable=godot_executable,
+            budget=budget,
+            environment_counts=environment_counts,
+            worker_counts=worker_counts,
+            finalists=finalists or DEFAULT_FINALISTS,
+            cancel=cancel,
+            on_progress=on_progress,
+            output_dir=output_dir,
+            recommendation_project_root=self.project_root,
+        )
+
+    def benchmark_pipeline_history(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Every persisted pipeline report under the project's benchmark root."""
+        from .benchmark_pipeline import default_output_root, discover_reports
+
+        return discover_reports(default_output_root(self.project_root), limit)
+
+    def recommended_configuration(self) -> dict[str, Any] | None:
+        """The persisted benchmark recommendation, or ``None`` if absent."""
+        from .benchmark_pipeline import load_recommendation
+
+        return load_recommendation(self.project_root)
+
+    def apply_recommended_configuration(self) -> dict[str, Any] | None:
+        """Mark the persisted recommendation as applied; returns it."""
+        from .benchmark_pipeline import mark_recommendation_applied
+
+        return mark_recommendation_applied(self.project_root)
+
+    def validate_runtime_configuration(
+        self, environment_count: int, env_workers: int, device: str
+    ) -> dict[str, Any]:
+        """Compatibility verdict shared with the benchmark's own planning.
+
+        Uses the same runtime facts the pipeline discovers, so a
+        configuration the benchmark would reject is also refused by the
+        launcher — and vice versa.
+        """
+        from .benchmark_pipeline import validate_configuration
+
+        runtime = self._runtime_status_cached()
+        return validate_configuration(
+            environment_count,
+            env_workers,
+            device,
+            runtime=runtime,
+            cpu_count=int(runtime.get("cpu_count_available_to_process") or 1),
+        )
+
+    def _runtime_status_cached(self, max_age_seconds: float = 30.0) -> dict[str, Any]:
+        """Runtime facts for compatibility checks, cached briefly.
+
+        ``available_runtime`` probes the Godot binary's version (a
+        subprocess), which is far too slow to repeat on every keystroke of
+        a custom-configuration form.
+        """
+        now = time.monotonic()
+        if self._runtime_status is not None and now - self._runtime_status[0] < max_age_seconds:
+            return self._runtime_status[1]
+        from .benchmark_pipeline import available_runtime
+
+        runtime = available_runtime(self.project_root)
+        self._runtime_status = (now, runtime)
+        return runtime
+
+    # ------------------------------------------------------------------
     # Process registry
     # ------------------------------------------------------------------
 
@@ -819,16 +977,31 @@ class SandboxAIAdapter:
     # Launching real work
     # ------------------------------------------------------------------
 
-    def _managed_training(self, config: TrainingConfig) -> tuple[Path, list[str]]:
+    def _managed_training(
+        self, config: TrainingConfig, checkpoint: str | Path | None = None
+    ) -> tuple[Path, list[str]]:
         config.validate()
-        run_dir = config.run_directory()
-        if not run_dir.is_absolute():
-            run_dir = self.project_root / run_dir
+        if checkpoint is not None:
+            # Resume artifacts stay inside the original run directory (the
+            # same rule ppo._resolve_run_directory applies), so the GUI keeps
+            # polling one status.json across the restart.
+            checkpoint_path = Path(checkpoint).expanduser()
+            if not checkpoint_path.is_file():
+                raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint_path}")
+            run_dir = (
+                checkpoint_path.parent.parent
+                if checkpoint_path.parent.name == "checkpoints"
+                else checkpoint_path.parent
+            )
+        else:
+            run_dir = config.run_directory()
+            if not run_dir.is_absolute():
+                run_dir = self.project_root / run_dir
         run_dir.mkdir(parents=True, exist_ok=True)
         # Persist the exact domain config (the trainer also writes its own copy).
         config.save(run_dir / "config.json")
         command = self._python_command(
-            "train",
+            "train" if checkpoint is None else "resume",
             "--config",
             str(run_dir / "config.json"),
             "--control-file",
@@ -838,11 +1011,24 @@ class SandboxAIAdapter:
             "--event-log-file",
             str(run_dir / "events.jsonl"),
         )
+        if checkpoint is not None:
+            command.extend(["--checkpoint", str(Path(checkpoint).expanduser())])
         return run_dir, command
 
-    def start_training(self, config: TrainingConfig | dict[str, Any]) -> dict[str, Any]:
+    def start_training(
+        self,
+        config: TrainingConfig | dict[str, Any],
+        *,
+        checkpoint: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Launch a fresh training run, or resume ``checkpoint`` when given.
+
+        Resuming keeps the checkpoint's original run directory, so a
+        restarted agent continues exactly where it stopped (same
+        status.json, same event log, same checkpoint inventory).
+        """
         cfg = config if isinstance(config, TrainingConfig) else TrainingConfig.from_dict(config)
-        run_dir, command = self._managed_training(cfg)
+        run_dir, command = self._managed_training(cfg, checkpoint)
         meta = {
             "run_id": cfg.run_id or run_dir.name,
             "environment_count": cfg.environment_count,
@@ -852,6 +1038,8 @@ class SandboxAIAdapter:
             "device": cfg.device,
             "curriculum_mode": cfg.curriculum_mode,
         }
+        if checkpoint is not None:
+            meta["resumed_from"] = str(checkpoint)
         record = self.processes.start("training", command, run_dir, self.project_root, meta=meta)
         return self.processes.snapshot(record.id) | {"process_id": record.id}
 

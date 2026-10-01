@@ -145,6 +145,109 @@ def recommended_worker_count(
     return max(1, min(int(environment_count), budget))
 
 
+@dataclass(frozen=True)
+class WorkerCompatibility:
+    """Compatibility verdict for one ``environment_count × env_workers`` pair.
+
+    This is the single place where the Environment -> Worker -> Agent
+    relationship is judged, so the benchmark pipeline and the Control
+    Center launcher can never disagree about what a valid topology is.
+    ``errors`` make a configuration invalid (it must not be launched);
+    ``warnings`` describe a valid but suboptimal topology. The shard plan
+    is included so callers can display the exact environment -> worker
+    mapping instead of re-deriving it.
+    """
+
+    environment_count: int
+    requested_workers: int
+    resolved_workers: int
+    shards: tuple[ShardSpec, ...]
+    errors: tuple[str, ...]
+    warnings: tuple[str, ...]
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+
+def worker_compatibility(
+    environment_count: int,
+    env_workers: int,
+    *,
+    cpu_count: int | None = None,
+) -> WorkerCompatibility:
+    """Validate an environment/worker request against the sharding rules.
+
+    Hard errors (mirroring what ``plan_shards`` and
+    ``TrainingConfig.resolved_env_workers`` would do anyway, but reported
+    instead of silently clamped, so a UI can prevent the invalid launch):
+
+    * ``environment_count < 1``
+    * ``env_workers < 1`` (0/"auto" is resolved by the caller before this
+      point; an explicit worker request must be positive)
+    * ``env_workers > environment_count`` — an empty shard would still cost
+      a Godot process and a handshake while simulating nothing.
+
+    Warnings (the configuration runs, but the operator should know):
+
+    * the shard split is uneven (``environment_count % env_workers != 0``),
+      listing the actual per-worker environment counts;
+    * the worker count exceeds the host's physical-core estimate, which
+      oversubscribes the CPU without adding simulation throughput.
+    """
+    errors: list[str] = []
+    if environment_count < 1:
+        errors.append("environment_count must be >= 1")
+    if env_workers < 1:
+        errors.append("env_workers must be >= 1 (0 = auto)")
+    if errors:
+        return WorkerCompatibility(
+            environment_count=max(int(environment_count), 0),
+            requested_workers=int(env_workers),
+            resolved_workers=0,
+            shards=(),
+            errors=tuple(errors),
+            warnings=(),
+        )
+    if env_workers > environment_count:
+        errors.append(
+            f"env_workers ({env_workers}) must not exceed environment_count "
+            f"({environment_count}): every worker needs at least one environment"
+        )
+        return WorkerCompatibility(
+            environment_count=int(environment_count),
+            requested_workers=int(env_workers),
+            resolved_workers=0,
+            shards=(),
+            errors=tuple(errors),
+            warnings=(),
+        )
+    shards = tuple(plan_shards(int(environment_count), int(env_workers)))
+    warnings: list[str] = []
+    per_worker = [shard.count for shard in shards]
+    if len(set(per_worker)) > 1:
+        warnings.append(
+            f"uneven shard split: {environment_count} environments over "
+            f"{env_workers} workers gives {per_worker} per worker; the "
+            "slowest worker caps every vector step"
+        )
+    logical = int(cpu_count if cpu_count is not None else (os.cpu_count() or 1))
+    physical_estimate = max(1, (logical + 1) // 2) if logical > 4 else logical
+    if env_workers > physical_estimate:
+        warnings.append(
+            f"{env_workers} workers exceed the estimated {physical_estimate} physical "
+            f"cores; workers beyond that contend for CPU instead of adding throughput"
+        )
+    return WorkerCompatibility(
+        environment_count=int(environment_count),
+        requested_workers=int(env_workers),
+        resolved_workers=len(shards),
+        shards=shards,
+        errors=(),
+        warnings=tuple(warnings),
+    )
+
+
 class ShardedBatchClient:
     """``GodotBatchClient``-compatible facade over several bridge processes.
 

@@ -175,16 +175,17 @@ class StaticCallThroughScriptClassTests(unittest.TestCase):
 class UndefinedLocalCallTests(unittest.TestCase):
     """Regression tests for the broken-``system_monitor.gd`` failure class.
 
-    ``scripts/control_center/system_monitor.gd`` called
-    ``_needs_cpu_command()`` and ``_parse_optional_number()`` without
-    declaring either. Godot rejects undeclared bare calls at COMPILE time
-    ("Function ... not found in base self"), which invalidates the whole
-    script — yet the invalid script still loads as a resource, so every
-    ``preload`` chain survived and the damage only appeared at runtime:
-    ``ControlCenterSystemMonitor.new()`` aborted with "Nonexistent function
-    'new' in base 'GDScript'", ``ControlCenterSession._init`` died mid-way
-    (leaving ``system_monitor`` and ``simulation_manager`` null), and ~37
-    Control Center tests failed across session/scene/dashboard files.
+    (Historical: that file lived in ``scripts/control_center/``, removed
+    with the rendered operator UI.) It called ``_needs_cpu_command()`` and
+    ``_parse_optional_number()`` without declaring either. Godot rejects
+    undeclared bare calls at COMPILE time ("Function ... not found in base
+    self"), which invalidates the whole script — yet the invalid script
+    still loads as a resource, so every ``preload`` chain survived and the
+    damage only appeared at runtime: ``ControlCenterSystemMonitor.new()``
+    aborted with "Nonexistent function 'new' in base 'GDScript'",
+    ``ControlCenterSession._init`` died mid-way (leaving ``system_monitor``
+    and ``simulation_manager`` null), and ~37 Control Center tests failed
+    across session/scene/dashboard files.
 
     These tests pin the static check that catches this class of defect
     without needing the engine.

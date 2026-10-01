@@ -13,7 +13,7 @@ from unittest import mock
 from optional_deps import HAS_TKINTER, HAS_TORCH, TKINTER_REASON, TORCH_REASON
 
 from sandboxai import cli
-from sandboxai.cli import build_control_center_command, build_record_command, main
+from sandboxai.cli import build_record_command, main
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,41 +57,6 @@ class CliTests(unittest.TestCase):
         launched = call.call_args[0][0]
         self.assertIn("res://scripts/recording/record_demo.gd", launched)
 
-    def test_build_control_center_command_is_graphical_and_passes_settings(self):
-        command = build_control_center_command("godot", "", "human", 2, 3, 4, 77, "duel")
-        # The Control Center is an operator tool: it opens a real window and
-        # must never be launched headless (that is the training path).
-        self.assertNotIn("--headless", command)
-        self.assertIn("res://scenes/control_center.tscn", command)
-        # Scene arguments are passed after the "--" separator so Godot does
-        # not try to interpret them itself.
-        separator = command.index("--")
-        user_args = command[separator + 1 :]
-        self.assertIn("--mode=human", user_args)
-        self.assertIn("--env-count=2", user_args)
-        self.assertIn("--enemy-count=3", user_args)
-        self.assertIn("--curriculum-level=4", user_args)
-        self.assertIn("--seed=77", user_args)
-        self.assertIn("--scenario=duel", user_args)
-
-    def test_control_center_command_omits_empty_scenario(self):
-        command = build_control_center_command("godot", "", "watch", 1, 1, 3, 1234)
-        self.assertFalse([arg for arg in command if arg.startswith("--scenario")])
-
-    def test_control_center_command_is_dispatched(self):
-        with mock.patch("sandboxai.cli.subprocess.call", return_value=0) as call:
-            exit_code = main(["control-center", "--mode", "watch", "--env-count", "2"])
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(call.call_count, 1)
-        launched = call.call_args[0][0]
-        self.assertIn("res://scenes/control_center.tscn", launched)
-        self.assertIn("--env-count=2", launched)
-
-    def test_control_center_reports_missing_godot_instead_of_crashing(self):
-        with mock.patch("sandboxai.cli.subprocess.call", side_effect=OSError("not found")):
-            exit_code = main(["control-center"])
-        self.assertEqual(exit_code, 1)
-
     @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
     def test_control_center_desktop_is_dispatched_with_project_and_output_root(self):
         # Importing sandboxai.control_center_desktop (even just to patch its
@@ -130,10 +95,10 @@ class CliTests(unittest.TestCase):
             "train",
             "evaluate",
             "record",
-            "control-center",
             "bc-train",
             "resume",
             "benchmark",
+            "benchmark-pipeline",
             "hardware-wizard",
             "inspect-dataset",
             "smoke-test",
@@ -166,6 +131,21 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["fallback"])
         self.assertEqual(payload["selected_device"], "cpu")
         self.assertFalse(payload["godot_available"])
+
+    def test_benchmark_pipeline_show_without_recommendation_reports_absence(self):
+        with mock.patch(
+            "sandboxai.benchmark_pipeline.load_recommendation", return_value=None
+        ) as load:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                exit_code = main(["benchmark-pipeline", "--show"])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("No persisted benchmark recommendation", out.getvalue())
+        load.assert_called_once()
+
+    def test_benchmark_pipeline_rejects_an_invalid_budget(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            exit_code = main(["benchmark-pipeline", "--budget-mode", "time", "--minutes", "500"])
+        self.assertEqual(exit_code, 1)
 
     def test_hardware_wizard_show_without_profile_reports_absence(self):
         with mock.patch("sandboxai.hardware_profile.load_profile", return_value=None):

@@ -394,3 +394,310 @@ def test_training_values_from_profile_ignores_fallback():
 
 def test_training_values_from_profile_without_profile_is_defaults():
     assert vm.training_values_from_profile(None) == vm.default_training_values()
+
+
+# ---------------------------------------------------------------------------
+# Agents (lifecycle registry)
+# ---------------------------------------------------------------------------
+
+
+def test_lifecycle_colors_cover_every_derived_state():
+    from sandboxai import agents
+
+    for constant in (
+        agents.LIFECYCLE_AVAILABLE,
+        agents.LIFECYCLE_LAUNCHING,
+        agents.LIFECYCLE_RUNNING,
+        agents.LIFECYCLE_PAUSED,
+        agents.LIFECYCLE_STOPPING,
+        agents.LIFECYCLE_STOPPED,
+        agents.LIFECYCLE_FINISHED,
+        agents.LIFECYCLE_FAILED,
+        agents.LIFECYCLE_RESTARTING,
+    ):
+        assert constant in vm.LIFECYCLE_COLORS, constant
+
+
+def test_agent_table_rows_relay_published_facts_only():
+    rows = vm.agent_table_rows(
+        [
+            {
+                "agent_id": "a1",
+                "kind": "training",
+                "lifecycle": "RUNNING",
+                "pid": 4242,
+                "backend": {
+                    "environment_count": 12,
+                    "timesteps": 3_000,
+                    "total_training_steps": 10_000,
+                    "steps_per_second": 91.5,
+                    "mean_episode_reward": 0.42,
+                },
+                "meta": {"env_workers": 4, "device": "cpu"},
+                "name": "run-1",
+                "created_at": 1000.0,
+            },
+            {
+                # A benchmark agent publishes no backend metrics; every
+                # missing fact must stay None, never be guessed.
+                "agent_id": "a2",
+                "kind": "benchmark",
+                "lifecycle": "FINISHED",
+                "meta": {"environment_counts": [4, 8]},
+                "created_at": 1001.0,
+            },
+        ]
+    )
+    assert rows[0]["environment_count"] == 12
+    assert rows[0]["env_workers"] == 4
+    assert rows[0]["device"] == "cpu"
+    assert rows[0]["timesteps"] == 3_000
+    assert rows[0]["name"] == "run-1"
+    assert rows[1]["name"] == "a2"
+    assert rows[1]["timesteps"] is None
+    assert rows[1]["environment_count"] is None
+    assert rows[1]["error"] is None
+
+
+def test_agent_progress_percent_is_bounded_and_honest():
+    row = {"timesteps": 2_500, "total_steps": 10_000}
+    assert vm.agent_progress_percent(row) == 25.0
+    # Never above 100 even if the backend overshoots its total.
+    assert vm.agent_progress_percent({"timesteps": 99, "total_steps": 10}) == 100.0
+    assert vm.agent_progress_percent({"timesteps": None, "total_steps": 10}) is None
+    assert vm.agent_progress_percent({"timesteps": 5, "total_steps": 0}) is None
+
+
+def test_agent_action_availability_matrix():
+    # Training agent: the full cooperative set.
+    running_training = vm.agent_action_availability("RUNNING", "training")
+    assert running_training["pause"] and running_training["stop"]
+    assert not running_training["resume"]
+    assert not running_training["remove"]
+    assert running_training["pause_unsupported_reason"] is None
+
+    paused_training = vm.agent_action_availability("PAUSED", "training")
+    assert paused_training["resume"] and not paused_training["pause"]
+
+    # Benchmark/evaluation agents have no pause protocol: the reason says so.
+    running_benchmark = vm.agent_action_availability("RUNNING", "benchmark")
+    assert not running_benchmark["pause"]
+    assert "no pause protocol" in running_benchmark["pause_unsupported_reason"]
+    assert running_benchmark["stop"]
+
+    # A stop already in progress disables pressing stop again.
+    stopping = vm.agent_action_availability("STOPPING", "training")
+    assert not stopping["stop"] and not stopping["pause"]
+    assert stopping["force_stop"]
+
+    # Terminal agents can be restarted or removed, not stopped.
+    stopped = vm.agent_action_availability("STOPPED", "training")
+    assert stopped["restart"] and stopped["remove"]
+    assert not stopped["stop"] and not stopped["force_stop"]
+
+    failed = vm.agent_action_availability("FAILED", "training")
+    assert failed["restart"] and failed["remove"]
+
+
+def test_launch_slot_view_resolves_auto_workers_and_reports_invalid_values():
+    slot = vm.launch_slot_view(vm.default_training_values())
+    assert slot["state"] == "AVAILABLE", slot["errors"]
+    assert slot["warnings"] == []
+    summary = slot["summary"]
+    expected = vm.parse_training_form(vm.default_training_values())
+    assert summary["env_workers"] == expected.resolved_env_workers()
+    assert summary["environment_count"] == expected.environment_count
+
+    invalid = vm.launch_slot_view({**vm.default_training_values(), "environment_count": "zero"})
+    assert invalid["state"] == "INVALID"
+    assert invalid["summary"] is None
+    assert any("Environments" in error for error in invalid["errors"])
+
+    # Runtime incompatibilities (e.g. CUDA requested without CUDA) merge in.
+    with_cuda = vm.launch_slot_view(
+        {**vm.default_training_values(), "device": "cuda"},
+        compatibility={"valid": False, "errors": ["no CUDA runtime"], "warnings": []},
+    )
+    assert with_cuda["state"] == "INVALID"
+    assert "no CUDA runtime" in with_cuda["errors"]
+
+
+def test_topology_rows_mirror_the_sharded_bridge_plan():
+    rows = vm.topology_rows(10, 3)
+    assert [(row["worker"], row["environments"]) for row in rows] == [(0, 4), (1, 3), (2, 3)]
+    assert rows[0]["first_environment"] == 0 and rows[0]["last_environment"] == 3
+    assert rows[1]["first_environment"] == 4
+    assert vm.topology_rows(4, 1) == [
+        {"worker": 0, "first_environment": 0, "last_environment": 3, "environments": 4}
+    ]
+    # Invalid or missing input renders nothing, never a guessed plan.
+    assert vm.topology_rows(None, 4) == []
+    assert vm.topology_rows(8, 0) == []
+    assert vm.topology_rows("eight", 2) == []
+
+
+# ---------------------------------------------------------------------------
+# Benchmark pipeline
+# ---------------------------------------------------------------------------
+
+
+def test_benchmark_pipeline_form_defaults_parse_cleanly():
+    assert vm.parse_benchmark_pipeline_form(vm.benchmark_pipeline_form_defaults()) == {
+        "budget_mode": "time",
+        "steps": None,
+        "minutes": 15.0,
+        "environment_counts": None,
+        "worker_counts": None,
+        "finalists": 4,
+    }
+
+
+def test_parse_benchmark_pipeline_form_accepts_a_full_custom_sweep():
+    parsed = vm.parse_benchmark_pipeline_form(
+        {
+            "budget_mode": "steps",
+            "steps": "2000",
+            "minutes": "",
+            "environment_counts": "4, 8,16",
+            "worker_counts": "1,4",
+            "finalists": "2",
+        }
+    )
+    assert parsed == {
+        "budget_mode": "steps",
+        "steps": 2000,
+        "minutes": None,
+        "environment_counts": [4, 8, 16],
+        "worker_counts": [1, 4],
+        "finalists": 2,
+    }
+
+
+def test_parse_benchmark_pipeline_form_collects_every_error():
+    with pytest.raises(ValueError, match="budget mode"):
+        vm.parse_benchmark_pipeline_form(
+            {
+                "budget_mode": "energy",
+                "steps": "10",
+                "minutes": "500",
+                "environment_counts": "4,x",
+                "worker_counts": "0",
+                "finalists": "9",
+            }
+        )
+
+
+def test_parse_benchmark_pipeline_form_enforces_the_budget_ranges():
+    with pytest.raises(ValueError, match="at least 100"):
+        vm.parse_benchmark_pipeline_form({"budget_mode": "steps", "steps": "50"})
+    with pytest.raises(ValueError, match="between 1 and 60"):
+        vm.parse_benchmark_pipeline_form({"budget_mode": "time", "minutes": "0.5"})
+
+
+def test_benchmark_pipeline_rows_label_stages_and_keep_failures():
+    rows = vm.benchmark_pipeline_rows(
+        {
+            "stages": [
+                {
+                    "name": "screening",
+                    "configurations": [
+                        {
+                            "environments": 8,
+                            "workers": 2,
+                            "status": "ok",
+                            "steps_per_second": 120.0,
+                            "vector_step_latency_p50_ms": 1.0,
+                            "vector_step_latency_p95_ms": 2.5,
+                            "latency_jitter": 2.5,
+                            "startup_seconds": 0.4,
+                        },
+                        {
+                            "environments": 8,
+                            "workers": 4,
+                            "status": "failed",
+                            "error": "worker refused to start",
+                        },
+                    ],
+                },
+                {
+                    "name": "validation",
+                    "configurations": [
+                        {
+                            "environments": 8,
+                            "workers": 2,
+                            "status": "measured",
+                            "device": "cpu",
+                            "steps": 3000,
+                            "steps_per_second": 41.0,
+                        }
+                    ],
+                },
+            ]
+        }
+    )
+    assert [row["stage"] for row in rows] == ["screening", "screening", "validation"]
+    assert rows[0]["steps_per_second"] == 120.0
+    assert rows[1]["status"] == "failed" and rows[1]["error"]
+    assert rows[2]["device"] == "cpu"
+    assert vm.benchmark_pipeline_rows(None) == []
+
+
+def test_benchmark_recommendation_view_requires_a_real_recommendation():
+    empty = vm.benchmark_recommendation_view(None)
+    assert not empty["available"] and empty["reason"]
+    broken = vm.benchmark_recommendation_view({"environment_count": "many"})
+    assert not broken["available"]
+
+    view = vm.benchmark_recommendation_view(
+        {
+            "environment_count": 24,
+            "env_workers": 4,
+            "device": "cpu",
+            "inference_device": "cpu",
+            "expected_steps_per_second": 380.2,
+            "basis": "validated_training_slice",
+            "rationale": ["measured 380.2 steps/s"],
+            "warnings": [],
+        }
+    )
+    assert view["available"]
+    assert view["summary"].startswith("24 environments / 4 workers")
+    assert view["basis"] == "validated_training_slice"
+
+
+def test_custom_configuration_view_reports_validation_verdicts():
+    empty = vm.custom_configuration_view(None)
+    assert not empty["valid"] and empty["errors"]
+    view = vm.custom_configuration_view(
+        {
+            "valid": True,
+            "errors": [],
+            "warnings": ["uneven shards"],
+            "environment_count": 10,
+            "env_workers": 3,
+            "shards": [{"worker": 0, "offset": 0, "count": 4}],
+        }
+    )
+    assert view["valid"] and view["warnings"] == ["uneven shards"]
+    assert view["shards"][0]["count"] == 4
+
+
+def test_pipeline_progress_view_formats_counts_and_messages():
+    counted = vm.pipeline_progress_view(
+        {
+            "stage": "screening",
+            "status": "completed",
+            "index": 2,
+            "total": 6,
+            "configuration": {"environments": 8, "workers": 2},
+        }
+    )
+    assert counted["text"] == "screening: 3/6 — 8 envs / 2 workers (completed)"
+    assert counted["fraction"] == 0.5
+
+    messaged = vm.pipeline_progress_view(
+        {"stage": "devices", "status": "skipped", "message": "reusing profile"}
+    )
+    assert messaged["text"] == "devices: reusing profile"
+    assert messaged["fraction"] is None
+    assert vm.pipeline_progress_view(None) == {"text": "idle", "stage": None, "fraction": None}

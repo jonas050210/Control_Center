@@ -11,7 +11,7 @@
 ## Shutdown diagnostics
 ## --------------------
 ## Tests own their objects: anything that is NOT RefCounted (every Node —
-## SimulationManager, ControlCenterSession, controllers, panels, scene
+## SimulationManager, controllers, panels, scene
 ## instances) must be freed by the test that created it, because this
 ## runner calls `quit()` on the first process frame and never gives the
 ## SceneTree another frame to flush `queue_free()`.

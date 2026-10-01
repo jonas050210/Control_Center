@@ -107,89 +107,56 @@ by RL and recording.
 
 ## Control Center
 
-The Control Center is the interactive front-end: one window to operate,
-watch, play, inspect and evaluate the same simulation the trainer uses.
+The Control Center is the interactive front-end: one native desktop window
+to launch, operate, benchmark and inspect the headless training stack. It
+is a Python/Tkinter application and is **headless-only** — it never renders
+the game; training always runs `scripts/rl/rl_server.gd` with `--headless`
+in separate processes, and the GUI exchanges only cooperative commands and
+read-only status files with them.
 
 ```bash
-# Godot directly
-godot --path . res://scenes/control_center.tscn
+# from the repository root (no Godot editor, no .tscn):
+python3 main.py
 
-# ... or through the CLI, with settings
-sandboxai control-center --mode watch --env-count 4 --enemy-count 1 \
-    --curriculum-level 3 --seed 1234
+# ... or through the CLI:
+sandboxai control-center-desktop
 ```
 
 It provides:
 
-- managed **PPO** and **Behavior Cloning** configuration and real process
-  controls (start, graceful stop, cooperative pause/resume, reset), with
-  checkpoint resume, CPU/CUDA/Auto selection and backend-published progress;
-  **Self-Play** is exposed honestly as evaluation-only until an optimizer is
-  implemented
-- responsive Visual/Headless dashboards with resizable, hideable, persisted
-  tiles; Visual keeps an actual local 3D simulation preview while Headless
-  prioritizes progress, RL metrics, measured resources and training logs
-- three local modes over one simulation — **TRAINING** (headless-style
-  throughput, rendering/telemetry/logging off), **WATCH** (render the
-  selected environment while the AI drives) and **HUMAN** (drive the same
-  agent through the same `HumanController` -> `Action` pipeline)
-- simulation controls: play/pause, single step, step x10, deterministic or
-  randomized reset, reset all, speed `0.25x`-`16x` (implemented as
-  simulation steps per frame, never `Engine.time_scale`)
-- a live agent panel (position, health, target, action, reward, kills,
-  damage, accuracy) and an in-world HUD with crosshair and hit feedback
-- **"What does the AI see?"** — REAL WORLD ground truth and AI PERCEPTION
-  (decoded from the observation vector only) side by side, with enemies
-  that are hidden from the AI flagged explicitly and unimplemented
-  perception features marked as unavailable
-- an Observation Inspector for all 84 contract fields, driven by
-  `Observation.FIELD_SPEC` (no duplicated field lists)
-- results/metrics with HUMAN vs AI comparison and JSON export
-- a throttled, filterable event log (`ALL/COMBAT/PERCEPTION/SYSTEM/
-  REWARD/ERROR`)
-- normal first-person player presentation; third-person/free/top-down views are debug-only inspection tools, never TTK Testing gameplay modes
+- **Dashboard** - live state, progress, steps/s, elapsed/ETA, environment
+  and worker counts, agent lifecycle summary, device, reward
+- **Agents** - the launch form (validated against the same compatibility
+  rules the benchmark uses) plus every launched training/benchmark/
+  evaluation agent with its lifecycle state
+  (AVAILABLE -> LAUNCHING -> RUNNING -> PAUSED/STOPPING -> STOPPED/
+  FINISHED/FAILED), its Environment -> Worker topology, backend metrics,
+  and the full action set: Launch, Pause/Resume (training only - other
+  backends say why not), Stop, Restart (resuming from the run's latest
+  checkpoint), Force stop, Stop all
+- **Benchmarks** - the staged benchmark pipeline that *measures* this
+  machine's runtime (environment count x worker count x device, startup,
+  warmup, throughput, latency percentiles, errors, stability) under a
+  Steps or a 1-60 minute Time budget, then recommends a configuration
+  with its reasoning - never a hard-coded guess. The recommendation can
+  be applied to the launch form in one click, and both it and the full
+  report are persisted; a Custom configuration gets the same validation
+  verdict the launcher enforces
+- **Evaluations** - win/loss/timeout, combat, accuracy and
+  action-head/zero-shot diagnostics plus multi-run comparison
+- **Runs / Checkpoints** - a browser over the on-disk run artifacts
+- **System / Telemetry** - real CPU/RAM/Godot/dependency status and
+  bounded live telemetry charts; unavailable metrics are shown as such,
+  never estimated
+- **Settings** - project/output roots and the Godot executable
 
-Shortcuts: `F1`/`F2`/`F3` toggle the docks, `Space` pauses, `N` steps, `R`
-resets, `Tab` cycles inspector tabs.
+The Control Center is built entirely on
+`sandboxai.adapter.SandboxAIAdapter` - the same `train`/`benchmark`/
+`evaluate` CLI commands and on-disk artifacts, never a parallel
+implementation - and stays **outside** the RL hot path: `scenes/main.tscn`
+remains the main scene, and the training modules never import the GUI.
 
-The Control Center remains **outside** the RL hot path: it is not constructed
-when the display server is headless, `scenes/main.tscn` remains the main
-scene, and managed PPO still launches `scripts/rl/rl_server.gd` with
-`--headless` in a separate Python process. The GUI exchanges only cooperative
-commands and read-only status files with that process.
-
-Full documentation: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
-
-### Desktop Control Center (Python/Tkinter)
-
-A separate, local Python desktop application for operating training runs
-without opening Godot at all - useful while a run is training headless, or
-for reviewing runs/checkpoints/benchmarks after the fact:
-
-```bash
-sandboxai control-center-desktop
-# or, pointing it at a different project/output directory:
-sandboxai control-center-desktop --project-path /path/to/SandboxAI --output-root training
-```
-
-On Windows, `tools\windows\start_control_center.bat` launches it from the
-project's Python environment (activates `.venv` if present, checks that
-`sandboxai` and Tkinter are importable first, and reports a clear message
-instead of a stack trace if not).
-
-It is built entirely on `sandboxai.adapter.SandboxAIAdapter` - the same
-`train`/`benchmark`/`evaluate` CLI commands and on-disk run artifacts, never
-a parallel implementation - and covers: a live Dashboard (progress, FPS,
-ETA, device, PPO optimizer diagnostics, checkpoints, warnings); bounded
-live telemetry charts; validated Training launch/stop with basic/advanced
-config sections; an Evaluation page with win/loss/timeout, combat, accuracy
-and action-head/zero-shot diagnostics plus multi-run comparison; a Benchmark
-page with real sweeps and scaling-summary comparison across result
-history; a Runs/Checkpoints browser; an Agents page listing every
-training/evaluation/benchmark process this session launched (safe stop/force
--stop only, no arbitrary process execution); and a System/Telemetry page
-with real CPU/RAM/Godot/dependency status - unavailable metrics are shown as
-such, never estimated. See
+Full documentation: [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md) and
 [docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
 
 ## Automated tests
@@ -292,25 +259,15 @@ fingerprint. It is the same report BC writes to `dataset_report.json`.
 ### Open the Control Center
 
 ```bash
-sandboxai control-center                      # WATCH mode, defaults
-sandboxai control-center --mode human         # play the agent yourself
-sandboxai control-center --scenario overwhelmed --env-count 8
-```
-
-This opens the graphical Godot scene `scenes/control_center.tscn` (never
-headless). See [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
-
-### Open the desktop Control Center
-
-```bash
+python3 main.py                # from the repository root
+# or:
 sandboxai control-center-desktop
 ```
 
-This opens the Python/Tkinter desktop application described above, not the
-Godot scene - it never launches Godot itself; it launches the existing
-`train`/`benchmark`/`evaluate` CLI commands as separate processes when you
-start one from the GUI. See
-[docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
+This opens the Python/Tkinter desktop application described above. It never
+renders the game: it launches the existing `train`/`benchmark`/`evaluate`
+CLI commands as separate headless processes when you start one from the
+GUI. See [docs/CONTROL_CENTER.md](docs/CONTROL_CENTER.md).
 
 ### Behavior Cloning
 
@@ -716,12 +673,11 @@ location and best-effort resource utilization.
   GUI (FPS/telemetry + pause/reset/enemy-count/curriculum controls). It is
   never created by the headless RL bridge. See
   [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md).
-- `scripts/control_center/` is the Control Center: a data layer
-  (`control_center_config/session/event_log/results/telemetry`,
-  `observation_inspector`, `perception_model`) plus a UI layer
-  (`scripts/control_center/ui/`). It consumes simulation state only, reuses
-  the existing controller/observation pipeline, and is skipped entirely in
-  headless processes. See [`docs/CONTROL_CENTER.md`](docs/CONTROL_CENTER.md).
+- The Control Center is the Python/Tkinter desktop application
+  (`python/sandboxai/control_center_*.py`, started with `python3 main.py`).
+  It operates the headless stack through `sandboxai.adapter`, never renders
+  the game, and is not imported by any training module. See
+  [`docs/CONTROL_CENTER.md`](docs/CONTROL_CENTER.md).
 - `python/sandboxai/contract.py` documents the local Godot/Python
   Observation/Action contract as data. It is not a Roblox integration seam.
 

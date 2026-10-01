@@ -70,7 +70,6 @@ class ControlCenterConstructionTests(unittest.TestCase):
         titles = {page_class.title for page_class in PAGE_CLASSES}
         assert titles == {
             "Dashboard",
-            "Training",
             "Agents",
             "Benchmarks",
             "Evaluations",
@@ -162,18 +161,28 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # against the resolved form the adapter actually reports.
         assert page._last_run_dir == str(run_dir.resolve())
 
-    def test_training_form_rejects_invalid_input_without_starting_a_process(self):
-        self.app.show_page("Training")
-        page = self.app.pages["Training"]
-        page.field_vars["environment_count"].set("not-a-number")
-        # _start() shows a messagebox on invalid input; patch it out so the
-        # test does not block on a real dialog.
+    def test_launch_form_rejects_invalid_input_without_starting_an_agent(self):
+        """The launch slot must go INVALID before anything can be launched."""
         from unittest import mock
 
-        with mock.patch("sandboxai.control_center_desktop.messagebox.showerror") as mocked:
-            page._start()
-        mocked.assert_called_once()
-        assert page.process_id is None
+        self.app.show_page("Agents")
+        page = self.app.pages["Agents"]
+        page.field_vars["environment_count"].set("not-a-number")
+        _drain_background(self.app)
+        # The inline launch slot reports the parse error and disables the
+        # launch button; no dialog, no process.
+        slot = page._launch_slot
+        assert slot["state"] == "INVALID"
+        assert slot["errors"]
+        assert str(page.launch_button.cget("state")) == "disabled"
+        with (
+            mock.patch("sandboxai.control_center_pages.messagebox.showerror") as dialog,
+            mock.patch.object(page.adapter.agents, "launch_training") as launch,
+        ):
+            page._launch()
+            _drain_background(self.app)
+        dialog.assert_not_called()
+        launch.assert_not_called()
 
     def test_settings_page_shows_the_real_project_and_output_roots(self):
         self.app.show_page("Settings")
@@ -281,24 +290,28 @@ class ControlCenterConstructionTests(unittest.TestCase):
         runs._on_detail("run-old", 3, {}, None)
         self.assertEqual(runs.detail_text.get("1.0", "end-1c"), "")
 
-    def test_agents_page_rejects_late_logs_and_binds_stop_to_the_clicked_process(self):
+    def test_agents_page_rejects_late_logs_and_binds_actions_to_the_clicked_agent(self):
         """Background output/commands must stay attached to the selected agent.
 
         A slow file read for Agent A may finish after the operator selected
         Agent B. Rendering A's output under B would make the telemetry
-        misleading; resolving a stop lambda after the selection changed could
-        act on B instead of the clicked A.
+        misleading; resolving an action lambda after the selection changed
+        could act on B instead of the clicked A.
         """
         from unittest import mock
 
         self.app.show_page("Agents")
         _drain_background(self.app)
         page = self.app.pages["Agents"]
-        page._selected_process_id = "agent-b"
+        page._last_views = [
+            {"agent_id": "agent-a", "process_id": "proc-a"},
+            {"agent_id": "agent-b", "process_id": "proc-b"},
+        ]
+        page._selected_agent_id = "agent-b"
         page._log_selection_generation = 2
-        page._on_log("agent-a", 1, {"stdout": ["stale agent-a output"]}, None)
+        page._on_log("proc-a", 1, {"stdout": ["stale agent-a output"]}, None)
         self.assertNotIn("stale agent-a output", page.log_panel.text.get("1.0", "end"))
-        page._on_log("agent-b", 2, {"stdout": ["current agent-b output"]}, None)
+        page._on_log("proc-b", 2, {"stdout": ["current agent-b output"]}, None)
         self.assertIn("current agent-b output", page.log_panel.text.get("1.0", "end"))
 
         # A deselection clears the now-unattributed output and disables
@@ -306,16 +319,18 @@ class ControlCenterConstructionTests(unittest.TestCase):
         page._clear_selection()
         self.assertEqual(page.log_panel.text.get("1.0", "end-1c"), "")
         self.assertEqual(str(page.stop_button.cget("state")), "disabled")
+        self.assertEqual(str(page.pause_button.cget("state")), "disabled")
+        self.assertEqual(str(page.restart_button.cget("state")), "disabled")
 
-        # The queued action captures the id that was selected when the
+        # The queued action captures the agent id that was selected when the
         # operator pressed the button, rather than resolving the mutable
         # selection later on a worker thread.
-        page._selected_process_id = "agent-a"
-        with mock.patch.object(page.adapter, "cancel") as cancel:
+        page._selected_agent_id = "agent-a"
+        with mock.patch.object(page.adapter.agents, "stop") as stop:
             page._stop()
-            page._selected_process_id = "agent-b"
+            page._selected_agent_id = "agent-b"
             _drain_background(self.app)
-        cancel.assert_called_once_with("agent-a")
+        stop.assert_called_once_with("agent-a")
 
     def test_tooltip_cancels_its_delayed_callback_when_a_page_widget_is_destroyed(self):
         from sandboxai.control_center_widgets import ToolTip

@@ -4,6 +4,14 @@ Scope: every GDScript file under `scripts/` and `tests/`, every Python module un
 
 Method: full read of ~43k lines, dependency modelling of the producer/consumer seams (observation/action contract, `_brain_context`, `heard` sound events, `step_all` results, replay/demonstration formats), then root-cause fixes with regression tests, then duplicate-pattern searches, then a whole-project re-audit.
 
+> **Later-pass note (headless-only Control Center).** The in-simulator
+> operator scene audited here (`scenes/control_center.tscn`,
+> `scripts/control_center/`, and the `tests/test_control_center_*.gd`
+> regression files) has since been removed; the Control Center is now the
+> headless-only Python/Tk desktop application. Findings B4/B5/B6 and the
+> session-related tests below are therefore historical records of that
+> deleted layer; the fixes they describe went with it.
+
 ---
 
 ## 1. Bugs found and fixed
