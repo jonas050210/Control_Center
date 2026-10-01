@@ -107,10 +107,10 @@ class ControlCenterConstructionTests(unittest.TestCase):
             self.assertEqual(str(scrollbar.cget("orient")), "horizontal")
             self.assertEqual(scrollbar.winfo_manager(), "grid")
 
-    def test_page_poll_gate_coalesces_slow_refreshes_without_suppressing_the_next_one(
+    def test_page_poll_gate_coalesces_slow_refreshes_without_losing_the_latest_one(
         self,
     ) -> None:
-        """Periodic disk/process reads cannot queue behind an already-live poll."""
+        """An overlapping poll has one latest-only retry, never an unbounded queue."""
         self.app.show_page("Dashboard")
         _drain_background(self.app)
         page = self.app.pages["Dashboard"]
@@ -119,15 +119,19 @@ class ControlCenterConstructionTests(unittest.TestCase):
             "test-poll", lambda: "first", lambda result, _error: results.append(result)
         )
         page.submit_poll(
-            "test-poll", lambda: "second", lambda result, _error: results.append(result)
+            "test-poll", lambda: "superseded", lambda result, _error: results.append(result)
+        )
+        page.submit_poll(
+            "test-poll", lambda: "latest", lambda result, _error: results.append(result)
         )
         _drain_background(self.app)
-        self.assertEqual(results, ["first"])
+        self.assertEqual(results, ["first", "latest"])
         self.assertNotIn("test-poll", page._polls_in_flight)
+        self.assertNotIn("test-poll", page._pending_polls)
 
         page.submit_poll("test-poll", lambda: "next", lambda result, _error: results.append(result))
         _drain_background(self.app)
-        self.assertEqual(results, ["first", "next"])
+        self.assertEqual(results, ["first", "latest", "next"])
 
     def test_dashboard_reflects_a_real_run_directory(self):
         run_dir = self.project_root / "training" / "runs" / "run-a"
@@ -470,7 +474,10 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
         runner = self._runner()
         runner.close()
         calls: list[str] = []
-        runner.submit(lambda: calls.append("ran"), lambda _result, _error: None)
+        self.assertFalse(
+            runner.submit(lambda: calls.append("ran"), lambda _result, _error: None),
+            "callers that own in-flight UI state must be able to release it on shutdown",
+        )
         time.sleep(0.1)
         self.assertEqual(calls, [])
 

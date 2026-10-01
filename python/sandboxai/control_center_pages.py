@@ -58,7 +58,14 @@ class Page(ttk.Frame):
         # at most one request per page operation in flight: piling identical
         # reads into the shared three-worker pool makes a slow disk look like
         # a frozen GUI and can render stale telemetry long after it mattered.
+        # A second request is retained as one latest-only follow-up instead
+        # of being lost: a refresh requested while the initial app-start poll
+        # is still reading an empty run root must still observe a run that
+        # appears before that poll comes back.
         self._polls_in_flight: set[str] = set()
+        self._pending_polls: dict[
+            str, tuple[Callable[[], Any], Callable[[Any, BaseException | None], None]]
+        ] = {}
 
     def show(self) -> None:
         if not self._built:
@@ -87,22 +94,44 @@ class Page(ttk.Frame):
         fn: Callable[[], Any],
         callback: Callable[[Any, BaseException | None], None],
     ) -> None:
-        """Submit one periodic read, skipping duplicates until it completes.
+        """Submit one periodic read, coalescing overlap to one fresh retry.
 
         This is deliberately for idempotent refreshes only, never for a user
-        command such as Start, Stop or Force stop. The Tk callback removes the
-        guard immediately before handing the result to its page, so a failed
-        read never wedges a later refresh and the next normal tick can retry.
+        command such as Start, Stop or Force stop. A request that arrives
+        while its operation is live replaces one retained follow-up request;
+        it never expands the executor queue.  The Tk callback releases the
+        guard before handing its result to the page, so errors cannot wedge a
+        later refresh and work requested during a slow read is not discarded.
         """
         if operation in self._polls_in_flight:
+            self._pending_polls[operation] = (fn, callback)
             return
+        self._start_poll(operation, fn, callback)
+
+    def _start_poll(
+        self,
+        operation: str,
+        fn: Callable[[], Any],
+        callback: Callable[[Any, BaseException | None], None],
+    ) -> None:
         self._polls_in_flight.add(operation)
 
         def complete(result: Any, error: BaseException | None) -> None:
             self._polls_in_flight.discard(operation)
-            callback(result, error)
+            try:
+                callback(result, error)
+            finally:
+                pending = self._pending_polls.pop(operation, None)
+                if pending is not None:
+                    self._start_poll(operation, *pending)
 
-        self.app.background.submit(fn, complete)
+        if not self.app.background.submit(fn, complete):
+            self._polls_in_flight.discard(operation)
+
+    def reset_polls(self) -> None:
+        """Forget work tied to a background runner that has been replaced."""
+        self._polls_in_flight.clear()
+        self._pending_polls.clear()
 
     def report_error(self, context: str, error: BaseException) -> None:
         self.app.set_status(f"{context}: {error}", error=True)

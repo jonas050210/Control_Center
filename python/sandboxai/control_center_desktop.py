@@ -353,6 +353,10 @@ class ControlCenter(tk.Tk):
         )
         self.background = BackgroundRunner(self)
         for page in self.pages.values():
+            # close() deliberately discards queued delivery callbacks. A page
+            # must therefore not retain a coalesced-poll guard that belonged
+            # to the retired runner, or a later visit would never refresh.
+            page.reset_polls()
             page.adapter = self.adapter
 
     def _tick(self) -> None:

@@ -154,8 +154,12 @@ dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
 * A page only submits background work and applies the result; it never
   blocks waiting for it. Periodic reads are coalesced per page operation, so
   a slow run-directory/process-status scan cannot fill the shared worker pool
-  with duplicate polls. Results that belong to a replaced run/process/
-  selection are rejected instead of being rendered as current telemetry.
+  with duplicate polls. If a refresh overlaps a live operation, only its
+  latest request is retained for one follow-up when that operation completes;
+  this preserves freshness without creating a queue. Switching output roots
+  clears guards from the retired runner. Results that belong to a replaced
+  run/process/selection are rejected instead of being rendered as current
+  telemetry.
 * `LogPanel` bounds the Text widget itself (old lines are deleted past a
   cap) independently of the adapter's own bounded buffer, distinguishes
   stdout from stderr (red), exposes both scroll axes for unwrapped commands

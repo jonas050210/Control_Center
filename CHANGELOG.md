@@ -203,9 +203,11 @@ records what changed and why.
   Periodic Dashboard, Training, Benchmark, Evaluation, Runs, Agents and
   System reads are now coalesced per page operation, preserving the bounded
   worker pool and discarding a response that no longer belongs to its active
-  run/process selection. Every dense Tk inventory table now has both native
-  scroll axes, so a narrow desktop never makes its right-hand
-  run/checkpoint/error data unreachable.
+  run/process selection. An overlap retains exactly one latest-only follow-up
+  rather than dropping the freshness request, and changing the output root
+  clears guards owned by the retired worker. Every dense Tk inventory table
+  now has both native scroll axes, so a narrow desktop never makes its
+  right-hand run/checkpoint/error data unreachable.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

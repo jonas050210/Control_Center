@@ -120,9 +120,16 @@ class BackgroundRunner:
 
     def submit(
         self, fn: Callable[[], Any], callback: Callable[[Any, BaseException | None], None]
-    ) -> None:
+    ) -> bool:
+        """Queue background work and report whether the runner accepted it.
+
+        A caller may need to release local in-flight state when shutdown has
+        already started.  Returning the acceptance result keeps that state
+        from getting stranded without making normal fire-and-forget callers
+        inspect a value they do not need.
+        """
         if self._closed:
-            return
+            return False
 
         def _run() -> None:
             try:
@@ -136,6 +143,7 @@ class BackgroundRunner:
         with self._pending_lock:
             self._pending.add(future)
         future.add_done_callback(self._forget)
+        return True
 
     def _forget(self, future: Future[None]) -> None:
         with self._pending_lock:
