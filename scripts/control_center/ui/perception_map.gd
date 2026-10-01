@@ -2,8 +2,8 @@
 ##
 ## Side-by-side top-down maps that make the Phase 5 question concrete:
 ##
-##   LEFT  "REAL WORLD"    - every enemy the simulation actually contains.
-##   RIGHT "AI PERCEPTION" - reconstructed ONLY from the observation vector
+##   LEFT  "SIMULATION WORLD" - every enemy the local simulation contains.
+##   RIGHT "POLICY OBSERVATION" - reconstructed ONLY from the observation vector
 ##                           (bearing + distance per tracked slot), i.e.
 ##                           exactly what the policy could know.
 ##
@@ -48,10 +48,12 @@ func _draw() -> void:
 	var left := Rect2(Vector2(0.0, HEADER_HEIGHT), Vector2(map_width, map_height))
 	var right := Rect2(Vector2(map_width + MAP_GAP, HEADER_HEIGHT), Vector2(map_width, map_height))
 
-	_draw_caption("REAL WORLD", Vector2(0.0, 0.0), ControlCenterTheme.COLOR_TEXT)
-	_draw_caption("AI PERCEPTION", Vector2(map_width + MAP_GAP, 0.0), ControlCenterTheme.COLOR_AI)
-	_draw_frame(left)
-	_draw_frame(right)
+	_draw_caption("SIMULATION WORLD", Vector2(0.0, 0.0), ControlCenterTheme.COLOR_TEXT)
+	_draw_caption(
+		"POLICY OBSERVATION", Vector2(map_width + MAP_GAP, 0.0), ControlCenterTheme.COLOR_AI
+	)
+	_draw_frame(left, ControlCenterTheme.COLOR_TITLE)
+	_draw_frame(right, ControlCenterTheme.COLOR_AI)
 
 	if perception.is_empty():
 		_draw_text(left.position + Vector2(6.0, 18.0), "no data", ControlCenterTheme.COLOR_MUTED)
@@ -75,9 +77,22 @@ func _draw_text(at: Vector2, text: String, color: Color) -> void:
 	)
 
 
-func _draw_frame(rect: Rect2) -> void:
-	draw_rect(rect, Color(0.10, 0.11, 0.14, 0.9), true)
-	draw_rect(rect, ControlCenterTheme.COLOR_BORDER, false, 1.0)
+func _draw_frame(rect: Rect2, accent: Color) -> void:
+	draw_rect(rect, Color(0.02, 0.07, 0.13, 0.9), true)
+	draw_rect(rect, Color(accent.r, accent.g, accent.b, 0.5), false, 1.0)
+	var center: Vector2 = rect.get_center()
+	var grid_color := Color(accent.r, accent.g, accent.b, 0.12)
+	draw_line(Vector2(rect.position.x, center.y), Vector2(rect.end.x, center.y), grid_color, 1.0)
+	draw_line(Vector2(center.x, rect.position.y), Vector2(center.x, rect.end.y), grid_color, 1.0)
+	var maximum_radius: float = minf(rect.size.x, rect.size.y) * 0.42
+	for ratio in [0.25, 0.5, 0.75, 1.0]:
+		draw_arc(center, maximum_radius * float(ratio), 0.0, TAU, 36, grid_color, 1.0)
+	var corner: float = 6.0
+	var corner_color := Color(accent.r, accent.g, accent.b, 0.86)
+	draw_line(rect.position, rect.position + Vector2(corner, 0.0), corner_color, 2.0)
+	draw_line(rect.position, rect.position + Vector2(0.0, corner), corner_color, 2.0)
+	draw_line(rect.end, rect.end - Vector2(corner, 0.0), corner_color, 2.0)
+	draw_line(rect.end, rect.end - Vector2(0.0, corner), corner_color, 2.0)
 
 
 func _draw_real_world(rect: Rect2) -> void:

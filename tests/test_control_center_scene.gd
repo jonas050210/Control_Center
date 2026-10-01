@@ -97,6 +97,12 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 		_teardown(instance)
 		return t
 
+	t.assert_not_null(ui.ambient_backdrop, "presentation-only ambient backdrop")
+	t.assert_eq(
+		ui.ambient_backdrop.mouse_filter,
+		Control.MOUSE_FILTER_IGNORE,
+		"the backdrop must never intercept Control Center input"
+	)
 	t.assert_not_null(ui.status_bar, "top status bar")
 	t.assert_not_null(ui.agent_panel, "live agent view panel")
 	t.assert_not_null(ui.perception_panel, "what-does-the-AI-see panel")

@@ -26,6 +26,7 @@ extends CanvasLayer
 const ControlCenterAgentPanel = preload("res://scripts/control_center/ui/agent_panel.gd")
 const ControlCenterAgentsPanel = preload("res://scripts/control_center/ui/agents_panel.gd")
 const ControlCenterAnalyticsPanel = preload("res://scripts/control_center/ui/analytics_panel.gd")
+const ControlCenterAmbientBackdrop = preload("res://scripts/control_center/ui/ambient_backdrop.gd")
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterControlsPanel = preload("res://scripts/control_center/ui/controls_panel.gd")
 const ControlCenterHeadlessPanel = preload("res://scripts/control_center/ui/headless_panel.gd")
@@ -74,6 +75,7 @@ const PAGES: Array = [
 ]
 
 var session
+var ambient_backdrop: ControlCenterAmbientBackdrop
 var hud: ControlCenterHud
 var status_bar: ControlCenterStatusBar
 var agent_panel: ControlCenterAgentPanel
@@ -121,6 +123,12 @@ func setup(p_session) -> void:
 
 
 func _build_layout() -> void:
+	# This is intentionally a local Control Center treatment, not a claim
+	# about TTK Testing's in-game presentation. It is built only with the
+	# interactive UI and therefore stays out of the headless/RL hot path.
+	ambient_backdrop = ControlCenterAmbientBackdrop.new()
+	add_child(ambient_backdrop)
+
 	var root := MarginContainer.new()
 	root.theme = ControlCenterTheme.build_theme()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -183,7 +191,18 @@ func _build_navigation() -> Control:
 	rail.add_child(items)
 	items.add_child(
 		ControlCenterTheme.make_label(
-			"Workspace", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+			"SANDBOXAI", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		)
+	)
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"CONTROL SURFACE", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_ACCENT
+		)
+	)
+	items.add_child(ControlCenterTheme.make_separator())
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"WORKSPACE", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
 		)
 	)
 	for index in range(PAGES.size()):

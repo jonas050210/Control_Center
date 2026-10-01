@@ -33,9 +33,12 @@ func setup(p_session) -> void:
 
 	row.add_child(
 		ControlCenterTheme.make_label(
-			"SandboxAI Control Center",
-			ControlCenterTheme.FONT_SIZE_TITLE,
-			ControlCenterTheme.COLOR_TITLE
+			"SANDBOXAI // TTK", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		)
+	)
+	row.add_child(
+		ControlCenterTheme.make_label(
+			"LOCAL CALIBRATION", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_ACCENT
 		)
 	)
 	row.add_child(VSeparator.new())
