@@ -60,7 +60,7 @@ test = [
 # used by python/sandboxai/gdscript_analysis.py. Optional because it is only
 # needed to verify the Godot half of the repository.
 gdscript = [
-  "gdtoolkit>=4.3,<5",
+  "gdtoolkit>=4.5.0,<5",
 ]
 # Static analysis and formatting for the Python package/tests (CI "lint"
 # job). Kept separate from `test` so running the suite locally never
