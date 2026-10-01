@@ -250,7 +250,15 @@ front-end: the headless-only Python/Tk desktop application started with
 logic in the Tk-free `control_center_viewmodel.py`). The rendered
 in-simulator operator scene (`scenes/control_center.tscn` +
 `scripts/control_center/`) was removed when the project went headless-only
-for training operation. The GUI's place in the architecture:
+for training operation; `python/tests/test_control_center_isolation.py`
+keeps it from coming back. That guard looks for restorable content, not for
+a bare directory entry: git cannot track an empty directory, so a
+Windows/OneDrive working copy can keep `scripts/control_center/` (and a
+`desktop.ini` inside it) after the tracked GDScript files are deleted. Any
+real file there - `.gd`, `.tscn`, anything that is not sync/editor cruft -
+still fails the test; sweep it with
+`git clean -xdf scripts/control_center`. The GUI's place in the
+architecture:
 
 ```text
 Desktop Control Center (Tk)                  presentation only, thread pool
