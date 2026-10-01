@@ -1,18 +1,13 @@
-"""Observation/Action contract description and the external-adapter boundary.
+"""Local Godot/Python observation and action contract description.
 
 This module is documentation-as-code: it mirrors, in Python, the same
 Observation/Action contract implemented in Godot by
-``scripts/core/observation.gd`` and ``scripts/core/action.gd``. It exists so
-a future adapter for a *different* game/engine (the planned external Roblox
-Player adapter) has a single, explicit, versioned target to implement
-against instead of reverse-engineering the Godot bridge protocol.
+``scripts/core/observation.gd`` and ``scripts/core/action.gd``. It gives the
+local Godot and Python layers one explicit, versioned target instead of
+reverse-engineering the bridge protocol.
 
 Nothing in this file talks to Roblox, opens a network socket, or depends on
-any paid/cloud service. ``GameAdapter`` below is an abstract interface only:
-a future concrete implementation (e.g. ``RobloxPlayerAdapter``) would live in
-a separate module and translate a *real* Roblox game/session into this same
-observation/action shape. Implementing that translation is explicitly out of
-scope for this milestone — see docs/ROBLOX_ADAPTER.md.
+any paid/cloud service. It describes the local simulator contract only.
 
 IMPORTANT: keep ``OBSERVATION_FIELD_COUNT`` and ``OBSERVATION_SPEC`` in sync
 with ``Observation.FIELD_COUNT`` / the field table documented at the top of
@@ -26,10 +21,8 @@ constants or the ``to_array()`` index layout no longer match this module.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 # Semantic compatibility boundary shared by training, datasets, checkpoints,
 # evaluation, and replay provenance. Shape checks alone cannot detect reordered
@@ -550,11 +543,10 @@ OBSERVATION_LEGACY_FIELD_COUNT: int = 33
 OBSERVATION_V2_FIELD_COUNT: int = 65
 
 
-# Semantic channels of the observation vector. An external adapter has to
-# be able to produce each channel independently and honestly; when a target
-# game cannot supply one, the adapter must emit that channel's neutral
-# "no information" encoding (zeros, with the corresponding `*_visible` /
-# `*_confidence` flags at 0) rather than substituting privileged data.
+# Semantic channels of the local observation vector. Each channel has a
+# defined neutral "no information" encoding (zeros, with the corresponding
+# `*_visible` / `*_confidence` flags at 0), which keeps downstream consumers
+# from treating unavailable perception as privileged information.
 #
 # Keys are channel names; values are the OBSERVATION_SPEC field names in
 # that channel. Every field belongs to exactly one channel (asserted by
@@ -747,7 +739,7 @@ def validate_observation_spec() -> None:
             f"OBSERVATION_FIELD_COUNT says {OBSERVATION_FIELD_COUNT}"
         )
 
-    # Every field belongs to exactly one adapter channel. This is what makes
+    # Every field belongs to exactly one observation group. This is what makes
     # OBSERVATION_GROUPS a usable implementation checklist rather than
     # decorative documentation.
     grouped: list[str] = [name for names in OBSERVATION_GROUPS.values() for name in names]
@@ -760,50 +752,3 @@ def validate_observation_spec() -> None:
         raise ValueError(f"observation fields not assigned to a group: {sorted(missing)}")
     if unknown:
         raise ValueError(f"OBSERVATION_GROUPS references unknown fields: {sorted(unknown)}")
-
-
-class GameAdapter(ABC):
-    """Abstract boundary a future external game adapter (e.g. Roblox) implements.
-
-    This is a *hook*, not an implementation. It exists so that:
-      1. The observation/action semantics used by PPO never implicitly leak
-         Godot-only concepts (Node references, scene-tree state, etc.).
-      2. A future Roblox Player adapter can be developed and tested against
-         this exact interface, independently of the Godot simulator, using
-         the same trained policy without retraining the observation head.
-
-    A concrete implementation MUST:
-      - Only expose information a player in that position could reasonably
-        perceive (own state, relative enemy positions/health/aliveness/
-        direction) — no server-only/privileged state.
-      - Produce a float32 vector of exactly OBSERVATION_FIELD_COUNT values,
-        each within [OBSERVATION_LOW, OBSERVATION_HIGH].
-      - Accept an action in the ACTION_SPEC MultiDiscrete shape (ACTION_NVEC).
-
-    No concrete Roblox implementation exists yet. Do not claim Roblox
-    integration is implemented until a subclass actually connects to a real
-    Roblox session and this docstring is updated to link to it.
-    """
-
-    @abstractmethod
-    def reset(self, seed: int | None = None) -> Sequence[float]:
-        """Starts a new episode and returns the first observation vector."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def step(self, action: Sequence[int]) -> tuple[Sequence[float], float, bool, dict[str, Any]]:
-        """Applies one action; returns (observation, reward, done, info)."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def close(self) -> None:
-        """Releases any external resources (sockets, processes, handles)."""
-        raise NotImplementedError
-
-    @staticmethod
-    def observation_spec() -> tuple[ObservationField, ...]:
-        return OBSERVATION_SPEC
-
-    @staticmethod
-    def action_spec() -> tuple[ActionField, ...]:
-        return ACTION_SPEC

@@ -559,7 +559,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     weapons = sub.add_parser(
         "weapon-table",
-        help="print the weapon TTK / role matrix parsed from the Godot weapon tables",
+        help="print the local weapon-calibration matrix parsed from the Godot tables",
     )
     weapons.add_argument("--json", action="store_true")
     weapons.add_argument(
@@ -592,11 +592,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed", type=int, default=1234, help="bootstrap seed (reports are reproducible)"
     )
 
-    adapter = sub.add_parser(
-        "adapter-contract", help="print the external-game adapter contract (Roblox boundary)"
+    ttk_status = sub.add_parser(
+        "ttk-status",
+        help="show verified TTK Testing mechanics, calibration gaps and excluded features",
     )
-    adapter.add_argument(
-        "--check-mock", action="store_true", help="run the mock adapter contract check"
+    ttk_status.add_argument(
+        "--json", action="store_true", help="emit the full evidence manifest as JSON"
     )
 
     validate_rt = sub.add_parser(
@@ -1069,6 +1070,17 @@ def _cmd_ttk_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ttk_status(args: argparse.Namespace) -> int:
+    from .ttk_testing import format_status, status_summary
+
+    payload = status_summary()
+    if args.json:
+        print(json.dumps(payload, indent=2, default=str))
+    else:
+        print(format_status(payload))
+    return 0
+
+
 def _cmd_weapon_table(args: argparse.Namespace) -> int:
     from .weapons import format_ttk_table, role_ranking, ttk_table
 
@@ -1092,21 +1104,6 @@ def _cmd_weapon_table(args: argparse.Namespace) -> int:
         )
         print(f"  {band:<12} {ranked or 'nothing reaches this band'}")
     return 0
-
-
-def _cmd_adapter_contract(args: argparse.Namespace) -> int:
-    from .external_adapter import (
-        AdapterContractChecker,
-        MockExternalEnvironment,
-        contract_summary,
-    )
-
-    print(json.dumps(contract_summary(), indent=2, default=str))
-    if not args.check_mock:
-        return 0
-    problems = AdapterContractChecker(MockExternalEnvironment()).run()
-    print(json.dumps({"mock_adapter_problems": problems}, indent=2))
-    return 1 if problems else 0
 
 
 def _cmd_validate_runtime(args: argparse.Namespace) -> int:
@@ -1174,8 +1171,8 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "replay": _cmd_replay,
     "curriculum": _cmd_curriculum,
     "ttk-report": _cmd_ttk_report,
+    "ttk-status": _cmd_ttk_status,
     "weapon-table": _cmd_weapon_table,
-    "adapter-contract": _cmd_adapter_contract,
     "validate-runtime": _cmd_validate_runtime,
     "compare-experiments": _cmd_compare_experiments,
     "summarize-experiment": _cmd_summarize_experiment,

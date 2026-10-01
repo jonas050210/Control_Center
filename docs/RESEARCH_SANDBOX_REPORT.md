@@ -159,9 +159,9 @@ Strictly additive; indices 0–64 keep their exact v2 meaning.
 Updated together, as the contract requires: `Observation.to_array()`,
 `Observation.FIELD_SPEC`, `python/sandboxai/contract.py` (+
 `OBSERVATION_GROUPS`, which still partitions every field),
-`docs/OBSERVATION_ACTION_CONTRACT.md`, `docs/ARCHITECTURE.md`,
-`docs/ROBLOX_ADAPTER.md`. `python/tests/test_contract.py` statically diffs
-the Godot and Python layouts and passes.
+`docs/OBSERVATION_ACTION_CONTRACT.md` and `docs/ARCHITECTURE.md`.
+`python/tests/test_contract.py` statically diffs the Godot and Python layouts
+and passes.
 
 **Break:** a v2 checkpoint has a 65-input head and cannot be loaded into a
 v3 policy. The action space is unchanged, and behaviour-cloning datasets

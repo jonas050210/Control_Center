@@ -7,12 +7,13 @@
 # does not match its behavior.
 ## WeaponState
 ##
-## Deterministic hitscan weapon with named handling profiles. The default
-## profile preserves the original single-ray rifle contract, while optional
-## profiles model the TTK-style roles we care about during controlled tests:
-## a mid-range rifle, a close-range pellet shotgun, a precision sidearm and
-## an SMG-like fast secondary. Profiles are simulation metadata, not new
-## policy actions: the PPO action space still has exactly one shoot button.
+## Deterministic hitscan weapon with named *local calibration* profiles. The
+## bundled values preserve historical SandboxAI experiments; they are not a
+## claim about TTK Testing's current weapon roster, handling, damage or TTK.
+## Treat any profile as a replaceable calibration input only after player-
+## visible evidence has been collected (see docs/TTK_TESTING_REFERENCE.md).
+## Profiles are simulation metadata, not new policy actions: the PPO action
+## space still has exactly one shoot button.
 ##
 ## ## Weapon handling (optional layer)
 ##

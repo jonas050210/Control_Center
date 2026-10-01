@@ -27,10 +27,10 @@ these first; everything else restates or consumes them.
 
 | Module | Summary |
 | --- | --- |
-| [`contract`](../python/sandboxai/contract.py) | Observation/Action contract description and the external-adapter boundary. |
+| [`contract`](../python/sandboxai/contract.py) | Local Godot/Python observation and action contract description. |
 | [`config`](../python/sandboxai/config.py) | Central, serialisable configuration for SandboxAI experiments. |
 | [`control_center_schema`](../python/sandboxai/control_center_schema.py) | Versioned data contract shared by Control Center producers and consumers. |
-| [`weapons`](../python/sandboxai/weapons.py) | Weapon roles, TTK and handling — the Python mirror of the Godot tables. |
+| [`weapons`](../python/sandboxai/weapons.py) | Local weapon-calibration profiles — the Python mirror of the Godot tables. |
 
 ## The Godot bridge
 
@@ -90,6 +90,7 @@ frozen.
 | [`experiment`](../python/sandboxai/experiment.py) | Multi-seed experiment management, statistical aggregation and regression testing. |
 | [`action_audit`](../python/sandboxai/action_audit.py) | Low-overhead policy-action diagnostics for training and evaluation. |
 | [`ttk`](../python/sandboxai/ttk.py) | Manually measured time-to-kill (TTK) trials: schema, validation, statistics. |
+| [`ttk_testing`](../python/sandboxai/ttk_testing.py) | Verified TTK Testing mechanics, evidence sources and calibration gates. |
 
 ## Runs, artifacts and telemetry
 
@@ -126,4 +127,3 @@ Reached from a shell rather than from Python.
 | --- | --- |
 | [`cli`](../python/sandboxai/cli.py) | Command-line workflow for recording, BC, PPO, evaluation, benchmarks and smoke tests. |
 | [`gdscript_analysis`](../python/sandboxai/gdscript_analysis.py) | Static analysis for the Godot/GDScript half of SandboxAI. |
-| [`external_adapter`](../python/sandboxai/external_adapter.py) | External-game adapter boundary: contract, validation and a mock. |

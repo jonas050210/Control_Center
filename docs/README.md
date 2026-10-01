@@ -20,6 +20,7 @@ truth for versions and the engine contract.
 | [PYTHON_MODULE_MAP.md](PYTHON_MODULE_MAP.md) | Where to find things in `python/sandboxai/`: all 47 modules grouped by theme, with each description generated from the module's own docstring. |
 | [CURRICULUM_AND_COMBAT.md](CURRICULUM_AND_COMBAT.md) | Curriculum levels, enemy behaviour and the multi-enemy combat model. |
 | [REPLAY_AND_METRICS.md](REPLAY_AND_METRICS.md) | Replay format, research metrics, generalization conditions and curriculum telemetry. |
+| [TTK_TESTING_REFERENCE.md](TTK_TESTING_REFERENCE.md) | Official TTK Testing evidence, calibration gaps, screenshot protocol and excluded mechanics. |
 
 ## Running the simulator and the tooling
 
@@ -41,10 +42,3 @@ may describe state that has since changed.
 | [AUDIT_REPORT.md](AUDIT_REPORT.md) | Full-repository bug hunt: the bugs found, their root causes and the regression tests added for each. |
 | [CONTROL_CENTER_ARCHITECTURE_AUDIT.md](CONTROL_CENTER_ARCHITECTURE_AUDIT.md) | Architecture audit of the Control Center against `PROJECT.md` and the bridge. |
 | [RESEARCH_SANDBOX_REPORT.md](RESEARCH_SANDBOX_REPORT.md) | Implementation report for the perception-driven RL sandbox work. |
-| [WEAPON_HANDLING_REPORT.md](WEAPON_HANDLING_REPORT.md) | How weapon handling, hit resolution and the shot economy were derived and verified. |
-
-## Boundaries and non-goals
-
-| Document | What it is for |
-| --- | --- |
-| [ROBLOX_ADAPTER.md](ROBLOX_ADAPTER.md) | The proposed external-player adapter boundary. **Not implemented** - this document exists so the boundary stays explicit. |

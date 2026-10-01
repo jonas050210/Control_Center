@@ -4,7 +4,7 @@
 ## arena layout id, an enemy count, a spawn rule and the perception
 ## capabilities that must be active. `EnvironmentCore.apply_scenario()`
 ## consumes the resulting spec; there is no scenario-specific gameplay code
-## anywhere, which is what keeps sixteen scenarios from becoming sixteen
+## anywhere, which is what keeps the scenario catalog from becoming a set of
 ## divergent simulations.
 ##
 ## Seeding contract: `resolve(id, seed)` is a pure function. The same
@@ -31,9 +31,10 @@ const SPAWN_SURROUND: String = "surround"
 const SPAWN_ELEVATED: String = "elevated"
 const SPAWN_RANDOM: String = "random"
 
-## The sixteen shipped scenarios. Twelve are in the regular training pool;
-## four weapon/TTK drills are evaluation-only. `flags` lists the capabilities the
-## scenario needs; anything absent falls back to the curriculum level's
+## The twelve shipped scenarios form the regular training pool. Named weapon
+## drills were removed because they were invented SandboxAI exercises rather than
+## verified TTK Testing content. `flags` lists the capabilities the scenario needs;
+## anything absent falls back to the curriculum level's
 ## own setting, so a scenario can be run at any level without lying about
 ## what the agent can perceive.
 const SCENARIOS: Array = [
@@ -147,55 +148,6 @@ const SCENARIOS: Array = [
 		"level": CurriculumConfig.Level.VERTICAL_COMBAT,
 		"flags":
 		{"obstacles": true, "perception": true, "sound": true, "memory": true, "vertical": true},
-	},
-	{
-		"id": "rifle_lane_drill",
-		"label": "Rifle lane drill",
-		"description": "TTK-style rifle test: medium lanes, cover breaks and clean optics.",
-		"layout": "combat_complex",
-		"enemy_count": 2,
-		"spawn": SPAWN_BEHIND_COVER,
-		"level": CurriculumConfig.Level.FOV_LOS,
-		"weapon_profile": "rifle",
-		"training_pool": false,
-		"flags": {"obstacles": true, "perception": true, "sound": true, "memory": true},
-	},
-	{
-		"id": "shotgun_breach_drill",
-		"label": "Shotgun breach drill",
-		"description": "TTK-style close-room drill with a pellet shotgun and occluded targets.",
-		"layout": "rooms",
-		"enemy_count": 2,
-		"spawn": SPAWN_OUT_OF_SIGHT,
-		"level": CurriculumConfig.Level.FOV_LOS,
-		"weapon_profile": "shotgun",
-		"training_pool": false,
-		"flags": {"obstacles": true, "perception": true, "sound": true, "memory": true},
-	},
-	{
-		"id": "sidearm_finish_drill",
-		"label": "Sidearm finish drill",
-		"description": "TTK-style pistol cleanup drill: short lanes and wounded-target pacing.",
-		"layout": "corner",
-		"enemy_count": 1,
-		"spawn": SPAWN_OUT_OF_SIGHT,
-		"level": CurriculumConfig.Level.FOV_LOS,
-		"weapon_profile": "pistol",
-		"training_pool": false,
-		"flags": {"obstacles": true, "perception": true, "sound": true, "memory": true},
-	},
-	{
-		"id": "smg_tracking_drill",
-		"label": "SMG tracking drill",
-		"description":
-		"Close moving-target drill: high cadence, sharp falloff and sustained tracking.",
-		"layout": "pillars",
-		"enemy_count": 3,
-		"spawn": SPAWN_RING,
-		"level": CurriculumConfig.Level.MULTIPLE_ENEMIES,
-		"weapon_profile": "smg",
-		"training_pool": false,
-		"flags": {"obstacles": true, "perception": true, "sound": true, "memory": true},
 	},
 	{
 		"id": "randomized_arena",

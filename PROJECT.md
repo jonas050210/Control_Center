@@ -14,9 +14,9 @@
 
 ## 1. One-minute orientation
 
-**CURRENT — purpose.** SandboxAI is a controlled, local FPS simulation and machine-learning research platform. Godot is the canonical simulator; Python records demonstrations, trains behavior-cloning (BC) and PPO policies, evaluates checkpoints, and produces research telemetry. The motivation is to study aiming, movement, weapon handling, tactical perception, curricula, generalization, and multi-policy combat in an inspectable environment where state, seeds, rewards, and failure modes are controlled.
+**CURRENT — purpose.** SandboxAI is a controlled, local FPS calibration and machine-learning platform being reduced to verified Roblox TTK Testing mechanics. Godot is the canonical local simulator; Python records demonstrations, trains behavior-cloning (BC) and PPO policies, evaluates checkpoints, and produces research telemetry. Its source-backed TTK scope, calibration gaps and exclusions are recorded in `docs/TTK_TESTING_REFERENCE.md`.
 
-**CONSTRAINT — scope and ethics.** This is **not** a Roblox exploit, cheat, live-game bot, process-memory reader, packet inspector, or client modifier. No working Roblox connection exists. Human data must come from the local simulator or from manual, consented observation/annotation of ordinary play; never assume private APIs, server-authoritative internals, hidden positions, or proprietary data. `contract.py` and `external_adapter.py` define and test a future adapter boundary, not an integration.
+**CONSTRAINT — scope and ethics.** This is **not** a Roblox exploit, cheat, live-game bot, process-memory reader, packet inspector, client modifier or external-game adapter. There is no Roblox connection. Human data must come from the local simulator or from manual, consented observation/annotation of ordinary play; never assume private APIs, server-authoritative internals, hidden positions, or proprietary data.
 
 **CURRENT — design properties.** The project is local, free/open-source, structured-state-first, reproducibility-oriented, and cloud-independent. Core Python needs only NumPy; training extras are PyTorch, Gymnasium, Stable-Baselines3 (SB3), TensorBoard, and psutil. Godot 4.7.2 is the tested engine target.
 
@@ -41,7 +41,7 @@
 | Parallel/headless scale | **CURRENT, limited** | Headless batched environments exist, but one Godot process steps its environments serially. |
 | Self-play/complex combat | **CURRENT foundation; PLANNED training** | A two-policy match environment and league registry exist; no end-to-end self-play training command exists, and lethal fire has a documented slot-order bias. |
 | RGB learning | **RESEARCH** | No image observation, renderer-to-trainer data plane, CNN, or visual checkpoint exists. |
-| External transfer | **RESEARCH / CONSTRAINT** | Possible only through an authorized, player-perceivable adapter after sim-to-sim validation; no current adapter exists. |
+| TTK calibration | **CURRENT + PLANNED** | Official controls and visible wound/bleeding are catalogued; numerical physics, weapon and reload behavior remain evidence-gated. |
 
 ## 2. Architecture and ownership
 
@@ -54,7 +54,6 @@
 | Local IPC | **CURRENT** | One Godot subprocess, request/response JSON Lines over stdin/stdout | `scripts/rl/rl_server.gd`, `python/sandboxai/godot_env.py` |
 | ML/orchestration | **CURRENT** | BC, PPO, curriculum plans, evaluation, checkpointing, replay, telemetry, benchmark control | `python/sandboxai/` |
 | Visual operator tools | **CURRENT** | Human control, spectating, diagnostics, replay inspection; never part of headless training | `scenes/control_center.tscn`, `scripts/control_center/` |
-| External game seam | **CURRENT boundary only** | Validation rules and a mock environment | `python/sandboxai/{contract,external_adapter}.py` |
 
 ```text
 Python: SB3/PyTorch policy
@@ -150,7 +149,7 @@ A single environment step is conceptually:
 | --- | --- | --- |
 | Generated layouts | 14: `open_arena`, `scattered_cover`, `corner`, `cover_field`, `corridor`, `rooms`, `pillars`, `vertical`, `multi_room`, `ambush`, `sound_maze`, `combat_complex`, `crossfire_complex`, `randomized` | Geometry is perceived, layout ID is hidden |
 | Authored maps | 16: `open_field`, `training_yard`, `blind_corner`, `cover_field`, `long_corridor`, `two_rooms`, `pillar_hall`, `catwalks`, `compound`, `ambush_alley`, `echo_maze`, `combat_complex`, `crossfire_lab`, `night_yard`, `foggy_field`, `random_ops` | Map metadata/ID is hidden |
-| Scenarios | 16, including single/multi target, corner/cover/corridor fights, ambush, lost contact, sound-only, vertical, four weapon drills, and randomized arena | Scenario ID is hidden |
+| Scenarios | 12 generic calibration encounters: single/multi target, corner/cover/corridor fights, ambush, lost contact, sound-only, vertical and randomized arena. Invented weapon drills were removed. | Scenario ID is hidden |
 | Lighting | `normal`, `low_light`, `night`, `fog`, `high_contrast`, `mixed` | Only local illumination and resulting perceptual effects |
 
 Maps bind generated geometry variants, arena extent, lighting pools, ambience, and human-readable metadata. `resolve(map_id, seed)` and scenario resolution are seeded. Randomized conditions are episode configuration, not additional policy fields.
@@ -385,9 +384,9 @@ Public subcommands are:
 ```text
 install  train  resume  evaluate  record  control-center
 control-center-desktop  bc-train  inspect-dataset  inspect-runs  benchmark
-benchmark-suites  replay  curriculum  weapon-table  ttk-report
-adapter-contract  validate-runtime  compare-experiments  summarize-experiment
-smoke-test  hardware-wizard
+benchmark-suites  replay  curriculum  weapon-table  ttk-report  ttk-status
+validate-runtime  compare-experiments  summarize-experiment  smoke-test
+hardware-wizard
 ```
 
 Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` commands.
@@ -473,8 +472,8 @@ Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu wi
 - **CURRENT limitation:** bridge and replay formats have weak evolution/negotiation compared with the observation contract.
 - **CURRENT limitation:** self-play is match/league/evaluation infrastructure, not end-to-end population training. (Same-tick lethal fire is no longer slot-order-biased: fire resolves simultaneously.)
 - **CURRENT limitation:** Godot must be installed separately. Neither this nor the previous audit could run local live validation or a benchmark; the GDScript suite and all live-bridge/throughput claims rest on CI (exact 4.7.2, Windows + Linux). GDScript changes in this pass were checked with `gdscript_analysis`, gdlint and the real GDScript grammar parser, and their numeric claims re-derived in Python against the real `SandboxConfig` constants.
-- **CONSTRAINT:** external adapter code is only a contract checker and mock. There is no Roblox connection, private API, Studio plugin, live input automation, or transfer evidence.
-- **TRUTH WARNING:** some older prose is stale. The known cases in `docs/CURRICULUM_AND_COMBAT.md` (no verticality/navigation) and `docs/ARCHITECTURE.md` (five BC heads, transition split) are now corrected in place, but those documents are milestone write-ups, not living specifications: current source has vertical worlds, custom navigation, recoil/bloom/magazines/reloads, six action heads, and sixteen scenarios. Re-check source/tests before repeating documentation claims.
+- **CONSTRAINT:** there is no Roblox connection, private API, Studio plugin, live input automation, external-game adapter, or transfer claim in this repository.
+- **TRUTH WARNING:** older milestone prose can be stale. The current source still contains a controlled calibration simulator with vertical worlds, navigation and handling models; those numbers are not claims about Roblox TTK Testing. The source-backed boundary, calibration gaps and excluded mechanics are maintained in `docs/TTK_TESTING_REFERENCE.md`; re-check that document and the current source before repeating gameplay claims.
 
 ## 14. Research directions that fit this system
 
@@ -516,7 +515,6 @@ Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu wi
 | P4 | **RESEARCH** | Recurrence/history and DAgger | Beats feed-forward/BC baselines on lost-contact and handling holdouts across seeds |
 | P5 | **PLANNED** | End-to-end self-play trainer using frozen league pools | Immutable snapshots, matchup matrix, historical regression and anti-cycling evidence |
 | P6 | **RESEARCH** | Versioned RGB simulator path | Stable capture + transport budget on 8 GB GPU; visual holdout generalization |
-| P7 | **RESEARCH / CONSTRAINT** | Authorized external adapter or transfer study | Official/permitted interface, player-perceivable data only, explicit non-determinism, no live-game automation claims |
 
 ## 16. Agent working rules and source map
 
@@ -524,7 +522,7 @@ Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu wi
 
 1. Read this file, then inspect the named authority—not just prose docs.
 2. Run `git status`; preserve the session branch and user changes.
-3. If touching observations/actions, update both languages, the canonical table, adapter groups, recorder/dataset compatibility, replays, and drift tests together.
+3. If touching observations/actions, update both languages, the canonical table, observation groups, recorder/dataset compatibility, replays, and drift tests together.
 4. If touching episode/reset/vector logic, test terminal observations, partial resets, staged-plan consumption, and seed/order invariance.
 5. If touching reward, add a case to `tests/test_reward_exploits.gd` and inspect independent success metrics. Adding a reward component fails `test_reward_component_set_is_closed` until it is documented there.
 6. If touching performance, profile and benchmark the exact workload before and after; never report estimates as measurements.

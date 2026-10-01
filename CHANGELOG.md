@@ -8,6 +8,26 @@ records what changed and why.
 
 ## Unreleased
 
+### TTK Testing scope
+- `sandboxai ttk-status` plus `sandboxai.ttk_testing`: one source-traceable
+  TTK Testing evidence manifest. It separates verified controls and
+  wound-painting/bleeding from calibration-required physics/weapon/reload
+  behavior, records the normal-first-person/no-Helmetcam project decision,
+  and makes manual weapon switching (never automatic empty-magazine
+  switching) explicit.
+- `docs/TTK_TESTING_REFERENCE.md`: official-source links, the mechanics
+  matrix, screenshot-only calibration protocol and exclusions for the
+  TTK-focused rebuild.
+
+### Removed
+- The invented weapon drills `rifle_lane_drill`, `shotgun_breach_drill`,
+  `sidearm_finish_drill` and `smg_tracking_drill`, with a regression test
+  preventing their return.
+- The unused external-game/Roblox adapter boundary, mock, command and
+  documentation. SandboxAI has no Roblox connection or automation path.
+- The unverified weapon-handling report, whose third-party claims did not
+  meet the TTK-only evidence boundary.
+
 ### Added
 - `sandboxai.hardware_profile`: the single device-comparison
   implementation behind the first-start hardware wizard. It compares CPU,

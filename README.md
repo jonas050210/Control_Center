@@ -1,9 +1,12 @@
 # SandboxAI
 
-SandboxAI is a local, open-source reinforcement-learning research platform
-built around a small Godot 4.7.2 FPS combat simulator. The simulator is the
-canonical test environment: it is deterministic, headless-capable, and
-rendering is not required by the Python trainer.
+SandboxAI is a local, open-source calibration and reinforcement-learning
+platform being narrowed to **verified Roblox TTK Testing** mechanics. Godot
+remains the deterministic, headless-capable local test environment; it is not
+a Roblox client or connection. The exact evidence boundary, calibration gaps
+and explicitly excluded features are in
+[docs/TTK_TESTING_REFERENCE.md](docs/TTK_TESTING_REFERENCE.md). Rendering is
+not required by the Python trainer.
 
 The repository now contains a real PPO and Behavior Cloning workflow in
 addition to the original Godot foundation:
@@ -144,7 +147,7 @@ It provides:
 - results/metrics with HUMAN vs AI comparison and JSON export
 - a throttled, filterable event log (`ALL/COMBAT/PERCEPTION/SYSTEM/
   REWARD/ERROR`)
-- presentation-only cameras: first person, third person, free, top-down
+- normal first-person player presentation; third-person/free/top-down views are debug-only inspection tools, never TTK Testing gameplay modes
 
 Shortcuts: `F1`/`F2`/`F3` toggle the docks, `Space` pauses, `N` steps, `R`
 resets, `Tab` cycles inspector tabs.
@@ -535,33 +538,23 @@ The evaluation directory includes `summary.json`, `summary.txt` and
 `episodes.csv`. It reports reward, kills, deaths, damage dealt/received,
 survival time, accuracy, shots fired/hit, win rate and loss rate.
 
-### Inspect weapon balance
+### Inspect local weapon-calibration profiles
 
 ```bash
-sandboxai weapon-table                          # TTK / role matrix
+sandboxai weapon-table                          # local diagnostic matrix
 sandboxai weapon-table --distances 3,6,9,12 --json
 ```
 
-Prints the time-to-kill matrix and the engagement band each weapon owns.
-The numbers are **parsed out of `scripts/weapon/weapon_state.gd` at call
-time**, not copied, so the table can never drift from the engine. Each cell
-is *ideal* / *actual* TTK: ideal assumes every round lands on centre mass,
-actual walks the trigger shot by shot with bloom, magazine and reload
-included.
+The table parses the local values from `scripts/weapon/weapon_state.gd` at
+call time, so it cannot drift from the engine. It is **not** a TTK Testing
+weapon list, balance sheet or claimed TTK measurement: the bundled profiles
+and their recoil, magazine, falloff and reload values predate the current
+TTK-only scope. Do not use their values as Roblox facts. The evidence gate and
+screenshot/manual-calibration checklist are in
+[docs/TTK_TESTING_REFERENCE.md](docs/TTK_TESTING_REFERENCE.md).
 
-```
-profile  mode     rpm  mag  range         role          2m            5m           8m          11m          14m
-rifle    auto     120   30  15.0m         long   1.50/1.50s   1.50/1.50s   1.50/1.50s   1.50/1.50s   2.00/2.00s
-shotgun  pump      83    6   9.5m  point_blank   0.00/0.00s   0.72/0.72s   1.44/1.44s           --           --
-pistol   semi     250   15  12.0m          mid   0.96/0.96s   0.96/0.96s   1.20/1.20s   1.68/1.68s           --
-smg      auto     667   30  11.0m          mid   0.63/0.63s   0.63/0.63s   0.81/0.81s   1.35/2.61s           --
-```
-
-The same tables back `python/tests/test_weapon_balance.py`, which asserts
-the design intent (role separation, falloff monotonicity, "no weapon wins
-every band", spraying costs more than bursting at range) rather than the
-literal numbers — so retuning a profile either preserves those properties
-or fails with a specific explanation.
+`python/tests/test_weapon_balance.py` only guards internal consistency of the
+local calibration model. It does not validate real-game balance.
 
 ### Human time-to-kill evidence
 
@@ -729,10 +722,8 @@ location and best-effort resource utilization.
   (`scripts/control_center/ui/`). It consumes simulation state only, reuses
   the existing controller/observation pipeline, and is skipped entirely in
   headless processes. See [`docs/CONTROL_CENTER.md`](docs/CONTROL_CENTER.md).
-- `python/sandboxai/contract.py` documents the Observation/Action contract
-  as data and defines the abstract `GameAdapter` boundary a future external
-  Roblox Player adapter would implement. No Roblox integration exists yet —
-  see [`docs/ROBLOX_ADAPTER.md`](docs/ROBLOX_ADAPTER.md).
+- `python/sandboxai/contract.py` documents the local Godot/Python
+  Observation/Action contract as data. It is not a Roblox integration seam.
 
 Simulation code never imports PyTorch. Python code never depends on Godot
 render nodes. The only current external process boundary is the lightweight
