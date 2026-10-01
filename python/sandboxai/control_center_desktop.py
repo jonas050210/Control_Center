@@ -36,6 +36,7 @@ from .control_center_pages import PAGE_CLASSES, Page
 from .control_center_widgets import (
     _FONT_FAMILY,
     COLOR_ACCENT,
+    COLOR_ACCENT_SECONDARY,
     COLOR_BG,
     COLOR_BORDER,
     COLOR_ERROR,
@@ -61,7 +62,7 @@ class ControlCenter(tk.Tk):
 
     def __init__(self, adapter: SandboxAIAdapter | None = None) -> None:
         super().__init__()
-        self.title("SandboxAI Control Center")
+        self.title("SandboxAI // TTK Calibration")
         self.geometry("1360x860")
         self.minsize(1080, 680)
         self.adapter = adapter or SandboxAIAdapter()
@@ -82,6 +83,7 @@ class ControlCenter(tk.Tk):
         self.option_add("*TCombobox*Listbox.background", COLOR_SURFACE_RAISED)
         self.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
         self.option_add("*TCombobox*Listbox.selectBackground", "#164e63")
+        self.option_add("*TCombobox*Listbox.selectForeground", COLOR_TEXT)
         style.configure(
             ".",
             background=COLOR_BG,
@@ -93,7 +95,30 @@ class ControlCenter(tk.Tk):
             font=(_FONT_FAMILY, 10),
         )
         style.configure("TFrame", background=COLOR_BG)
+        style.configure("Shell.TFrame", background=COLOR_BG)
+        style.configure("Header.TFrame", background=COLOR_SURFACE)
+        style.configure("Nav.TFrame", background=COLOR_SURFACE)
+        style.configure("Content.TFrame", background=COLOR_BG)
         style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT)
+        style.configure(
+            "BrandEyebrow.TLabel",
+            background=COLOR_SURFACE,
+            foreground=COLOR_ACCENT,
+            font=(_FONT_FAMILY, 9, "bold"),
+        )
+        style.configure(
+            "BrandTitle.TLabel",
+            background=COLOR_SURFACE,
+            foreground=COLOR_TEXT,
+            font=(_FONT_FAMILY, 17, "bold"),
+        )
+        style.configure(
+            "OperatorStatus.TLabel",
+            background=COLOR_SURFACE,
+            foreground=COLOR_MUTED,
+            font=(_FONT_FAMILY, 9, "bold"),
+            padding=(10, 6),
+        )
         style.configure(
             "PageTitle.TLabel",
             background=COLOR_BG,
@@ -103,7 +128,7 @@ class ControlCenter(tk.Tk):
         style.configure(
             "PageSubtitle.TLabel",
             background=COLOR_BG,
-            foreground=COLOR_MUTED,
+            foreground=COLOR_ACCENT_SECONDARY,
             font=(_FONT_FAMILY, 10),
         )
         style.configure(
@@ -113,7 +138,11 @@ class ControlCenter(tk.Tk):
             font=(_FONT_FAMILY, 12, "bold"),
         )
         style.configure(
-            "Card.TFrame", background=COLOR_SURFACE_RAISED, relief="flat", borderwidth=0
+            "Card.TFrame",
+            background=COLOR_SURFACE_RAISED,
+            bordercolor=COLOR_BORDER,
+            relief="solid",
+            borderwidth=1,
         )
         style.configure(
             "CardLabel.TLabel",
@@ -158,7 +187,7 @@ class ControlCenter(tk.Tk):
         )
         style.map(
             "Primary.TButton",
-            background=[("active", "#7dd3fc"), ("pressed", "#0ea5e9"), ("disabled", COLOR_BORDER)],
+            background=[("active", "#75e8ff"), ("pressed", "#179dc1"), ("disabled", COLOR_BORDER)],
         )
         style.configure(
             "Danger.TButton",
@@ -170,12 +199,22 @@ class ControlCenter(tk.Tk):
         style.map("Danger.TButton", background=[("active", "#4c1d2a"), ("pressed", "#881337")])
         style.configure(
             "NavGroup.TLabel",
-            background=COLOR_BG,
+            background=COLOR_SURFACE,
             foreground=COLOR_MUTED,
             font=(_FONT_FAMILY, 9, "bold"),
         )
-        style.configure("Nav.TButton", anchor="w", padding=(14, 10), background=COLOR_BG)
-        style.map("Nav.TButton", background=[("active", COLOR_HOVER)])
+        style.configure(
+            "NavFootnote.TLabel",
+            background=COLOR_SURFACE,
+            foreground=COLOR_MUTED,
+            font=(_FONT_FAMILY, 9),
+        )
+        style.configure("Nav.TButton", anchor="w", padding=(14, 10), background=COLOR_SURFACE)
+        style.map(
+            "Nav.TButton",
+            background=[("active", COLOR_HOVER), ("pressed", "#193a55")],
+            foreground=[("active", COLOR_TEXT)],
+        )
         style.configure(
             "NavSelected.TButton",
             anchor="w",
@@ -184,7 +223,11 @@ class ControlCenter(tk.Tk):
             foreground=COLOR_ACCENT,
             font=(_FONT_FAMILY, 10, "bold"),
         )
-        style.map("NavSelected.TButton", background=[("active", COLOR_HOVER)])
+        style.map(
+            "NavSelected.TButton",
+            background=[("active", "#193a55"), ("pressed", "#193a55")],
+            foreground=[("active", COLOR_ACCENT)],
+        )
         style.configure(
             "Warning.TLabel",
             background="#302711",
@@ -227,6 +270,7 @@ class ControlCenter(tk.Tk):
         style.configure(
             "TCombobox", fieldbackground=COLOR_SURFACE_RAISED, foreground=COLOR_TEXT, padding=6
         )
+        style.configure("TSeparator", background=COLOR_BORDER)
         style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
         style.configure(
             "TNotebook.Tab", background=COLOR_SURFACE, foreground=COLOR_MUTED, padding=(12, 8)
@@ -238,27 +282,28 @@ class ControlCenter(tk.Tk):
         )
 
     def _build_shell(self) -> None:
-        outer = ttk.Frame(self, padding=0)
+        outer = ttk.Frame(self, style="Shell.TFrame", padding=0)
         outer.pack(fill="both", expand=True)
 
-        header = ttk.Frame(outer, padding=(14, 10))
+        header = ttk.Frame(outer, style="Header.TFrame", padding=(18, 11))
         header.pack(fill="x")
-        ttk.Label(header, text="SandboxAI Control Center", style="PageTitle.TLabel").pack(
-            side="left"
-        )
-        self.status_label = ttk.Label(header, text="ready", foreground=COLOR_MUTED)
-        self.status_label.pack(side="right")
+        brand = ttk.Frame(header, style="Header.TFrame")
+        brand.pack(side="left")
+        ttk.Label(brand, text="SANDBOXAI // TTK", style="BrandEyebrow.TLabel").pack(anchor="w")
+        ttk.Label(brand, text="CONTROL CENTER", style="BrandTitle.TLabel").pack(anchor="w")
+        self.status_label = ttk.Label(header, text="SYSTEM // READY", style="OperatorStatus.TLabel")
+        self.status_label.pack(side="right", pady=4)
         ttk.Separator(outer).pack(fill="x")
 
-        body = ttk.Frame(outer)
+        body = ttk.Frame(outer, style="Shell.TFrame")
         body.pack(fill="both", expand=True)
-        nav = ttk.Frame(body, width=210, padding=(12, 18))
+        nav = ttk.Frame(body, style="Nav.TFrame", width=224, padding=(14, 18))
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
-        self.content = ttk.Frame(body, padding=(8, 14, 18, 18))
+        self.content = ttk.Frame(body, style="Content.TFrame", padding=(12, 14, 20, 18))
         self.content.pack(side="left", fill="both", expand=True)
 
-        nav_groups = {0: "Overview", 1: "Operations", 3: "Analysis", 6: "System"}
+        nav_groups = {0: "OVERVIEW", 1: "OPERATIONS", 3: "ANALYSIS", 6: "SYSTEM"}
         for index, page_class in enumerate(PAGE_CLASSES):
             if index in nav_groups:
                 if index:
@@ -281,8 +326,8 @@ class ControlCenter(tk.Tk):
         ttk.Separator(nav).pack(fill="x", pady=10)
         ttk.Label(
             nav,
-            text="Real backend only.\nNo simulated data.",
-            foreground=COLOR_MUTED,
+            text="LOCAL CALIBRATION\nMeasured backend data only.",
+            style="NavFootnote.TLabel",
             justify="left",
         ).pack(anchor="w")
 
@@ -308,6 +353,10 @@ class ControlCenter(tk.Tk):
         )
         self.background = BackgroundRunner(self)
         for page in self.pages.values():
+            # close() deliberately discards queued delivery callbacks. A page
+            # must therefore not retain a coalesced-poll guard that belonged
+            # to the retired runner, or a later visit would never refresh.
+            page.reset_polls()
             page.adapter = self.adapter
 
     def _tick(self) -> None:

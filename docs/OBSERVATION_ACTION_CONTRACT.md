@@ -5,10 +5,9 @@ implemented twice, once per language, and both must be kept in sync by hand:
 
 - Godot: `scripts/core/observation.gd` (`Observation`) and
   `scripts/core/action.gd` (`Action`).
-- Python: `python/sandboxai/contract.py` (`OBSERVATION_SPEC`, `ACTION_SPEC`),
-  used as the documented target for a future external adapter (see
-  `docs/ROBLOX_ADAPTER.md`). `python/tests/test_contract.py` checks the
-  Python side is internally consistent, and additionally parses the Godot
+- Python: `python/sandboxai/contract.py` (`OBSERVATION_SPEC`, `ACTION_SPEC`).
+  `python/tests/test_contract.py` checks the Python side is internally
+  consistent, and additionally parses the Godot
   sources to fail loudly if `Observation.FIELD_COUNT`, the `to_array()`
   index layout, `Action.MULTI_DISCRETE_NVECS` or the tracked-enemy budget
   drift apart from the Python contract. Semantic drift (a field whose
@@ -18,7 +17,7 @@ implemented twice, once per language, and both must be kept in sync by hand:
 The intended data flow (also in `docs/ARCHITECTURE.md`) is:
 
 ```
-GAME STATE (Godot today; Roblox in the future)
+LOCAL GAME STATE (Godot calibration simulator)
         |
 Observation Adapter        <- Observation.build() in Godot
         |
@@ -51,7 +50,7 @@ GAME
    nearest alive one still exist and affect the simulation (they can still
    attack/be attacked) but are not individually reported — the policy must
    generalize from the nearest few threats, which is also what is
-   practical for a human or a future Roblox client to track.
+   practical for a human player to track.
 4. **Additive changes only, unless there is a strong reason otherwise.**
    The original 17-field single-enemy contract (indices 0–16) is unchanged
    in meaning; multi-enemy support was added as new fields (17–32) rather

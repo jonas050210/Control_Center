@@ -1,6 +1,6 @@
 # gdlint:ignore=max-public-methods
 # The public surface is intentionally wide: it is the RL interface
-# (reset/step/get_*), plus the seven read-only introspection hooks
+# (reset/step/get_*), plus the ten read-only introspection hooks
 # PerceptionModel probes by name for the Control Center. Splitting the
 # hooks into a helper object would mean the Control Center could no longer
 # discover them with has_method() on the environment, which is the whole

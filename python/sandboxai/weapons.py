@@ -1,4 +1,4 @@
-"""Weapon roles, TTK and handling — the Python mirror of the Godot tables.
+"""Local weapon-calibration profiles — the Python mirror of the Godot tables.
 
 The authoritative weapon simulation is ``scripts/weapon/weapon_state.gd``.
 This module does **not** re-implement it from memory: it *parses* the

@@ -247,6 +247,9 @@ var show_right_panel: bool = true
 var show_bottom_panel: bool = true
 var show_perception_overlay: bool = true
 var show_reward_components: bool = true
+## Presentation-only preference. Disabling it leaves a static backdrop and
+## removes the ambient redraw loop; simulation timing and telemetry do not change.
+var ui_motion_enabled: bool = true
 var log_filter: int = -1  # ControlCenterEventLog.FILTER_ALL
 ## Which dashboard page the persistent navigation shows (see PAGE_IDS).
 var active_page: String = DEFAULT_PAGE
@@ -511,6 +514,7 @@ func to_dict() -> Dictionary:
 		"show_bottom_panel": show_bottom_panel,
 		"show_perception_overlay": show_perception_overlay,
 		"show_reward_components": show_reward_components,
+		"ui_motion_enabled": ui_motion_enabled,
 		"log_filter": log_filter,
 		"active_page": active_page,
 		"tile_order": tile_order.duplicate(),
@@ -557,6 +561,7 @@ func apply_dict(values: Dictionary) -> void:
 	show_bottom_panel = bool(values.get("show_bottom_panel", show_bottom_panel))
 	show_perception_overlay = bool(values.get("show_perception_overlay", show_perception_overlay))
 	show_reward_components = bool(values.get("show_reward_components", show_reward_components))
+	ui_motion_enabled = bool(values.get("ui_motion_enabled", ui_motion_enabled))
 	log_filter = int(values.get("log_filter", log_filter))
 	active_page = str(values.get("active_page", active_page))
 	tile_order = (values.get("tile_order", tile_order) as Array).duplicate()

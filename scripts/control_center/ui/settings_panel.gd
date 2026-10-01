@@ -17,6 +17,7 @@ extends VBoxContainer
 
 signal settings_rebuilt
 signal tile_layout_changed
+signal presentation_changed
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
@@ -31,6 +32,7 @@ var _enemy_spin: SpinBox
 var _seed_spin: SpinBox
 var _apply_button: Button
 var _pending_label: Label
+var _motion_toggle: Button
 var _command_label: Label
 var _scenario_note: Label
 var _updating: bool = false
@@ -189,6 +191,32 @@ func setup(p_session) -> void:
 	add_child(ControlCenterTheme.make_separator())
 	add_child(
 		ControlCenterTheme.make_label(
+			"Presentation", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		)
+	)
+	var presentation_row := ControlCenterTheme.make_row()
+	add_child(presentation_row)
+	_motion_toggle = ControlCenterTheme.make_toggle(
+		"Ambient motion",
+		session.config.ui_motion_enabled,
+		(
+			"Animate the local Control Center backdrop and page transitions. "
+			+ "Disabling this does not change simulation, telemetry or training."
+		)
+	)
+	_motion_toggle.toggled.connect(_on_motion_toggled)
+	presentation_row.add_child(_motion_toggle)
+	presentation_row.add_child(
+		ControlCenterTheme.make_label(
+			"Local UI only · use static presentation for reduced motion.",
+			ControlCenterTheme.FONT_SIZE_SMALL,
+			ControlCenterTheme.COLOR_MUTED
+		)
+	)
+
+	add_child(ControlCenterTheme.make_separator())
+	add_child(
+		ControlCenterTheme.make_label(
 			"Headless training", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 		)
 	)
@@ -252,6 +280,7 @@ func _sync_from_config() -> void:
 	_environment_spin.value = float(session.config.environment_count)
 	_enemy_spin.value = float(session.config.enemy_count)
 	_seed_spin.value = float(session.config.seed)
+	_motion_toggle.button_pressed = session.config.ui_motion_enabled
 	_updating = false
 
 
@@ -297,6 +326,14 @@ func _on_apply_pressed() -> void:
 	session.apply_pending_settings()
 	_sync_from_config()
 	settings_rebuilt.emit()
+
+
+func _on_motion_toggled(pressed: bool) -> void:
+	if _updating:
+		return
+	session.config.ui_motion_enabled = pressed
+	session.config.save_preferences()
+	presentation_changed.emit()
 
 
 func _on_tile_toggled(pressed: bool, tile_id: String) -> void:

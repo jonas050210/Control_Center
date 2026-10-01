@@ -5,6 +5,12 @@ milestone. It **extends** `scripts/core/curriculum_config.gd`
 (`CurriculumConfig`) rather than replacing it; each level bundles a richer,
 still-deterministic set of behaviors.
 
+> **TTK scope note:** this is a legacy local calibration curriculum, not a
+> specification of Roblox TTK Testing. Its enemy behavior, maps, physics,
+> weapon values and reward shaping remain uncalibrated until player-visible
+> evidence supports them. The authoritative evidence boundary is
+> [TTK_TESTING_REFERENCE.md](TTK_TESTING_REFERENCE.md).
+
 The ladder is now 10 combat levels plus the self-play hook. Levels 1–4 are
 unchanged from the original implementation (same flags, same spawn
 distributions, same analytic melee enemies), so a checkpoint or a
@@ -169,11 +175,14 @@ while still collecting statistics.
 
 ## Scenarios
 
-`scripts/scenario/scenario_library.gd` defines twelve seedable encounters —
-`open_arena`, `single_target`, `multiple_targets`, `corner_fight`,
-`cover_fight`, `corridor_fight`, `ambush`, `target_disappears`,
-`sound_only`, `multi_direction`, `vertical_encounter`, `randomized_arena`.
-A scenario is pure data (layout id, enemy count, spawn rule, required
+`scripts/scenario/scenario_library.gd` defines twelve seedable calibration
+encounters: `open_arena`, `single_target`, `multiple_targets`, `corner_fight`,
+`cover_fight`, `corridor_fight`, `ambush`, `target_disappears`, `sound_only`,
+`multi_direction`, `vertical_encounter` and `randomized_arena`. The invented
+weapon/TTK drills (`rifle_lane_drill`, `shotgun_breach_drill`,
+`sidearm_finish_drill`, `smg_tracking_drill`) were removed rather than hidden
+behind an option; they were not verified TTK Testing content. A scenario is
+pure data (layout id, enemy count, spawn rule, required
 capabilities); `ScenarioLibrary.resolve(id, seed)` is a pure function, so
 the same `(id, seed)` pair always produces the same geometry AND the same
 spawn points. The occlusion-based spawn rules (`out_of_sight`,

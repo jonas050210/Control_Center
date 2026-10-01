@@ -8,6 +8,26 @@ records what changed and why.
 
 ## Unreleased
 
+### TTK Testing scope
+- `sandboxai ttk-status` plus `sandboxai.ttk_testing`: one source-traceable
+  TTK Testing evidence manifest. It separates verified controls and
+  wound-painting/bleeding from calibration-required physics/weapon/reload
+  behavior, records the normal-first-person/no-Helmetcam project decision,
+  and makes manual weapon switching (never automatic empty-magazine
+  switching) explicit.
+- `docs/TTK_TESTING_REFERENCE.md`: official-source links, the mechanics
+  matrix, screenshot-only calibration protocol and exclusions for the
+  TTK-focused rebuild.
+
+### Removed
+- The invented weapon drills `rifle_lane_drill`, `shotgun_breach_drill`,
+  `sidearm_finish_drill` and `smg_tracking_drill`, with a regression test
+  preventing their return.
+- The unused external-game/Roblox adapter boundary, mock, command and
+  documentation. SandboxAI has no Roblox connection or automation path.
+- The unverified weapon-handling report, whose third-party claims did not
+  meet the TTK-only evidence boundary.
+
 ### Added
 - `sandboxai.hardware_profile`: the single device-comparison
   implementation behind the first-start hardware wizard. It compares CPU,
@@ -88,12 +108,40 @@ records what changed and why.
   `docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md`.
 
 ### Changed
+- The interactive Godot and Tk desktop Control Centers now use a
+  high-contrast cyan/violet glass-and-telemetry visual system: shadowed
+  panels, clear hover/pressed states, branded status and navigation zones,
+  radar-style local perception rendering, and a compact first-person
+  instrumentation overlay. The Godot backdrop is constructed only with the
+  GUI, ignores input, and has a persisted reduced-motion preference that
+  stops backdrop/page-transition animation without changing simulation,
+  telemetry or training. These remain explicitly local calibration
+  presentation, not a claim about TTK Testing's player HUD.
+- The Godot Control Center now carries the same visual system through dense
+  telemetry surfaces too: direct Tree/ItemList/RichText controls, option
+  popups, scrollbars, tooltips, progress meters and compact sparklines no
+  longer fall back to an engine-default palette. A full-workspace horizontal
+  scroll contract keeps the navigation rail, simulation docks and all
+  existing controls reachable on narrow desktop windows; the first-person
+  reticle's centre point now agrees with its local ready/range state. The Tk
+  log reader now resumes its existing auto-follow behavior when an operator
+  scrolls back to the newest line instead of silently remaining paused. Its
+  Tk background runner now owns exactly one pending pump callback and
+  cancels it during close, avoiding an unbounded callback chain during
+  manual test/drain calls and late callbacks after window destruction.
 - CI (`python-tests.yml`) no longer duplicates the Python suite that
   `godot-tests.yml` was also running; adds pip caching, a
   `concurrency` group that cancels superseded runs, and pins every
-  third-party action to a commit SHA rather than a mutable tag.
-  Job order: lint, typecheck, core-tests, gdscript-checks,
-  desktop-ui-tests, full-tests, coverage, audit.
+  third-party action to a commit SHA rather than a mutable tag. The full
+  training matrix has a 30-minute budget and explicitly bounds native math
+  threads to one: its tiny torch/SB3 test models were dramatically slower
+  when a high-core Windows runner fanned their work out across every CPU.
+  Its unbuffered, verbose pytest output now identifies the last test if a
+  platform-specific stall ever reappears, and `pytest-timeout` turns a
+  wedged individual test into a failure with a stack after three minutes
+  rather than an opaque job-level cancellation. Job order: lint, typecheck,
+  core-tests, gdscript-checks, desktop-ui-tests, full-tests, coverage,
+  audit.
 - Ruff now enforces `E,W,F,I,UP,B,SIM,C901` instead of `F` alone, with
   `max-complexity = 15`, and `ruff format` is the formatter of record
   for the Python half. Clearing the new rules touched most of the
@@ -140,6 +188,26 @@ records what changed and why.
   one off the Tk thread reaches into Tcl from a thread that does not own
   it. `BackgroundRunner` now suspends automatic collection while it is
   alive and collects from its Tk-thread poll instead.
+- The Tk process-log reader no longer steals focus from an operator reading
+  older output after they drag its scrollbar or navigate with the keyboard;
+  either path now pauses live follow until the viewport returns to the newest
+  line. It also exposes the horizontal scrollbar required to inspect long
+  commands, file paths and tracebacks while keeping the deliberately
+  unwrapped log text readable. Agent-log reads now capture the selected
+  process and incremental cursors at submission time, coalesce a slow poll,
+  discard a late result for a prior selection (including A → B → A), clear
+  output on deselection, and bind Stop/Force Stop to the process that was
+  selected when the button was pressed. Evaluation comparisons and run reports
+  now use the same selection-generation contract, so a slow disk read cannot
+  overwrite a newer selection or leave vanished data presented as current.
+  Periodic Dashboard, Training, Benchmark, Evaluation, Runs, Agents and
+  System reads are now coalesced per page operation, preserving the bounded
+  worker pool and discarding a response that no longer belongs to its active
+  run/process selection. An overlap retains exactly one latest-only follow-up
+  rather than dropping the freshness request, and changing the output root
+  clears guards owned by the retired worker. Every dense Tk inventory table
+  now has both native scroll axes, so a narrow desktop never makes its
+  right-hand run/checkpoint/error data unreachable.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

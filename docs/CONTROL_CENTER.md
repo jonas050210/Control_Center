@@ -271,11 +271,13 @@ reason. Debug visualization can therefore show hidden world state without
 ever leaking it into the policy's input: the AI branch is decoded
 exclusively from `Observation.to_array()`.
 
-Perception features the simulation does **not** implement — field-of-view
-gating, line-of-sight/occlusion, sound events, target memory/last-known
-position, cover, navigation, corpses — are listed as **unavailable** with
-an explanation. They are detected with `has_method()` probes, so the moment
-the simulation grows such a feature the panel starts reporting it.
+`EnvironmentCore` currently implements field-of-view gating,
+line-of-sight/occlusion, sound, target memory, obstacles/cover, navigation,
+corpses, exploration and environment-condition hooks. The panel detects
+these through `has_method()` probes and renders their real state. A feature
+is marked **unavailable** only for another environment type that does not
+expose the corresponding hook (for example an incomplete future adapter),
+never replaced with invented data.
 
 The optional 3D overlay (`PerceptionOverlay3D`, 20 Hz) draws cyan lines to
 tracked enemies, dashed red lines to hidden enemies, a target ring, the

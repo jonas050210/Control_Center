@@ -12,6 +12,7 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
+const ControlCenterMetricSparkline = preload("res://scripts/control_center/ui/metric_sparkline.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
@@ -97,7 +98,36 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 		_teardown(instance)
 		return t
 
+	t.assert_not_null(ui.ambient_backdrop, "presentation-only ambient backdrop")
+	t.assert_eq(
+		ui.ambient_backdrop.mouse_filter,
+		Control.MOUSE_FILTER_IGNORE,
+		"the backdrop must never intercept Control Center input"
+	)
+	instance.session.config.ui_motion_enabled = false
+	ui._on_presentation_changed()
+	t.assert_false(
+		ui.ambient_backdrop.motion_enabled,
+		"reduced-motion preference stops the ambient backdrop loop"
+	)
 	t.assert_not_null(ui.status_bar, "top status bar")
+	t.assert_true(
+		ui.status_bar.get_child(0) is ScrollContainer,
+		"narrow windows keep the full command strip reachable via horizontal scrolling"
+	)
+	t.assert_not_null(
+		ui._workspace_scroll,
+		"the persistent navigation and page workspace stay reachable on narrow desktops"
+	)
+	t.assert_eq(
+		ui._workspace_scroll.horizontal_scroll_mode,
+		ScrollContainer.SCROLL_MODE_AUTO,
+		"workspace scrolling is enabled only when a viewport is too narrow"
+	)
+	t.assert_true(
+		ui._page_container.custom_minimum_size.x > 0.0,
+		"the page viewport keeps a usable simulation/control width before scrolling"
+	)
 	t.assert_not_null(ui.agent_panel, "live agent view panel")
 	t.assert_not_null(ui.perception_panel, "what-does-the-AI-see panel")
 	t.assert_not_null(ui.observation_panel, "observation inspector panel")
@@ -164,6 +194,42 @@ func test_gui_mode_switch_keeps_panels_alive() -> SandboxTest:
 		instance.session.simulation_manager.environments.size(), 2, "no rebuild on mode switch"
 	)
 	_teardown(instance)
+	return t
+
+
+## Theme coverage for controls built directly by specialist panels. Without
+## this, Tree, ItemList, RichTextLabel, menus, scrollbars and tooltips silently
+## fall back to the engine default visual language instead of the operator
+## surface.
+func test_telemetry_theme_covers_direct_data_controls() -> SandboxTest:
+	var t := SandboxTest.new("control_center_telemetry_theme")
+	var theme := ControlCenterTheme.build_theme()
+	for control_type in ["Tree", "ItemList", "RichTextLabel"]:
+		t.assert_true(
+			theme.has_stylebox(
+				"panel" if control_type != "RichTextLabel" else "normal", control_type
+			),
+			"%s receives the Control Center data-surface style" % control_type
+		)
+	t.assert_true(theme.has_stylebox("panel", "PopupMenu"))
+	for control_type in ["HScrollBar", "VScrollBar"]:
+		t.assert_true(
+			theme.has_stylebox("grabber", control_type),
+			"%s has an operator-surface scrollbar grabber" % control_type
+		)
+	t.assert_true(theme.has_stylebox("panel", "TooltipPanel"))
+
+	var source: Array = [1.0, 1.0]
+	var sparkline := ControlCenterMetricSparkline.new()
+	sparkline.set_samples(source)
+	source.clear()
+	t.assert_eq(sparkline.sample_count(), 2, "sparkline owns an immutable sample copy")
+	t.assert_eq(
+		sparkline.mouse_filter,
+		Control.MOUSE_FILTER_IGNORE,
+		"a chart never intercepts dashboard input"
+	)
+	sparkline.free()
 	return t
 
 

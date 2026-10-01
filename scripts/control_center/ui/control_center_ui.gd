@@ -26,6 +26,7 @@ extends CanvasLayer
 const ControlCenterAgentPanel = preload("res://scripts/control_center/ui/agent_panel.gd")
 const ControlCenterAgentsPanel = preload("res://scripts/control_center/ui/agents_panel.gd")
 const ControlCenterAnalyticsPanel = preload("res://scripts/control_center/ui/analytics_panel.gd")
+const ControlCenterAmbientBackdrop = preload("res://scripts/control_center/ui/ambient_backdrop.gd")
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterControlsPanel = preload("res://scripts/control_center/ui/controls_panel.gd")
 const ControlCenterHeadlessPanel = preload("res://scripts/control_center/ui/headless_panel.gd")
@@ -60,6 +61,10 @@ const TrainingRunController = preload("res://scripts/control_center/training_run
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
 const RIGHT_PANEL_WIDTH: float = 380.0
+## Minimum width that keeps the persistent navigation rail and a useful
+## simulation viewport visible together. Smaller desktop windows scroll the
+## whole workspace horizontally instead of hiding live controls or docks.
+const MIN_WORKSPACE_WIDTH: float = 1080.0
 
 ## Navigation entries: page id -> label, in display order.
 const PAGES: Array = [
@@ -74,6 +79,7 @@ const PAGES: Array = [
 ]
 
 var session
+var ambient_backdrop: ControlCenterAmbientBackdrop
 var hud: ControlCenterHud
 var status_bar: ControlCenterStatusBar
 var agent_panel: ControlCenterAgentPanel
@@ -96,6 +102,7 @@ var headless_panel: ControlCenterHeadlessPanel
 var analytics_panel: ControlCenterAnalyticsPanel
 var history_panel: ControlCenterHistoryPanel
 
+var _workspace_scroll: ScrollContainer
 var _left_container: Control
 var _right_container: Control
 var _bottom_container: Control
@@ -121,6 +128,13 @@ func setup(p_session) -> void:
 
 
 func _build_layout() -> void:
+	# This is intentionally a local Control Center treatment, not a claim
+	# about TTK Testing's in-game presentation. It is built only with the
+	# interactive UI and therefore stays out of the headless/RL hot path.
+	ambient_backdrop = ControlCenterAmbientBackdrop.new()
+	ambient_backdrop.motion_enabled = session.config.ui_motion_enabled
+	add_child(ambient_backdrop)
+
 	var root := MarginContainer.new()
 	root.theme = ControlCenterTheme.build_theme()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -146,14 +160,26 @@ func _build_layout() -> void:
 
 	# Keep navigation visually separate from the working area. A persistent
 	# rail is easier to scan than a dense row of eight equally weighted tabs.
+	# On a narrow desktop, make that full working surface horizontally
+	# reachable; shrinking it would make active selectors and simulation docks
+	# disappear off-screen with no way to access them.
+	_workspace_scroll = ScrollContainer.new()
+	_workspace_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_workspace_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_workspace_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_workspace_scroll.tooltip_text = "Scroll horizontally to reach the full Control Center workspace."
+	column.add_child(_workspace_scroll)
 	var workspace := HBoxContainer.new()
+	workspace.custom_minimum_size = Vector2(MIN_WORKSPACE_WIDTH, 0.0)
+	workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	workspace.add_theme_constant_override("separation", 12)
 	workspace.mouse_filter = Control.MOUSE_FILTER_PASS
-	column.add_child(workspace)
+	_workspace_scroll.add_child(workspace)
 	workspace.add_child(_build_navigation())
 
 	_page_container = Control.new()
+	_page_container.custom_minimum_size = Vector2(MIN_WORKSPACE_WIDTH - 188.0, 0.0)
 	_page_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_page_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -183,7 +209,18 @@ func _build_navigation() -> Control:
 	rail.add_child(items)
 	items.add_child(
 		ControlCenterTheme.make_label(
-			"Workspace", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
+			"SANDBOXAI", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
+		)
+	)
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"CONTROL SURFACE", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_ACCENT
+		)
+	)
+	items.add_child(ControlCenterTheme.make_separator())
+	items.add_child(
+		ControlCenterTheme.make_label(
+			"WORKSPACE", ControlCenterTheme.FONT_SIZE_SMALL, ControlCenterTheme.COLOR_MUTED
 		)
 	)
 	for index in range(PAGES.size()):
@@ -322,6 +359,7 @@ func _build_dashboard_pages() -> void:
 	settings_panel.setup(session)
 	settings_panel.settings_rebuilt.connect(_on_settings_rebuilt)
 	settings_panel.tile_layout_changed.connect(_on_tile_layout_changed)
+	settings_panel.presentation_changed.connect(_on_presentation_changed)
 	var settings_page := PanelContainer.new()
 	settings_page.add_theme_stylebox_override(
 		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
@@ -422,12 +460,15 @@ func set_page(page_id: String, persist: bool = true) -> void:
 	var selected_page: Control = _pages[resolved] as Control
 	for existing_id in _pages:
 		(_pages[existing_id] as Control).visible = str(existing_id) == resolved
-	# A short opacity transition makes context changes readable without
-	# slowing an operator down or animating live telemetry itself.
-	selected_page.modulate.a = 0.0
-	var transition := create_tween()
-	transition.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	transition.tween_property(selected_page, "modulate:a", 1.0, 0.14)
+	# Motion is an operator preference. Disabling it keeps navigation
+	# immediate and also stops the ambient backdrop redraw loop.
+	if session.config.ui_motion_enabled:
+		selected_page.modulate.a = 0.0
+		var transition := create_tween()
+		transition.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		transition.tween_property(selected_page, "modulate:a", 1.0, 0.14)
+	else:
+		selected_page.modulate.a = 1.0
 	for nav_id in _nav_buttons:
 		(_nav_buttons[nav_id] as Button).button_pressed = str(nav_id) == resolved
 	if resolved == "history":
@@ -689,4 +730,10 @@ func _on_training_state_changed(_state: int) -> void:
 func _on_tile_layout_changed() -> void:
 	_apply_tile_order()
 	_apply_panel_visibility()
+	refresh_now()
+
+
+func _on_presentation_changed() -> void:
+	if ambient_backdrop != null:
+		ambient_backdrop.set_motion_enabled(session.config.ui_motion_enabled)
 	refresh_now()

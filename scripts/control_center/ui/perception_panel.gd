@@ -6,7 +6,8 @@
 ## REAL WORLD (ground truth, debug only) and AI PERCEPTION (decoded from
 ## the observation vector, i.e. everything the policy knows), plus the list
 ## of enemies that exist but are absent from the observation, plus the
-## perception features the simulation does not implement yet.
+## dynamic capability status; unavailable hooks are shown only when the
+## current environment type genuinely lacks them.
 ##
 ## It performs no perception logic of its own.
 class_name ControlCenterPerceptionPanel

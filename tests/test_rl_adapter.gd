@@ -112,5 +112,7 @@ func test_action_and_observation_space_info_are_well_formed() -> SandboxTest:
 	var action_info: Dictionary = RLAdapter.action_space_info()
 	var obs_info: Dictionary = RLAdapter.observation_space_info()
 	t.assert_eq(action_info.discrete_choices, Action.DISCRETE_COUNT)
+	t.assert_eq(action_info.nvec, Action.MULTI_DISCRETE_NVECS)
+	t.assert_eq(action_info.dimension, Action.MULTI_DISCRETE_SIZE)
 	t.assert_eq(obs_info.get("size", -1), Observation.FIELD_COUNT)
 	return t

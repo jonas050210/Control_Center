@@ -7,6 +7,7 @@ remain in the independently tested viewmodel.
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -23,7 +24,7 @@ from .control_center_widgets import (
     LogPanel,
     StatRow,
     _open_in_file_manager,
-    _sortable_table,
+    _scrollable_table,
 )
 
 STATE_COLORS = {
@@ -53,6 +54,18 @@ class Page(ttk.Frame):
         self.app = app
         self.adapter = app.adapter
         self._built = False
+        # A poll can touch a large run directory or a process registry. Keep
+        # at most one request per page operation in flight: piling identical
+        # reads into the shared three-worker pool makes a slow disk look like
+        # a frozen GUI and can render stale telemetry long after it mattered.
+        # A second request is retained as one latest-only follow-up instead
+        # of being lost: a refresh requested while the initial app-start poll
+        # is still reading an empty run root must still observe a run that
+        # appears before that poll comes back.
+        self._polls_in_flight: set[str] = set()
+        self._pending_polls: dict[
+            str, tuple[Callable[[], Any], Callable[[Any, BaseException | None], None]]
+        ] = {}
 
     def show(self) -> None:
         if not self._built:
@@ -74,6 +87,51 @@ class Page(ttk.Frame):
     def refresh(self) -> None:
         """Called on every poll tick while this page is visible. Must only
         submit background work; it must never block."""
+
+    def submit_poll(
+        self,
+        operation: str,
+        fn: Callable[[], Any],
+        callback: Callable[[Any, BaseException | None], None],
+    ) -> None:
+        """Submit one periodic read, coalescing overlap to one fresh retry.
+
+        This is deliberately for idempotent refreshes only, never for a user
+        command such as Start, Stop or Force stop. A request that arrives
+        while its operation is live replaces one retained follow-up request;
+        it never expands the executor queue.  The Tk callback releases the
+        guard before handing its result to the page, so errors cannot wedge a
+        later refresh and work requested during a slow read is not discarded.
+        """
+        if operation in self._polls_in_flight:
+            self._pending_polls[operation] = (fn, callback)
+            return
+        self._start_poll(operation, fn, callback)
+
+    def _start_poll(
+        self,
+        operation: str,
+        fn: Callable[[], Any],
+        callback: Callable[[Any, BaseException | None], None],
+    ) -> None:
+        self._polls_in_flight.add(operation)
+
+        def complete(result: Any, error: BaseException | None) -> None:
+            self._polls_in_flight.discard(operation)
+            try:
+                callback(result, error)
+            finally:
+                pending = self._pending_polls.pop(operation, None)
+                if pending is not None:
+                    self._start_poll(operation, *pending)
+
+        if not self.app.background.submit(fn, complete):
+            self._polls_in_flight.discard(operation)
+
+    def reset_polls(self) -> None:
+        """Forget work tied to a background runner that has been replaced."""
+        self._polls_in_flight.clear()
+        self._pending_polls.clear()
 
     def report_error(self, context: str, error: BaseException) -> None:
         self.app.set_status(f"{context}: {error}", error=True)
@@ -133,14 +191,20 @@ class DashboardPage(Page):
         self._last_run_dir: str | None = None
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.dashboard_snapshot, self._on_snapshot)
+        self.submit_poll("dashboard", self.adapter.dashboard_snapshot, self._on_snapshot)
 
     def _on_snapshot(self, snapshot: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or snapshot is None:
             self.report_error("Dashboard refresh failed", error or RuntimeError("unknown error"))
             return
         view = vm.dashboard_view(snapshot)
+        previous_run_dir = self._last_run_dir
         self._last_run_dir = view.get("run_dir")
+        if self._last_run_dir != previous_run_dir:
+            # Never temporarily chart a prior run while the next telemetry
+            # read is still in flight for the newly discovered run.
+            for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
+                chart.set_points([])
         self.stats.update_values(
             {
                 "state": (view["state"] or "no runs yet", STATE_COLORS.get(view["state"] or "")),
@@ -200,16 +264,26 @@ class DashboardPage(Page):
             )
         self.checkpoints_label.configure(text="\n".join(checkpoint_lines))
 
-        if view["run_dir"]:
-            self.app.background.submit(
-                lambda: self.adapter.telemetry_series(view["run_dir"]), self._on_telemetry
+        run_dir = self._last_run_dir
+        if run_dir:
+            self.submit_poll(
+                "telemetry",
+                lambda: self.adapter.telemetry_series(run_dir),
+                lambda series, error: self._on_telemetry(run_dir, series, error),
             )
         else:
             for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
                 chart.set_points([])
 
-    def _on_telemetry(self, series: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or series is None or not series.get("available"):
+    def _on_telemetry(
+        self, run_dir: str, series: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if (
+            run_dir != self._last_run_dir
+            or error is not None
+            or series is None
+            or not series.get("available")
+        ):
             return
         data = series.get("series", {})
         self.reward_chart.set_points(data.get("mean_episode_reward", []))
@@ -341,9 +415,12 @@ class TrainingPage(Page):
             self.advanced_frame.pack_forget()
 
     def refresh(self) -> None:
-        if self.process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+        process_id = self.process_id
+        if process_id:
+            self.submit_poll(
+                "training-status",
+                lambda: self.adapter.process_status(process_id),
+                lambda status, error: self._on_process_status(process_id, status, error),
             )
 
     def _start(self) -> None:
@@ -373,15 +450,17 @@ class TrainingPage(Page):
         self.app.set_status(f"Training started ({self.process_id[:8]})")
 
     def _stop(self) -> None:
-        if not self.process_id:
+        process_id = self.process_id
+        if not process_id:
             return
-        self.app.background.submit(lambda: self.adapter.cancel(self.process_id), lambda *_: None)
+        self.app.background.submit(lambda: self.adapter.cancel(process_id), lambda *_: None)
         self.app.set_status(
             "Stop requested - the trainer will save a final checkpoint before exiting"
         )
 
     def _force_stop(self) -> None:
-        if not self.process_id:
+        process_id = self.process_id
+        if not process_id:
             return
         if not messagebox.askyesno(
             "Force stop",
@@ -389,14 +468,15 @@ class TrainingPage(Page):
             "NOT be saved. Continue?",
         ):
             return
-        self.app.background.submit(
-            lambda: self.adapter.force_stop(self.process_id), lambda *_: None
-        )
+        self.app.background.submit(lambda: self.adapter.force_stop(process_id), lambda *_: None)
 
     def _on_process_status(
-        self, status: dict[str, Any] | None, error: BaseException | None
+        self,
+        process_id: str,
+        status: dict[str, Any] | None,
+        error: BaseException | None,
     ) -> None:
-        if error is not None or status is None:
+        if process_id != self.process_id or error is not None or status is None:
             return
         state = status.get("state", "unknown")
         color = STATE_COLORS.get(state, COLOR_MUTED)
@@ -408,15 +488,18 @@ class TrainingPage(Page):
             self.force_stop_button.configure(state="disabled")
             if state == "failed" and status.get("error"):
                 self.app.set_status(f"Training process failed: {status['error']}", error=True)
-        self.app.background.submit(
-            lambda: self.adapter.process_log(
-                self.process_id, self.log_panel.stdout_after, self.log_panel.stderr_after
-            ),
-            self._on_log,
+        stdout_after = self.log_panel.stdout_after
+        stderr_after = self.log_panel.stderr_after
+        self.submit_poll(
+            f"training-log:{process_id}",
+            lambda: self.adapter.process_log(process_id, stdout_after, stderr_after),
+            lambda log, log_error: self._on_log(process_id, log, log_error),
         )
 
-    def _on_log(self, log: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or log is None:
+    def _on_log(
+        self, process_id: str, log: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if process_id != self.process_id or error is not None or log is None:
             return
         self.log_panel.apply_log(log)
 
@@ -442,11 +525,7 @@ class AgentsPage(Page):
         paned.pack(fill="both", expand=True)
         top = ttk.Frame(paned)
         paned.add(top, weight=2)
-        self.tree = _sortable_table(top, self.COLUMNS)
-        self.tree.pack(fill="both", expand=True, side="left")
-        scroll = ttk.Scrollbar(top, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        self.tree = _scrollable_table(top, self.COLUMNS)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         bottom = ttk.Frame(paned, padding=(0, 8, 0, 0))
@@ -470,18 +549,40 @@ class AgentsPage(Page):
 
         self._row_to_process: dict[str, str] = {}
         self._selected_process_id: str | None = None
+        # The process id alone is not sufficient: A -> B -> A can happen
+        # while A's first disk read is still in flight. The generation keeps
+        # that old A result from filling a freshly reset A log view.
+        self._log_selection_generation = 0
+        self._log_in_flight: tuple[str, int] | None = None
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.list_processes, self._on_processes)
-        if self._selected_process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_log(
-                    self._selected_process_id,
-                    self.log_panel.stdout_after,
-                    self.log_panel.stderr_after,
-                ),
-                self._on_log,
-            )
+        self.submit_poll("process-list", self.adapter.list_processes, self._on_processes)
+        process_id = self._selected_process_id
+        if process_id:
+            self._request_log(process_id)
+
+    def _request_log(self, process_id: str) -> None:
+        """Fetch one selected process log without duplicate or stale updates.
+
+        Process metadata and output are read on separate worker calls. An
+        operator can click a second agent while the first call is still
+        reading its files, so both the id and the incremental cursors must be
+        captured at submission time. A per-selection generation distinguishes
+        even A -> B -> A, and the in-flight token coalesces slow polls: a
+        process-log read must not queue up behind itself and replay the same
+        output after the panel has already caught up.
+        """
+        generation = self._log_selection_generation
+        token = (process_id, generation)
+        if token == self._log_in_flight:
+            return
+        self._log_in_flight = token
+        stdout_after = self.log_panel.stdout_after
+        stderr_after = self.log_panel.stderr_after
+        self.app.background.submit(
+            lambda: self.adapter.process_log(process_id, stdout_after, stderr_after),
+            lambda log, error: self._on_log(process_id, generation, log, error),
+        )
 
     def _on_processes(
         self, processes: list[dict[str, Any]] | None, error: BaseException | None
@@ -491,6 +592,7 @@ class AgentsPage(Page):
             return
         rows = vm.process_table_rows(processes)
         selected = self._selected_process_id
+        selected_still_present = False
         self.tree.delete(*self.tree.get_children())
         self._row_to_process.clear()
         for row in rows:
@@ -513,42 +615,70 @@ class AgentsPage(Page):
             )
             self._row_to_process[item_id] = row["id"]
             if row["id"] == selected:
+                selected_still_present = True
                 self.tree.selection_set(item_id)
+        if selected is not None and not selected_still_present:
+            # The process inventory can legitimately change between polling
+            # ticks (for example after a run is cleared). Do not leave its
+            # old output on screen with active lifecycle buttons.
+            self._clear_selection()
 
     def _on_select(self, _event: object) -> None:
         selection = self.tree.selection()
         if not selection:
-            self._selected_process_id = None
-            self.stop_button.configure(state="disabled")
-            self.force_stop_button.configure(state="disabled")
+            self._clear_selection()
             return
         process_id = self._row_to_process.get(selection[0])
+        if process_id is None:
+            self._clear_selection()
+            return
         if process_id != self._selected_process_id:
             self._selected_process_id = process_id
+            self._log_selection_generation += 1
             self.log_panel.reset_cursor()
         self.stop_button.configure(state="normal")
         self.force_stop_button.configure(state="normal")
-        if process_id:
-            self.app.background.submit(lambda: self.adapter.process_log(process_id), self._on_log)
+        self._request_log(process_id)
 
-    def _on_log(self, log: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or log is None:
+    def _clear_selection(self) -> None:
+        self._selected_process_id = None
+        self._log_selection_generation += 1
+        self.stop_button.configure(state="disabled")
+        self.force_stop_button.configure(state="disabled")
+        self.log_panel.reset_cursor()
+
+    def _on_log(
+        self,
+        process_id: str,
+        generation: int,
+        log: dict[str, Any] | None,
+        error: BaseException | None,
+    ) -> None:
+        token = (process_id, generation)
+        if token == self._log_in_flight:
+            self._log_in_flight = None
+        # See _request_log: a late result belongs to the process/selection it
+        # was read from, not necessarily the one the operator is viewing now.
+        if (
+            process_id != self._selected_process_id
+            or generation != self._log_selection_generation
+            or error is not None
+            or log is None
+        ):
             return
         self.log_panel.apply_log(log)
 
     def _stop(self) -> None:
-        if self._selected_process_id:
-            self.app.background.submit(
-                lambda: self.adapter.cancel(self._selected_process_id), lambda *_: None
-            )
+        process_id = self._selected_process_id
+        if process_id:
+            self.app.background.submit(lambda: self.adapter.cancel(process_id), lambda *_: None)
 
     def _force_stop(self) -> None:
-        if self._selected_process_id and messagebox.askyesno(
+        process_id = self._selected_process_id
+        if process_id and messagebox.askyesno(
             "Force stop", "Skip cooperative shutdown and kill this process now?"
         ):
-            self.app.background.submit(
-                lambda: self.adapter.force_stop(self._selected_process_id), lambda *_: None
-            )
+            self.app.background.submit(lambda: self.adapter.force_stop(process_id), lambda *_: None)
 
 
 class BenchmarkPage(Page):
@@ -608,11 +738,7 @@ class BenchmarkPage(Page):
             self, text="Result history (click a column to sort; select rows to compare)", padding=8
         )
         history_frame.pack(fill="both", expand=True)
-        self.tree = _sortable_table(history_frame, self.RESULT_COLUMNS)
-        self.tree.pack(fill="both", expand=True, side="left")
-        scroll = ttk.Scrollbar(history_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        self.tree = _scrollable_table(history_frame, self.RESULT_COLUMNS)
 
         self.scaling_label = ttk.Label(self, text="", justify="left", foreground=COLOR_MUTED)
         self.scaling_label.pack(fill="x", pady=(6, 0))
@@ -620,10 +746,13 @@ class BenchmarkPage(Page):
         self.process_id: str | None = None
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.benchmark_history, self._on_history)
-        if self.process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+        self.submit_poll("benchmark-history", self.adapter.benchmark_history, self._on_history)
+        process_id = self.process_id
+        if process_id:
+            self.submit_poll(
+                "benchmark-status",
+                lambda: self.adapter.process_status(process_id),
+                lambda status, error: self._on_process_status(process_id, status, error),
             )
 
     def _start(self) -> None:
@@ -664,9 +793,12 @@ class BenchmarkPage(Page):
         self.app.set_status(f"Benchmark started ({self.process_id[:8]})")
 
     def _on_process_status(
-        self, status: dict[str, Any] | None, error: BaseException | None
+        self,
+        process_id: str,
+        status: dict[str, Any] | None,
+        error: BaseException | None,
     ) -> None:
-        if error is not None or status is None:
+        if process_id != self.process_id or error is not None or status is None:
             return
         self.state_label.configure(
             text=status.get("state", "unknown"),
@@ -748,8 +880,7 @@ class EvaluationPage(Page):
         left = ttk.Frame(paned, padding=(0, 0, 8, 0))
         paned.add(left, weight=1)
         ttk.Label(left, text="Checkpoints", style="Section.TLabel").pack(anchor="w")
-        self.checkpoint_tree = _sortable_table(left, self.CHECKPOINT_COLUMNS)
-        self.checkpoint_tree.pack(fill="both", expand=True)
+        self.checkpoint_tree = _scrollable_table(left, self.CHECKPOINT_COLUMNS)
 
         form = ttk.LabelFrame(left, text="Run evaluation on the selected checkpoint", padding=10)
         form.pack(fill="x", pady=(8, 0))
@@ -792,8 +923,7 @@ class EvaluationPage(Page):
             text="Evaluation results (select multiple rows to compare)",
             style="Section.TLabel",
         ).pack(anchor="w")
-        self.eval_tree = _sortable_table(right, self.EVAL_COLUMNS)
-        self.eval_tree.pack(fill="both", expand=False)
+        self.eval_tree = _scrollable_table(right, self.EVAL_COLUMNS, expand=False)
         self.eval_tree.configure(selectmode="extended")
         self.eval_tree.bind("<<TreeviewSelect>>", self._on_eval_select)
 
@@ -818,6 +948,8 @@ class EvaluationPage(Page):
 
         self._checkpoint_paths: dict[str, str] = {}
         self._eval_paths: dict[str, str] = {}
+        self._selected_evaluation_paths: tuple[str, ...] = ()
+        self._evaluation_detail_generation = 0
         self.selected_checkpoint: str | None = None
         self.checkpoint_tree.bind("<<TreeviewSelect>>", self._on_checkpoint_select)
         self.process_id: str | None = None
@@ -827,11 +959,14 @@ class EvaluationPage(Page):
         self.selected_checkpoint_label.configure(text=f"selected checkpoint: {path}")
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.discover_checkpoints, self._on_checkpoints)
-        self.app.background.submit(self.adapter.discover_evaluations, self._on_evaluations)
-        if self.process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+        self.submit_poll("checkpoint-list", self.adapter.discover_checkpoints, self._on_checkpoints)
+        self.submit_poll("evaluation-list", self.adapter.discover_evaluations, self._on_evaluations)
+        process_id = self.process_id
+        if process_id:
+            self.submit_poll(
+                "evaluation-status",
+                lambda: self.adapter.process_status(process_id),
+                lambda status, error: self._on_process_status(process_id, status, error),
             )
 
     def _on_checkpoints(
@@ -895,9 +1030,12 @@ class EvaluationPage(Page):
         self.app.set_status(f"Evaluation started ({self.process_id[:8]})")
 
     def _on_process_status(
-        self, status: dict[str, Any] | None, error: BaseException | None
+        self,
+        process_id: str,
+        status: dict[str, Any] | None,
+        error: BaseException | None,
     ) -> None:
-        if error is not None or status is None:
+        if process_id != self.process_id or error is not None or status is None:
             return
         self.state_label.configure(
             text=f"evaluation process: {status.get('state')}",
@@ -912,14 +1050,17 @@ class EvaluationPage(Page):
         if error is not None or entries is None:
             self.report_error("Evaluation list refresh failed", error or RuntimeError("unknown"))
             return
+        selected = set(self._selected_evaluation_paths)
+        restored_paths: list[str] = []
         self.eval_tree.delete(*self.eval_tree.get_children())
         self._eval_paths.clear()
         for entry in entries:
+            path = str(entry["path"])
             item_id = self.eval_tree.insert(
                 "",
                 "end",
                 values=(
-                    entry["path"],
+                    path,
                     vm.format_number(entry.get("timesteps")),
                     vm.format_number(entry.get("episodes")),
                     vm.format_fraction_as_percent(entry.get("win_rate")),
@@ -927,20 +1068,54 @@ class EvaluationPage(Page):
                     vm.format_number(entry.get("mean_episode_reward"), 3),
                 ),
             )
-            self._eval_paths[item_id] = entry["path"]
+            self._eval_paths[item_id] = path
+            if path in selected:
+                self.eval_tree.selection_add(item_id)
+                restored_paths.append(path)
+        restored = tuple(restored_paths)
+        if restored != self._selected_evaluation_paths:
+            self._selected_evaluation_paths = restored
+            self._evaluation_detail_generation += 1
+            if not restored:
+                self._clear_evaluation_detail()
 
     def _on_eval_select(self, _event: object) -> None:
         selection = self.eval_tree.selection()
-        paths = [self._eval_paths[item_id] for item_id in selection if item_id in self._eval_paths]
+        paths = tuple(
+            self._eval_paths[item_id] for item_id in selection if item_id in self._eval_paths
+        )
+        if paths == self._selected_evaluation_paths:
+            return
+        self._selected_evaluation_paths = paths
+        self._evaluation_detail_generation += 1
+        generation = self._evaluation_detail_generation
         if not paths:
+            self._clear_evaluation_detail()
             return
         self.app.background.submit(
-            lambda: [self.adapter.evaluation_detail(path) for path in paths], self._on_details
+            lambda: [self.adapter.evaluation_detail(path) for path in paths],
+            lambda details, error: self._on_details(paths, generation, details, error),
         )
 
+    def _clear_evaluation_detail(self) -> None:
+        self.detail_text.configure(state="normal")
+        self.detail_text.delete("1.0", "end")
+        self.detail_text.configure(state="disabled")
+
     def _on_details(
-        self, details: list[dict[str, Any]] | None, error: BaseException | None
+        self,
+        paths: tuple[str, ...],
+        generation: int,
+        details: list[dict[str, Any]] | None,
+        error: BaseException | None,
     ) -> None:
+        # A slow comparison from an earlier multi-selection must never
+        # overwrite the report for the selection the operator currently sees.
+        if (
+            paths != self._selected_evaluation_paths
+            or generation != self._evaluation_detail_generation
+        ):
+            return
         if error is not None or details is None:
             self.report_error("Evaluation detail failed", error or RuntimeError("unknown"))
             return
@@ -1023,11 +1198,7 @@ class RunsPage(Page):
         paned.pack(fill="both", expand=True)
         top = ttk.Frame(paned)
         paned.add(top, weight=1)
-        self.tree = _sortable_table(top, self.COLUMNS)
-        self.tree.pack(fill="both", expand=True, side="left")
-        scroll = ttk.Scrollbar(top, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        self.tree = _scrollable_table(top, self.COLUMNS)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         bottom = ttk.LabelFrame(paned, text="Run detail", padding=8)
@@ -1056,6 +1227,7 @@ class RunsPage(Page):
 
         self._row_to_dir: dict[str, str] = {}
         self._selected_run_dir: str | None = None
+        self._run_detail_generation = 0
         self._pending_run_selection: str | None = None
 
     def select_run(self, run_dir: str) -> None:
@@ -1081,7 +1253,7 @@ class RunsPage(Page):
         return False
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.list_runs, self._on_runs)
+        self.submit_poll("run-list", self.adapter.list_runs, self._on_runs)
 
     def _on_runs(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or result is None:
@@ -1089,6 +1261,7 @@ class RunsPage(Page):
             return
         rows = vm.runs_table_rows(result)
         selected = self._selected_run_dir
+        selected_still_present = False
         self.tree.delete(*self.tree.get_children())
         self._row_to_dir.clear()
         for row in rows:
@@ -1112,7 +1285,10 @@ class RunsPage(Page):
             )
             self._row_to_dir[item_id] = row["run_dir"]
             if row["run_dir"] == selected:
+                selected_still_present = True
                 self.tree.selection_set(item_id)
+        if selected is not None and not selected_still_present:
+            self._clear_run_selection()
         if self._pending_run_selection is not None and self._select_existing_row(
             self._pending_run_selection
         ):
@@ -1121,14 +1297,42 @@ class RunsPage(Page):
     def _on_select(self, _event: object) -> None:
         selection = self.tree.selection()
         if not selection:
+            self._clear_run_selection()
             return
         run_dir = self._row_to_dir.get(selection[0])
+        if run_dir is None:
+            self._clear_run_selection()
+            return
+        if run_dir == self._selected_run_dir:
+            return
         self._selected_run_dir = run_dir
-        if run_dir:
-            self.app.background.submit(lambda: self.adapter.inspect_run(run_dir), self._on_detail)
+        self._run_detail_generation += 1
+        generation = self._run_detail_generation
+        self.app.background.submit(
+            lambda: self.adapter.inspect_run(run_dir),
+            lambda report, error: self._on_detail(run_dir, generation, report, error),
+        )
 
-    def _on_detail(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or report is None:
+    def _clear_run_selection(self) -> None:
+        self._selected_run_dir = None
+        self._run_detail_generation += 1
+        self.detail_text.configure(state="normal")
+        self.detail_text.delete("1.0", "end")
+        self.detail_text.configure(state="disabled")
+
+    def _on_detail(
+        self,
+        run_dir: str,
+        generation: int,
+        report: dict[str, Any] | None,
+        error: BaseException | None,
+    ) -> None:
+        if (
+            run_dir != self._selected_run_dir
+            or generation != self._run_detail_generation
+            or error is not None
+            or report is None
+        ):
             return
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")
@@ -1221,7 +1425,7 @@ class SystemPage(Page):
         self._sample_index = 0.0
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.system_status, self._on_status)
+        self.submit_poll("system-status", self.adapter.system_status, self._on_status)
 
     def _on_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or status is None:

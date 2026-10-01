@@ -87,6 +87,52 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # empty (no runs yet) project directory - the most common state a
         # fresh user will actually see.
 
+    def test_dense_tables_keep_every_column_reachable_at_the_minimum_window_width(self):
+        """Tables must scroll horizontally rather than hide right-hand data."""
+        for title, attribute in (
+            ("Agents", "tree"),
+            ("Benchmarks", "tree"),
+            ("Evaluations", "checkpoint_tree"),
+            ("Evaluations", "eval_tree"),
+            ("Runs / Checkpoints", "tree"),
+        ):
+            self.app.show_page(title)
+            page = self.app.pages[title]
+            table = getattr(page, attribute)
+            self.assertTrue(
+                table.cget("xscrollcommand"),
+                f"{title}'s {attribute} reports horizontal movement to a scrollbar",
+            )
+            scrollbar = table._horizontal_scrollbar
+            self.assertEqual(str(scrollbar.cget("orient")), "horizontal")
+            self.assertEqual(scrollbar.winfo_manager(), "grid")
+
+    def test_page_poll_gate_coalesces_slow_refreshes_without_losing_the_latest_one(
+        self,
+    ) -> None:
+        """An overlapping poll has one latest-only retry, never an unbounded queue."""
+        self.app.show_page("Dashboard")
+        _drain_background(self.app)
+        page = self.app.pages["Dashboard"]
+        results: list[str] = []
+        page.submit_poll(
+            "test-poll", lambda: "first", lambda result, _error: results.append(result)
+        )
+        page.submit_poll(
+            "test-poll", lambda: "superseded", lambda result, _error: results.append(result)
+        )
+        page.submit_poll(
+            "test-poll", lambda: "latest", lambda result, _error: results.append(result)
+        )
+        _drain_background(self.app)
+        self.assertEqual(results, ["first", "latest"])
+        self.assertNotIn("test-poll", page._polls_in_flight)
+        self.assertNotIn("test-poll", page._pending_polls)
+
+        page.submit_poll("test-poll", lambda: "next", lambda result, _error: results.append(result))
+        _drain_background(self.app)
+        self.assertEqual(results, ["first", "latest", "next"])
+
     def test_dashboard_reflects_a_real_run_directory(self):
         run_dir = self.project_root / "training" / "runs" / "run-a"
         run_dir.mkdir(parents=True)
@@ -144,6 +190,145 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app._on_close()
         assert self.app.background._closed is True
 
+    def test_log_autoscroll_resumes_after_the_operator_returns_to_the_bottom(self):
+        from sandboxai.control_center_widgets import LogPanel
+
+        panel = LogPanel(self.app, max_lines=300)
+        panel.pack(fill="both", expand=True)
+        self.app.update()
+        panel.apply_log({"stdout": [f"line {index}" for index in range(120)]})
+        panel._on_manual_scroll(None)
+        assert panel._user_scrolled_up is True
+
+        # The checkbox remains enabled, so returning to the newest output
+        # should resume live-follow rather than leave it silently stuck.
+        panel._on_text_scroll("0.0", "1.0")
+        assert panel._user_scrolled_up is False
+        panel._on_autoscroll_toggled()
+        self.app.update()
+        # Tk's terminal newline may make the final fraction just shy of 1.0;
+        # it must nevertheless be at the bottom rather than leave the reader
+        # at its prior historical position.
+        self.assertGreater(panel.text.yview()[1], 0.98)
+
+    def test_log_scrollbar_and_keyboard_reading_pause_follow_without_hiding_wide_output(self):
+        """The log must not snap a reader away from a traceback they are inspecting.
+
+        Wheel events already had a regression test, but actual desktop readers
+        also drag the visible scrollbar or use Home/Page Up. This pins both
+        paths and verifies the horizontal scrollbar that makes unwrapped
+        command lines/tracebacks reachable.
+        """
+        from sandboxai.control_center_widgets import LogPanel
+
+        panel = LogPanel(self.app, max_lines=300)
+        panel.pack(fill="both", expand=True)
+        self.app.update()
+        panel.apply_log(
+            {
+                "stdout": [
+                    f"line {index}: " + ("very-wide-traceback-segment " * 24)
+                    for index in range(120)
+                ]
+            }
+        )
+        self.app.update()
+        # Text measurement varies with the virtual display/font selected by
+        # the platform (and can consider this sample to fit on a very wide
+        # runner), so assert the durable layout contract rather than an
+        # environment-dependent scroll fraction.
+        self.assertEqual(str(panel._xscroll.cget("orient")), "horizontal")
+        self.assertEqual(panel._xscroll.winfo_manager(), "grid")
+        self.assertTrue(
+            panel.text.cget("xscrollcommand"),
+            "unwrapped process output reports horizontal movement to its scrollbar",
+        )
+
+        # This is the command path used by scrollbar arrows/track dragging,
+        # not a synthetic wheel event.
+        panel._scroll_text_y("moveto", "0.0")
+        self.assertTrue(panel._user_scrolled_up)
+        panel.apply_log({"stdout": ["a newer line must not steal the reading position"]})
+        self.app.update()
+        self.assertLess(
+            panel.text.yview()[1],
+            0.98,
+            "new process output preserves a scrollbar reader's historical position",
+        )
+
+        # Keyboard navigation uses the same delayed follow-state check. A
+        # reader returning to the end resumes live-follow on the next update.
+        panel._on_manual_scroll()
+        panel._scroll_text_y("moveto", "1.0")
+        self.assertFalse(panel._user_scrolled_up)
+        panel.apply_log({"stdout": ["follow resumes at the newest line"]})
+        self.app.update()
+        self.assertGreater(panel.text.yview()[1], 0.98)
+
+    def test_evaluation_and_run_details_reject_late_selections(self):
+        """Slow disk reads must not overwrite the newer selected detail pane."""
+        self.app.show_page("Evaluations")
+        evaluation = self.app.pages["Evaluations"]
+        evaluation._selected_evaluation_paths = ("evaluation-new.json",)
+        evaluation._evaluation_detail_generation = 4
+        evaluation._on_details(("evaluation-old.json",), 3, [{}], None)
+        self.assertEqual(evaluation.detail_text.get("1.0", "end-1c"), "")
+
+        self.app.show_page("Runs / Checkpoints")
+        runs = self.app.pages["Runs / Checkpoints"]
+        runs._selected_run_dir = "run-new"
+        runs._run_detail_generation = 4
+        runs._on_detail("run-old", 3, {}, None)
+        self.assertEqual(runs.detail_text.get("1.0", "end-1c"), "")
+
+    def test_agents_page_rejects_late_logs_and_binds_stop_to_the_clicked_process(self):
+        """Background output/commands must stay attached to the selected agent.
+
+        A slow file read for Agent A may finish after the operator selected
+        Agent B. Rendering A's output under B would make the telemetry
+        misleading; resolving a stop lambda after the selection changed could
+        act on B instead of the clicked A.
+        """
+        from unittest import mock
+
+        self.app.show_page("Agents")
+        _drain_background(self.app)
+        page = self.app.pages["Agents"]
+        page._selected_process_id = "agent-b"
+        page._log_selection_generation = 2
+        page._on_log("agent-a", 1, {"stdout": ["stale agent-a output"]}, None)
+        self.assertNotIn("stale agent-a output", page.log_panel.text.get("1.0", "end"))
+        page._on_log("agent-b", 2, {"stdout": ["current agent-b output"]}, None)
+        self.assertIn("current agent-b output", page.log_panel.text.get("1.0", "end"))
+
+        # A deselection clears the now-unattributed output and disables
+        # commands rather than leaving an old process apparently actionable.
+        page._clear_selection()
+        self.assertEqual(page.log_panel.text.get("1.0", "end-1c"), "")
+        self.assertEqual(str(page.stop_button.cget("state")), "disabled")
+
+        # The queued action captures the id that was selected when the
+        # operator pressed the button, rather than resolving the mutable
+        # selection later on a worker thread.
+        page._selected_process_id = "agent-a"
+        with mock.patch.object(page.adapter, "cancel") as cancel:
+            page._stop()
+            page._selected_process_id = "agent-b"
+            _drain_background(self.app)
+        cancel.assert_called_once_with("agent-a")
+
+    def test_tooltip_cancels_its_delayed_callback_when_a_page_widget_is_destroyed(self):
+        from sandboxai.control_center_widgets import ToolTip
+
+        button = tk.Button(self.app, text="temporary")
+        button.pack()
+        tip = ToolTip(button, "temporary help")
+        tip._schedule()
+        button.destroy()
+        self.app.update()
+        assert tip._after_id is None
+        assert tip._window is None
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -178,6 +363,20 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
         def after(self, _delay_ms: int, _callback) -> str:
             self.scheduled += 1
             return "timer"
+
+    class _TimerRoot(_StubRoot):
+        """Timer-aware root used to prove manual pumps cannot multiply work."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled: list[str] = []
+
+        def after(self, _delay_ms: int, _callback) -> str:
+            self.scheduled += 1
+            return f"timer-{self.scheduled}"
+
+        def after_cancel(self, timer_id: str) -> None:
+            self.cancelled.append(timer_id)
 
     def _runner(self):
         from sandboxai.control_center_widgets import BackgroundRunner
@@ -275,9 +474,29 @@ class BackgroundRunnerShutdownTests(unittest.TestCase):
         runner = self._runner()
         runner.close()
         calls: list[str] = []
-        runner.submit(lambda: calls.append("ran"), lambda _result, _error: None)
+        self.assertFalse(
+            runner.submit(lambda: calls.append("ran"), lambda _result, _error: None),
+            "callers that own in-flight UI state must be able to release it on shutdown",
+        )
         time.sleep(0.1)
         self.assertEqual(calls, [])
+
+    def test_manual_pumps_keep_one_pending_timer_and_close_cancels_it(self) -> None:
+        from sandboxai.control_center_widgets import BackgroundRunner
+
+        root = self._TimerRoot()
+        runner = BackgroundRunner(root)  # type: ignore[arg-type]
+        self.addCleanup(runner.close)
+        self.assertEqual(root.scheduled, 1, "runner starts with one future pump")
+        for _ in range(8):
+            runner._pump()
+        self.assertEqual(
+            root.scheduled,
+            1,
+            "a test/manual drain does not build an unbounded Tk callback chain",
+        )
+        runner.close()
+        self.assertEqual(root.cancelled, ["timer-1"], "close removes the pending Tk callback")
 
 
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)

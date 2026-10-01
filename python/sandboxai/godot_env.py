@@ -309,6 +309,27 @@ class GodotBatchClient:
                 "observation contract are out of sync; update contract.py (and the "
                 "docs) to match scripts/core/observation.gd."
             )
+        # A matching observation width alone is insufficient: a reordered or
+        # resized MultiDiscrete action component silently changes every
+        # trained policy's meaning. Validate the full wire declaration during
+        # the handshake before the first reset or training update.
+        try:
+            reported_nvec = tuple(
+                int(value) for value in self.transport.spaces["action_space"]["nvec"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            self.close()
+            raise RuntimeError(
+                "Godot bridge did not provide a valid MultiDiscrete action nvec "
+                "in its spaces handshake"
+            ) from exc
+        if reported_nvec != ACTION_NVEC:
+            self.close()
+            raise RuntimeError(
+                f"Godot bridge reports action nvec {reported_nvec}, but the Python contract "
+                f"defines {ACTION_NVEC}. The two halves of the action contract are out of sync; "
+                "update contract.py, scripts/core/action.gd and the docs together."
+            )
 
     def reset_send(self, seed: int | None = None) -> PendingRequest:
         return self.transport.send({"cmd": "reset", "seed": -1 if seed is None else int(seed)})

@@ -64,21 +64,21 @@ reverted; do not re-enable it.
 
 ## 4. Repository shape
 
-- `python/sandboxai/` — 46 modules, **flat on purpose**. See
+- `python/sandboxai/` — 47 documented modules, **flat on purpose**. See
   `docs/PYTHON_MODULE_MAP.md`; it is generated from the module docstrings
   and enforced by a test. Do not reorganise into subpackages: every
   import path is public API and appears in docs, user scripts and saved
   run manifests.
-- `python/tests/` — 46 pytest files. Note the real names:
+- `python/tests/` — 52 pytest files. Note the real names:
   `test_ppo_smoke.py`, `test_ppo_helpers.py`, `test_training_infrastructure.py`,
   `test_weapon_profiles_static.py`, `test_weapons_constant_parser.py`.
   There is **no** `test_ppo.py` and **no** `test_weapons.py`.
-- `scripts/` — ~130 GDScript files. `scripts/env/environment_core.gd` is
+- `scripts/` — 98 GDScript files. `scripts/env/environment_core.gd` is
   the simulation loop; it delegates to `EnvironmentReset`,
   `EnvironmentCombat`, `EnvironmentEnemies` and `EnvironmentIntrospection`,
   all stateless static helpers taking the environment as an untyped first
   argument (typing it would need a preload cycle).
-- `tests/` — ~50 GDScript tests, runner `tests/run_tests.gd`.
+- `tests/` — 57 GDScript tests, runner `tests/run_tests.gd`.
 
 ## 5. Single sources of truth (all enforced by `python/tests/test_docs_consistency.py`)
 
@@ -220,8 +220,9 @@ sandboxai benchmark --worker-counts 1,2,4,6,8 --env-counts 4,8,16
 ```
 
 Single-user project. Checkpoints are never loaded from third parties.
-There is no release process and none is wanted — do not propose PyPI
-publishing, semantic-version ceremony or a support policy.
+A repository release workflow exists (`.github/workflows/release.yml`) and
+`CHANGELOG.md` records releases. Do not propose PyPI publishing or a support
+policy unless the project scope changes.
 
 ## 10. Open: the Windows Tk/GC saga (read this before touching BackgroundRunner)
 

@@ -152,11 +152,28 @@ dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
   launch/cancel and disk reads on a large run directory - blocks the GUI
   thread.
 * A page only submits background work and applies the result; it never
-  blocks waiting for it.
+  blocks waiting for it. Periodic reads are coalesced per page operation, so
+  a slow run-directory/process-status scan cannot fill the shared worker pool
+  with duplicate polls. If a refresh overlaps a live operation, only its
+  latest request is retained for one follow-up when that operation completes;
+  this preserves freshness without creating a queue. Switching output roots
+  clears guards from the retired runner. Results that belong to a replaced
+  run/process/selection are rejected instead of being rendered as current
+  telemetry.
 * `LogPanel` bounds the Text widget itself (old lines are deleted past a
   cap) independently of the adapter's own bounded buffer, distinguishes
-  stdout from stderr (red), and supports pausing auto-scroll without pausing
-  polling.
+  stdout from stderr (red), exposes both scroll axes for unwrapped commands
+  and tracebacks, and supports pausing auto-scroll without pausing polling.
+  Wheel/scrollbar/keyboard reading retains the operator's position; it resumes
+  follow only after the newest output is visible.
+* Dense inventory tables use native horizontal and vertical scrollbars rather
+  than hiding right-hand values at the minimum desktop window width. Agents
+  captures a process selection and its incremental log cursors per request,
+  coalesces a slow poll, and discards a late result for an old selection; a
+  scoped Stop/Force Stop request captures the clicked process id before the
+  worker starts. Evaluation comparisons and Runs/Checkpoints detail panes use
+  the same generation guard, so an older disk read cannot replace the report
+  for a newer selection.
 * `LineChart` is a small dependency-free Tk Canvas widget; it redraws from
   the adapter's already-bounded series, decimated again to the canvas width
   (`control_center_viewmodel.downsample_series`), so render cost does not

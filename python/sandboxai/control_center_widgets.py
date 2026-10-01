@@ -7,6 +7,7 @@ visual token palette can evolve without growing the application shell module.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import gc
 import os
 import queue
@@ -100,6 +101,11 @@ class BackgroundRunner:
         # second and wasteful ten times a second.
         self._pumps_between_collections = max(1, 1000 // max(poll_ms, 1))
         self._pumps_since_collection = 0
+        # Exactly one Tk `after` callback may be outstanding. Tests manually
+        # drain `_pump()` without mainloop; scheduling unconditionally from
+        # those direct calls used to grow a second, third, then unbounded
+        # callback chain, most visibly as a Windows desktop-test timeout.
+        self._pump_after_id: str | None = None
         _suspend_automatic_gc()
         # Tied to the object, not just to close(): a runner that is dropped
         # without being closed - a constructor that raised half-way, a test
@@ -114,9 +120,16 @@ class BackgroundRunner:
 
     def submit(
         self, fn: Callable[[], Any], callback: Callable[[Any, BaseException | None], None]
-    ) -> None:
+    ) -> bool:
+        """Queue background work and report whether the runner accepted it.
+
+        A caller may need to release local in-flight state when shutdown has
+        already started.  Returning the acceptance result keeps that state
+        from getting stranded without making normal fire-and-forget callers
+        inspect a value they do not need.
+        """
         if self._closed:
-            return
+            return False
 
         def _run() -> None:
             try:
@@ -130,6 +143,7 @@ class BackgroundRunner:
         with self._pending_lock:
             self._pending.add(future)
         future.add_done_callback(self._forget)
+        return True
 
     def _forget(self, future: Future[None]) -> None:
         with self._pending_lock:
@@ -150,8 +164,29 @@ class BackgroundRunner:
         except queue.Empty:
             pass
         self._collect_if_due()
+        self._schedule_pump()
+
+    def _schedule_pump(self) -> None:
+        """Queue one future pump, including when tests call `_pump` directly."""
+        if self._closed or self._pump_after_id is not None:
+            return
+        self._pump_after_id = self._root.after(self._poll_ms, self._scheduled_pump)
+
+    def _scheduled_pump(self) -> None:
+        # Only Tk invokes this wrapper. A direct `_pump()` must leave its
+        # already-pending timer in place rather than multiplying callbacks.
+        self._pump_after_id = None
         if not self._closed:
-            self._root.after(self._poll_ms, self._pump)
+            self._pump()
+
+    def _cancel_scheduled_pump(self) -> None:
+        if self._pump_after_id is None:
+            return
+        cancel = getattr(self._root, "after_cancel", None)
+        if callable(cancel):
+            with contextlib.suppress(tk.TclError):
+                cancel(self._pump_after_id)
+        self._pump_after_id = None
 
     def _collect_if_due(self) -> None:
         """Run the cyclic collector here, on the thread that owns Tk."""
@@ -185,6 +220,7 @@ class BackgroundRunner:
         if self._closed:
             return
         self._closed = True
+        self._cancel_scheduled_pump()
         with self._pending_lock:
             pending = set(self._pending)
         for future in pending:
@@ -217,18 +253,21 @@ class BackgroundRunner:
 # Small reusable widgets
 # ---------------------------------------------------------------------------
 
+# Shared desktop Control Center palette. This is an operator-facing local
+# calibration surface, not a reconstruction of a TTK Testing player HUD.
 _FONT_FAMILY = "Segoe UI"
-COLOR_BG = "#0b1120"
-COLOR_SURFACE = "#111827"
-COLOR_SURFACE_RAISED = "#151f32"
-COLOR_HOVER = "#1c2940"
-COLOR_TEXT = "#e7edf7"
-COLOR_ACCENT = "#38bdf8"
-COLOR_OK = "#4ade80"
-COLOR_WARN = "#fbbf24"
-COLOR_ERROR = "#fb7185"
-COLOR_MUTED = "#94a3b8"
-COLOR_BORDER = "#2b3a52"
+COLOR_BG = "#050a16"
+COLOR_SURFACE = "#0b1427"
+COLOR_SURFACE_RAISED = "#101d32"
+COLOR_HOVER = "#162943"
+COLOR_TEXT = "#e7f1ff"
+COLOR_ACCENT = "#35d7ff"
+COLOR_ACCENT_SECONDARY = "#9c8cff"
+COLOR_OK = "#4ee6a1"
+COLOR_WARN = "#ffc861"
+COLOR_ERROR = "#ff718d"
+COLOR_MUTED = "#91a7bf"
+COLOR_BORDER = "#29445f"
 
 
 class ToolTip:
@@ -243,18 +282,22 @@ class ToolTip:
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<FocusIn>", self._schedule, add="+")
         widget.bind("<FocusOut>", self._hide, add="+")
+        widget.bind("<Destroy>", self._on_widget_destroy, add="+")
 
     def _schedule(self, _event: object = None) -> None:
+        if not self.widget.winfo_exists():
+            return
         self._cancel()
         self._after_id = self.widget.after(450, self._show)
 
     def _cancel(self) -> None:
         if self._after_id is not None:
-            self.widget.after_cancel(self._after_id)
+            with contextlib.suppress(tk.TclError):
+                self.widget.after_cancel(self._after_id)
             self._after_id = None
 
     def _show(self) -> None:
-        if self._window is not None or not self.text:
+        if self._window is not None or not self.text or not self.widget.winfo_exists():
             return
         self._after_id = None
         tip = tk.Toplevel(self.widget)
@@ -280,8 +323,14 @@ class ToolTip:
     def _hide(self, _event: object = None) -> None:
         self._cancel()
         if self._window is not None:
-            self._window.destroy()
+            with contextlib.suppress(tk.TclError):
+                self._window.destroy()
             self._window = None
+
+    def _on_widget_destroy(self, _event: object = None) -> None:
+        # A delayed callback must never try to query a widget after its page
+        # was replaced or the application was closed.
+        self._hide()
 
 
 class StatCard(ttk.Frame):
@@ -382,7 +431,7 @@ class LineChart(tk.Canvas):
 
         for fraction in (0.0, 0.5, 1.0):
             gy = pad_top + fraction * plot_h
-            self.create_line(pad_left, gy, width - pad_right, gy, fill="#243044")
+            self.create_line(pad_left, gy, width - pad_right, gy, fill=COLOR_BORDER)
             value = y_max - fraction * (y_max - y_min)
             self.create_text(
                 pad_left - 6,
@@ -429,7 +478,12 @@ class LogPanel(ttk.Frame):
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x")
         self._autoscroll = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text="Auto-scroll", variable=self._autoscroll).pack(side="left")
+        ttk.Checkbutton(
+            toolbar,
+            text="Auto-scroll",
+            variable=self._autoscroll,
+            command=self._on_autoscroll_toggled,
+        ).pack(side="left")
         ttk.Button(toolbar, text="Clear view", command=self.clear).pack(side="left", padx=(8, 0))
         self._truncated_label = ttk.Label(toolbar, text="", foreground=COLOR_WARN)
         self._truncated_label.pack(side="right")
@@ -440,23 +494,83 @@ class LogPanel(ttk.Frame):
             height=16,
             wrap="none",
             state="disabled",
-            background="#0d1117",
-            foreground="#c9d1d9",
-            insertbackground="#c9d1d9",
+            background=COLOR_SURFACE,
+            foreground=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
             font=("Consolas", 9),
         )
-        yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=yscroll.set)
-        self.text.pack(side="left", fill="both", expand=True)
-        yscroll.pack(side="right", fill="y")
-        self.text.tag_configure("stderr", foreground="#ff7b72")
-        self.text.tag_configure("meta", foreground="#8b949e")
-        self.text.bind("<MouseWheel>", self._on_manual_scroll)
-        self.text.bind("<Button-4>", self._on_manual_scroll)
-        self.text.bind("<Button-5>", self._on_manual_scroll)
+        # Process output routinely contains wide commands, paths and tracebacks.
+        # With ``wrap=\"none\"`` a horizontal scrollbar is therefore a
+        # readability requirement, not a decorative extra. Grid lets both
+        # native scrollbars share the same data surface without clipping each
+        # other on compact windows.
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        self._yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self._scroll_text_y)
+        self._xscroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.text.xview)
+        self.text.configure(yscrollcommand=self._on_text_scroll, xscrollcommand=self._xscroll.set)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        self._yscroll.grid(row=0, column=1, sticky="ns")
+        self._xscroll.grid(row=1, column=0, sticky="ew")
+        self.text.tag_configure("stderr", foreground=COLOR_ERROR)
+        self.text.tag_configure("meta", foreground=COLOR_MUTED)
+        # Wheel input covers the common pointer path, while the wrapped
+        # scrollbar command and navigation keys cover track dragging,
+        # scrollbar arrows and keyboard readers. Previously only wheel
+        # events paused follow-mode, so dragging the visible scrollbar up
+        # could still snap a reader back to the newest log line on refresh.
+        self.text.bind("<MouseWheel>", self._on_manual_scroll, add="+")
+        self.text.bind("<Button-4>", self._on_manual_scroll, add="+")
+        self.text.bind("<Button-5>", self._on_manual_scroll, add="+")
+        for sequence in ("<Prior>", "<Next>", "<Home>", "<End>", "<Up>", "<Down>"):
+            self.text.bind(sequence, self._on_manual_scroll, add="+")
 
-    def _on_manual_scroll(self, _event: object) -> None:
+    def _on_manual_scroll(self, _event: object = None) -> None:
         self._user_scrolled_up = True
+        # Instance bindings run before Tk's class binding moves the viewport.
+        # Re-check after that binding so a downward wheel/key action at the
+        # newest line immediately resumes follow mode instead of leaving it
+        # silently paused.
+        with contextlib.suppress(tk.TclError):
+            self.text.after_idle(self._sync_follow_state)
+
+    def _scroll_text_y(self, *args: str) -> None:
+        """Forward scrollbar input and preserve an operator's reading position."""
+        self._user_scrolled_up = True
+        self.text.yview(*args)
+        self._sync_follow_state()
+
+    def _sync_follow_state(self) -> None:
+        """Resume live follow only when the viewport is genuinely at the end."""
+        try:
+            _first, last = self.text.yview()
+        except tk.TclError:
+            return
+        if last >= 0.999:
+            self._user_scrolled_up = False
+
+    def _on_text_scroll(self, first: float | str, last: float | str) -> None:
+        """Synchronize the native scrollbar and restore follow-at-bottom.
+
+        Tk may invoke a registered callback with Tcl strings while its type
+        stubs describe numeric fractions, so both forms are accepted here.
+        A manual wheel event pauses live-follow while an operator reads
+        historical output; reaching the newest line makes the already-enabled
+        Auto-scroll checkbox useful immediately.
+        """
+        try:
+            first_fraction = float(first)
+            last_fraction = float(last)
+        except ValueError:  # pragma: no cover - Tk sends numeric fractions
+            return
+        self._yscroll.set(first_fraction, last_fraction)
+        if last_fraction >= 0.999:
+            self._user_scrolled_up = False
+
+    def _on_autoscroll_toggled(self) -> None:
+        if self._autoscroll.get():
+            self._user_scrolled_up = False
+            self.text.see("end")
 
     def reset_cursor(self) -> None:
         """Call when switching to a different process id."""
@@ -512,6 +626,36 @@ def _safe_line(line: Any) -> str:
         return str(line)
     except Exception:  # pragma: no cover - defensive
         return "<unprintable output>"
+
+
+def _scrollable_table(
+    parent: tk.Misc, columns: tuple[tuple[str, str, int], ...], *, expand: bool = True
+) -> ttk.Treeview:
+    """Build a sortable table with both axes reachable on a narrow window.
+
+    Result inventories have deliberately descriptive columns (run location,
+    timestamp, error, checkpoint kind). Shrinking them to fit a fixed window
+    turns their values into ellipses, while a vertical-only scrollbar made the
+    rightmost columns unreachable. The wrapper keeps a conventional native
+    table and makes its full width explicitly reachable instead.
+    """
+    frame = ttk.Frame(parent)
+    frame.pack(fill="both", expand=expand)
+    frame.columnconfigure(0, weight=1)
+    frame.rowconfigure(0, weight=1)
+    tree = _sortable_table(frame, columns)
+    tree.grid(row=0, column=0, sticky="nsew")
+    yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    yscroll.grid(row=0, column=1, sticky="ns")
+    xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+    xscroll.grid(row=1, column=0, sticky="ew")
+    tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+    # The attributes are intentionally private presentation seams: desktop
+    # tests verify that every dense inventory preserves horizontal reachability
+    # without teaching pages Tk grid details.
+    tree._horizontal_scrollbar = xscroll  # type: ignore[attr-defined]
+    tree._vertical_scrollbar = yscroll  # type: ignore[attr-defined]
+    return tree
 
 
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:

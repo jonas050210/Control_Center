@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from optional_deps import HAS_SB3, SB3_REASON
 from simulated_bridge import SimulatedBridgeExecutable, supported
@@ -24,6 +25,38 @@ from sandboxai.sharded_env import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class ShardStartupFailureTests(unittest.TestCase):
+    def test_partial_startup_is_closed_when_a_later_shard_fails(self):
+        """A failed constructor must not orphan an already-live bridge."""
+        created = []
+
+        class FakeClient:
+            def __init__(self, *, seed, **_kwargs):
+                if seed == 11:
+                    raise RuntimeError("second shard failed to start")
+                self.closed = False
+                created.append(self)
+
+            def close(self):
+                self.closed = True
+
+        # This is a constructor/lifecycle regression, so it deliberately
+        # needs neither numpy nor an actual Godot child process.
+        with (
+            patch("sandboxai.sharded_env.np", object()),
+            patch("sandboxai.sharded_env.GodotBatchClient", FakeClient),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "second shard failed"):
+                ShardedBatchClient(
+                    environment_count=2,
+                    worker_count=2,
+                    seed=10,
+                    startup_parallelism=False,
+                )
+        self.assertEqual(len(created), 1)
+        self.assertTrue(created[0].closed)
 
 
 class ShardPlanningTests(unittest.TestCase):

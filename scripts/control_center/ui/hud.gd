@@ -1,11 +1,9 @@
 ## ControlCenterHud
 ##
-## Transparent in-world HUD drawn over the 3D viewport (Phase 11): health
-## bar, weapon readiness, crosshair with hit feedback, target distance,
-## episode timer, live reward and a mode banner.
-##
-## It is deliberately drawn with `_draw()` on a mouse-ignoring Control so
-## it never intercepts gameplay input and adds no layout cost.
+## Local simulation instrumentation drawn over the first-person viewport. It
+## remains mouse-ignoring, so it never captures gameplay input. The visual
+## language is intentionally an operator overlay, not a reconstruction of
+## TTK Testing's unverified player HUD.
 class_name ControlCenterHud
 extends Control
 
@@ -13,10 +11,13 @@ extends Control
 const ControlCenterConfig = preload("res://scripts/control_center/control_center_config.gd")
 const ControlCenterTheme = preload("res://scripts/control_center/ui/ui_theme.gd")
 
-const CROSSHAIR_SIZE: float = 9.0
+const CROSSHAIR_SIZE: float = 10.0
 const CROSSHAIR_DOT_RADIUS: float = 2.0
 const HIT_MARKER_SECONDS: float = 0.35
 const DAMAGE_FLASH_SECONDS: float = 0.45
+const HUD_MARGIN: float = 16.0
+const HEALTH_PANEL_SIZE := Vector2(274.0, 66.0)
+const STATUS_PANEL_WIDTH: float = 304.0
 
 var _snapshot: Dictionary = {}
 var _mode: int = ControlCenterConfig.Mode.WATCH
@@ -26,7 +27,6 @@ var _damage_timer: float = 0.0
 var _last_shots_hit: int = -1
 var _last_damage_taken: float = -1.0
 var _font: Font
-var _font_size: int = ControlCenterTheme.FONT_SIZE_NORMAL
 
 
 func setup() -> void:
@@ -64,46 +64,74 @@ func refresh(snapshot: Dictionary, mode: int, human_armed: bool) -> void:
 func _draw() -> void:
 	if _snapshot.is_empty():
 		return
-	var rect := Rect2(Vector2.ZERO, size)
-	if rect.size.x < 40.0 or rect.size.y < 40.0:
+	var viewport := Rect2(Vector2.ZERO, size)
+	if viewport.size.x < 40.0 or viewport.size.y < 40.0:
 		return
 
 	var agent: Dictionary = _snapshot["agent"]
 	var episode: Dictionary = _snapshot["episode"]
 	var target: Dictionary = _snapshot["target"]
 
-	if _damage_timer > 0.0:
-		var alpha: float = 0.35 * (_damage_timer / DAMAGE_FLASH_SECONDS)
-		draw_rect(rect, Color(0.85, 0.1, 0.1, alpha), true)
-
-	_draw_crosshair(rect, bool(target.get("in_range", false)), bool(agent["weapon_ready"]))
+	_draw_damage_feedback(viewport)
+	_draw_crosshair(viewport, bool(target.get("in_range", false)), bool(agent["weapon_ready"]))
 	_draw_health(agent)
 	_draw_status(agent, episode, target)
 	_draw_mode_banner()
 
 
-func _draw_crosshair(rect: Rect2, in_range: bool, weapon_ready: bool) -> void:
-	var center: Vector2 = rect.size * 0.5
-	# The red center dot is deliberately fixed at the viewport center: the
-	# simulation fires exactly from AgentState.get_eye_position() along
-	# AgentState.get_forward_vector(), and the first-person camera mirrors
-	# that same yaw/pitch. This dot is therefore the true hitscan direction.
-	var dot_color := Color(1.0, 0.05, 0.03, 0.95)
-	draw_circle(center, CROSSHAIR_DOT_RADIUS, Color(0.0, 0.0, 0.0, 0.55))
-	draw_circle(center, CROSSHAIR_DOT_RADIUS * 0.65, dot_color)
-	var color: Color = Color(1.0, 0.05, 0.03, 0.55)
+func _draw_damage_feedback(viewport: Rect2) -> void:
+	if _damage_timer <= 0.0:
+		return
+	var alpha: float = 0.42 * (_damage_timer / DAMAGE_FLASH_SECONDS)
+	var color := Color(
+		ControlCenterTheme.COLOR_BAD.r,
+		ControlCenterTheme.COLOR_BAD.g,
+		ControlCenterTheme.COLOR_BAD.b,
+		alpha
+	)
+	var length: float = 80.0
+	var inset: float = 10.0
+	# Four compact brackets preserve a clear first-person view rather than
+	# covering the screen with an opaque damage effect.
+	for corner in [
+		Vector2(inset, inset),
+		Vector2(viewport.size.x - inset, inset),
+		Vector2(inset, viewport.size.y - inset),
+		Vector2(viewport.size.x - inset, viewport.size.y - inset),
+	]:
+		var sign_x: float = -1.0 if corner.x > viewport.size.x * 0.5 else 1.0
+		var sign_y: float = -1.0 if corner.y > viewport.size.y * 0.5 else 1.0
+		draw_line(corner, corner + Vector2(sign_x * length, 0.0), color, 2.0)
+		draw_line(corner, corner + Vector2(0.0, sign_y * length), color, 2.0)
+
+
+func _draw_crosshair(viewport: Rect2, in_range: bool, weapon_ready: bool) -> void:
+	var center: Vector2 = viewport.size * 0.5
+	# The dot tracks the simulation's forward hitscan direction. Its colour
+	# reports only local simulator state, never a claimed game mechanic.
+	var reticle_color := Color(1.0, 0.1, 0.1, 0.64)
 	if in_range:
-		color = (Color(0.2, 1.0, 0.35, 0.65) if weapon_ready else Color(1.0, 0.8, 0.2, 0.65))
+		reticle_color = (
+			ControlCenterTheme.COLOR_OK if weapon_ready else ControlCenterTheme.COLOR_WARN
+		)
+	reticle_color.a = 0.72
 	var gap: float = 5.0
-	var length: float = CROSSHAIR_SIZE
-	draw_line(center + Vector2(-length, 0.0), center + Vector2(-gap, 0.0), color, 1.0)
-	draw_line(center + Vector2(gap, 0.0), center + Vector2(length, 0.0), color, 1.0)
-	draw_line(center + Vector2(0.0, -length), center + Vector2(0.0, -gap), color, 1.0)
-	draw_line(center + Vector2(0.0, gap), center + Vector2(0.0, length), color, 1.0)
+	var outer: float = CROSSHAIR_SIZE
+	draw_circle(center, CROSSHAIR_DOT_RADIUS + 1.0, Color(0.0, 0.03, 0.08, 0.72))
+	# Keep the centre point in the same local-state colour as the brackets.
+	# A permanently red dot used to disagree with a green in-range reticle.
+	var dot_color := Color(reticle_color.r, reticle_color.g, reticle_color.b, 0.96)
+	draw_circle(center, CROSSHAIR_DOT_RADIUS, dot_color)
+	draw_arc(center, outer + 6.0, -0.55, 0.55, 12, reticle_color, 1.0)
+	draw_arc(center, outer + 6.0, PI - 0.55, PI + 0.55, 12, reticle_color, 1.0)
+	draw_line(center + Vector2(-outer, 0.0), center + Vector2(-gap, 0.0), reticle_color, 1.0)
+	draw_line(center + Vector2(gap, 0.0), center + Vector2(outer, 0.0), reticle_color, 1.0)
+	draw_line(center + Vector2(0.0, -outer), center + Vector2(0.0, -gap), reticle_color, 1.0)
+	draw_line(center + Vector2(0.0, gap), center + Vector2(0.0, outer), reticle_color, 1.0)
 	if _hit_timer > 0.0:
 		var fade: float = _hit_timer / HIT_MARKER_SECONDS
-		var marker := Color(1.0, 0.35, 0.35, fade)
-		var offset: float = length + 3.0
+		var marker := Color(1.0, 0.38, 0.4, fade)
+		var offset: float = outer + 5.0
 		draw_line(center + Vector2(-offset, -offset), center + Vector2(-gap, -gap), marker, 2.0)
 		draw_line(center + Vector2(offset, -offset), center + Vector2(gap, -gap), marker, 2.0)
 		draw_line(center + Vector2(-offset, offset), center + Vector2(-gap, gap), marker, 2.0)
@@ -114,126 +142,182 @@ func _draw_health(agent: Dictionary) -> void:
 	var health: float = float(agent["health"])
 	var max_health: float = maxf(float(agent["max_health"]), 0.001)
 	var ratio: float = clampf(health / max_health, 0.0, 1.0)
-	var bar := Rect2(Vector2(16.0, size.y - 46.0), Vector2(220.0, 14.0))
-	draw_rect(bar, Color(0.0, 0.0, 0.0, 0.55), true)
-	var fill := Rect2(bar.position, Vector2(bar.size.x * ratio, bar.size.y))
-	draw_rect(fill, ControlCenterTheme.ratio_color(ratio), true)
-	draw_rect(bar, ControlCenterTheme.COLOR_BORDER, false, 1.0)
-	_draw_text(
-		bar.position + Vector2(6.0, 11.0),
-		"HP %3.0f / %3.0f" % [health, max_health],
-		ControlCenterTheme.COLOR_TEXT
+	var panel := Rect2(
+		Vector2(HUD_MARGIN, size.y - HEALTH_PANEL_SIZE.y - HUD_MARGIN), HEALTH_PANEL_SIZE
 	)
+	_draw_telemetry_frame(panel, ControlCenterTheme.ratio_color(ratio))
+	_draw_text(
+		panel.position + Vector2(11.0, 16.0),
+		"LOCAL AGENT // HEALTH",
+		ControlCenterTheme.COLOR_MUTED,
+		ControlCenterTheme.FONT_SIZE_SMALL
+	)
+	_draw_text(
+		panel.position + Vector2(11.0, 37.0),
+		"%03d" % roundi(health),
+		ControlCenterTheme.ratio_color(ratio),
+		20
+	)
+	_draw_text(
+		panel.position + Vector2(58.0, 37.0),
+		"/ %03d" % roundi(max_health),
+		ControlCenterTheme.COLOR_TEXT,
+		ControlCenterTheme.FONT_SIZE_SMALL
+	)
+	var bar := Rect2(panel.position + Vector2(11.0, 46.0), Vector2(panel.size.x - 22.0, 9.0))
+	draw_rect(bar, Color(0.02, 0.07, 0.13, 0.82), true)
+	draw_rect(
+		Rect2(bar.position, Vector2(bar.size.x * ratio, bar.size.y)),
+		ControlCenterTheme.ratio_color(ratio),
+		true
+	)
+	for tick in range(1, 10):
+		var tick_x: float = bar.position.x + bar.size.x * float(tick) / 10.0
+		draw_line(
+			Vector2(tick_x, bar.position.y),
+			Vector2(tick_x, bar.end.y),
+			Color(0.02, 0.07, 0.13, 0.8),
+			1.0
+		)
 
 	var ready: bool = bool(agent["weapon_ready"])
-	var cooldown: float = float(agent["weapon_cooldown"])
+	var cycle_seconds: float = float(agent["weapon_cooldown"])
 	var weapon_label: String = str(agent.get("weapon_label", agent.get("weapon_profile", "weapon")))
-	_draw_text(
-		Vector2(16.0, size.y - 22.0),
-		"%s %s" % [weapon_label.to_upper(), "READY" if ready else "reload %.2fs" % cooldown],
+	var readiness: String = "READY" if ready else "CYCLE %.2fs" % cycle_seconds
+	var readiness_color: Color = (
 		ControlCenterTheme.COLOR_OK if ready else ControlCenterTheme.COLOR_WARN
+	)
+	_draw_text(
+		panel.position + Vector2(panel.size.x - 11.0, 18.0),
+		"%s // %s" % [weapon_label.to_upper(), readiness],
+		readiness_color,
+		ControlCenterTheme.FONT_SIZE_SMALL,
+		HORIZONTAL_ALIGNMENT_RIGHT
 	)
 
 
 func _draw_status(agent: Dictionary, episode: Dictionary, target: Dictionary) -> void:
 	var lines: PackedStringArray = PackedStringArray()
 	lines.append(
+		"EPISODE %04d  //  %05.1fs" % [int(episode["episode"]), float(episode["time_seconds"])]
+	)
+	lines.append("PROGRESS %04d / %04d" % [int(episode["step"]), int(episode["max_steps"])])
+	lines.append(
 		(
-			"TIME %5.1fs   STEP %4d/%d"
-			% [float(episode["time_seconds"]), int(episode["step"]), int(episode["max_steps"])]
+			"SCORE %7.2f    ACCURACY %3.0f%%"
+			% [float(episode["reward"]), float(episode["accuracy"]) * 100.0]
 		)
 	)
 	lines.append(
-		(
-			"REWARD %7.2f   KILLS %d   DEATHS %d"
-			% [float(episode["reward"]), int(episode["kills"]), int(episode["deaths"])]
-		)
-	)
-	(
-		lines
-		. append(
-			(
-				"ENEMIES %d/%d   ACCURACY %3.0f%%"
-				% [
-					int(episode["alive_enemies"]),
-					int(episode["total_enemies"]),
-					float(episode["accuracy"]) * 100.0,
-				]
-			)
-		)
-	)
-	(
-		lines
-		. append(
-			(
-				"SHOT near %d useless %d cooldown %d last %s"
-				% [
-					int(episode.get("near_miss_shots", 0)),
-					int(episode.get("useless_shots", 0)),
-					int(episode.get("cooldown_shots", 0)),
-					str(episode.get("last_shot_result", "none")),
-				]
-			)
-		)
+		"HOSTILES %d / %d" % [int(episode["alive_enemies"]), int(episode["total_enemies"])]
 	)
 	if bool(target.get("has_target", false)):
 		(
 			lines
 			. append(
 				(
-					"TARGET %4.1fm %s   HP %3.0f"
+					"OBSERVED %4.1fm  //  %s"
 					% [
 						float(target["distance_m"]),
-						"IN RANGE" if bool(target["in_range"]) else "far",
-						float(target["health"]),
+						"IN LOCAL RANGE" if bool(target["in_range"]) else "OUT OF RANGE",
 					]
 				)
 			)
 		)
 	else:
-		lines.append("TARGET none")
+		lines.append("OBSERVED // NO TARGET")
 	if not bool(agent["alive"]):
-		lines.append("AGENT DOWN - waiting for reset")
+		lines.append("LOCAL AGENT DOWN // RESET PENDING")
 
-	var origin := Vector2(size.x - 300.0, 20.0)
+	var panel_height: float = 40.0 + float(lines.size()) * 17.0
+	var panel := Rect2(
+		Vector2(size.x - STATUS_PANEL_WIDTH - HUD_MARGIN, 52.0),
+		Vector2(STATUS_PANEL_WIDTH, panel_height)
+	)
+	_draw_telemetry_frame(panel, ControlCenterTheme.COLOR_ACCENT)
+	_draw_text(
+		panel.position + Vector2(11.0, 17.0),
+		"SIMULATION INSTRUMENTATION",
+		ControlCenterTheme.COLOR_ACCENT,
+		ControlCenterTheme.FONT_SIZE_SMALL
+	)
 	for index in range(lines.size()):
 		var line: String = lines[index]
-		_draw_text(origin + Vector2(0.0, float(index) * 16.0), line, _line_color(line))
+		_draw_text(
+			panel.position + Vector2(11.0, 38.0 + float(index) * 17.0),
+			line,
+			_line_color(line),
+			ControlCenterTheme.FONT_SIZE_SMALL
+		)
 
 
 func _line_color(line: String) -> Color:
-	if line.begins_with("AGENT DOWN"):
+	if line.begins_with("LOCAL AGENT DOWN"):
 		return ControlCenterTheme.COLOR_BAD
+	if line.contains("OUT OF RANGE"):
+		return ControlCenterTheme.COLOR_WARN
 	return ControlCenterTheme.COLOR_TEXT
 
 
 func _draw_mode_banner() -> void:
-	var text: String = "WATCH - AI is driving"
-	var color: Color = ControlCenterTheme.COLOR_AI
+	var text := "WATCH // AI CONTROLLER"
+	var color := ControlCenterTheme.COLOR_AI
 	if _mode == ControlCenterConfig.Mode.HUMAN:
 		if _human_armed:
-			text = "HUMAN - you are driving (Esc releases the mouse)"
+			text = "HUMAN // INPUT ARMED"
 			color = ControlCenterTheme.COLOR_HUMAN
 		else:
-			text = "HUMAN - input disarmed, agent is idle"
+			text = "HUMAN // INPUT DISARMED"
 			color = ControlCenterTheme.COLOR_WARN
 	elif _mode == ControlCenterConfig.Mode.TRAINING:
-		text = "TRAINING - rendering and telemetry disabled"
+		text = "TRAINING // VIEWPORT TELEMETRY OFF"
 		color = ControlCenterTheme.COLOR_MUTED
-	_draw_text(Vector2(16.0, 22.0), text, color)
+	var panel := Rect2(Vector2(HUD_MARGIN, 52.0), Vector2(236.0, 32.0))
+	_draw_telemetry_frame(panel, color)
+	_draw_text(
+		panel.position + Vector2(10.0, 20.0), text, color, ControlCenterTheme.FONT_SIZE_SMALL
+	)
+
+
+func _draw_telemetry_frame(rect: Rect2, accent: Color) -> void:
+	var background := Color(
+		ControlCenterTheme.COLOR_BACKGROUND_DEEP.r,
+		ControlCenterTheme.COLOR_BACKGROUND_DEEP.g,
+		ControlCenterTheme.COLOR_BACKGROUND_DEEP.b,
+		0.74
+	)
+	draw_rect(rect, background, true)
+	draw_rect(rect, Color(accent.r, accent.g, accent.b, 0.48), false, 1.0)
+	var corner: float = 8.0
+	var line_color := Color(accent.r, accent.g, accent.b, 0.92)
+	draw_line(rect.position, rect.position + Vector2(corner, 0.0), line_color, 2.0)
+	draw_line(rect.position, rect.position + Vector2(0.0, corner), line_color, 2.0)
+	draw_line(rect.end, rect.end - Vector2(corner, 0.0), line_color, 2.0)
+	draw_line(rect.end, rect.end - Vector2(0.0, corner), line_color, 2.0)
 
 
 ## `at` (not `position`) so the parameter never shadows `Control.position`.
-func _draw_text(at: Vector2, text: String, color: Color) -> void:
+func _draw_text(
+	at: Vector2,
+	text: String,
+	color: Color,
+	font_size: int = ControlCenterTheme.FONT_SIZE_NORMAL,
+	alignment: HorizontalAlignment = HORIZONTAL_ALIGNMENT_LEFT
+) -> void:
 	if _font == null:
 		return
+	var draw_at := at
+	if alignment == HORIZONTAL_ALIGNMENT_RIGHT:
+		draw_at.x -= _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	elif alignment == HORIZONTAL_ALIGNMENT_CENTER:
+		draw_at.x -= _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x * 0.5
 	draw_string(
 		_font,
-		at + Vector2(1.0, 1.0),
+		draw_at + Vector2(1.0, 1.0),
 		text,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1.0,
-		_font_size,
-		Color(0.0, 0.0, 0.0, 0.7)
+		font_size,
+		Color(0.0, 0.0, 0.0, 0.76)
 	)
-	draw_string(_font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _font_size, color)
+	draw_string(_font, draw_at, text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, color)

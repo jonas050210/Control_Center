@@ -166,8 +166,9 @@ coverage-over-time curve, and a diagnostic metric set.
 
 ## 6. Benchmarks
 
-`python/sandboxai/benchmark_suites.py` defines four comparable suites —
-`curriculum_1_4`, `curriculum_5_10`, `perception_combat`, `map_analyzer` —
+`python/sandboxai/benchmark_suites.py` defines five comparable suites —
+`curriculum_1_4`, `curriculum_5_10`, `perception_combat`, `map_analyzer`,
+`weapon_handling` —
 each measured at **1, 4, 8, 16, 32 and 64** environments. The difference
 between two suites at the same environment count is the overhead of what
 was switched on.

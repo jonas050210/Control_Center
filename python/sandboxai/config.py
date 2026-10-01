@@ -354,8 +354,20 @@ class TrainingConfig:
         return self
 
     def _invariants(self) -> list[tuple[bool, str]]:
-        resolved_rollout = self.resolved_rollout_length()
-        rollout_batch = resolved_rollout * self.environment_count
+        # Validation deliberately reports violations in declaration order.  Do
+        # not call ``resolved_rollout_length()`` here with raw values: auto
+        # sizing divides by both environment_count and a batch-size-derived
+        # quantum, so zero used to turn a friendly validation error into an
+        # internal ZeroDivisionError before this table was even inspected.
+        # Safe placeholders preserve the ordered error reporting below while
+        # keeping the derived bounds meaningful for otherwise-valid fields.
+        safe_environment_count = max(1, self.environment_count)
+        safe_batch_size = max(1, self.batch_size)
+        if self.rollout_length > 0:
+            resolved_rollout = int(self.rollout_length)
+        else:
+            resolved_rollout = self._auto_rollout_length(safe_environment_count, safe_batch_size)
+        rollout_batch = resolved_rollout * safe_environment_count
         return [
             (self.environment_count >= 1, "environment_count must be >= 1"),
             (self.enemy_count >= 1, "enemy_count must be >= 1"),
@@ -402,6 +414,7 @@ class TrainingConfig:
                 self.inference_device in ("auto", "cpu", "cuda"),
                 "inference_device must be one of auto, cpu, cuda",
             ),
+            (self.device in ("auto", "cpu", "cuda"), "device must be one of auto, cpu, cuda"),
             (self.early_stopping_patience >= 0, "early_stopping_patience must be non-negative"),
             # Integrated pipeline fields.
             (
@@ -488,6 +501,22 @@ class TrainingConfig:
 
         return CheckpointSelectionRule.from_config(self)
 
+    @staticmethod
+    def _auto_rollout_length(environment_count: int, batch_size: int) -> int:
+        """Auto rollout geometry for already-positive inputs."""
+        raw = max(
+            1,
+            min(
+                MAX_AUTO_ROLLOUT_LENGTH,
+                math.ceil(DEFAULT_ROLLOUT_BATCH_TARGET / environment_count),
+            ),
+        )
+        quantum = batch_size // math.gcd(batch_size, environment_count)
+        aligned = math.ceil(raw / quantum) * quantum
+        if aligned <= math.ceil(raw * 1.10):
+            return int(aligned)
+        return int(raw)
+
     def resolved_rollout_length(self) -> int:
         """Concrete per-environment horizon used by PPO.
 
@@ -498,21 +527,19 @@ class TrainingConfig:
         divisible by the minibatch size, prefer it to avoid a tiny final
         minibatch; the adjustment is capped at 10% so unusual environment
         counts cannot inflate the rollout substantially.
+
+        This helper is public and is occasionally called before ``validate``
+        by inspection tools, so guard its arithmetic independently as well.
         """
+        if self.environment_count < 1:
+            raise ValueError("environment_count must be >= 1")
+        if self.batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if self.rollout_length < 0:
+            raise ValueError("rollout_length must be >= 0 (0 = auto)")
         if self.rollout_length > 0:
             return int(self.rollout_length)
-        raw = max(
-            1,
-            min(
-                MAX_AUTO_ROLLOUT_LENGTH,
-                math.ceil(DEFAULT_ROLLOUT_BATCH_TARGET / self.environment_count),
-            ),
-        )
-        quantum = self.batch_size // math.gcd(self.batch_size, self.environment_count)
-        aligned = math.ceil(raw / quantum) * quantum
-        if aligned <= math.ceil(raw * 1.10):
-            return int(aligned)
-        return int(raw)
+        return self._auto_rollout_length(self.environment_count, self.batch_size)
 
     def rollout_schedule(self) -> dict[str, int | float | bool]:
         """Nominal collect/update geometry for a fresh training call."""
@@ -642,12 +669,21 @@ class BCConfig:
     def validate(self) -> BCConfig:
         if self.epochs < 1 or self.batch_size < 1:
             raise ValueError("BC epochs and batch_size must be positive")
+        if self.learning_rate <= 0.0:
+            raise ValueError("BC learning_rate must be positive")
         if not 0.0 < self.validation_fraction < 1.0:
             raise ValueError("validation_fraction must be between 0 and 1")
-        if any(size < 1 for size in self.hidden_sizes):
-            raise ValueError("BC hidden sizes must be positive")
+        # BehaviorCloningPolicy is intentionally a fixed two-layer MLP.  A
+        # positive-only check accepted (), (128,) and (128, 128, 128), then
+        # failed later while indexing layer 0/1 (or silently ignored layer 3).
+        if len(self.hidden_sizes) != 2 or any(size < 1 for size in self.hidden_sizes):
+            raise ValueError("BC hidden_sizes must contain exactly two positive layer sizes")
+        if self.checkpoint_frequency < 1:
+            raise ValueError("BC checkpoint_frequency must be positive")
         if self.early_stopping_patience < 0:
             raise ValueError("early_stopping_patience must be non-negative")
+        if self.device not in ("auto", "cpu", "cuda"):
+            raise ValueError("BC device must be one of auto, cpu, cuda")
         if self.split_strategy not in ("auto", "episode", "transition"):
             raise ValueError("split_strategy must be one of auto, episode, transition")
         if not 0.0 < self.max_duplicate_fraction <= 1.0:
@@ -655,6 +691,10 @@ class BCConfig:
         return self
 
     def resolved_device(self) -> str:
+        # Keep direct library calls safe too: callers are not required to
+        # remember to call validate() before resolving a device.
+        if self.device not in ("auto", "cpu", "cuda"):
+            raise ValueError("BC device must be one of auto, cpu, cuda")
         if self.device == "cpu":
             return "cpu"
         try:

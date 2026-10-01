@@ -231,12 +231,13 @@ subsystems layered on top of the simulator:
   two "different" brains share a parameter tensor or a checkpoint path.
 - **Team play foundation**, disabled by default (`teamplay.py`,
   `scripts/team/team_config.gd`).
-- **External adapter boundary** (`external_adapter.py`) — see
-  [`docs/ROBLOX_ADAPTER.md`](ROBLOX_ADAPTER.md).
+- **TTK evidence boundary** (`ttk_testing.py`) — verified controls, calibration
+  gaps and exclusions are described in
+  [`docs/TTK_TESTING_REFERENCE.md`](TTK_TESTING_REFERENCE.md).
 - **Map Analyzer 2.0** (`scripts/exploration/exploration_report.gd`):
   perception-only heatmaps, regions, routes, sightlines and metrics, with
   unknown cells reported as unknown.
-- **Benchmark suites** (`benchmark_suites.py`): four comparable workloads
+- **Benchmark suites** (`benchmark_suites.py`): five comparable workloads
   at 1/4/8/16/32/64 environments. Raises rather than estimating when Godot
   is absent.
 
@@ -269,18 +270,17 @@ SimulationManager -> EnvironmentCore * N     unchanged simulation
   red-labelled ground-truth block; the Replay tab scrubs a recorded
   episode and never steps the live simulation.
 
-## Debug GUI, benchmarking and the future Roblox boundary
+## Debug GUI, benchmarking and the TTK evidence boundary
 
 - [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](DEBUG_GUI_AND_BENCHMARKING.md)
   documents the optional, presentation-only `DebugOverlay` (telemetry +
   pause/reset/enemy-count/curriculum controls, never used by headless
   training) and how to run/interpret `sandboxai benchmark`.
 - [`docs/OBSERVATION_ACTION_CONTRACT.md`](OBSERVATION_ACTION_CONTRACT.md) is
-  the canonical Observation/Action reference, kept independent of any
-  specific game engine.
-- [`docs/ROBLOX_ADAPTER.md`](ROBLOX_ADAPTER.md) defines the abstract
-  `GameAdapter` interface boundary a future Roblox Player adapter would
-  implement. No Roblox integration exists yet.
+  the canonical local Godot/Python Observation/Action reference.
+- [`docs/TTK_TESTING_REFERENCE.md`](TTK_TESTING_REFERENCE.md) is the source
+  boundary for what this project may call a TTK Testing mechanic. It is not
+  a Roblox integration path.
 
 ## Files
 
@@ -296,7 +296,7 @@ scripts/
               TargetSelector
   exploration/ SpatialMemory (perception-built map knowledge with decay),
               MapAnalyzer (exploration mode + Control Center payload)
-  scenario/   ScenarioLibrary (twelve seedable encounters)
+  scenario/   ScenarioLibrary (twelve seedable calibration encounters; invented weapon drills removed)
   env/        EnvironmentCore, EnvironmentReset (episode setup),
               EnvironmentCombat (shot resolution and hit zones),
               EnvironmentEnemies (per-tick opponent update),
@@ -318,11 +318,11 @@ scripts/
     ui/       Control Center presentation layer (status bar, agent panel,
               perception/observation/results/settings tabs, controls, log,
               HUD, perception map, shared theme)
-python/sandboxai/   46 modules, flat - see PYTHON_MODULE_MAP.md
+python/sandboxai/   47 modules, flat - see PYTHON_MODULE_MAP.md
 ```
 
 The Python side is not listed file-by-file here. It used to be, and the
-list went stale: it named thirteen of the forty-six modules and nothing
+list went stale: it named thirteen of the forty-seven modules and nothing
 noticed. [PYTHON_MODULE_MAP.md](PYTHON_MODULE_MAP.md) has all of them,
 grouped by theme, with every description taken from the module's own
 docstring and a test that fails when the two disagree.
@@ -340,8 +340,10 @@ docstring and a test that fails when the two disagree.
   gravity, jumping, standable platforms and a deterministic navigation
   graph (`NavigationGraph`, 8-connected walkable grid + A*). Enemies steer
   directly and only fall back to path following once they are demonstrably
-  stuck, so open layouts pay nothing for it. Still missing: recoil and
-  ammunition.
+  stuck, so open layouts pay nothing for it. Weapon profiles now add
+  deterministic recoil, bloom, magazines, reloads, damage falloff and
+  pellet volleys; the handling layer is enabled for the appropriate
+  curriculum/scenario profiles.
 - Only the 3 highest-priority contacts are individually reported in the
   observation vector. Contacts beyond that are no longer invisible: fields
   66–69 describe them statistically (how many, how many visible, mean and
@@ -351,12 +353,13 @@ docstring and a test that fails when the two disagree.
   network runtime in Godot); its TRAINING mode is a throughput mode, not a
   trainer. Agent slot 1 still does not exist outside the self-play
   foundation and is reported as unavailable. Field-of-view, line-of-sight,
-  sound, memory, obstacles, navigation state and corpses DO exist now and
-  are exposed through the seven read-only hooks `PerceptionModel` probes
-  for; the Control Center picks them up automatically.
-- No Roblox integration exists. `python/sandboxai/contract.py` defines the
-  abstract adapter boundary a future implementation would need to satisfy;
-  see `docs/ROBLOX_ADAPTER.md` for exactly what is and is not implemented.
+  sound, memory, obstacles, navigation state, corpses, exploration and
+  environment conditions DO exist now and are exposed through the dynamic
+  read-only hooks `PerceptionModel` probes; the Control Center picks them
+  up automatically.
+- No Roblox integration exists or is planned in this repository. TTK Testing
+  calibration uses only official sources and manual player-visible evidence;
+  see `docs/TTK_TESTING_REFERENCE.md`.
 - Godot itself must be installed locally; the repository cannot verify live
   Godot behavior on a machine without that executable. This milestone's
   Python-side changes were validated with a scripted fake Godot bridge
