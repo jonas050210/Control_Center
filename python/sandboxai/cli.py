@@ -234,42 +234,6 @@ def build_record_command(
     ]
 
 
-def build_control_center_command(
-    godot_executable: str,
-    project_path: str | None,
-    mode: str,
-    environment_count: int,
-    enemy_count: int,
-    curriculum_level: int,
-    seed: int,
-    scenario: str = "",
-) -> list[str]:
-    """Build the Godot invocation for the graphical Control Center.
-
-    This launches ``scenes/control_center.tscn`` in a normal (non-headless)
-    Godot window: the Control Center is an operator/inspection tool and is
-    deliberately never part of the headless RL training path. Arguments after
-    ``--`` are read by ``ControlCenterMain._apply_command_line``.
-    """
-    executable = find_godot_executable(godot_executable)
-    project = _resolve_project_path(project_path)
-    command = [
-        executable,
-        "--path",
-        WindowsInterop(executable).windows_path(project),
-        "res://scenes/control_center.tscn",
-        "--",
-        f"--mode={mode}",
-        f"--env-count={environment_count}",
-        f"--enemy-count={enemy_count}",
-        f"--curriculum-level={curriculum_level}",
-        f"--seed={seed}",
-    ]
-    if scenario:
-        command.append(f"--scenario={scenario}")
-    return command
-
-
 def _call_godot_process(command: list[str]) -> int:
     """Launch a graphical Godot tool and wait for it, WSL/Windows aware.
 
@@ -397,26 +361,6 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--godot-executable", default="godot")
     record.add_argument("--project-path", default="")
 
-    control_center = sub.add_parser(
-        "control-center",
-        help="open the graphical Control Center (watch the AI, play as a human, inspect the simulation)",
-    )
-    control_center.add_argument("--mode", default="watch", choices=["training", "watch", "human"])
-    control_center.add_argument("--env-count", type=int, default=4, dest="environment_count")
-    control_center.add_argument("--enemy-count", type=int, default=1)
-    control_center.add_argument("--curriculum-level", type=int, default=3)
-    control_center.add_argument("--seed", type=int, default=1234)
-    control_center.add_argument(
-        "--scenario",
-        default="",
-        help=(
-            "optional scenario preset id (target_practice, duel, three_way, overwhelmed, "
-            "cover_fight, corner_fight, sound_only, lost_target, vertical, randomized)"
-        ),
-    )
-    control_center.add_argument("--godot-executable", default="godot")
-    control_center.add_argument("--project-path", default="")
-
     desktop = sub.add_parser(
         "control-center-desktop",
         help="open the real Python desktop Control Center backed by SandboxAIAdapter",
@@ -516,6 +460,58 @@ def build_parser() -> argparse.ArgumentParser:
         "--full-infos",
         action="store_true",
         help="benchmark diagnostic-heavy wire responses instead of PPO's compact training path",
+    )
+
+    pipeline = sub.add_parser(
+        "benchmark-pipeline",
+        help="staged benchmark that measures envs x workers x device and recommends a configuration",
+    )
+    pipeline.add_argument(
+        "--budget-mode",
+        choices=["time", "steps"],
+        default="time",
+        help="time: approximately N minutes total; steps: screen until N steps per configuration",
+    )
+    pipeline.add_argument(
+        "--minutes",
+        type=float,
+        default=15.0,
+        help="total measurement budget in minutes for --budget-mode time (default: 15)",
+    )
+    pipeline.add_argument(
+        "--steps",
+        type=int,
+        default=2000,
+        help="screening steps per configuration for --budget-mode steps (default: 2000)",
+    )
+    pipeline.add_argument(
+        "--env-counts",
+        default="",
+        help="comma-separated environment counts to sweep (default: a host-scaled ladder)",
+    )
+    pipeline.add_argument(
+        "--worker-counts",
+        default="",
+        help="comma-separated worker counts to sweep (default: 1 plus powers of two up to "
+        "the host's recommended worker count)",
+    )
+    pipeline.add_argument(
+        "--finalists",
+        type=int,
+        default=4,
+        help="how many stable screening survivors get a real training-slice validation",
+    )
+    pipeline.add_argument("--godot-executable", default=None)
+    pipeline.add_argument("--project-path", default="")
+    pipeline.add_argument(
+        "--output-dir",
+        default="",
+        help="write pipeline.json here instead of training/benchmarks/pipelines/<timestamp>",
+    )
+    pipeline.add_argument(
+        "--show",
+        action="store_true",
+        help="print the persisted recommendation without measuring anything",
     )
 
     benchmark_suites = sub.add_parser(
@@ -780,7 +776,19 @@ def _cmd_install(args: argparse.Namespace) -> int:
 
 
 def _cmd_control_center_desktop(args: argparse.Namespace) -> int:
-    from .control_center_desktop import main as desktop_main
+    try:
+        from .control_center_desktop import main as desktop_main
+    except ImportError as exc:
+        if exc.name == "tkinter":
+            print(
+                "The Control Center needs Tkinter, which this Python installation "
+                "does not provide. Install the python3-tk system package (or use a "
+                "Python build with Tk support) and try again; `python3 main.py` "
+                "from the repository root reports the same problem.",
+                file=sys.stderr,
+            )
+            return 1
+        raise
 
     return desktop_main(project_root=args.project_path or None, output_root=args.output_root)
 
@@ -829,25 +837,6 @@ def _cmd_record(args: argparse.Namespace) -> int:
         print(f"Invalid Godot executable: {exc}", file=sys.stderr)
         return 1
     print("Launching Godot demonstration recorder:", " ".join(command))
-    return _call_godot_process(command)
-
-
-def _cmd_control_center(args: argparse.Namespace) -> int:
-    try:
-        command = build_control_center_command(
-            args.godot_executable,
-            args.project_path,
-            args.mode,
-            args.environment_count,
-            args.enemy_count,
-            args.curriculum_level,
-            args.seed,
-            args.scenario,
-        )
-    except ValueError as exc:
-        print(f"Invalid Godot executable: {exc}", file=sys.stderr)
-        return 1
-    print("Launching SandboxAI Control Center:", " ".join(command))
     return _call_godot_process(command)
 
 
@@ -1000,6 +989,69 @@ def _cmd_benchmark_suites(args: argparse.Namespace) -> int:
     project = _resolve_project_path(args.project_path)
     report = run_suites(project, args.godot_executable, output_dir=args.output_dir)
     print(format_report(report))
+    return 0
+
+
+def _cmd_benchmark_pipeline(args: argparse.Namespace) -> int:
+    from .benchmark_pipeline import (
+        DEFAULT_FINALISTS,
+        PipelineBudget,
+        load_recommendation,
+        run_benchmark_pipeline,
+    )
+
+    project = _resolve_project_path(args.project_path)
+    if args.show:
+        recommendation = load_recommendation(project)
+        if recommendation is None:
+            print("No persisted benchmark recommendation.")
+            return 1
+        print(json.dumps(recommendation, indent=2, default=str))
+        return 0
+    try:
+        budget = (
+            PipelineBudget.for_steps(args.steps)
+            if args.budget_mode == "steps"
+            else PipelineBudget.for_time(args.minutes)
+        )
+    except ValueError as exc:
+        print(f"Invalid benchmark budget: {exc}", file=sys.stderr)
+        return 1
+    environment_counts = [
+        int(value) for value in str(args.env_counts).split(",") if value.strip()
+    ] or None
+    worker_counts = [
+        int(value) for value in str(args.worker_counts).split(",") if value.strip()
+    ] or None
+
+    def on_progress(event: dict[str, Any]) -> None:
+        configuration = event.get("configuration") or {}
+        where = (
+            f"{configuration.get('environments', '?')} envs / "
+            f"{configuration.get('workers', '?')} workers"
+            if configuration
+            else ""
+        ).strip()
+        index = event.get("index")
+        total = event.get("total")
+        position = (
+            f" {index + 1}/{total}" if isinstance(index, int) and isinstance(total, int) else ""
+        )
+        print(f"[{event.get('stage')}] {event.get('status', '')}{position} {where}".rstrip())
+
+    report = run_benchmark_pipeline(
+        project_path=project,
+        godot_executable=args.godot_executable,
+        budget=budget,
+        environment_counts=environment_counts,
+        worker_counts=worker_counts,
+        finalists=args.finalists or DEFAULT_FINALISTS,
+        output_dir=args.output_dir or None,
+        on_progress=on_progress,
+    )
+    print(json.dumps(report, indent=2, default=str))
+    if report.get("status") != "completed":
+        return 1
     return 0
 
 
@@ -1174,13 +1226,13 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inspect-dataset": _cmd_inspect_dataset,
     "inspect-runs": _cmd_inspect_runs,
     "record": _cmd_record,
-    "control-center": _cmd_control_center,
     "bc-train": _cmd_bc_train,
     "train": _cmd_train,
     "resume": _cmd_train,
     "evaluate": _cmd_evaluate,
     "benchmark": _cmd_benchmark,
     "benchmark-suites": _cmd_benchmark_suites,
+    "benchmark-pipeline": _cmd_benchmark_pipeline,
     "hardware-wizard": _cmd_hardware_wizard,
     "replay": _cmd_replay,
     "curriculum": _cmd_curriculum,

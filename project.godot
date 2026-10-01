@@ -17,9 +17,9 @@ run/flush_stdout_on_print=true
 
 [display]
 
-; The Control Center packs a status bar, two side docks and a bottom dock
-; around the 3D view; 1600x900 keeps every panel readable at the default
-; size while still fitting a 1080p desktop. scenes/main.tscn is unaffected.
+; The demonstration recorder / human-play scene. The Control Center no
+; longer lives in this project: it is the separate headless desktop
+; application launched with `python3 main.py` from the repository root.
 window/size/viewport_width=1600
 window/size/viewport_height=900
 window/size/resizable=true

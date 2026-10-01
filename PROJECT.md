@@ -53,7 +53,7 @@
 | Contract/adaptation | **CURRENT** | Observation and action semantics, batched reset/step, terminal observation | `scripts/core/{observation,action}.gd`, `scripts/rl/rl_adapter.gd` |
 | Local IPC | **CURRENT** | One Godot subprocess, request/response JSON Lines over stdin/stdout | `scripts/rl/rl_server.gd`, `python/sandboxai/godot_env.py` |
 | ML/orchestration | **CURRENT** | BC, PPO, curriculum plans, evaluation, checkpointing, replay, telemetry, benchmark control | `python/sandboxai/` |
-| Visual operator tools | **CURRENT** | Human control, spectating, diagnostics, replay inspection; never part of headless training | `scenes/control_center.tscn`, `scripts/control_center/` |
+| Visual operator tools | **REMOVED** | The in-simulator operator scene (`scenes/control_center.tscn`, `scripts/control_center/`) was deleted; the Control Center is now the headless-only Python/Tk desktop application (`python3 main.py`). Human demonstration recording remains via `record` | `main.py`, `python/sandboxai/control_center_*.py`, `docs/CONTROL_CENTER.md` |
 
 ```text
 Python: SB3/PyTorch policy
@@ -360,9 +360,9 @@ The protocol the schema encodes:
 - **CURRENT diagnostics:** aim, reaction, awareness, positioning, movement, combat, survival, and exploration skill groups. They are measurements, never reward terms.
 - **CURRENT profiling:** Python rollout/update/callback/model/bridge timings (including the exact SB3 optimizer call) plus opt-in Godot parse/simulation/encode/write aggregates and request/response byte counters. Top-level phase totals aggregate sharded `workerN` buckets: serial encode/decode CPU phases are summed and overlapping request/wait windows use the slowest-worker critical path.
 - **CURRENT benchmark:** environment-count sweeps and five comparable suites—early curriculum, advanced curriculum, perception combat, map analyzer, weapon handling—at `1/4/8/16/32/64` environments. It reports measured throughput, p50/p95 vector-step latency, and resources only. The default wire mode matches PPO's compact non-terminal infos; `benchmark --full-infos` explicitly measures diagnostic serialization instead.
-- **CURRENT Control Center:** watch/training-throughput/human modes, exact pause/step/speed controls, one lazily rendered environment, perception and observation inspectors, result/metric/replay tabs, and a background system monitor. It does not train or run a neural checkpoint inside Godot.
+- **REMOVED Control Center scene:** the in-simulator operator UI (watch/human modes, perception and observation inspectors, result tabs) was deleted together with `scenes/control_center.tscn` and `scripts/control_center/`; training is operated through the headless desktop application below.
 - **CURRENT run inspection:** `python/sandboxai/run_inspection.py` + `sandboxai inspect-runs` are a strictly read-only backend over the run directory layout (state with the evidence it came from, progress, checkpoint/evaluation inventory, log sizes, manifest provenance, `problems` vs `warnings`). Documents are versioned (`sandboxai.run_report/v1`, `sandboxai.run_index/v1`); the Control Center consumes them instead of re-implementing the layout in GDScript.
-- **CURRENT desktop Control Center:** `sandboxai control-center-desktop` is a separate, local Tkinter application (`python/sandboxai/control_center_desktop.py`) for operating training without opening Godot. It is a thin view over `sandboxai.adapter.SandboxAIAdapter`, which only launches the existing `train`/`benchmark`/`evaluate` CLI commands and reads their existing artifacts (`run_inspection.py`, `logs/training.jsonl`, `status.json`, `evaluations/*`, `benchmark.json`); it owns no RL logic and duplicates no CLI/business logic. Dashboard, Training, Agents, Benchmarks, Evaluations, Runs/Checkpoints, System/Telemetry, and Settings pages; bounded incremental telemetry/log polling; non-blocking cooperative stop plus a scoped force-stop; unavailable metrics (e.g. no Godot binary, no CUDA) are shown as such, never estimated. See [`docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md`](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
+- **CURRENT Control Center (headless desktop):** `python3 main.py` (or `sandboxai control-center-desktop`) is the single operator application, a local Tkinter window (`python/sandboxai/control_center_desktop.py`). It is a thin view over `sandboxai.adapter.SandboxAIAdapter`, which only launches the existing `train`/`benchmark`/`evaluate` CLI commands and reads their existing artifacts (`run_inspection.py`, `logs/training.jsonl`, `status.json`, `evaluations/*`, `benchmark.json`); it owns no RL logic and duplicates no CLI/business logic. Dashboard, Agents (launch form + lifecycle actions incl. restart-from-checkpoint), Benchmarks (staged benchmark pipeline with a measured, persisted recommendation), Evaluations, Runs/Checkpoints, System/Telemetry, and Settings pages; bounded incremental telemetry/log polling; non-blocking cooperative stop plus a scoped force-stop; unavailable metrics (e.g. no Godot binary, no CUDA) are shown as such, never estimated. It never renders the game and no training module imports it. See [`docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md`](docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md).
 - **CURRENT replay:** light deterministic replays for routine capture; detailed observations for debugging contract or nondeterminism. `interesting` mode is default and capped at 64/run.
 
 ## 11. CLI, configuration, testing, and reproducibility
@@ -382,9 +382,9 @@ The protocol the schema encodes:
 Public subcommands are:
 
 ```text
-install  train  resume  evaluate  record  control-center
-control-center-desktop  bc-train  inspect-dataset  inspect-runs  benchmark
-benchmark-suites  replay  curriculum  weapon-table  ttk-report  ttk-status
+install  train  resume  evaluate  record  control-center-desktop
+bc-train  inspect-dataset  inspect-runs  benchmark  benchmark-suites
+benchmark-pipeline  replay  curriculum  weapon-table  ttk-report  ttk-status
 validate-runtime  compare-experiments  summarize-experiment  smoke-test
 hardware-wizard
 ```

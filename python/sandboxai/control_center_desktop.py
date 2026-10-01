@@ -5,7 +5,14 @@ Architecture (kept intentionally unchanged from the first version):
     Desktop Control Center (this file)
         -> SandboxAIAdapter (python/sandboxai/adapter.py)
             -> existing CLI/training/evaluation/benchmark infrastructure
-                -> Godot workers
+                -> headless Godot workers
+
+This is the Control Center: a normal movable/resizable desktop application
+that operates the *headless* training stack. There is no rendering, no
+environment visualisation and no human-play mode — the window only reads
+what the backends actually measured (agents, workers, environments, steps,
+throughput, rewards/losses, resources, checkpoints, logs) and issues
+lifecycle commands through the cooperative control protocol.
 
 This module owns *presentation only*: widget layout, polling cadence and
 turning user input into calls on :class:`~sandboxai.adapter.SandboxAIAdapter`.
@@ -62,7 +69,7 @@ class ControlCenter(tk.Tk):
 
     def __init__(self, adapter: SandboxAIAdapter | None = None) -> None:
         super().__init__()
-        self.title("SandboxAI // TTK Calibration")
+        self.title("SandboxAI Control Center")
         self.geometry("1360x860")
         self.minsize(1080, 680)
         self.adapter = adapter or SandboxAIAdapter()
@@ -303,7 +310,7 @@ class ControlCenter(tk.Tk):
         self.content = ttk.Frame(body, style="Content.TFrame", padding=(12, 14, 20, 18))
         self.content.pack(side="left", fill="both", expand=True)
 
-        nav_groups = {0: "OVERVIEW", 1: "OPERATIONS", 3: "ANALYSIS", 6: "SYSTEM"}
+        nav_groups = {0: "OVERVIEW", 1: "OPERATIONS", 4: "ANALYSIS", 5: "SYSTEM"}
         for index, page_class in enumerate(PAGE_CLASSES):
             if index in nav_groups:
                 if index:
@@ -326,7 +333,7 @@ class ControlCenter(tk.Tk):
         ttk.Separator(nav).pack(fill="x", pady=10)
         ttk.Label(
             nav,
-            text="LOCAL CALIBRATION\nMeasured backend data only.",
+            text="HEADLESS CONTROL\nMeasured backend data only.",
             style="NavFootnote.TLabel",
             justify="left",
         ).pack(anchor="w")

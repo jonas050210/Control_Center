@@ -404,6 +404,7 @@ def default_measure(
     godot_executable: str,
     steps: int,
     environment_count: int = 4,
+    env_workers: int = 1,
     enemy_count: int = 1,
     seed: int = 12345,
     output_root: str | Path | None = None,
@@ -418,6 +419,11 @@ def default_measure(
     slice fails, the exception is surfaced to
     :func:`measure_devices`, which records a ``failed`` measurement.
 
+    ``env_workers`` (default 1, the single-process bridge) lets callers
+    measure a full topology — the benchmark pipeline validates its
+    finalist (environment_count, env_workers) pairs through this same
+    function instead of a second training-slice implementation.
+
     The training artifacts land in a throwaway directory that is removed
     afterwards — a measurement must not litter the user's run history.
     """
@@ -428,6 +434,7 @@ def default_measure(
         root = str(output_root) if output_root is not None else tmp
         config = TrainingConfig(
             environment_count=environment_count,
+            env_workers=env_workers,
             enemy_count=enemy_count,
             total_training_steps=steps,
             checkpoint_frequency=max(steps * 2, 1),

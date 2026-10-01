@@ -1,8 +1,9 @@
 # Adapter and desktop Control Center
 
-The Python Control Center is separate from the existing in-simulator Godot
-operator scene (`sandboxai control-center`, documented in
-[`CONTROL_CENTER.md`](CONTROL_CENTER.md)). `sandboxai.adapter.SandboxAIAdapter`
+The Control Center is the Python desktop application (`python3 main.py` or
+`sandboxai control-center-desktop`, documented in
+[`CONTROL_CENTER.md`](CONTROL_CENTER.md)); the rendered in-simulator operator
+scene was removed with the headless-only focus. `sandboxai.adapter.SandboxAIAdapter`
 is the application boundary between the desktop GUI and the rest of the
 project: it builds and launches the existing `sandboxai train` /
 `sandboxai benchmark` / `sandboxai evaluate` CLI commands, and reads the
@@ -128,8 +129,13 @@ can tell a real measurement from a fallback.
 
 Every dict-shaping, formatting, and form-validation rule the GUI needs lives
 in this Tkinter-free module (`dashboard_view`, `runs_table_rows`,
-`process_table_rows`, `evaluation_view`/`evaluation_comparison_rows`,
-`benchmark_history_rows`, `parse_training_form`, `format_*` helpers,
+`process_table_rows`, `agent_table_rows`/`agent_action_availability`,
+`launch_slot_view`/`topology_rows`,
+`evaluation_view`/`evaluation_comparison_rows`, `benchmark_history_rows`,
+the benchmark-pipeline views (`parse_benchmark_pipeline_form`,
+`benchmark_pipeline_rows`, `benchmark_recommendation_view`,
+`custom_configuration_view`, `pipeline_progress_view`),
+`parse_training_form`, `format_*` helpers,
 `downsample_series`). It is unit-tested directly
 (`python/tests/test_control_center_viewmodel.py`) without constructing a Tk
 window, and the desktop file (`control_center_desktop.py`) only calls into
@@ -139,12 +145,14 @@ default") cannot silently diverge between pages.
 
 ## Desktop GUI (`python/sandboxai/control_center_desktop.py`)
 
-Launch with `sandboxai control-center-desktop` (optionally
+Launch with `python3 main.py` from the repository root, or
+`sandboxai control-center-desktop` (optionally
 `--project-path`/`--output-root`; see
 `tools/windows/start_control_center.bat` for a Windows launcher). It uses
 Tkinter from the standard library only (Windows-first, no paid/cloud
-dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
-**Evaluations**, **Runs / Checkpoints**, **System / Telemetry**, **Settings**.
+dependency) and never renders the game. Pages: **Dashboard**, **Agents**,
+**Benchmarks**, **Evaluations**, **Runs / Checkpoints**,
+**System / Telemetry**, **Settings**.
 
 * All adapter calls run on a small background thread pool
   (`BackgroundRunner`); results are handed back to the Tk thread through a
@@ -178,10 +186,15 @@ dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
   the adapter's already-bounded series, decimated again to the canvas width
   (`control_center_viewmodel.downsample_series`), so render cost does not
   grow with run length.
-* Training start/stop, benchmark launch, and evaluation launch all validate
-  input through `control_center_viewmodel.parse_training_form` (backed by
-  `TrainingConfig.validate()`) or explicit range checks before ever touching
-  the adapter, so an invalid combination never reaches a subprocess.
-* The Agents page only offers scoped cancel/force-stop on processes this
-  Control Center itself launched; there is no arbitrary command execution
-  surface.
+* Agent launch validates input through
+  `control_center_viewmodel.parse_training_form` (backed by
+  `TrainingConfig.validate()`) plus the shared runtime-compatibility check
+  (`benchmark_pipeline.validate_configuration`) before ever touching the
+  adapter, so an invalid combination never reaches a subprocess.
+* Lifecycle actions (Pause/Resume/Stop/Restart/Force stop/Remove/Stop all)
+  go through `sandboxai.agents.AgentManager`, which derives operator-facing
+  states from the OS process, the trainer's `status.json` and the requested
+  action, restarts from the run's newest checkpoint, and refuses actions a
+  backend cannot honour with the reason. The Agents page only ever acts on
+  agents this Control Center itself launched; there is no arbitrary command
+  execution surface.

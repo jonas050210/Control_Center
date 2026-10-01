@@ -226,8 +226,8 @@ func test_frontier_direction_points_away_from_known_ground() -> SandboxTest:
 	return t
 
 
-func test_control_center_payload_is_read_only_and_complete() -> SandboxTest:
-	var t := SandboxTest.new("control_center_payload_is_read_only_and_complete")
+func test_exploration_payload_is_read_only_and_complete() -> SandboxTest:
+	var t := SandboxTest.new("exploration_payload_is_read_only_and_complete")
 	var env: EnvironmentCore = _explorer("night_yard", 4)
 	_patrol(env, 60)
 	var before: float = env.exploration.coverage()

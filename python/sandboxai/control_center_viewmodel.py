@@ -442,6 +442,329 @@ def benchmark_history_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Agents (lifecycle registry)
+# ---------------------------------------------------------------------------
+
+#: Operator-facing lifecycle states and how they are coloured. Derived
+#: states only (see sandboxai.agents.derive_lifecycle); nothing here is a
+#: measurement, so a missing state renders muted, never guessed.
+LIFECYCLE_COLORS: dict[str, str] = {
+    "AVAILABLE": "#4ee6a1",
+    "LAUNCHING": "#ffc861",
+    "RUNNING": "#4ee6a1",
+    "PAUSED": "#ffc861",
+    "STOPPING": "#ffc861",
+    "STOPPED": "#91a7bf",
+    "FINISHED": "#91a7bf",
+    "FAILED": "#ff718d",
+    "RESTARTING": "#ffc861",
+}
+
+
+def agent_table_rows(views: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One table row per agent view, straight from published facts.
+
+    Environment/worker/device context comes from the launch metadata or the
+    backend's own status — never re-derived here — and stays ``None``
+    ("n/a") when the kind does not publish it.
+    """
+    rows: list[dict[str, Any]] = []
+    for view in views:
+        backend = view.get("backend") or {}
+        meta = view.get("meta") or {}
+        spec = view.get("spec") or {}
+        config = spec.get("config") or {}
+        rows.append(
+            {
+                "agent_id": view.get("agent_id"),
+                "name": view.get("name") or view.get("agent_id"),
+                "kind": view.get("kind"),
+                "lifecycle": str(view.get("lifecycle", "")),
+                "pid": view.get("pid"),
+                "environment_count": backend.get("environment_count")
+                or meta.get("environment_count")
+                or config.get("environment_count"),
+                "env_workers": meta.get("env_workers") or config.get("env_workers"),
+                "device": backend.get("device") or meta.get("device") or config.get("device"),
+                "timesteps": backend.get("timesteps"),
+                "total_steps": backend.get("total_training_steps"),
+                "steps_per_second": backend.get("steps_per_second"),
+                "mean_episode_reward": backend.get("mean_episode_reward"),
+                "episodes": backend.get("episodes"),
+                "started_at": view.get("started_at") or view.get("created_at"),
+                "error": view.get("error"),
+                "run_dir": view.get("run_dir"),
+            }
+        )
+    return rows
+
+
+def agent_progress_percent(row: dict[str, Any]) -> float | None:
+    timesteps = row.get("timesteps")
+    total = row.get("total_steps")
+    if isinstance(timesteps, (int, float)) and isinstance(total, (int, float)) and total:
+        return max(0.0, min(100.0, 100.0 * timesteps / total))
+    return None
+
+
+def agent_action_availability(lifecycle: str, kind: str) -> dict[str, Any]:
+    """Which lifecycle actions make sense for one agent right now.
+
+    Pause/Resume exist only on the training backend's cooperative command
+    protocol; for other kinds the reason says so instead of a dead button.
+    """
+    alive = lifecycle in ("LAUNCHING", "RUNNING", "PAUSED", "STOPPING", "RESTARTING")
+    pausable = kind == "training"
+    reason = None if pausable else f"the '{kind}' backend has no pause protocol"
+    return {
+        "pause": alive and lifecycle == "RUNNING" and pausable,
+        "resume": alive and lifecycle == "PAUSED" and pausable,
+        "stop": alive and lifecycle not in ("STOPPING", "RESTARTING"),
+        "restart": lifecycle in ("RUNNING", "PAUSED", "STOPPED", "FINISHED", "FAILED"),
+        "force_stop": alive,
+        "remove": not alive,
+        "pause_unsupported_reason": reason,
+    }
+
+
+def launch_slot_view(
+    values: dict[str, str],
+    compatibility: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The launch slot's state before any agent exists.
+
+    ``AVAILABLE`` means the current form values parse, validate and are
+    compatible with the runtime; ``INVALID`` carries every reason found.
+    The summary is what a launch would use — the resolved worker count
+    included, so "0 = auto" is shown as the concrete number of workers.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    try:
+        config = parse_training_form(values)
+    except ValueError as exc:
+        errors.extend(part.strip() for part in str(exc).split(";") if part.strip())
+        config = None
+    if compatibility is not None:
+        errors.extend(str(reason) for reason in compatibility.get("errors", []))
+        warnings.extend(str(reason) for reason in compatibility.get("warnings", []))
+    if config is None:
+        return {"state": "INVALID", "errors": errors, "warnings": warnings, "summary": None}
+    summary = {
+        "environment_count": config.environment_count,
+        "env_workers": config.resolved_env_workers(),
+        "device": config.device,
+        "total_training_steps": config.total_training_steps,
+        "run_id": config.run_id or "",
+    }
+    return {
+        "state": "INVALID" if errors else "AVAILABLE",
+        "errors": errors,
+        "warnings": warnings,
+        "summary": summary,
+    }
+
+
+def topology_rows(environment_count: Any, env_workers: Any) -> list[dict[str, Any]]:
+    """The Environment -> Worker mapping for one launch or agent.
+
+    Recomputes the same contiguous shard plan the sharded bridge will
+    build (``sharded_env.plan_shards``), so what the operator sees is what
+    the runtime does. Invalid inputs produce an empty list.
+    """
+    from .sharded_env import plan_shards
+
+    if not isinstance(environment_count, int) or not isinstance(env_workers, int):
+        return []
+    if environment_count < 1 or env_workers < 1:
+        return []
+    return [
+        {
+            "worker": shard.worker,
+            "first_environment": shard.offset,
+            "last_environment": shard.stop - 1,
+            "environments": shard.count,
+        }
+        for shard in plan_shards(environment_count, env_workers)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Benchmark pipeline
+# ---------------------------------------------------------------------------
+
+
+def benchmark_pipeline_form_defaults() -> dict[str, str]:
+    from .benchmark_pipeline import DEFAULT_SCREEN_STEPS, DEFAULT_TIME_BUDGET_MINUTES
+
+    return {
+        "budget_mode": "time",
+        "minutes": str(DEFAULT_TIME_BUDGET_MINUTES),
+        "steps": str(DEFAULT_SCREEN_STEPS),
+        "environment_counts": "",
+        "worker_counts": "",
+        "finalists": "4",
+    }
+
+
+def parse_benchmark_pipeline_form(values: dict[str, str]) -> dict[str, Any]:
+    """Parse the pipeline form. Raises ``ValueError`` with every problem."""
+    errors: list[str] = []
+    budget_mode = str(values.get("budget_mode", "time")).strip().lower()
+    if budget_mode not in ("steps", "time"):
+        errors.append("budget mode must be 'steps' or 'time'")
+    steps: int | None = None
+    minutes: float | None = None
+    try:
+        if budget_mode == "steps":
+            steps = int(str(values.get("steps", "")).strip())
+            if steps < 100:
+                errors.append("steps must be at least 100 for a usable measurement")
+        else:
+            minutes = float(str(values.get("minutes", "")).strip())
+            if not 1.0 <= minutes <= 60.0:
+                errors.append("time budget must be between 1 and 60 minutes")
+    except ValueError:
+        errors.append("budget value must be a number")
+    environment_counts: list[int] = []
+    worker_counts: list[int] = []
+    for key, target in (
+        ("environment_counts", environment_counts),
+        ("worker_counts", worker_counts),
+    ):
+        raw = str(values.get(key, "")).strip()
+        if not raw:
+            continue
+        try:
+            parsed = [int(part) for part in raw.replace(" ", "").split(",") if part]
+        except ValueError:
+            errors.append(f"{key} must be comma-separated integers")
+            continue
+        if any(value < 1 for value in parsed):
+            errors.append(f"{key} must contain only positive integers")
+            continue
+        target.extend(parsed)
+    finalists: int | None = None
+    try:
+        finalists = int(str(values.get("finalists", "4")).strip())
+        if finalists < 1 or finalists > 8:
+            errors.append("finalists must be between 1 and 8")
+    except ValueError:
+        errors.append("finalists must be an integer")
+    if errors:
+        raise ValueError("; ".join(errors))
+    return {
+        "budget_mode": budget_mode,
+        "steps": steps,
+        "minutes": minutes,
+        "environment_counts": environment_counts or None,
+        "worker_counts": worker_counts or None,
+        "finalists": finalists,
+    }
+
+
+def benchmark_pipeline_rows(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Flatten one pipeline report's measured configurations into table rows.
+
+    Screening and validation rows are labelled by stage; a failed or
+    skipped configuration keeps its status and error so the table shows
+    what actually happened, not a green wash.
+    """
+    if not report:
+        return []
+    rows: list[dict[str, Any]] = []
+    for stage in report.get("stages", []):
+        for row in stage.get("configurations", []):
+            rows.append(
+                {
+                    "stage": stage.get("name"),
+                    "status": row.get("status", "ok"),
+                    "environments": row.get("environments"),
+                    "workers": row.get("workers"),
+                    "device": row.get("device"),
+                    "steps": row.get("steps") or row.get("total_steps"),
+                    "steps_per_second": row.get("steps_per_second"),
+                    "p50_ms": row.get("vector_step_latency_p50_ms"),
+                    "p95_ms": row.get("vector_step_latency_p95_ms"),
+                    "jitter": row.get("latency_jitter"),
+                    "startup_seconds": row.get("startup_seconds"),
+                    "elapsed_seconds": row.get("elapsed_seconds") or row.get("wall_seconds"),
+                    "error": row.get("error"),
+                }
+            )
+    return rows
+
+
+def benchmark_recommendation_view(recommendation: dict[str, Any] | None) -> dict[str, Any]:
+    """Display model for the Recommended Configuration card.
+
+    ``available`` is False when no recommendation exists (never run, or
+    nothing could be measured); the UI then shows the reason instead of a
+    fabricated configuration.
+    """
+    if not recommendation or not isinstance(recommendation.get("environment_count"), int):
+        return {"available": False, "reason": "no benchmark recommendation yet"}
+    return {
+        "available": True,
+        "environment_count": recommendation.get("environment_count"),
+        "env_workers": recommendation.get("env_workers"),
+        "device": recommendation.get("device"),
+        "inference_device": recommendation.get("inference_device"),
+        "expected_steps_per_second": recommendation.get("expected_steps_per_second"),
+        "basis": recommendation.get("basis"),
+        "created_utc": recommendation.get("created_utc"),
+        "applied_utc": recommendation.get("applied_utc"),
+        "source_report": recommendation.get("source_report"),
+        "rationale": list(recommendation.get("rationale") or []),
+        "warnings": list(recommendation.get("warnings") or []),
+        "summary": (
+            f"{recommendation.get('environment_count')} environments / "
+            f"{recommendation.get('env_workers')} workers on "
+            f"{recommendation.get('device')} — "
+            f"{format_number(recommendation.get('expected_steps_per_second'), 1)} steps/s"
+        ),
+    }
+
+
+def custom_configuration_view(validation: dict[str, Any] | None) -> dict[str, Any]:
+    """Display model for the Custom configuration card (valid + warnings)."""
+    if not validation:
+        return {"valid": False, "errors": ["not validated yet"], "warnings": [], "shards": []}
+    return {
+        "valid": bool(validation.get("valid")),
+        "errors": [str(error) for error in validation.get("errors", [])],
+        "warnings": [str(warning) for warning in validation.get("warnings", [])],
+        "environment_count": validation.get("environment_count"),
+        "env_workers": validation.get("env_workers"),
+        "shards": list(validation.get("shards", [])),
+    }
+
+
+def pipeline_progress_view(event: dict[str, Any] | None) -> dict[str, Any]:
+    """Display model for the live progress line of a running pipeline."""
+    if not event:
+        return {"text": "idle", "stage": None, "fraction": None}
+    stage = event.get("stage")
+    index = event.get("index")
+    total = event.get("total")
+    configuration = event.get("configuration") or {}
+    label = ""
+    if configuration:
+        label = (
+            f" — {configuration.get('environments', '?')} envs / "
+            f"{configuration.get('workers', '?')} workers"
+        )
+    if isinstance(index, int) and isinstance(total, int) and total:
+        fraction = (index + 1) / total
+        text = f"{stage}: {index + 1}/{total}{label} ({event.get('status', '')})"
+    else:
+        fraction = None
+        message = event.get("message") or event.get("status", "")
+        text = f"{stage}: {message}"
+    return {"text": text, "stage": stage, "fraction": fraction}
+
+
+# ---------------------------------------------------------------------------
 # Hardware wizard
 # ---------------------------------------------------------------------------
 

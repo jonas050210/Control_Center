@@ -1,6 +1,6 @@
 # Python module map
 
-`sandboxai` is a flat package: all 47 modules sit directly under
+`sandboxai` is a flat package: all 49 modules sit directly under
 `python/sandboxai/`. That is deliberate. Every module's import path is
 public API - it appears in the docs, in user scripts and in saved run
 manifests - so rearranging the files into subpackages would rewrite
@@ -45,6 +45,7 @@ measures how fast it does so.
 | [`runtime_validation`](../python/sandboxai/runtime_validation.py) | Automated headless runtime validation harness for the real Godot bridge. |
 | [`benchmark`](../python/sandboxai/benchmark.py) | Headless Godot simulation throughput benchmark. |
 | [`benchmark_suites`](../python/sandboxai/benchmark_suites.py) | Benchmark suites (Phase 13). |
+| [`benchmark_pipeline`](../python/sandboxai/benchmark_pipeline.py) | Staged, budget-aware runtime benchmark that recommends a configuration. |
 | [`training_profile`](../python/sandboxai/training_profile.py) | Low-overhead wall-clock profiling for PPO and the Godot bridge. |
 | [`hardware_profile`](../python/sandboxai/hardware_profile.py) | Single source of truth for hardware device-comparison measurement. |
 
@@ -114,6 +115,7 @@ presentation logic so it can be tested without a display.
 | Module | Summary |
 | --- | --- |
 | [`adapter`](../python/sandboxai/adapter.py) | Stable application boundary for the SandboxAI Control Center. |
+| [`agents`](../python/sandboxai/agents.py) | Agent lifecycle management for the headless Control Center. |
 | [`control_center_desktop`](../python/sandboxai/control_center_desktop.py) | Tk desktop Control Center backed exclusively by :mod:`sandboxai.adapter`. |
 | [`control_center_pages`](../python/sandboxai/control_center_pages.py) | Desktop Control Center pages. |
 | [`control_center_viewmodel`](../python/sandboxai/control_center_viewmodel.py) | Pure presentation logic for the desktop Control Center. |

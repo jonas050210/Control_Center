@@ -148,39 +148,6 @@ class GodotSourceDriftTests(unittest.TestCase):
         body = source[start : end if end != -1 else len(source)]
         self.assertIn("FIELD_SPEC", body, "field_names() must iterate FIELD_SPEC")
 
-    def test_control_center_inspector_uses_contract_helpers(self):
-        """The Observation Inspector must not hard-code field labels."""
-        source = self._godot_source("scripts/control_center/observation_inspector.gd")
-        self.assertIn("Observation.field_names()", source)
-        self.assertIn("Observation.field_group(", source)
-        for field in OBSERVATION_SPEC:
-            self.assertNotIn(
-                f'"{field.name}"',
-                source,
-                "observation_inspector.gd must not restate contract field names",
-            )
-
-    def test_perception_view_decodes_only_the_observation_vector(self):
-        """The "what does the AI see?" view must read the vector, nothing else.
-
-        `Observation` carries a few bookkeeping members (e.g. `enemy_alive`)
-        that `to_array()` never serialises. If the perception view read them
-        directly it would show the operator information the policy does not
-        actually receive, which is exactly the leak the Control Center is
-        supposed to make visible.
-        """
-        source = self._godot_source("scripts/control_center/perception_model.gd")
-        self.assertIn("Observation.field_names()", source)
-        start = source.index("static func _build_ai_perception")
-        end = source.index("static func _tracked_enemy_indices")
-        ai_branch = source[start:end]
-        self.assertIn("obs.to_array()", ai_branch)
-        self.assertEqual(
-            sorted(set(re.findall(r"\bobs\.(\w+)", ai_branch))),
-            ["to_array"],
-            "the AI perception branch may only touch the observation vector",
-        )
-
     def test_godot_action_nvec_matches_python_contract(self):
         source = self._godot_source("scripts/core/action.gd")
         match = re.search(r"const MULTI_DISCRETE_NVECS:\s*Array\s*=\s*\[([0-9,\s]+)\]", source)

@@ -55,8 +55,8 @@ CLI: `sandboxai replay --path run.jsonl --timeline`.
 ## 2. Research metrics
 
 `python/sandboxai/metrics.py` (per-episode + aggregator, JSON and CSV
-export) and `scripts/metrics/skill_metrics.gd` (the live Control Center
-view) share eight categories: **AIM, REACTION, AWARENESS, POSITIONING,
+export) and `scripts/metrics/skill_metrics.gd` (the in-simulator live view)
+share eight categories: **AIM, REACTION, AWARENESS, POSITIONING,
 MOVEMENT, COMBAT, SURVIVAL, EXPLORATION**.
 
 Two hard rules:
@@ -75,8 +75,7 @@ Aggregation keys: `policy_id`, `map_id`, `scenario`, `lighting`,
 ### Weapon handling metrics (level 5+)
 
 Both implementations report the same handling diagnostics, so a number in
-the Control Center means the same thing as the number in an exported
-report:
+the live view means the same thing as the number in an exported report:
 
 | Category | Metric | Meaning |
 | --- | --- | --- |

@@ -6,6 +6,7 @@ remain in the independently tested viewmodel.
 
 from __future__ import annotations
 
+import threading
 import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
@@ -23,6 +24,7 @@ from .control_center_widgets import (
     LineChart,
     LogPanel,
     StatRow,
+    ToolTip,
     _open_in_file_manager,
     _scrollable_table,
 )
@@ -148,8 +150,7 @@ class DashboardPage(Page):
         "fps",
         "elapsed / eta",
         "envs / workers",
-        "rollout length",
-        "ppo updates",
+        "agents",
         "device",
         "reward",
     )
@@ -192,6 +193,23 @@ class DashboardPage(Page):
 
     def refresh(self) -> None:
         self.submit_poll("dashboard", self.adapter.dashboard_snapshot, self._on_snapshot)
+        self.submit_poll("agents-summary", self.adapter.agents.views, self._on_agents_summary)
+
+    def _on_agents_summary(
+        self, views: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or views is None:
+            return
+        counts: dict[str, int] = {}
+        for view in views:
+            lifecycle = str(view.get("lifecycle", ""))
+            counts[lifecycle] = counts.get(lifecycle, 0) + 1
+        if not counts:
+            text, color = "none launched", None
+        else:
+            text = ", ".join(f"{count} {name.lower()}" for name, count in sorted(counts.items()))
+            color = COLOR_ERROR if counts.get("FAILED") else None
+        self.stats.update_values({"agents": (text, color)})
 
     def _on_snapshot(self, snapshot: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or snapshot is None:
@@ -225,8 +243,6 @@ class DashboardPage(Page):
                     f"{vm.format_number(view['environment_count'])} / {vm.format_number(view['env_workers'])}",
                     None,
                 ),
-                "rollout length": (vm.format_number(view["rollout_length"]), None),
-                "ppo updates": (vm.format_number(view["ppo_updates"]), None),
                 "device": (view["device"] or "n/a", None),
                 "reward": (vm.format_number(view["reward"], 3), None),
             }
@@ -305,45 +321,88 @@ class DashboardPage(Page):
             page.select_run(self._last_run_dir)
 
 
-class TrainingPage(Page):
-    title = "Training"
-    subtitle = "Launches python -m sandboxai train with a validated TrainingConfig - no RL logic lives here."
+class AgentsPage(Page):
+    """Launch configuration + agent lifecycle in one operational page.
+
+    The launch form is the single source of the training configuration
+    (the Benchmarks page applies its recommendation here); every launched
+    agent - training, benchmark or evaluation - is listed with its
+    lifecycle state, its Environment -> Worker topology and its live
+    backend metrics, with the full action set (Pause/Resume where the
+    backend supports it, Stop, Restart, Force stop) and a bounded log.
+    """
+
+    title = "Agents"
+    subtitle = "Launch, operate and restart headless agents - real backend states only."
+
+    COLUMNS = (
+        ("name", "Agent", 150),
+        ("kind", "Type", 80),
+        ("lifecycle", "Lifecycle", 100),
+        ("pid", "PID", 70),
+        ("environment_count", "Envs", 55),
+        ("env_workers", "Workers", 65),
+        ("device", "Device", 60),
+        ("timesteps", "Steps", 90),
+        ("progress", "Progress", 80),
+        ("steps_per_second", "Steps/s", 80),
+        ("mean_episode_reward", "Reward", 80),
+        ("started", "Started", 130),
+        ("error", "Error", 200),
+    )
 
     def build(self) -> None:
+        # ---- Launch configuration (the former Training page) ----------
+        form_frame = ttk.LabelFrame(self, text="Launch configuration", padding=10)
+        form_frame.pack(fill="x")
         self.field_vars: dict[str, tk.StringVar] = {}
-        defaults = vm.default_training_values()
+        defaults = vm.training_values_from_profile(None)
         groups = vm.training_field_groups()
-
-        form_container = ttk.Frame(self)
-        form_container.pack(fill="x")
-
-        basic_frame = ttk.LabelFrame(form_container, text="Basic configuration", padding=10)
+        basic_frame = ttk.Frame(form_frame)
         basic_frame.pack(fill="x")
         self._build_fields(basic_frame, groups["basic"], defaults)
-
         self._advanced_visible = tk.BooleanVar(value=False)
-        toggle = ttk.Checkbutton(
-            form_container,
+        ttk.Checkbutton(
+            form_frame,
             text="Show advanced options",
             variable=self._advanced_visible,
             command=self._toggle_advanced,
-        )
-        toggle.pack(anchor="w", pady=(8, 0))
-        self.advanced_frame = ttk.LabelFrame(
-            form_container, text="Advanced (PPO / curriculum / checkpoints)", padding=10
-        )
+        ).pack(anchor="w", pady=(8, 0))
+        self.advanced_frame = ttk.Frame(form_frame)
         self._build_fields(self.advanced_frame, groups["advanced"], defaults)
 
+        launch_bar = ttk.Frame(self)
+        launch_bar.pack(fill="x", pady=(8, 0))
+        self.launch_status_label = ttk.Label(launch_bar, text="", justify="left", wraplength=760)
+        self.launch_status_label.pack(side="left", fill="x", expand=True)
+        self.launch_button = ttk.Button(
+            launch_bar, text="Launch agent", command=self._launch, style="Primary.TButton"
+        )
+        self.launch_button.pack(side="right")
+
+        # ---- Agent table + actions ------------------------------------
+        table_frame = ttk.Frame(self)
+        table_frame.pack(fill="both", expand=True, pady=(10, 0))
+        self.tree = _scrollable_table(table_frame, self.COLUMNS)
+        self.tree.bind("<<TreeviewSelect>>", self._on_select)
+
         actions = ttk.Frame(self)
-        actions.pack(fill="x", pady=(10, 4))
-        self.start_button = ttk.Button(
-            actions, text="Start training", command=self._start, style="Primary.TButton"
+        actions.pack(fill="x", pady=(6, 0))
+        self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
+        self.pause_button.pack(side="left")
+        self._pause_tooltip = ToolTip(
+            self.pause_button, "Pause the training agent at its next safe boundary"
         )
-        self.start_button.pack(side="left")
-        self.stop_button = ttk.Button(
-            actions, text="Stop safely", command=self._stop, state="disabled"
+        self.resume_button = ttk.Button(
+            actions, text="Resume", command=self._resume, state="disabled"
         )
+        self.resume_button.pack(side="left", padx=(8, 0))
+        self.stop_button = ttk.Button(actions, text="Stop", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=(8, 0))
+        self.restart_button = ttk.Button(
+            actions, text="Restart", command=self._restart, state="disabled"
+        )
+        self.restart_button.pack(side="left", padx=(8, 0))
         self.force_stop_button = ttk.Button(
             actions,
             text="Force stop",
@@ -351,23 +410,43 @@ class TrainingPage(Page):
             state="disabled",
             style="Danger.TButton",
         )
-        self.force_stop_button.pack(side="left", padx=(8, 0))
-        self.state_label = ttk.Label(actions, text="idle", foreground=COLOR_MUTED)
-        self.state_label.pack(side="left", padx=(16, 0))
-
-        info_frame = ttk.Frame(self)
-        info_frame.pack(fill="x")
-        self.run_dir_label = ttk.Label(
-            info_frame, text="run directory: n/a", foreground=COLOR_MUTED
+        self.force_stop_button.pack(side="left", padx=(16, 0))
+        self.remove_button = ttk.Button(
+            actions, text="Remove", command=self._remove, state="disabled"
         )
-        self.run_dir_label.pack(anchor="w")
+        self.remove_button.pack(side="left", padx=(8, 0))
+        self.stop_all_button = ttk.Button(
+            actions, text="Stop all", command=self._stop_all, state="disabled"
+        )
+        self.stop_all_button.pack(side="right")
+        self.clear_button = ttk.Button(actions, text="Clear exited", command=self._clear)
+        self.clear_button.pack(side="right", padx=(8, 0))
 
-        log_frame = ttk.LabelFrame(self, text="Process output", padding=8)
-        log_frame.pack(fill="both", expand=True, pady=(8, 0))
+        # ---- Topology + log -------------------------------------------
+        bottom = ttk.Panedwindow(self, orient="horizontal")
+        bottom.pack(fill="both", expand=True, pady=(8, 0))
+        topology_frame = ttk.LabelFrame(
+            bottom, text="Environment → Worker topology (selected agent)", padding=8
+        )
+        bottom.add(topology_frame, weight=1)
+        self.topology_label = ttk.Label(topology_frame, text="no agent selected", justify="left")
+        self.topology_label.pack(anchor="nw")
+        log_frame = ttk.LabelFrame(bottom, text="Agent log", padding=8)
+        bottom.add(log_frame, weight=2)
         self.log_panel = LogPanel(log_frame)
         self.log_panel.pack(fill="both", expand=True)
 
-        self.process_id: str | None = None
+        self._row_to_agent: dict[str, str] = {}
+        self._selected_agent_id: str | None = None
+        self._last_views: list[dict[str, Any]] = []
+        self._last_slot_values: dict[str, str] | None = None
+        self._compatibility: dict[str, Any] | None = None
+        # The process id alone is not sufficient: A -> B -> A can happen
+        # while A's first disk read is still in flight. The generation keeps
+        # that old A result from filling a freshly reset A log view.
+        self._log_selection_generation = 0
+        self._log_in_flight: tuple[str, int] | None = None
+        self._launching = False
 
     def _build_fields(
         self, parent: tk.Misc, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]
@@ -414,164 +493,263 @@ class TrainingPage(Page):
         else:
             self.advanced_frame.pack_forget()
 
-    def refresh(self) -> None:
-        process_id = self.process_id
-        if process_id:
-            self.submit_poll(
-                "training-status",
-                lambda: self.adapter.process_status(process_id),
-                lambda status, error: self._on_process_status(process_id, status, error),
-            )
+    # -- launch slot -----------------------------------------------------
 
-    def _start(self) -> None:
-        values = {name: var.get() for name, var in self.field_vars.items()}
-        try:
-            config = vm.parse_training_form(values)
-        except ValueError as exc:
-            messagebox.showerror("Invalid training configuration", str(exc))
-            return
-        self.start_button.configure(state="disabled")
+    def current_values(self) -> dict[str, str]:
+        return {name: var.get() for name, var in self.field_vars.items()}
 
-        def _launch() -> dict[str, Any]:
-            return self.adapter.start_training(config)
+    def apply_launch_values(self, values: dict[str, str]) -> list[str]:
+        """Apply external launch values (e.g. a benchmark recommendation).
 
-        self.app.background.submit(_launch, self._on_started)
-
-    def _on_started(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
-        self.start_button.configure(state="normal")
-        if error is not None or result is None:
-            messagebox.showerror("Training could not start", str(error))
-            return
-        self.process_id = result["process_id"]
-        self.log_panel.reset_cursor()
-        self.stop_button.configure(state="normal")
-        self.force_stop_button.configure(state="normal")
-        self.run_dir_label.configure(text=f"run directory: {result.get('run_dir', 'n/a')}")
-        self.app.set_status(f"Training started ({self.process_id[:8]})")
-
-    def _stop(self) -> None:
-        process_id = self.process_id
-        if not process_id:
-            return
-        self.app.background.submit(lambda: self.adapter.cancel(process_id), lambda *_: None)
-        self.app.set_status(
-            "Stop requested - the trainer will save a final checkpoint before exiting"
-        )
-
-    def _force_stop(self) -> None:
-        process_id = self.process_id
-        if not process_id:
-            return
-        if not messagebox.askyesno(
-            "Force stop",
-            "This skips the cooperative shutdown; the final checkpoint will "
-            "NOT be saved. Continue?",
-        ):
-            return
-        self.app.background.submit(lambda: self.adapter.force_stop(process_id), lambda *_: None)
-
-    def _on_process_status(
-        self,
-        process_id: str,
-        status: dict[str, Any] | None,
-        error: BaseException | None,
-    ) -> None:
-        if process_id != self.process_id or error is not None or status is None:
-            return
-        state = status.get("state", "unknown")
-        color = STATE_COLORS.get(state, COLOR_MUTED)
-        backend_state = (status.get("backend") or {}).get("state")
-        label = backend_state or state
-        self.state_label.configure(text=label, foreground=color)
-        if state in ("finished", "failed"):
-            self.stop_button.configure(state="disabled")
-            self.force_stop_button.configure(state="disabled")
-            if state == "failed" and status.get("error"):
-                self.app.set_status(f"Training process failed: {status['error']}", error=True)
-        stdout_after = self.log_panel.stdout_after
-        stderr_after = self.log_panel.stderr_after
-        self.submit_poll(
-            f"training-log:{process_id}",
-            lambda: self.adapter.process_log(process_id, stdout_after, stderr_after),
-            lambda log, log_error: self._on_log(process_id, log, log_error),
-        )
-
-    def _on_log(
-        self, process_id: str, log: dict[str, Any] | None, error: BaseException | None
-    ) -> None:
-        if process_id != self.process_id or error is not None or log is None:
-            return
-        self.log_panel.apply_log(log)
-
-
-class AgentsPage(Page):
-    title = "Agents"
-    subtitle = "Every training/evaluation/benchmark process this Control Center has launched or is tracking."
-
-    COLUMNS = (
-        ("kind", "Type", 90),
-        ("run_id", "Run", 140),
-        ("status", "Status", 90),
-        ("pid", "PID", 70),
-        ("environment_count", "Envs", 60),
-        ("env_workers", "Workers", 70),
-        ("progress_percent", "Progress", 80),
-        ("started_at", "Started", 140),
-        ("error", "Error", 220),
-    )
-
-    def build(self) -> None:
-        paned = ttk.Panedwindow(self, orient="vertical")
-        paned.pack(fill="both", expand=True)
-        top = ttk.Frame(paned)
-        paned.add(top, weight=2)
-        self.tree = _scrollable_table(top, self.COLUMNS)
-        self.tree.bind("<<TreeviewSelect>>", self._on_select)
-
-        bottom = ttk.Frame(paned, padding=(0, 8, 0, 0))
-        paned.add(bottom, weight=1)
-        actions = ttk.Frame(bottom)
-        actions.pack(fill="x")
-        self.stop_button = ttk.Button(
-            actions, text="Stop safely", command=self._stop, state="disabled"
-        )
-        self.stop_button.pack(side="left")
-        self.force_stop_button = ttk.Button(
-            actions,
-            text="Force stop",
-            command=self._force_stop,
-            state="disabled",
-            style="Danger.TButton",
-        )
-        self.force_stop_button.pack(side="left", padx=(8, 0))
-        self.log_panel = LogPanel(bottom)
-        self.log_panel.pack(fill="both", expand=True, pady=(6, 0))
-
-        self._row_to_process: dict[str, str] = {}
-        self._selected_process_id: str | None = None
-        # The process id alone is not sufficient: A -> B -> A can happen
-        # while A's first disk read is still in flight. The generation keeps
-        # that old A result from filling a freshly reset A log view.
-        self._log_selection_generation = 0
-        self._log_in_flight: tuple[str, int] | None = None
+        Returns the list of field names that were applied; unknown field
+        names are ignored so a saved recommendation from an older version
+        cannot break the form.
+        """
+        applied = []
+        for name, value in values.items():
+            if name in self.field_vars and value is not None:
+                self.field_vars[name].set(str(value))
+                applied.append(name)
+        return applied
 
     def refresh(self) -> None:
-        self.submit_poll("process-list", self.adapter.list_processes, self._on_processes)
-        process_id = self._selected_process_id
+        self.submit_poll("agents", self.adapter.agents.views, self._on_agents)
+        values = self.current_values()
+        if values != self._last_slot_values or self._compatibility is None:
+            self._last_slot_values = dict(values)
+            self._update_launch_slot(values)
+        process_id = self._selected_agent_process_id()
         if process_id:
             self._request_log(process_id)
 
-    def _request_log(self, process_id: str) -> None:
-        """Fetch one selected process log without duplicate or stale updates.
+    def _update_launch_slot(self, values: dict[str, str]) -> None:
+        slot = vm.launch_slot_view(values, self._compatibility)
+        self._launch_slot = slot
+        if slot["state"] == "AVAILABLE":
+            summary = slot["summary"]
+            topology = "+".join(
+                str(row["environments"])
+                for row in vm.topology_rows(summary["environment_count"], summary["env_workers"])
+            )
+            text = (
+                f"AVAILABLE — {summary['environment_count']} environments / "
+                f"{summary['env_workers']} workers ({topology}) on {summary['device']}, "
+                f"{vm.format_number(summary['total_training_steps'])} steps"
+            )
+            for warning in slot["warnings"]:
+                text += f"\nwarning: {warning}"
+            self.launch_status_label.configure(
+                text=text,
+                foreground=COLOR_WARN if slot["warnings"] else COLOR_OK,
+            )
+            self.launch_button.configure(state="disabled" if self._launching else "normal")
+        else:
+            self.launch_status_label.configure(
+                text="INVALID — " + "; ".join(slot["errors"]), foreground=COLOR_ERROR
+            )
+            self.launch_button.configure(state="disabled")
+        # Runtime compatibility (worker topology vs. this host, CUDA
+        # availability) is a separate, slower check: it probes the runtime.
+        if slot["state"] == "AVAILABLE":
+            summary = slot["summary"]
+            self.submit_poll(
+                "launch-compatibility",
+                lambda: self.adapter.validate_runtime_configuration(
+                    summary["environment_count"], summary["env_workers"], summary["device"]
+                ),
+                self._on_compatibility,
+            )
 
-        Process metadata and output are read on separate worker calls. An
-        operator can click a second agent while the first call is still
-        reading its files, so both the id and the incremental cursors must be
-        captured at submission time. A per-selection generation distinguishes
-        even A -> B -> A, and the in-flight token coalesces slow polls: a
-        process-log read must not queue up behind itself and replay the same
-        output after the panel has already caught up.
-        """
+    def _on_compatibility(
+        self, validation: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or validation is None:
+            return
+        previous = self._compatibility
+        self._compatibility = validation
+        if (
+            previous is None
+            or previous.get("errors") != validation.get("errors")
+            or previous.get("warnings") != validation.get("warnings")
+        ):
+            self._update_launch_slot(self.current_values())
+
+    def _launch(self) -> None:
+        slot = getattr(self, "_launch_slot", None)
+        if not slot or slot["state"] != "AVAILABLE":
+            return
+        try:
+            config = vm.parse_training_form(self.current_values())
+        except ValueError as exc:
+            messagebox.showerror("Invalid launch configuration", str(exc))
+            return
+        self._launching = True
+        self.launch_button.configure(state="disabled")
+        self.app.background.submit(
+            lambda: self.adapter.agents.launch_training(config),
+            self._on_launched,
+        )
+
+    def _on_launched(self, view: dict[str, Any] | None, error: BaseException | None) -> None:
+        self._launching = False
+        slot = getattr(self, "_launch_slot", None)
+        self.launch_button.configure(
+            state="normal" if slot and slot["state"] == "AVAILABLE" else "disabled"
+        )
+        if error is not None or view is None:
+            messagebox.showerror("Agent could not start", str(error))
+            return
+        if view.get("lifecycle") == "FAILED":
+            messagebox.showerror("Agent failed to start", str(view.get("error") or "unknown error"))
+            return
+        self.app.set_status(f"Agent launched ({view.get('name', 'agent')})")
+
+    # -- agent table -----------------------------------------------------
+
+    def _on_agents(self, views: list[dict[str, Any]] | None, error: BaseException | None) -> None:
+        if error is not None or views is None:
+            self.report_error("Agents refresh failed", error or RuntimeError("unknown"))
+            return
+        self._last_views = views
+        rows = vm.agent_table_rows(views)
+        selected = self._selected_agent_id
+        selected_still_present = False
+        self.tree.delete(*self.tree.get_children())
+        self._row_to_agent.clear()
+        for row in rows:
+            progress = vm.agent_progress_percent(row)
+            item_id = self.tree.insert(
+                "",
+                "end",
+                values=(
+                    row["name"],
+                    row["kind"] or "n/a",
+                    row["lifecycle"] or "n/a",
+                    row["pid"] if row["pid"] is not None else "n/a",
+                    vm.format_number(row["environment_count"]),
+                    vm.format_number(row["env_workers"]),
+                    row["device"] or "n/a",
+                    vm.format_number(row["timesteps"]),
+                    vm.format_fraction_as_percent(progress / 100.0)
+                    if progress is not None
+                    else "n/a",
+                    vm.format_number(row["steps_per_second"], 1),
+                    vm.format_number(row["mean_episode_reward"], 3),
+                    vm.format_timestamp(row["started_at"]),
+                    row["error"] or "",
+                ),
+            )
+            self._row_to_agent[item_id] = row["agent_id"]
+            if row["agent_id"] == selected:
+                selected_still_present = True
+                self.tree.selection_set(item_id)
+        if selected is not None and not selected_still_present:
+            self._clear_selection()
+        self.stop_all_button.configure(
+            state="normal"
+            if any(
+                str(view.get("lifecycle")) in ("LAUNCHING", "RUNNING", "PAUSED") for view in views
+            )
+            else "disabled"
+        )
+        self._update_topology(rows)
+        if self._selected_agent_id is not None:
+            self._refresh_action_buttons()
+
+    def _update_topology(self, rows: list[dict[str, Any]]) -> None:
+        agent_id = self._selected_agent_id
+        row = next((item for item in rows if item["agent_id"] == agent_id), None)
+        if row is None:
+            self.topology_label.configure(text="no agent selected")
+            return
+        environment_count = row["environment_count"]
+        env_workers = row["env_workers"]
+        shards = vm.topology_rows(environment_count, env_workers)
+        if not shards:
+            self.topology_label.configure(
+                text=f"{row['name']}: no topology published by this agent kind"
+            )
+            return
+        lines = [
+            f"{row['name']} — {environment_count} environments across {env_workers} worker(s):"
+        ]
+        for shard in shards:
+            lines.append(
+                f"  worker {shard['worker']}: environments "
+                f"{shard['first_environment']}-{shard['last_environment']} "
+                f"({shard['environments']} envs)"
+            )
+        self.topology_label.configure(text="\n".join(lines))
+
+    def _on_select(self, _event: object) -> None:
+        selection = self.tree.selection()
+        if not selection:
+            self._clear_selection()
+            return
+        agent_id = self._row_to_agent.get(selection[0])
+        if agent_id is None:
+            self._clear_selection()
+            return
+        if agent_id != self._selected_agent_id:
+            self._selected_agent_id = agent_id
+            self._log_selection_generation += 1
+            self.log_panel.reset_cursor()
+        self._refresh_action_buttons()
+
+    def _refresh_action_buttons(self) -> None:
+        agent_id = self._selected_agent_id
+        if agent_id is None:
+            for button in (
+                self.pause_button,
+                self.resume_button,
+                self.stop_button,
+                self.restart_button,
+                self.force_stop_button,
+                self.remove_button,
+            ):
+                button.configure(state="disabled")
+            return
+        views = {str(view.get("agent_id")): view for view in self._last_views}
+        view = views.get(agent_id)
+        if view is None:
+            return
+        availability = vm.agent_action_availability(
+            str(view.get("lifecycle", "")), str(view.get("kind", ""))
+        )
+        for name, button in (
+            ("pause", self.pause_button),
+            ("resume", self.resume_button),
+            ("stop", self.stop_button),
+            ("restart", self.restart_button),
+            ("force_stop", self.force_stop_button),
+            ("remove", self.remove_button),
+        ):
+            button.configure(state="normal" if availability.get(name) else "disabled")
+        # The tooltip states why pause is impossible for backends without
+        # the cooperative protocol instead of leaving a silent dead button.
+        reason = availability.get("pause_unsupported_reason")
+        self._pause_tooltip.text = (
+            str(reason) if reason else "Pause the training agent at its next safe boundary"
+        )
+
+    def _clear_selection(self) -> None:
+        self._selected_agent_id = None
+        self._log_selection_generation += 1
+        self.log_panel.reset_cursor()
+        self._refresh_action_buttons()
+        self.topology_label.configure(text="no agent selected")
+
+    def _selected_agent_process_id(self) -> str | None:
+        agent_id = self._selected_agent_id
+        if agent_id is None:
+            return None
+        for view in self._last_views:
+            if str(view.get("agent_id")) == agent_id:
+                return view.get("process_id")
+        return None
+
+    def _request_log(self, process_id: str) -> None:
+        """Fetch one selected agent's log without duplicate or stale updates."""
         generation = self._log_selection_generation
         token = (process_id, generation)
         if token == self._log_in_flight:
@@ -584,69 +762,6 @@ class AgentsPage(Page):
             lambda log, error: self._on_log(process_id, generation, log, error),
         )
 
-    def _on_processes(
-        self, processes: list[dict[str, Any]] | None, error: BaseException | None
-    ) -> None:
-        if error is not None or processes is None:
-            self.report_error("Agents refresh failed", error or RuntimeError("unknown"))
-            return
-        rows = vm.process_table_rows(processes)
-        selected = self._selected_process_id
-        selected_still_present = False
-        self.tree.delete(*self.tree.get_children())
-        self._row_to_process.clear()
-        for row in rows:
-            item_id = self.tree.insert(
-                "",
-                "end",
-                values=(
-                    row["kind"],
-                    row["run_id"],
-                    row["status"] or "n/a",
-                    row["pid"] if row["pid"] is not None else "n/a",
-                    vm.format_number(row["environment_count"]),
-                    vm.format_number(row["env_workers"]),
-                    vm.format_fraction_as_percent((row["progress_percent"] or 0) / 100.0)
-                    if row["progress_percent"] is not None
-                    else "n/a",
-                    vm.format_timestamp(row["started_at"]),
-                    row["error"] or "",
-                ),
-            )
-            self._row_to_process[item_id] = row["id"]
-            if row["id"] == selected:
-                selected_still_present = True
-                self.tree.selection_set(item_id)
-        if selected is not None and not selected_still_present:
-            # The process inventory can legitimately change between polling
-            # ticks (for example after a run is cleared). Do not leave its
-            # old output on screen with active lifecycle buttons.
-            self._clear_selection()
-
-    def _on_select(self, _event: object) -> None:
-        selection = self.tree.selection()
-        if not selection:
-            self._clear_selection()
-            return
-        process_id = self._row_to_process.get(selection[0])
-        if process_id is None:
-            self._clear_selection()
-            return
-        if process_id != self._selected_process_id:
-            self._selected_process_id = process_id
-            self._log_selection_generation += 1
-            self.log_panel.reset_cursor()
-        self.stop_button.configure(state="normal")
-        self.force_stop_button.configure(state="normal")
-        self._request_log(process_id)
-
-    def _clear_selection(self) -> None:
-        self._selected_process_id = None
-        self._log_selection_generation += 1
-        self.stop_button.configure(state="disabled")
-        self.force_stop_button.configure(state="disabled")
-        self.log_panel.reset_cursor()
-
     def _on_log(
         self,
         process_id: str,
@@ -657,10 +772,8 @@ class AgentsPage(Page):
         token = (process_id, generation)
         if token == self._log_in_flight:
             self._log_in_flight = None
-        # See _request_log: a late result belongs to the process/selection it
-        # was read from, not necessarily the one the operator is viewing now.
         if (
-            process_id != self._selected_process_id
+            process_id != self._selected_agent_process_id()
             or generation != self._log_selection_generation
             or error is not None
             or log is None
@@ -668,144 +781,336 @@ class AgentsPage(Page):
             return
         self.log_panel.apply_log(log)
 
+    # -- lifecycle actions -------------------------------------------------
+
+    def _agent_action(self, label: str, action: Callable[[str], dict[str, Any]]) -> None:
+        agent_id = self._selected_agent_id
+        if not agent_id:
+            return
+
+        def _run() -> dict[str, Any]:
+            return action(agent_id)
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None:
+                self.app.set_status(f"{label} failed: {error}", error=True)
+            elif result and not result.get("ok"):
+                self.app.set_status(f"{label}: {result.get('error')}", error=True)
+            else:
+                self.app.set_status(f"{label} requested")
+
+        self.app.background.submit(_run, _done)
+
+    def _pause(self) -> None:
+        self._agent_action("Pause", self.adapter.agents.pause)
+
+    def _resume(self) -> None:
+        self._agent_action("Resume", self.adapter.agents.resume)
+
     def _stop(self) -> None:
-        process_id = self._selected_process_id
-        if process_id:
-            self.app.background.submit(lambda: self.adapter.cancel(process_id), lambda *_: None)
+        self._agent_action("Stop", self.adapter.agents.stop)
+
+    def _restart(self) -> None:
+        self._agent_action("Restart", self.adapter.agents.restart)
 
     def _force_stop(self) -> None:
-        process_id = self._selected_process_id
-        if process_id and messagebox.askyesno(
-            "Force stop", "Skip cooperative shutdown and kill this process now?"
+        if not messagebox.askyesno(
+            "Force stop",
+            "Skip cooperative shutdown and kill this process now? "
+            "The final checkpoint will NOT be saved.",
         ):
-            self.app.background.submit(lambda: self.adapter.force_stop(process_id), lambda *_: None)
+            return
+        self._agent_action("Force stop", self.adapter.agents.force_stop)
+
+    def _remove(self) -> None:
+        self._agent_action("Remove", self.adapter.agents.remove)
+
+    def _stop_all(self) -> None:
+        if not messagebox.askyesno(
+            "Stop all agents", "Request a safe stop for every running agent?"
+        ):
+            return
+
+        def _run() -> dict[str, Any]:
+            return {"stopped": self.adapter.agents.stop_all()}
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None:
+                self.app.set_status(f"Stop all failed: {error}", error=True)
+                return
+            stopped = result or {}
+            failures = [item for item in stopped.get("stopped", []) if not item.get("ok")]
+            if failures:
+                self.app.set_status(
+                    f"Stop all: {len(failures)} agent(s) could not be stopped", error=True
+                )
+            else:
+                self.app.set_status(
+                    f"Stop all requested for {len(stopped.get('stopped', []))} agent(s)"
+                )
+
+        self.app.background.submit(_run, _done)
+
+    def _clear(self) -> None:
+        def _run() -> dict[str, Any]:
+            return {"removed": self.adapter.agents.clear_finished()}
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None:
+                self.app.set_status(f"Clear failed: {error}", error=True)
+            else:
+                cleared = result or {}
+                self.app.set_status(f"Cleared {cleared.get('removed', 0)} exited agent(s)")
+
+        self.app.background.submit(_run, _done)
 
 
 class BenchmarkPage(Page):
+    """The staged benchmark pipeline, its recommendation, and history."""
+
     title = "Benchmarks"
     subtitle = (
-        "Runs python -m sandboxai benchmark and compares measured throughput across configurations."
+        "Measures this machine's real runtime (bridge sweep, device comparison, PPO "
+        "validation slices) and recommends a configuration. No estimated numbers."
     )
 
     RESULT_COLUMNS = (
-        ("source", "Sweep", 160),
-        ("environments", "Envs", 60),
-        ("workers", "Workers", 70),
-        ("total_steps", "Total steps", 90),
+        ("stage", "Stage", 90),
+        ("status", "Status", 80),
+        ("environments", "Envs", 55),
+        ("workers", "Workers", 65),
+        ("device", "Device", 60),
+        ("steps", "Steps", 90),
         ("steps_per_second", "Steps/s", 90),
-        ("episodes_per_second", "Episodes/s", 90),
         ("p50_ms", "p50 ms", 70),
         ("p95_ms", "p95 ms", 70),
-        ("elapsed_seconds", "Elapsed", 80),
-        ("info_mode", "Info mode", 90),
+        ("jitter", "p95/p50", 70),
+        ("startup_seconds", "Startup s", 80),
+        ("error", "Error", 240),
     )
 
     def build(self) -> None:
-        form = ttk.LabelFrame(self, text="New benchmark sweep", padding=10)
+        paned = ttk.Panedwindow(self, orient="vertical")
+        paned.pack(fill="both", expand=True)
+
+        top = ttk.Frame(paned, padding=(0, 0, 0, 8))
+        paned.add(top, weight=0)
+
+        form = ttk.LabelFrame(top, text="Benchmark pipeline", padding=10)
         form.pack(fill="x")
-        self.env_counts_var = tk.StringVar(value="1,2,4,8")
-        self.worker_counts_var = tk.StringVar(value="1")
-        self.steps_var = tk.StringVar(value="2000")
-        self.enemy_count_var = tk.StringVar(value="1")
-        self.compact_var = tk.BooleanVar(value=True)
-        for row, (label, var, width) in enumerate(
-            (
-                ("Environment counts (comma-separated)", self.env_counts_var, 24),
-                ("Worker counts (comma-separated)", self.worker_counts_var, 24),
-                ("Steps per configuration", self.steps_var, 10),
-                ("Enemy count", self.enemy_count_var, 10),
+        defaults = vm.benchmark_pipeline_form_defaults()
+        self.pipeline_vars = {name: tk.StringVar(value=value) for name, value in defaults.items()}
+        ttk.Label(form, text="Budget", width=22).grid(row=0, column=0, sticky="w")
+        budget_frame = ttk.Frame(form)
+        budget_frame.grid(row=0, column=1, sticky="w")
+        self.budget_mode_var = tk.StringVar(value=defaults["budget_mode"])
+        ttk.Radiobutton(
+            budget_frame, text="Time (minutes)", value="time", variable=self.budget_mode_var
+        ).pack(side="left")
+        ttk.Radiobutton(
+            budget_frame, text="Steps per config", value="steps", variable=self.budget_mode_var
+        ).pack(side="left", padx=(12, 0))
+        ttk.Label(form, text="Budget value", width=22).grid(row=1, column=0, sticky="w")
+        # Both entries live in the same grid cell; exactly one is managed
+        # at a time, so switching modes swaps the field instead of stacking
+        # two inputs (or leaving a dead one on screen).
+        self.minutes_entry = ttk.Entry(form, textvariable=self.pipeline_vars["minutes"], width=8)
+        self.steps_entry = ttk.Entry(form, textvariable=self.pipeline_vars["steps"], width=10)
+        self.budget_mode_var.trace_add("write", lambda *_: self._sync_budget_inputs())
+        self._sync_budget_inputs()
+        for row, key in enumerate(("environment_counts", "worker_counts", "finalists"), start=2):
+            ttk.Label(form, text=self._FIELD_LABELS[key], width=22).grid(
+                row=row, column=0, sticky="w"
             )
-        ):
-            ttk.Label(form, text=label, width=32).grid(row=row, column=0, sticky="w", pady=2)
-            ttk.Entry(form, textvariable=var, width=width).grid(
-                row=row, column=1, sticky="w", pady=2
+            ttk.Entry(form, textvariable=self.pipeline_vars[key], width=24).grid(
+                row=row, column=1, sticky="w"
             )
-        ttk.Checkbutton(
+        ttk.Label(
             form,
-            text="Compact training-path infos (uncheck for full diagnostic infos)",
-            variable=self.compact_var,
-        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        actions = ttk.Frame(self)
-        actions.pack(fill="x", pady=8)
+            text="Blank environment/worker lists sweep a host-scaled default grid.",
+            foreground=COLOR_MUTED,
+        ).grid(row=5, column=0, columnspan=2, sticky="w")
+
+        run_bar = ttk.Frame(top)
+        run_bar.pack(fill="x", pady=(8, 0))
         self.run_button = ttk.Button(
-            actions, text="Run benchmark", command=self._start, style="Primary.TButton"
+            run_bar, text="Run benchmark", command=self._start, style="Primary.TButton"
         )
         self.run_button.pack(side="left")
-        self.state_label = ttk.Label(actions, text="idle", foreground=COLOR_MUTED)
-        self.state_label.pack(side="left", padx=(12, 0))
-
-        history_frame = ttk.LabelFrame(
-            self, text="Result history (click a column to sort; select rows to compare)", padding=8
+        self.cancel_button = ttk.Button(
+            run_bar, text="Cancel", command=self._cancel, state="disabled"
         )
-        history_frame.pack(fill="both", expand=True)
-        self.tree = _scrollable_table(history_frame, self.RESULT_COLUMNS)
+        self.cancel_button.pack(side="left", padx=(8, 0))
+        self.progress_label = ttk.Label(
+            run_bar, text="idle", foreground=COLOR_MUTED, wraplength=620, justify="left"
+        )
+        self.progress_label.pack(side="left", padx=(14, 0))
 
-        self.scaling_label = ttk.Label(self, text="", justify="left", foreground=COLOR_MUTED)
-        self.scaling_label.pack(fill="x", pady=(6, 0))
+        # ---- Recommendation vs custom ---------------------------------
+        cards = ttk.Frame(top)
+        cards.pack(fill="x", pady=(10, 0))
+        recommended = ttk.LabelFrame(cards, text="Recommended configuration", padding=10)
+        recommended.pack(side="left", fill="both", expand=True)
+        self.recommendation_label = ttk.Label(recommended, text="n/a", justify="left")
+        self.recommendation_label.pack(anchor="nw")
+        self.apply_button = ttk.Button(
+            recommended, text="Apply to launch configuration", command=self._apply, state="disabled"
+        )
+        self.apply_button.pack(anchor="w", pady=(8, 0))
 
-        self.process_id: str | None = None
+        custom = ttk.LabelFrame(cards, text="Custom configuration", padding=10)
+        custom.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        custom_grid = ttk.Frame(custom)
+        custom_grid.pack(fill="x")
+        self.custom_env_var = tk.StringVar()
+        self.custom_workers_var = tk.StringVar()
+        self.custom_device_var = tk.StringVar(value="cpu")
+        for row, (label, var, kind) in enumerate(
+            (
+                ("Environments", self.custom_env_var, "entry"),
+                ("Workers", self.custom_workers_var, "entry"),
+                ("Device", self.custom_device_var, "choice"),
+            )
+        ):
+            ttk.Label(custom_grid, text=label, width=14).grid(row=row, column=0, sticky="w")
+            if kind == "choice":
+                ttk.Combobox(
+                    custom_grid,
+                    textvariable=var,
+                    values=("cpu", "cuda"),
+                    state="readonly",
+                    width=10,
+                ).grid(row=row, column=1, sticky="w")
+            else:
+                ttk.Entry(custom_grid, textvariable=var, width=10).grid(
+                    row=row, column=1, sticky="w"
+                )
+        custom_buttons = ttk.Frame(custom)
+        custom_buttons.pack(fill="x", pady=(6, 0))
+        self.validate_custom_button = ttk.Button(
+            custom_buttons, text="Validate", command=self._validate_custom
+        )
+        self.validate_custom_button.pack(side="left")
+        self.apply_custom_button = ttk.Button(
+            custom_buttons,
+            text="Apply to launch configuration",
+            command=self._apply_custom,
+            state="disabled",
+        )
+        self.apply_custom_button.pack(side="left", padx=(8, 0))
+        self.custom_result_label = ttk.Label(custom, text="", justify="left", wraplength=340)
+        self.custom_result_label.pack(anchor="w", pady=(6, 0))
+
+        # ---- Results + history -----------------------------------------
+        bottom = ttk.Frame(paned)
+        paned.add(bottom, weight=1)
+        results_frame = ttk.LabelFrame(
+            bottom, text="Latest pipeline results (click a column to sort)", padding=8
+        )
+        results_frame.pack(fill="both", expand=True)
+        self.tree = _scrollable_table(results_frame, self.RESULT_COLUMNS)
+
+        self._cancel_event: threading.Event | None = None
+        self._latest_progress: dict[str, Any] | None = None
+        self._progress_lock = threading.Lock()
+        self._latest_report: dict[str, Any] | None = None
+        self._custom_validation: dict[str, Any] | None = None
+        self._running = False
+
+    _FIELD_LABELS = {
+        "environment_counts": "Environment counts",
+        "worker_counts": "Worker counts",
+        "finalists": "Validated finalists",
+    }
+
+    def _sync_budget_inputs(self) -> None:
+        """Swap the budget input; the other mode keeps its value untouched."""
+        steps_mode = self.budget_mode_var.get() == "steps"
+        if steps_mode:
+            self.minutes_entry.grid_remove()
+            self.steps_entry.grid(row=1, column=1, sticky="w")
+        else:
+            self.steps_entry.grid_remove()
+            self.minutes_entry.grid(row=1, column=1, sticky="w")
 
     def refresh(self) -> None:
-        self.submit_poll("benchmark-history", self.adapter.benchmark_history, self._on_history)
-        process_id = self.process_id
-        if process_id:
-            self.submit_poll(
-                "benchmark-status",
-                lambda: self.adapter.process_status(process_id),
-                lambda status, error: self._on_process_status(process_id, status, error),
-            )
+        self.submit_poll(
+            "pipeline-history", self.adapter.benchmark_pipeline_history, self._on_history
+        )
+        self.submit_poll(
+            "recommendation", self.adapter.recommended_configuration, self._on_recommendation
+        )
+        with self._progress_lock:
+            progress = dict(self._latest_progress) if self._latest_progress else None
+        view = vm.pipeline_progress_view(progress)
+        if self._running:
+            self.progress_label.configure(text=view["text"])
+        self.run_button.configure(state="disabled" if self._running else "normal")
+        self.cancel_button.configure(state="normal" if self._running else "disabled")
 
     def _start(self) -> None:
+        values = {
+            "budget_mode": self.budget_mode_var.get(),
+            "minutes": self.pipeline_vars["minutes"].get(),
+            "steps": self.pipeline_vars["steps"].get(),
+            "environment_counts": self.pipeline_vars["environment_counts"].get(),
+            "worker_counts": self.pipeline_vars["worker_counts"].get(),
+            "finalists": self.pipeline_vars["finalists"].get(),
+        }
         try:
-            environment_counts = [
-                int(v.strip()) for v in self.env_counts_var.get().split(",") if v.strip()
-            ]
-            worker_counts = [
-                int(v.strip()) for v in self.worker_counts_var.get().split(",") if v.strip()
-            ]
-            steps = int(self.steps_var.get())
-            enemy_count = int(self.enemy_count_var.get())
-        except ValueError:
-            messagebox.showerror(
-                "Invalid benchmark configuration",
-                "Environment/worker counts, steps and enemy count must be integers.",
+            parsed = vm.parse_benchmark_pipeline_form(values)
+        except ValueError as exc:
+            messagebox.showerror("Invalid benchmark configuration", str(exc))
+            return
+        self._running = True
+        self._cancel_event = threading.Event()
+
+        def on_progress(event: dict[str, Any]) -> None:
+            with self._progress_lock:
+                self._latest_progress = dict(event)
+
+        def _run() -> dict[str, Any]:
+            return self.adapter.run_benchmark_pipeline(
+                budget_mode=parsed["budget_mode"],
+                steps=parsed["steps"],
+                minutes=parsed["minutes"],
+                environment_counts=parsed["environment_counts"],
+                worker_counts=parsed["worker_counts"],
+                finalists=parsed["finalists"],
+                cancel=self._cancel_event.is_set if self._cancel_event else None,
+                on_progress=on_progress,
             )
+
+        self.app.background.submit(_run, self._on_finished)
+
+    def _on_finished(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
+        self._running = False
+        if error is not None or report is None:
+            self.progress_label.configure(text=f"failed: {error}")
+            self.app.set_status(f"Benchmark failed: {error}", error=True)
             return
-
-        def _launch() -> dict[str, Any]:
-            return self.adapter.start_benchmark(
-                environment_counts=environment_counts,
-                worker_counts=worker_counts,
-                steps=steps,
-                enemy_count=enemy_count,
-                compact_infos=self.compact_var.get(),
-            )
-
-        self.run_button.configure(state="disabled")
-        self.app.background.submit(_launch, self._on_started)
-
-    def _on_started(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
-        self.run_button.configure(state="normal")
-        if error is not None or result is None:
-            messagebox.showerror("Benchmark could not start", str(error))
-            return
-        self.process_id = result["process_id"]
-        self.app.set_status(f"Benchmark started ({self.process_id[:8]})")
-
-    def _on_process_status(
-        self,
-        process_id: str,
-        status: dict[str, Any] | None,
-        error: BaseException | None,
-    ) -> None:
-        if process_id != self.process_id or error is not None or status is None:
-            return
-        self.state_label.configure(
-            text=status.get("state", "unknown"),
-            foreground=STATE_COLORS.get(str(status.get("state", "")), COLOR_MUTED),
+        self._latest_report = report
+        status = report.get("status")
+        self.progress_label.configure(
+            text=f"finished ({status}, {vm.format_duration(report.get('elapsed_seconds'))})"
         )
-        if status.get("state") in ("finished", "failed"):
-            self.process_id = None
+        if report.get("recommendation"):
+            self.app.set_status("Benchmark finished - recommendation available")
+        else:
+            self.app.set_status(
+                f"Benchmark finished without a recommendation: "
+                f"{report.get('recommendation_reason') or status}",
+                error=status != "completed",
+            )
+        self._render_report(report)
+        self._render_recommendation(report.get("recommendation"))
+
+    def _cancel(self) -> None:
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+            self.progress_label.configure(text="cancelling - the in-flight measurement finishes")
+
+    # -- results/history --------------------------------------------------
 
     def _on_history(
         self, history: list[dict[str, Any]] | None, error: BaseException | None
@@ -813,45 +1118,153 @@ class BenchmarkPage(Page):
         if error is not None or history is None:
             self.report_error("Benchmark history refresh failed", error or RuntimeError("unknown"))
             return
-        rows = vm.benchmark_history_rows(history)
+        if self._latest_report is None and history:
+            self._render_report(history[0].get("report"))
+
+    def _render_report(self, report: dict[str, Any] | None) -> None:
+        rows = vm.benchmark_pipeline_rows(report)
         self.tree.delete(*self.tree.get_children())
         for row in rows:
             self.tree.insert(
                 "",
                 "end",
                 values=(
-                    row["source"],
-                    row["environments"],
-                    row["workers"],
-                    vm.format_number(row["total_steps"]),
+                    row["stage"] or "n/a",
+                    row["status"] or "ok",
+                    vm.format_number(row["environments"]),
+                    vm.format_number(row["workers"]),
+                    row["device"] or "-",
+                    vm.format_number(row["steps"]),
                     vm.format_number(row["steps_per_second"], 1),
-                    vm.format_number(row["episodes_per_second"], 2),
                     vm.format_number(row["p50_ms"], 2),
                     vm.format_number(row["p95_ms"], 2),
-                    vm.format_duration(row["elapsed_seconds"]),
-                    row["info_mode"] or "n/a",
+                    vm.format_number(row["jitter"], 2),
+                    vm.format_number(row["startup_seconds"], 2),
+                    row["error"] or "",
                 ),
             )
-        if history:
-            scaling = history[0].get("scaling") or {}
-            if scaling:
-                lines = [
-                    f"Most recent sweep ({history[0]['directory']}):",
-                    f"  best throughput at {scaling.get('best_environment_count')} environments "
-                    f"({vm.format_number(scaling.get('best_steps_per_second'), 1)} steps/s)",
-                ]
-                if scaling.get("diminishing_returns_at_environment_count") is not None:
-                    lines.append(
-                        f"  diminishing returns from {scaling['diminishing_returns_at_environment_count']} "
-                        "environments onward"
-                    )
-                if scaling.get("worker_scaling"):
-                    lines.append(
-                        "  worker sharding speed-up measured vs. single-process baseline (see table)"
-                    )
-                self.scaling_label.configure(text="\n".join(lines))
-            else:
-                self.scaling_label.configure(text="")
+
+    # -- recommendation ---------------------------------------------------
+
+    def _on_recommendation(
+        self, recommendation: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if error is not None:
+            return
+        if not self._running and not self._latest_report:
+            self._render_recommendation(recommendation)
+
+    def _render_recommendation(self, recommendation: dict[str, Any] | None) -> None:
+        view = vm.benchmark_recommendation_view(recommendation)
+        if not view.get("available"):
+            self.recommendation_label.configure(
+                text=f"{view.get('reason')}\nRun the benchmark pipeline to measure this machine."
+            )
+            self.apply_button.configure(state="disabled")
+            return
+        lines = [
+            view["summary"],
+            f"basis: {view['basis']}",
+            f"measured: {view['created_utc'] or 'n/a'}"
+            + (f", applied: {view['applied_utc']}" if view.get("applied_utc") else ""),
+        ]
+        lines.extend(f"• {line}" for line in view["rationale"])
+        lines.extend(f"warning: {warning}" for warning in view["warnings"])
+        self.recommendation_label.configure(text="\n".join(lines))
+        self.apply_button.configure(state="normal")
+
+    def _apply(self) -> None:
+        recommendation = None
+        if self._latest_report and self._latest_report.get("recommendation"):
+            recommendation = self._latest_report["recommendation"]
+        if recommendation is None:
+            return
+
+        def _run() -> dict[str, Any] | None:
+            self.adapter.apply_recommended_configuration()
+            return recommendation
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result:
+                self.app.set_status(f"Apply failed: {error}", error=True)
+                return
+            agents_page = self.app.pages.get("Agents")
+            if agents_page is not None:
+                agents_page.apply_launch_values(
+                    {
+                        "environment_count": str(result["environment_count"]),
+                        "env_workers": str(result["env_workers"]),
+                        "device": result.get("device") or "auto",
+                        "inference_device": result.get("inference_device") or "auto",
+                    }
+                )
+            self.app.set_status(
+                "Recommended configuration applied to the launch form (Agents page)"
+            )
+            self._render_recommendation(result | {"applied_utc": "just now"})
+
+        self.app.background.submit(_run, _done)
+
+    def _validate_custom(self) -> None:
+        try:
+            environment_count = int(self.custom_env_var.get())
+            env_workers = int(self.custom_workers_var.get())
+        except ValueError:
+            self.custom_result_label.configure(
+                text="Environments and workers must be integers.", foreground=COLOR_ERROR
+            )
+            self.apply_custom_button.configure(state="disabled")
+            return
+        device = self.custom_device_var.get()
+
+        def _run() -> dict[str, Any]:
+            return self.adapter.validate_runtime_configuration(
+                environment_count, env_workers, device
+            )
+
+        def _done(validation: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or validation is None:
+                self.custom_result_label.configure(
+                    text=f"validation failed: {error}", foreground=COLOR_ERROR
+                )
+                self.apply_custom_button.configure(state="disabled")
+                return
+            self._custom_validation = validation
+            view = vm.custom_configuration_view(validation)
+            text = "VALID" if view["valid"] else "INVALID"
+            lines = [text] + [f"error: {item}" for item in view["errors"]]
+            lines.extend(f"warning: {item}" for item in view["warnings"])
+            if view["shards"]:
+                lines.append(
+                    "workers: "
+                    + ", ".join(f"w{shard['worker']}={shard['count']}" for shard in view["shards"])
+                )
+            self.custom_result_label.configure(
+                text="\n".join(lines),
+                foreground=COLOR_OK if view["valid"] else COLOR_ERROR,
+            )
+            self.apply_custom_button.configure(state="normal" if view["valid"] else "disabled")
+
+        self.app.background.submit(_run, _done)
+
+    def _apply_custom(self) -> None:
+        validation = self._custom_validation
+        if not validation or not validation.get("valid"):
+            return
+        environment_count = validation["environment_count"]
+        env_workers = validation["env_workers"]
+        device = self.custom_device_var.get()
+        agents_page = self.app.pages.get("Agents")
+        if agents_page is None:
+            return
+        agents_page.apply_launch_values(
+            {
+                "environment_count": str(environment_count),
+                "env_workers": str(env_workers),
+                "device": device,
+            }
+        )
+        self.app.set_status("Custom configuration applied to the launch form (Agents page)")
 
 
 class EvaluationPage(Page):
@@ -1507,7 +1920,6 @@ class SettingsPage(Page):
 
 PAGE_CLASSES: tuple[type[Page], ...] = (
     DashboardPage,
-    TrainingPage,
     AgentsPage,
     BenchmarkPage,
     EvaluationPage,

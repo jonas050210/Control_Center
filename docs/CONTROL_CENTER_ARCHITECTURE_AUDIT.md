@@ -1,10 +1,12 @@
 # Control Center architecture audit
 
 Audited against `PROJECT.md`, `python/sandboxai`, the Godot bridge, existing
-run-inspection code, and the existing Godot Control Center scene before and
-during the desktop Control Center's implementation. The architecture below
-was kept unchanged from the first version; only the depth of what the
-adapter/GUI expose grew.
+run-inspection code, and the (since removed) Godot Control Center scene
+before and during the desktop Control Center's implementation. The
+architecture below was kept unchanged from the first version; only the
+depth of what the adapter/GUI expose grew. The desktop application audited
+here is now the only Control Center: the rendered operator scene it was
+contrasted with no longer exists.
 
 | Concern | Existing owner / contract | GUI exposure |
 |---|---|---|

@@ -410,3 +410,115 @@ def test_run_hardware_wizard_falls_back_without_engine(tmp_path):
     assert result["fallback"] is True
     assert result["selected_device"] == "cpu"
     assert result["godot_available"] is False
+
+
+def test_send_command_writes_the_cooperative_command_file(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    record = adapter.processes.start(
+        "training", [sys.executable, "-c", "import time; time.sleep(5)"], run_dir, tmp_path
+    )
+    try:
+        snapshot = adapter.processes.send_command(record.id, "pause")
+        assert snapshot["state"] == "running"
+        command = json.loads((run_dir / "command.json").read_text())
+        assert command["command"] == "pause"
+    finally:
+        adapter.processes.force_stop(record.id)
+        record.process.wait(timeout=3)
+
+
+def test_send_command_guards(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    # Unknown command ids are rejected outright.
+    try:
+        adapter.processes.send_command("whatever", "explode")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for an unsupported command")
+
+    # Unknown process ids report, not raise.
+    missing = adapter.processes.send_command("nope", "pause")
+    assert missing["error_code"] == "process_not_found"
+
+    # Non-training kinds never speak the protocol.
+    other = tmp_path / "bench"
+    other.mkdir()
+    benchmark = adapter.processes.start(
+        "benchmark", [sys.executable, "-c", "import time; time.sleep(5)"], other, tmp_path
+    )
+    try:
+        refused = adapter.processes.send_command(benchmark.id, "pause")
+        assert refused["error_code"] == "unsupported_command"
+        assert not (other / "command.json").exists()
+    finally:
+        adapter.processes.force_stop(benchmark.id)
+        benchmark.process.wait(timeout=3)
+
+    # Exited training processes cannot take commands.
+    finished = adapter.processes.start(
+        "training", [sys.executable, "-c", "print('done')"], tmp_path / "r2", tmp_path
+    )
+    finished.process.wait(timeout=3)
+    time.sleep(0.05)
+    exited = adapter.processes.send_command(finished.id, "stop")
+    assert exited["error_code"] == "process_not_running"
+
+
+def test_start_training_resume_reuses_the_checkpoint_run_directory(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    run_dir = tmp_path / "training" / "runs" / "original"
+    checkpoints = run_dir / "checkpoints"
+    checkpoints.mkdir(parents=True)
+    checkpoint = checkpoints / "ppo_4000_steps.zip"
+    checkpoint.write_bytes(b"weights")
+
+    config = TrainingConfig(
+        total_training_steps=100, output_root=str(tmp_path / "training"), run_id="original"
+    )
+    snapshot = adapter.start_training(config, checkpoint=checkpoint)
+    try:
+        view = next(
+            item for item in adapter.list_processes() if item["id"] == snapshot["process_id"]
+        )
+        assert view["run_dir"] == str(run_dir)
+        assert "resume" in view["command"]
+        assert str(checkpoint) in view["command"]
+        assert view["meta"]["resumed_from"] == str(checkpoint)
+        # The config the resume run uses is persisted in that same run dir.
+        persisted = json.loads((run_dir / "config.json").read_text())
+        assert persisted["total_training_steps"] == 100
+    finally:
+        adapter.close()
+
+
+def test_adapter_wires_the_agent_manager_to_itself(tmp_path):
+    from sandboxai.agents import AgentManager
+
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    assert isinstance(adapter.agents, AgentManager)
+    # The registry drives the adapter's own processes and launch surface.
+    assert adapter.agents._processes is adapter.processes
+    assert adapter.agents._launcher is adapter
+
+
+def test_validate_runtime_configuration_shares_the_pipeline_verdict(tmp_path):
+    import time as _time
+
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    # Deterministic runtime facts: no CUDA, 8 usable cores.
+    adapter._runtime_status = (_time.monotonic(), {"cuda_available": False, "cpu_count": 8})
+
+    valid = adapter.validate_runtime_configuration(12, 4, "cpu")
+    assert valid["valid"], valid["errors"]
+    assert [shard["count"] for shard in valid["shards"]] == [3, 3, 3, 3]
+
+    too_many_workers = adapter.validate_runtime_configuration(4, 8, "cpu")
+    assert not too_many_workers["valid"]
+
+    no_cuda = adapter.validate_runtime_configuration(8, 2, "cuda")
+    assert not no_cuda["valid"]
+    assert any("CUDA" in error for error in no_cuda["errors"])

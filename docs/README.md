@@ -26,7 +26,7 @@ truth for versions and the engine contract.
 
 | Document | What it is for |
 | --- | --- |
-| [CONTROL_CENTER.md](CONTROL_CENTER.md) | The in-simulator Godot Control Center: screens, controls and headless operation. |
+| [CONTROL_CENTER.md](CONTROL_CENTER.md) | The headless desktop Control Center (`python3 main.py`): pages, lifecycle actions, benchmark pipeline and honesty rules. |
 | [ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](ADAPTER_AND_DESKTOP_CONTROL_CENTER.md) | The Python adapter and the Tkinter desktop Control Center built on top of it. |
 | [DEBUG_GUI_AND_BENCHMARKING.md](DEBUG_GUI_AND_BENCHMARKING.md) | The in-scene debug overlay and how to run and read the benchmark suites. |
 | [RUN_LOCAL_VALIDATION.md](RUN_LOCAL_VALIDATION.md) | Step-by-step full validation on a machine that actually has Godot installed, including the Windows/WSL paths. |

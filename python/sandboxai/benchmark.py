@@ -68,11 +68,24 @@ def benchmark_simulation(
     max_seconds_per_config: float = 20.0,
     worker_counts: list[int] | tuple[int, ...] = DEFAULT_WORKER_COUNTS,
     compact_infos: bool = True,
+    warmup_steps: int = 0,
 ) -> list[dict[str, Any]]:
+    """Measure stepping throughput for one or more configurations.
+
+    ``warmup_steps`` optionally runs that many vector steps before the
+    timed measurement. Warmup covers one-off costs the trainer never sees
+    on a hot loop (first-call code paths, allocator growth); its duration
+    is reported as ``warmup_seconds`` and excluded from ``steps_per_second``.
+    Startup is always reported separately as ``startup_seconds``: the time
+    from starting to build the bridge client (process spawn, environment
+    construction, protocol handshake) until the initial ``reset`` returns.
+    """
     if steps < 1 or not environment_counts:
         raise ValueError("benchmark needs positive steps and at least one environment count")
     if max_seconds_per_config <= 0.0:
         raise ValueError("max_seconds_per_config must be positive")
+    if warmup_steps < 0:
+        raise ValueError("warmup_steps must be >= 0")
     if not worker_counts or any(int(value) < 1 for value in worker_counts):
         raise ValueError("worker_counts must contain at least one positive value")
     results: list[dict[str, Any]] = []
@@ -84,6 +97,7 @@ def benchmark_simulation(
             {min(int(value), int(environment_count)) for value in worker_counts}
         )
         for worker_count in planned_workers:
+            startup_started = time.perf_counter()
             client = make_batch_client(
                 project_path=project_path,
                 godot_executable=godot_executable,
@@ -99,11 +113,18 @@ def benchmark_simulation(
             )
             try:
                 client.reset(seed)
+                startup_seconds = time.perf_counter() - startup_started
                 # MultiDiscrete idle action: all neutral axes, no shooting, no
                 # jump. Built from ACTION_NVEC rather than a literal so the
                 # benchmark cannot drift away from the action contract.
                 idle_action = [nvec // 2 if nvec == 3 else 0 for nvec in ACTION_NVEC]
                 actions = [list(idle_action) for _ in range(environment_count)]
+                warmup_seconds = 0.0
+                if warmup_steps:
+                    warmup_started = time.perf_counter()
+                    for _ in range(warmup_steps):
+                        client.step(actions)
+                    warmup_seconds = time.perf_counter() - warmup_started
                 started = time.perf_counter()
                 deadline = started + max_seconds_per_config
                 episode_count = 0
@@ -133,6 +154,9 @@ def benchmark_simulation(
                     "time_boxed": completed_steps < steps,
                     "info_mode": "compact_training" if compact_infos else "full_diagnostics",
                     "resources": resource_snapshot(),
+                    "startup_seconds": startup_seconds,
+                    "warmup_steps": warmup_steps,
+                    "warmup_seconds": warmup_seconds,
                 }
                 results.append(row)
             finally:
@@ -158,6 +182,9 @@ def benchmark_simulation(
                 "episodes_per_second",
                 "time_boxed",
                 "info_mode",
+                "startup_seconds",
+                "warmup_steps",
+                "warmup_seconds",
             ]
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
