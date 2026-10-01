@@ -61,6 +61,10 @@ const TrainingRunController = preload("res://scripts/control_center/training_run
 const REFRESH_HZ: float = 10.0
 const LEFT_PANEL_WIDTH: float = 310.0
 const RIGHT_PANEL_WIDTH: float = 380.0
+## Minimum width that keeps the persistent navigation rail and a useful
+## simulation viewport visible together. Smaller desktop windows scroll the
+## whole workspace horizontally instead of hiding live controls or docks.
+const MIN_WORKSPACE_WIDTH: float = 1080.0
 
 ## Navigation entries: page id -> label, in display order.
 const PAGES: Array = [
@@ -98,6 +102,7 @@ var headless_panel: ControlCenterHeadlessPanel
 var analytics_panel: ControlCenterAnalyticsPanel
 var history_panel: ControlCenterHistoryPanel
 
+var _workspace_scroll: ScrollContainer
 var _left_container: Control
 var _right_container: Control
 var _bottom_container: Control
@@ -155,14 +160,26 @@ func _build_layout() -> void:
 
 	# Keep navigation visually separate from the working area. A persistent
 	# rail is easier to scan than a dense row of eight equally weighted tabs.
+	# On a narrow desktop, make that full working surface horizontally
+	# reachable; shrinking it would make active selectors and simulation docks
+	# disappear off-screen with no way to access them.
+	_workspace_scroll = ScrollContainer.new()
+	_workspace_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_workspace_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_workspace_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_workspace_scroll.tooltip_text = "Scroll horizontally to reach the full Control Center workspace."
+	column.add_child(_workspace_scroll)
 	var workspace := HBoxContainer.new()
+	workspace.custom_minimum_size = Vector2(MIN_WORKSPACE_WIDTH, 0.0)
+	workspace.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	workspace.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	workspace.add_theme_constant_override("separation", 12)
 	workspace.mouse_filter = Control.MOUSE_FILTER_PASS
-	column.add_child(workspace)
+	_workspace_scroll.add_child(workspace)
 	workspace.add_child(_build_navigation())
 
 	_page_container = Control.new()
+	_page_container.custom_minimum_size = Vector2(MIN_WORKSPACE_WIDTH - 188.0, 0.0)
 	_page_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_page_container.mouse_filter = Control.MOUSE_FILTER_IGNORE

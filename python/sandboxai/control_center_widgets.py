@@ -7,6 +7,7 @@ visual token palette can evolve without growing the application shell module.
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import gc
 import os
 import queue
@@ -246,18 +247,22 @@ class ToolTip:
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<FocusIn>", self._schedule, add="+")
         widget.bind("<FocusOut>", self._hide, add="+")
+        widget.bind("<Destroy>", self._on_widget_destroy, add="+")
 
     def _schedule(self, _event: object = None) -> None:
+        if not self.widget.winfo_exists():
+            return
         self._cancel()
         self._after_id = self.widget.after(450, self._show)
 
     def _cancel(self) -> None:
         if self._after_id is not None:
-            self.widget.after_cancel(self._after_id)
+            with contextlib.suppress(tk.TclError):
+                self.widget.after_cancel(self._after_id)
             self._after_id = None
 
     def _show(self) -> None:
-        if self._window is not None or not self.text:
+        if self._window is not None or not self.text or not self.widget.winfo_exists():
             return
         self._after_id = None
         tip = tk.Toplevel(self.widget)
@@ -283,8 +288,14 @@ class ToolTip:
     def _hide(self, _event: object = None) -> None:
         self._cancel()
         if self._window is not None:
-            self._window.destroy()
+            with contextlib.suppress(tk.TclError):
+                self._window.destroy()
             self._window = None
+
+    def _on_widget_destroy(self, _event: object = None) -> None:
+        # A delayed callback must never try to query a widget after its page
+        # was replaced or the application was closed.
+        self._hide()
 
 
 class StatCard(ttk.Frame):
@@ -432,7 +443,12 @@ class LogPanel(ttk.Frame):
         toolbar = ttk.Frame(self)
         toolbar.pack(fill="x")
         self._autoscroll = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text="Auto-scroll", variable=self._autoscroll).pack(side="left")
+        ttk.Checkbutton(
+            toolbar,
+            text="Auto-scroll",
+            variable=self._autoscroll,
+            command=self._on_autoscroll_toggled,
+        ).pack(side="left")
         ttk.Button(toolbar, text="Clear view", command=self.clear).pack(side="left", padx=(8, 0))
         self._truncated_label = ttk.Label(toolbar, text="", foreground=COLOR_WARN)
         self._truncated_label.pack(side="right")
@@ -448,10 +464,10 @@ class LogPanel(ttk.Frame):
             insertbackground=COLOR_TEXT,
             font=("Consolas", 9),
         )
-        yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=yscroll.set)
+        self._yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
+        self.text.configure(yscrollcommand=self._on_text_scroll)
         self.text.pack(side="left", fill="both", expand=True)
-        yscroll.pack(side="right", fill="y")
+        self._yscroll.pack(side="right", fill="y")
         self.text.tag_configure("stderr", foreground=COLOR_ERROR)
         self.text.tag_configure("meta", foreground=COLOR_MUTED)
         self.text.bind("<MouseWheel>", self._on_manual_scroll)
@@ -460,6 +476,25 @@ class LogPanel(ttk.Frame):
 
     def _on_manual_scroll(self, _event: object) -> None:
         self._user_scrolled_up = True
+
+    def _on_text_scroll(self, first: str, last: str) -> None:
+        """Synchronize the native scrollbar and restore follow-at-bottom.
+
+        A manual wheel event must pause live-follow while an operator reads
+        historical output, but reaching the newest line again should make
+        the already-enabled Auto-scroll checkbox useful immediately.
+        """
+        self._yscroll.set(first, last)
+        try:
+            if float(last) >= 0.999:
+                self._user_scrolled_up = False
+        except ValueError:  # pragma: no cover - Tk always sends float strings
+            pass
+
+    def _on_autoscroll_toggled(self) -> None:
+        if self._autoscroll.get():
+            self._user_scrolled_up = False
+            self.text.see("end")
 
     def reset_cursor(self) -> None:
         """Call when switching to a different process id."""

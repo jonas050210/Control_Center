@@ -118,7 +118,10 @@ func _draw_crosshair(viewport: Rect2, in_range: bool, weapon_ready: bool) -> voi
 	var gap: float = 5.0
 	var outer: float = CROSSHAIR_SIZE
 	draw_circle(center, CROSSHAIR_DOT_RADIUS + 1.0, Color(0.0, 0.03, 0.08, 0.72))
-	draw_circle(center, CROSSHAIR_DOT_RADIUS, Color(1.0, 0.06, 0.04, 0.96))
+	# Keep the centre point in the same local-state colour as the brackets.
+	# A permanently red dot used to disagree with a green in-range reticle.
+	var dot_color := Color(reticle_color.r, reticle_color.g, reticle_color.b, 0.96)
+	draw_circle(center, CROSSHAIR_DOT_RADIUS, dot_color)
 	draw_arc(center, outer + 6.0, -0.55, 0.55, 12, reticle_color, 1.0)
 	draw_arc(center, outer + 6.0, PI - 0.55, PI + 0.55, 12, reticle_color, 1.0)
 	draw_line(center + Vector2(-outer, 0.0), center + Vector2(-gap, 0.0), reticle_color, 1.0)

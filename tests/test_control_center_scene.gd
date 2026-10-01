@@ -115,6 +115,19 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 		ui.status_bar.get_child(0) is ScrollContainer,
 		"narrow windows keep the full command strip reachable via horizontal scrolling"
 	)
+	t.assert_not_null(
+		ui._workspace_scroll,
+		"the persistent navigation and page workspace stay reachable on narrow desktops"
+	)
+	t.assert_eq(
+		ui._workspace_scroll.horizontal_scroll_mode,
+		ScrollContainer.SCROLL_MODE_AUTO,
+		"workspace scrolling is enabled only when a viewport is too narrow"
+	)
+	t.assert_true(
+		ui._page_container.custom_minimum_size.x > 0.0,
+		"the page viewport keeps a usable simulation/control width before scrolling"
+	)
 	t.assert_not_null(ui.agent_panel, "live agent view panel")
 	t.assert_not_null(ui.perception_panel, "what-does-the-AI-see panel")
 	t.assert_not_null(ui.observation_panel, "observation inspector panel")
@@ -185,8 +198,9 @@ func test_gui_mode_switch_keeps_panels_alive() -> SandboxTest:
 
 
 ## Theme coverage for controls built directly by specialist panels. Without
-## this, Tree, ItemList, RichTextLabel and tooltips silently fall back to the
-## engine default visual language instead of the operator surface.
+## this, Tree, ItemList, RichTextLabel, menus, scrollbars and tooltips silently
+## fall back to the engine default visual language instead of the operator
+## surface.
 func test_telemetry_theme_covers_direct_data_controls() -> SandboxTest:
 	var t := SandboxTest.new("control_center_telemetry_theme")
 	var theme := ControlCenterTheme.build_theme()
@@ -196,6 +210,12 @@ func test_telemetry_theme_covers_direct_data_controls() -> SandboxTest:
 				"panel" if control_type != "RichTextLabel" else "normal", control_type
 			),
 			"%s receives the Control Center data-surface style" % control_type
+		)
+	t.assert_true(theme.has_stylebox("panel", "PopupMenu"))
+	for control_type in ["HScrollBar", "VScrollBar"]:
+		t.assert_true(
+			theme.has_stylebox("grabber", control_type),
+			"%s has an operator-surface scrollbar grabber" % control_type
 		)
 	t.assert_true(theme.has_stylebox("panel", "TooltipPanel"))
 

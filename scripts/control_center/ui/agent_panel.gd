@@ -28,6 +28,16 @@ func setup() -> void:
 		"Agent", ControlCenterTheme.FONT_SIZE_TITLE, ControlCenterTheme.COLOR_TITLE
 	)
 	box.add_child(_title)
+	var scope_note := ControlCenterTheme.make_label(
+		"LOCAL SIMULATION TELEMETRY",
+		ControlCenterTheme.FONT_SIZE_SMALL,
+		ControlCenterTheme.COLOR_ACCENT_SECONDARY
+	)
+	scope_note.tooltip_text = (
+		"These values describe the local calibration simulation. "
+		+ "They are not a reconstructed TTK Testing player HUD."
+	)
+	box.add_child(scope_note)
 
 	var grid := ControlCenterTheme.make_grid(2)
 	box.add_child(grid)
@@ -91,7 +101,7 @@ func setup() -> void:
 
 func refresh(snapshot: Dictionary) -> void:
 	if snapshot.is_empty():
-		_title.text = "AGENT (telemetry disabled)"
+		_title.text = "AGENT // TELEMETRY DISABLED"
 		return
 	var status: Dictionary = snapshot["status"]
 	var agent: Dictionary = snapshot["agent"]
@@ -99,7 +109,7 @@ func refresh(snapshot: Dictionary) -> void:
 	var target: Dictionary = snapshot["target"]
 
 	_title.text = (
-		"AGENT %d  ·  ENV %d"
+		"AGENT %d  ·  ENV %d  // LOCAL"
 		% [int(snapshot["selected_agent_slot"]), int(snapshot["selected_environment"])]
 	)
 

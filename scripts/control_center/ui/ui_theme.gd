@@ -262,6 +262,42 @@ static func build_theme() -> Theme:
 	separator.content_margin_top = 1.0
 	separator.content_margin_bottom = 1.0
 	theme.set_stylebox("separator", "HSeparator", separator)
+	var vertical_separator := StyleBoxFlat.new()
+	vertical_separator.bg_color = Color(COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, 0.24)
+	vertical_separator.content_margin_left = 1.0
+	vertical_separator.content_margin_right = 1.0
+	theme.set_stylebox("separator", "VSeparator", vertical_separator)
+
+	# Popup menus are spawned by OptionButton, outside of each panel's scene
+	# tree. Theme them here so their choice lists do not flash the engine's
+	# default palette over the operator surface.
+	var popup_panel := inset_style(COLOR_BACKGROUND_SOLID, COLOR_BORDER)
+	popup_panel.content_margin_left = 5.0
+	popup_panel.content_margin_right = 5.0
+	popup_panel.content_margin_top = 5.0
+	popup_panel.content_margin_bottom = 5.0
+	theme.set_stylebox("panel", "PopupMenu", popup_panel)
+	theme.set_stylebox("hover", "PopupMenu", inset_style(COLOR_SURFACE_HOVER, COLOR_ACCENT))
+	theme.set_color("font_color", "PopupMenu", COLOR_TEXT)
+	theme.set_color("font_hover_color", "PopupMenu", COLOR_TITLE)
+	theme.set_color("font_disabled_color", "PopupMenu", COLOR_MUTED)
+	theme.set_font_size("font_size", "PopupMenu", FONT_SIZE_NORMAL)
+
+	# Scroll containers now carry many data-heavy pages on small windows. Give
+	# their tracks a compact, high-contrast grabber rather than a platform
+	# default that disappears against the dark workspace.
+	for type_name in ["HScrollBar", "VScrollBar"]:
+		var scrollbar_track := inset_style(Color("#060d19cc"), COLOR_BORDER_SUBTLE)
+		scrollbar_track.set_corner_radius_all(99)
+		var scrollbar_grabber := inset_style(COLOR_BORDER, COLOR_ACCENT)
+		scrollbar_grabber.set_corner_radius_all(99)
+		var scrollbar_active := inset_style(COLOR_SURFACE_HOVER, COLOR_ACCENT)
+		scrollbar_active.set_corner_radius_all(99)
+		theme.set_stylebox("scroll", type_name, scrollbar_track)
+		theme.set_stylebox("scroll_focus", type_name, scrollbar_track)
+		theme.set_stylebox("grabber", type_name, scrollbar_grabber)
+		theme.set_stylebox("grabber_highlight", type_name, scrollbar_active)
+		theme.set_stylebox("grabber_pressed", type_name, scrollbar_active)
 
 	var tooltip_panel := panel_style(COLOR_BACKGROUND_SOLID, COLOR_ACCENT_SECONDARY)
 	tooltip_panel.content_margin_left = 10.0

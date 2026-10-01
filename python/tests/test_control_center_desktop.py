@@ -144,6 +144,36 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app._on_close()
         assert self.app.background._closed is True
 
+    def test_log_autoscroll_resumes_after_the_operator_returns_to_the_bottom(self):
+        from sandboxai.control_center_widgets import LogPanel
+
+        panel = LogPanel(self.app, max_lines=300)
+        panel.pack(fill="both", expand=True)
+        self.app.update()
+        panel.apply_log({"stdout": [f"line {index}" for index in range(120)]})
+        panel._on_manual_scroll(None)
+        assert panel._user_scrolled_up is True
+
+        # The checkbox remains enabled, so returning to the newest output
+        # should resume live-follow rather than leave it silently stuck.
+        panel._on_text_scroll("0.0", "1.0")
+        assert panel._user_scrolled_up is False
+        panel._on_autoscroll_toggled()
+        self.app.update()
+        self.assertAlmostEqual(panel.text.yview()[1], 1.0, places=3)
+
+    def test_tooltip_cancels_its_delayed_callback_when_a_page_widget_is_destroyed(self):
+        from sandboxai.control_center_widgets import ToolTip
+
+        button = tk.Button(self.app, text="temporary")
+        button.pack()
+        tip = ToolTip(button, "temporary help")
+        tip._schedule()
+        button.destroy()
+        self.app.update()
+        assert tip._after_id is None
+        assert tip._window is None
+
 
 if __name__ == "__main__":
     unittest.main()

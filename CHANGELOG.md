@@ -117,11 +117,22 @@ records what changed and why.
   stops backdrop/page-transition animation without changing simulation,
   telemetry or training. These remain explicitly local calibration
   presentation, not a claim about TTK Testing's player HUD.
+- The Godot Control Center now carries the same visual system through dense
+  telemetry surfaces too: direct Tree/ItemList/RichText controls, option
+  popups, scrollbars, tooltips, progress meters and compact sparklines no
+  longer fall back to an engine-default palette. A full-workspace horizontal
+  scroll contract keeps the navigation rail, simulation docks and all
+  existing controls reachable on narrow desktop windows; the first-person
+  reticle's centre point now agrees with its local ready/range state. The Tk
+  log reader now resumes its existing auto-follow behavior when an operator
+  scrolls back to the newest line instead of silently remaining paused.
 - CI (`python-tests.yml`) no longer duplicates the Python suite that
   `godot-tests.yml` was also running; adds pip caching, a
   `concurrency` group that cancels superseded runs, and pins every
-  third-party action to a commit SHA rather than a mutable tag.
-  Job order: lint, typecheck, core-tests, gdscript-checks,
+  third-party action to a commit SHA rather than a mutable tag. The full
+  training matrix has a 30-minute budget: on Windows, native scientific
+  dependency setup left too little time for a real full-suite verdict at
+  20 minutes. Job order: lint, typecheck, core-tests, gdscript-checks,
   desktop-ui-tests, full-tests, coverage, audit.
 - Ruff now enforces `E,W,F,I,UP,B,SIM,C901` instead of `F` alone, with
   `max-complexity = 15`, and `ruff format` is the formatter of record
