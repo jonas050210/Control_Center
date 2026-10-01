@@ -24,7 +24,10 @@ state.
 
 1. [Official TTK Testing experience page](https://www.roblox.com/games/120189115846709/TTK-Testing)
    — current controls list **M1** fire, **M2** aim, **C** crouch, **Q/E**
-   lean left/right, and weapon swapping via **number keys**.
+   lean left/right, and weapon swapping via **number keys**. Its current
+   official experience thumbnail, reviewed on 2026-10-01, is a normal
+   first-person weapon/world view; it supports the existing no-Helmetcam
+   presentation decision, but contains no HUD, timing, or numerical evidence.
 2. [Official developer forum announcement](https://devforum.roblox.com/t/ttk-our-very-early-tactical-fps/4664539)
    — confirms the product direction around PvE, PvP and door-kicking. It does
    not publish map scripts, AI rules, timing, weapon values, or physics.

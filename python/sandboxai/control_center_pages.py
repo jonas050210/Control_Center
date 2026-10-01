@@ -23,7 +23,7 @@ from .control_center_widgets import (
     LogPanel,
     StatRow,
     _open_in_file_manager,
-    _sortable_table,
+    _scrollable_table,
 )
 
 STATE_COLORS = {
@@ -442,11 +442,7 @@ class AgentsPage(Page):
         paned.pack(fill="both", expand=True)
         top = ttk.Frame(paned)
         paned.add(top, weight=2)
-        self.tree = _sortable_table(top, self.COLUMNS)
-        self.tree.pack(fill="both", expand=True, side="left")
-        scroll = ttk.Scrollbar(top, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        self.tree = _scrollable_table(top, self.COLUMNS)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         bottom = ttk.Frame(paned, padding=(0, 8, 0, 0))
@@ -659,11 +655,7 @@ class BenchmarkPage(Page):
             self, text="Result history (click a column to sort; select rows to compare)", padding=8
         )
         history_frame.pack(fill="both", expand=True)
-        self.tree = _sortable_table(history_frame, self.RESULT_COLUMNS)
-        self.tree.pack(fill="both", expand=True, side="left")
-        scroll = ttk.Scrollbar(history_frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        self.tree = _scrollable_table(history_frame, self.RESULT_COLUMNS)
 
         self.scaling_label = ttk.Label(self, text="", justify="left", foreground=COLOR_MUTED)
         self.scaling_label.pack(fill="x", pady=(6, 0))
@@ -799,8 +791,7 @@ class EvaluationPage(Page):
         left = ttk.Frame(paned, padding=(0, 0, 8, 0))
         paned.add(left, weight=1)
         ttk.Label(left, text="Checkpoints", style="Section.TLabel").pack(anchor="w")
-        self.checkpoint_tree = _sortable_table(left, self.CHECKPOINT_COLUMNS)
-        self.checkpoint_tree.pack(fill="both", expand=True)
+        self.checkpoint_tree = _scrollable_table(left, self.CHECKPOINT_COLUMNS)
 
         form = ttk.LabelFrame(left, text="Run evaluation on the selected checkpoint", padding=10)
         form.pack(fill="x", pady=(8, 0))
@@ -843,8 +834,7 @@ class EvaluationPage(Page):
             text="Evaluation results (select multiple rows to compare)",
             style="Section.TLabel",
         ).pack(anchor="w")
-        self.eval_tree = _sortable_table(right, self.EVAL_COLUMNS)
-        self.eval_tree.pack(fill="both", expand=False)
+        self.eval_tree = _scrollable_table(right, self.EVAL_COLUMNS, expand=False)
         self.eval_tree.configure(selectmode="extended")
         self.eval_tree.bind("<<TreeviewSelect>>", self._on_eval_select)
 
@@ -1074,11 +1064,7 @@ class RunsPage(Page):
         paned.pack(fill="both", expand=True)
         top = ttk.Frame(paned)
         paned.add(top, weight=1)
-        self.tree = _sortable_table(top, self.COLUMNS)
-        self.tree.pack(fill="both", expand=True, side="left")
-        scroll = ttk.Scrollbar(top, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
+        self.tree = _scrollable_table(top, self.COLUMNS)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         bottom = ttk.LabelFrame(paned, text="Run detail", padding=8)

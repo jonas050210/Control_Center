@@ -155,8 +155,16 @@ dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
   blocks waiting for it.
 * `LogPanel` bounds the Text widget itself (old lines are deleted past a
   cap) independently of the adapter's own bounded buffer, distinguishes
-  stdout from stderr (red), and supports pausing auto-scroll without pausing
-  polling.
+  stdout from stderr (red), exposes both scroll axes for unwrapped commands
+  and tracebacks, and supports pausing auto-scroll without pausing polling.
+  Wheel/scrollbar/keyboard reading retains the operator's position; it resumes
+  follow only after the newest output is visible.
+* Dense inventory tables use native horizontal and vertical scrollbars rather
+  than hiding right-hand values at the minimum desktop window width. Agents
+  captures a process selection and its incremental log cursors per request,
+  coalesces a slow poll, and discards a late result for an old selection; a
+  scoped Stop/Force Stop request captures the clicked process id before the
+  worker starts.
 * `LineChart` is a small dependency-free Tk Canvas widget; it redraws from
   the adapter's already-bounded series, decimated again to the canvas width
   (`control_center_viewmodel.downsample_series`), so render cost does not

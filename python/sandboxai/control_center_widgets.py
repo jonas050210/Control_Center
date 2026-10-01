@@ -620,6 +620,36 @@ def _safe_line(line: Any) -> str:
         return "<unprintable output>"
 
 
+def _scrollable_table(
+    parent: tk.Misc, columns: tuple[tuple[str, str, int], ...], *, expand: bool = True
+) -> ttk.Treeview:
+    """Build a sortable table with both axes reachable on a narrow window.
+
+    Result inventories have deliberately descriptive columns (run location,
+    timestamp, error, checkpoint kind). Shrinking them to fit a fixed window
+    turns their values into ellipses, while a vertical-only scrollbar made the
+    rightmost columns unreachable. The wrapper keeps a conventional native
+    table and makes its full width explicitly reachable instead.
+    """
+    frame = ttk.Frame(parent)
+    frame.pack(fill="both", expand=expand)
+    frame.columnconfigure(0, weight=1)
+    frame.rowconfigure(0, weight=1)
+    tree = _sortable_table(frame, columns)
+    tree.grid(row=0, column=0, sticky="nsew")
+    yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    yscroll.grid(row=0, column=1, sticky="ns")
+    xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+    xscroll.grid(row=1, column=0, sticky="ew")
+    tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+    # The attributes are intentionally private presentation seams: desktop
+    # tests verify that every dense inventory preserves horizontal reachability
+    # without teaching pages Tk grid details.
+    tree._horizontal_scrollbar = xscroll  # type: ignore[attr-defined]
+    tree._vertical_scrollbar = yscroll  # type: ignore[attr-defined]
+    return tree
+
+
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:
     """Builds a Treeview with click-to-sort columns (ascending/descending)."""
     tree = ttk.Treeview(

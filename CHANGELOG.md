@@ -197,7 +197,9 @@ records what changed and why.
   process and incremental cursors at submission time, coalesce a slow poll,
   discard a late result for a prior selection (including A → B → A), clear
   output on deselection, and bind Stop/Force Stop to the process that was
-  selected when the button was pressed.
+  selected when the button was pressed. Every dense Tk inventory table now
+  has both native scroll axes, so a narrow desktop never makes its right-hand
+  run/checkpoint/error data unreachable.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

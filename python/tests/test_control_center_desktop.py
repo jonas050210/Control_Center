@@ -87,6 +87,26 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # empty (no runs yet) project directory - the most common state a
         # fresh user will actually see.
 
+    def test_dense_tables_keep_every_column_reachable_at_the_minimum_window_width(self):
+        """Tables must scroll horizontally rather than hide right-hand data."""
+        for title, attribute in (
+            ("Agents", "tree"),
+            ("Benchmarks", "tree"),
+            ("Evaluations", "checkpoint_tree"),
+            ("Evaluations", "eval_tree"),
+            ("Runs / Checkpoints", "tree"),
+        ):
+            self.app.show_page(title)
+            page = self.app.pages[title]
+            table = getattr(page, attribute)
+            self.assertTrue(
+                table.cget("xscrollcommand"),
+                f"{title}'s {attribute} reports horizontal movement to a scrollbar",
+            )
+            scrollbar = table._horizontal_scrollbar
+            self.assertEqual(str(scrollbar.cget("orient")), "horizontal")
+            self.assertEqual(scrollbar.winfo_manager(), "grid")
+
     def test_dashboard_reflects_a_real_run_directory(self):
         run_dir = self.project_root / "training" / "runs" / "run-a"
         run_dir.mkdir(parents=True)
