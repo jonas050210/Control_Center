@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 from sandboxai.conditions import Condition
+from sandboxai.contract import observation_index
 from sandboxai.config import TrainingConfig
 from sandboxai.curriculum_stages import (
     MULTI_ENEMY_MAX_LEVEL,
@@ -38,6 +39,7 @@ from sandboxai.pipeline import (
     write_manifest,
 )
 from sandboxai.randomization import STREAM_STRIDE, EpisodePlan
+from sandboxai.replay import DetailLevel, load_replay
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -398,6 +400,24 @@ class ReplayControllerTest(unittest.TestCase):
             self.assertFalse(controller._recording_enabled())
             self.assertTrue(all(recorder is None for recorder in controller._recorders))
 
+    def test_cap_is_hard_when_multiple_environments_started_before_the_first_save(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = self._controller(
+                Path(tmp), mode="all", max_per_run=1, environment_count=2
+            )
+            # Both recorders are legitimately allocated below the cap. Their
+            # terminals then arrive in one vector step, one after the other.
+            controller.begin(0, _plan(seed=1))
+            controller.begin(1, _plan(seed=2))
+            controller.record_step(0, [0] * 6, 0.1)
+            controller.record_step(1, [0] * 6, 0.1)
+            self.assertIsNotNone(controller.finish(0, {"win": True}))
+            self.assertIsNone(controller.finish(1, {"win": True}))
+            self.assertEqual(controller.saved, 1)
+            self.assertEqual(len(list(Path(tmp).glob("*.jsonl"))), 1)
+
 
 # ---------------------------------------------------------------------------
 # SkillMetricsSink
@@ -533,6 +553,47 @@ class TrainingPipelineTest(unittest.TestCase):
             self.assertEqual(row["engine_metrics"]["episode_reward"], 2.0)
             self.assertIn("skill_metrics", row)
             self.assertTrue(env.client.batches, "next plan was restaged after the episode")
+            pipe.close()
+
+    def test_detailed_replay_and_terminal_metrics_use_the_terminal_observation(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._config(Path(tmp))
+            config.replay_mode = "all"
+            config.replay_detail = DetailLevel.DETAILED
+            config.replay_max_per_run = 0
+            pipe = TrainingPipeline(config, config.run_directory(), _Telemetry(), device="cpu")
+            env = _FakeVecEnv(2)
+            pipe.attach(env)
+            pipe.on_reset(None)
+
+            reset_observation = [0.0] * 84
+            terminal_observation = [0.0] * 84
+            terminal_observation[observation_index("primary_enemy_visible")] = 1.0
+            infos = [
+                {
+                    "events": {},
+                    "metrics": {"win": True, "episode_reward": 1.0, "episode_length": 1},
+                    "done_reason": "won",
+                    "terminal_observation": terminal_observation,
+                },
+                {"events": {}},
+            ]
+            pipe.on_step(
+                [[0] * 6, [0] * 6],
+                [reset_observation, reset_observation],
+                [1.0, 0.0],
+                [True, False],
+                infos,
+            )
+
+            replay_path = next((config.run_directory() / "replays").glob("*.jsonl"))
+            replay = load_replay(replay_path)
+            self.assertTrue(replay.ticks[0].done)
+            self.assertEqual(replay.ticks[0].observation, terminal_observation)
+            summary = pipe.skill_metrics.aggregator.episodes()[0]
+            self.assertEqual(summary["categories"]["awareness"]["visible_contacts"], 1)
             pipe.close()
 
     def test_resume_restages_identical_plans(self):

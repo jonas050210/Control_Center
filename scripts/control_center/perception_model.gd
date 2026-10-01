@@ -15,13 +15,12 @@
 ## listed under `hidden_from_ai` with the concrete reason. Nothing here
 ## leaks extra information INTO the observation — this module only reads.
 ##
-## Perception features the simulation does not implement yet (field-of-view
-## gating, line-of-sight/occlusion, sound events, target memory/last-known
-## positions, cover/obstacles, navigation, corpses) are reported as
-## explicitly unavailable instead of being faked. `capabilities()` probes
-## EnvironmentCore for the optional hooks a future world/perception
-## milestone would add, so this view starts showing real data the moment
-## those methods exist, without duplicating any perception logic in the GUI.
+## EnvironmentCore implements the FOV, occlusion, sound, target-memory,
+## cover, navigation, corpse, exploration and condition hooks below.
+## `capabilities()` still probes dynamically: another environment type that
+## lacks one is reported as explicitly unavailable instead of being faked,
+## while the canonical environment renders its real data without duplicating
+## perception logic in the GUI.
 class_name PerceptionModel
 extends RefCounted
 

@@ -509,7 +509,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     benchmark_suites = sub.add_parser(
         "benchmark-suites",
-        help="run the four comparable benchmark suites at 1/4/8/16/32/64 environments",
+        help="run the five comparable benchmark suites at 1/4/8/16/32/64 environments",
     )
     benchmark_suites.add_argument("--godot-executable", default="godot")
     benchmark_suites.add_argument("--project-path", default="")

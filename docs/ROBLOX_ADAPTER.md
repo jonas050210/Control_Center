@@ -27,13 +27,13 @@ similar-looking one.
   `docs/OBSERVATION_ACTION_CONTRACT.md`).
 - `ACTION_SPEC` / `ACTION_NVEC` — the `MultiDiscrete([3,3,3,3,2,2])` action
   shape and per-field semantics.
-- `OBSERVATION_GROUPS` — the observation split into the six semantic
+- `OBSERVATION_GROUPS` — the observation split into twelve semantic
   channels an adapter has to be able to produce independently:
-  `self_state`, `movement`, `combat`, `perception`, `memory`, `sound` and
-  `world`. This is the practical checklist: if a target game cannot supply
-  one of these channels honestly, the adapter must report the neutral
-  "no information" encoding for it rather than substituting privileged
-  data.
+  `self_state`, `movement`, `combat`, `targets`, `perception`, `memory`,
+  `sound`, `world`, `conditions`, `contacts`, `target` and `exploration`.
+  This is the practical checklist: if a target game cannot supply one of
+  these channels honestly, the adapter must report the neutral "no
+  information" encoding for it rather than substituting privileged data.
 - `GameAdapter` — an `abc.ABC` with `reset(seed) -> observation`,
   `step(action) -> (observation, reward, done, info)`, and `close()`. This is
   the seam a future adapter implements. `GodotBatchClient` /

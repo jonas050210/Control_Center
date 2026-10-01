@@ -4,7 +4,7 @@
 ## arena layout id, an enemy count, a spawn rule and the perception
 ## capabilities that must be active. `EnvironmentCore.apply_scenario()`
 ## consumes the resulting spec; there is no scenario-specific gameplay code
-## anywhere, which is what keeps twelve scenarios from becoming twelve
+## anywhere, which is what keeps sixteen scenarios from becoming sixteen
 ## divergent simulations.
 ##
 ## Seeding contract: `resolve(id, seed)` is a pure function. The same
@@ -31,7 +31,8 @@ const SPAWN_SURROUND: String = "surround"
 const SPAWN_ELEVATED: String = "elevated"
 const SPAWN_RANDOM: String = "random"
 
-## The twelve shipped scenarios. `flags` lists the capabilities the
+## The sixteen shipped scenarios. Twelve are in the regular training pool;
+## four weapon/TTK drills are evaluation-only. `flags` lists the capabilities the
 ## scenario needs; anything absent falls back to the curriculum level's
 ## own setting, so a scenario can be run at any level without lying about
 ## what the agent can perceive.

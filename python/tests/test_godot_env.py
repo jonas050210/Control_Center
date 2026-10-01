@@ -12,11 +12,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from optional_deps import GYMNASIUM_REASON, HAS_GYMNASIUM, HAS_SB3, SB3_REASON
 
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
-from sandboxai.godot_env import GodotGymEnv, GodotProcessTransport, GodotVecEnv
+from sandboxai.godot_env import GodotBatchClient, GodotGymEnv, GodotProcessTransport, GodotVecEnv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,6 +56,7 @@ if flood:
         sys.stderr.write(line)
     sys.stderr.flush()
 silent_after_spaces = os.environ.get("FAKE_BRIDGE_SILENT", "") == "1"
+BAD_ACTION_NVEC = os.environ.get("FAKE_BRIDGE_BAD_ACTION_NVEC", "") == "1"
 
 # Reproduces the exact real-server behavior of the self-play regression: a
 # script that fails to compile makes SelfPlayEnvironmentCore.new() return
@@ -80,9 +82,10 @@ for line in sys.stdin:
     request = json.loads(line)
     command = request.get("cmd")
     if command == "spaces":
+        action_nvec = [3, 3, 3, 3, 2, 3] if BAD_ACTION_NVEC else [3, 3, 3, 3, 2, 2]
         payload = {
             "ok": True,
-            "action_space": {"type": "multi_discrete", "nvec": [3, 3, 3, 3, 2, 2], "dimension": 6},
+            "action_space": {"type": "multi_discrete", "nvec": action_nvec, "dimension": 6},
             "observation_space": {"type": "structured_float_vector", "size": OBS_DIM,
                                    "shape": [OBS_DIM], "low": -1.0, "high": 1.0},
         }
@@ -215,6 +218,21 @@ class FakeBridgeTestCase(unittest.TestCase):
         with self.make_transport() as transport:
             self.assertEqual(transport.spaces["observation_space"]["size"], OBSERVATION_FIELD_COUNT)
             self.assertTrue(transport.request({"cmd": "ping"}).get("pong"))
+
+    def test_batch_client_rejects_action_contract_drift_during_handshake(self):
+        os.environ["FAKE_BRIDGE_BAD_ACTION_NVEC"] = "1"
+        try:
+            # This handshake regression needs no array conversion, so keep it
+            # runnable in the numpy-free core environment too.
+            with patch("sandboxai.godot_env.np", object()):
+                with self.assertRaisesRegex(RuntimeError, "action nvec"):
+                    GodotBatchClient(
+                        project_path=PROJECT_ROOT,
+                        godot_executable=self.executable,
+                        environment_count=1,
+                    )
+        finally:
+            del os.environ["FAKE_BRIDGE_BAD_ACTION_NVEC"]
 
     def test_large_stderr_output_does_not_deadlock(self):
         # 512 KiB of stderr comfortably exceeds the OS pipe buffer; without a

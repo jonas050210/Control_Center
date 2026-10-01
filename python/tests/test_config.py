@@ -27,6 +27,21 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingConfig(environment_count=2, rollout_length=4, batch_size=9).validate()
 
+    def test_zero_auto_rollout_inputs_raise_validation_errors_not_division_by_zero(self):
+        for values, message in (
+            ({"environment_count": 0}, "environment_count must be >= 1"),
+            ({"batch_size": 0}, r"batch_size \(0\) must be in \[1,"),
+        ):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, message):
+                    TrainingConfig(**values).validate()
+
+    def test_resolved_rollout_length_guards_unvalidated_invalid_inputs(self):
+        with self.assertRaisesRegex(ValueError, "environment_count must be >= 1"):
+            TrainingConfig(environment_count=0).resolved_rollout_length()
+        with self.assertRaisesRegex(ValueError, "batch_size must be >= 1"):
+            TrainingConfig(batch_size=0).resolved_rollout_length()
+
     def test_auto_rollout_preserves_aggregate_update_scale_at_48_envs(self):
         config = TrainingConfig(
             environment_count=48,
@@ -92,6 +107,12 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             TrainingConfig(torch_threads=-1).validate()
 
+    def test_invalid_training_devices_are_rejected_during_validation(self):
+        with self.assertRaisesRegex(ValueError, "device must be one of auto, cpu, cuda"):
+            TrainingConfig(device="not-a-device").validate()
+        with self.assertRaisesRegex(ValueError, "inference_device must be one of auto, cpu, cuda"):
+            TrainingConfig(inference_device="not-a-device").validate()
+
     def test_invalid_net_arch_rejected(self):
         with self.assertRaises(ValueError):
             TrainingConfig(net_arch=(128, 0)).validate()
@@ -112,6 +133,26 @@ class ConfigTests(unittest.TestCase):
         config = BCConfig(epochs=10, batch_size=64, early_stopping_patience=3).validate()
         self.assertEqual(config.epochs, 10)
         self.assertEqual(config.early_stopping_patience, 3)
+
+    def test_bc_config_rejects_values_that_would_fail_or_silently_misconfigure_training(self):
+        invalid = (
+            {"learning_rate": 0.0},
+            {"learning_rate": -0.1},
+            {"checkpoint_frequency": 0},
+            {"checkpoint_frequency": -1},
+            {"hidden_sizes": ()},
+            {"hidden_sizes": (128,)},
+            {"hidden_sizes": (128, 128, 128)},
+            {"device": "not-a-device"},
+        )
+        for values in invalid:
+            with self.subTest(values=values):
+                with self.assertRaises(ValueError):
+                    BCConfig(**values).validate()
+
+    def test_bc_resolved_device_rejects_invalid_unvalidated_request(self):
+        with self.assertRaisesRegex(ValueError, "BC device must be one of"):
+            BCConfig(device="not-a-device").resolved_device()
 
     def test_find_godot_executable(self):
         exe = find_godot_executable("godot")

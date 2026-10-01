@@ -169,10 +169,13 @@ while still collecting statistics.
 
 ## Scenarios
 
-`scripts/scenario/scenario_library.gd` defines twelve seedable encounters —
-`open_arena`, `single_target`, `multiple_targets`, `corner_fight`,
-`cover_fight`, `corridor_fight`, `ambush`, `target_disappears`,
-`sound_only`, `multi_direction`, `vertical_encounter`, `randomized_arena`.
+`scripts/scenario/scenario_library.gd` defines sixteen seedable encounters.
+The regular training pool contains `open_arena`, `single_target`,
+`multiple_targets`, `corner_fight`, `cover_fight`, `corridor_fight`, `ambush`,
+`target_disappears`, `sound_only`, `multi_direction`, `vertical_encounter` and
+`randomized_arena`. Four additional evaluation-only weapon/TTK drills are
+`rifle_lane_drill`, `shotgun_breach_drill`, `sidearm_finish_drill` and
+`smg_tracking_drill`.
 A scenario is pure data (layout id, enemy count, spawn rule, required
 capabilities); `ScenarioLibrary.resolve(id, seed)` is a pure function, so
 the same `(id, seed)` pair always produces the same geometry AND the same

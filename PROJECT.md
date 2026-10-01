@@ -380,14 +380,14 @@ The protocol the schema encodes:
 | Static GDScript tooling | gdtoolkit/gdlint |
 | WSL | Windows-path translation, remembered Godot executable, and Windows process-launch fallback are implemented |
 
-Public subcommands are exactly:
+Public subcommands are:
 
 ```text
 install  train  resume  evaluate  record  control-center
 control-center-desktop  bc-train  inspect-dataset  inspect-runs  benchmark
 benchmark-suites  replay  curriculum  weapon-table  ttk-report
 adapter-contract  validate-runtime  compare-experiments  summarize-experiment
-smoke-test
+smoke-test  hardware-wizard
 ```
 
 Do not invent `test`, `self-play`, `replay-info`, `replay-play`, or `compare` commands.

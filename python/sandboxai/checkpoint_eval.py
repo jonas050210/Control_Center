@@ -46,7 +46,7 @@ from .curriculum_stages import (
     evaluation_distribution,
 )
 from .generalization import SCENARIO_FAMILIES, GeneralizationSuite, MapSplit
-from .pipeline import EVAL_MASTER_SEED_SALT, SkillMetricsSink
+from .pipeline import EVAL_MASTER_SEED_SALT, SkillMetricsSink, transition_observation
 from .randomization import EpisodePlan
 from .replay import ReplayHeader, ReplayRecorder
 
@@ -353,7 +353,12 @@ class PlanExecutor:
         rewards_per_env[env_index] += reward
         events = info.get("events", {})
         if sink is not None:
-            sink.record_step(env_index, observation, action, events)
+            sink.record_step(
+                env_index,
+                transition_observation(observation, done, info),
+                action,
+                events,
+            )
         recorder = recorders[env_index]
         if recorder is not None:
             # Two calls, exactly as TrainingPipeline does it: record_step

@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 import time
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -173,6 +174,13 @@ class ShardedBatchClient:
         self.worker_count = len(self.shards)
         self.clients: list[GodotBatchClient] = []
         self._pending: list[PendingRequest | None] = [None] * self.worker_count
+        # A list assignment such as ``self.clients = list(pool.map(...))``
+        # happens only after *every* constructor returned. If shard two
+        # failed, shard one had a live Godot process but was still invisible
+        # to close(), leaking it. Register each completed bridge immediately
+        # under a lock so the shared cleanup path owns every partial startup.
+        started_clients: list[GodotBatchClient] = []
+        started_lock = threading.Lock()
 
         def build(shard: ShardSpec) -> GodotBatchClient:
             shard_profiler = (
@@ -180,7 +188,7 @@ class ShardedBatchClient:
                 if profiler is not None
                 else None
             )
-            return GodotBatchClient(
+            client = GodotBatchClient(
                 environment_count=shard.count,
                 # Identical per-environment seeds to the single-process
                 # layout: the engine seeds env j with base_seed + j.
@@ -189,6 +197,9 @@ class ShardedBatchClient:
                 profiler=shard_profiler,
                 **kwargs,
             )
+            with started_lock:
+                started_clients.append(client)
+            return client
 
         started = time.perf_counter()
         try:
@@ -201,6 +212,10 @@ class ShardedBatchClient:
             else:
                 self.clients = [build(shard) for shard in self.shards]
         except BaseException:
+            # See the registration above. The executor waits for submitted
+            # constructors on exit, so this owns every client that completed
+            # before (or alongside) the failing constructor.
+            self.clients = started_clients
             self.close()
             raise
         self.startup_seconds = time.perf_counter() - started

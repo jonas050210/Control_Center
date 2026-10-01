@@ -22,10 +22,13 @@ const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
 # ---------------------------------------------------------------------------
 
 
-func test_all_twelve_scenarios_resolve() -> SandboxTest:
-	var t := SandboxTest.new("all_twelve_scenarios_resolve")
+func test_all_sixteen_scenarios_resolve() -> SandboxTest:
+	var t := SandboxTest.new("all_sixteen_scenarios_resolve")
 	var ids: PackedStringArray = ScenarioLibrary.ids()
-	t.assert_gte(float(ids.size()), 12.0, "the library must ship at least twelve scenarios")
+	t.assert_eq(ids.size(), 16, "the library must ship all sixteen scenarios")
+	t.assert_eq(
+		ScenarioLibrary.training_ids().size(), 12, "twelve scenarios belong to the regular training pool"
+	)
 	for scenario_id in ids:
 		var resolved: Dictionary = ScenarioLibrary.resolve(scenario_id, 17)
 		t.assert_eq(str(resolved["id"]), scenario_id)

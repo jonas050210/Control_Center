@@ -68,6 +68,22 @@ from .replay import DetailLevel, ReplayHeader, ReplayRecorder
 EVAL_MASTER_SEED_SALT: int = 707_000_017
 
 
+def transition_observation(observation: Any, done: bool, info: dict[str, Any]) -> Any:
+    """Observation belonging to the transition that just completed.
+
+    The bridge auto-resets a finished environment before answering ``step``:
+    its batch observation is therefore the first frame of the next episode,
+    while ``info["terminal_observation"]`` preserves the final frame of the
+    episode that produced the action/reward/events. Diagnostics and detailed
+    replay must consume the latter or they silently mix two episodes.
+    """
+    if done:
+        terminal = info.get("terminal_observation")
+        if terminal is not None:
+            return terminal
+    return observation
+
+
 # ---------------------------------------------------------------------------
 # Curriculum driver
 # ---------------------------------------------------------------------------
@@ -457,12 +473,13 @@ class ReplayController:
         action: Any,
         reward: float,
         observation: Any = None,
+        done: bool = False,
         events: dict[str, Any] | None = None,
     ) -> None:
         recorder = self._recorders[env_index]
         if recorder is None:
             return
-        recorder.record_step(action, reward, observation=observation, done=False)
+        recorder.record_step(action, reward, observation=observation, done=done)
         if events:
             recorder.record_events(events)
 
@@ -493,6 +510,12 @@ class ReplayController:
             }
         )
         if not self._select(self.episodes_considered, won, truncated, curriculum_change):
+            return None
+        # Several vector environments can have started recording while the
+        # run was still below the cap. Re-check immediately before the write:
+        # otherwise all same-step terminals could exceed a documented hard
+        # maximum even though begin() correctly stopped future allocations.
+        if self._cap_reached():
             return None
         condition = plan.condition
         name = (
@@ -647,16 +670,21 @@ class TrainingPipeline:
         stage: list[dict[str, Any]] = []
         for env_index in range(driver.environment_count):
             info = infos[env_index] if env_index < len(infos) else {}
+            done = bool(dones[env_index])
             events = info.get("events", {})
+            observation = transition_observation(observations[env_index], done, info)
             if record_metrics:
-                self.skill_metrics.record_step(
-                    env_index, observations[env_index], actions[env_index], events
-                )
+                self.skill_metrics.record_step(env_index, observation, actions[env_index], events)
             if record_replays:
                 self.replays.record_step(
-                    env_index, actions[env_index], float(rewards[env_index]), events=events
+                    env_index,
+                    actions[env_index],
+                    float(rewards[env_index]),
+                    observation=observation,
+                    done=done,
+                    events=events,
                 )
-            if not bool(dones[env_index]):
+            if not done:
                 continue
             metrics = dict(info.get("metrics", {}))
             event = driver.finish_episode(env_index, metrics)

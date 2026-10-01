@@ -37,7 +37,7 @@ The script:
      res://tests/run_tests.gd`)
    - `sandboxai validate-runtime` (live headless Godot validation)
    - `sandboxai smoke-test` (end-to-end Python/ML stack sanity check)
-   - `sandboxai benchmark-suites` (the four comparable suites at
+   - `sandboxai benchmark-suites` (the five comparable suites at
      1/4/8/16/32/64 environments)
    - `sandboxai benchmark --worker-counts 1,2,4,8` (the worker-process sweep)
 5. Writes every log and every raw benchmark JSON file under

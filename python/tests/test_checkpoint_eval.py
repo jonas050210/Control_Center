@@ -27,7 +27,7 @@ from sandboxai.checkpoint_eval import (
 )
 from sandboxai.conditions import MAP_IDS, Condition
 from sandboxai.config import TrainingConfig
-from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT, observation_index
 from sandboxai.curriculum_stages import applied_condition
 from sandboxai.generalization import GeneralizationSuite
 from sandboxai.pipeline import TrainingPipeline
@@ -593,6 +593,25 @@ class PlanExecutorTest(unittest.TestCase):
             for event in episode.events:
                 with self.subTest(event=event.kind):
                     self.assertLessEqual(event.tick, last_tick)
+
+    def test_terminal_skill_metrics_use_the_preserved_terminal_observation(self):
+        class _TerminalObservationClient(_FakeBatchClient):
+            def step(self, actions):
+                observations, rewards, dones, infos = super().step(actions)
+                for index, done in enumerate(dones):
+                    if done:
+                        terminal = [0.0] * OBSERVATION_FIELD_COUNT
+                        terminal[observation_index("primary_enemy_visible")] = 1.0
+                        infos[index]["terminal_observation"] = terminal
+                return observations, rewards, dones, infos
+
+        executor = PlanExecutor.__new__(PlanExecutor)
+        executor.client = _TerminalObservationClient(1)
+        executor.environment_count = 1
+        executor.skill_metrics_enabled = True
+        executor.profiler = None
+        row = executor.run(self._model(), self._plans(1), policy_id="pol")[0]
+        self.assertEqual(row["skill"]["awareness"]["visible_contacts"], 1)
 
     def test_next_plans_use_terminal_auto_reset_without_explicit_reset(self):
         executor = self._executor(3)
