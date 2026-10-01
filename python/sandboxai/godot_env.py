@@ -231,6 +231,13 @@ class GodotProcessTransport:
                 response = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(response, dict):
+                # Valid JSON, but not a protocol frame. A bare `print(0)`
+                # or `print([1, 2])` anywhere in the engine's startup path
+                # parses cleanly and used to take the whole bridge down
+                # with `AttributeError: 'int' object has no attribute
+                # 'get'`. Skipped like any other informational line.
+                continue
             if profiler is not None:
                 now = time.perf_counter()
                 profiler.record(

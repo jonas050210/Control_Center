@@ -46,6 +46,25 @@ def test_format_bytes():
     assert vm.format_bytes(5 * 1024 * 1024) == "5.0 MB"
 
 
+@pytest.mark.parametrize("value", [math.inf, -math.inf, float("nan")])
+def test_formatters_render_non_finite_values_as_na(value):
+    """A diverged run's NaN/inf must never reach the screen as a number.
+
+    `json` round-trips NaN and Infinity (a training summary written with
+    `json.dump` reads straight back as a float), so these values genuinely
+    arrive here. `format_number` used to raise OverflowError on an
+    infinity - `int(round(inf))` - taking down the page that rendered it,
+    while the other formatters printed "nan%" or "inf PB" as if they were
+    measurements.
+    """
+    assert vm.format_number(value) == "n/a"
+    assert vm.format_number(value, decimals=2) == "n/a"
+    assert vm.format_fraction_as_percent(value) == "n/a"
+    assert vm.format_duration(value) == "n/a"
+    assert vm.format_bytes(value) == "n/a"
+    assert vm.format_timestamp(value) == "n/a"
+
+
 def test_format_timestamp_rejects_non_numeric():
     assert vm.format_timestamp(None) == "n/a"
     assert vm.format_timestamp("not-a-number") == "n/a"
