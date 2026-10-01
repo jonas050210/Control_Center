@@ -174,6 +174,13 @@ def find_godot_executable(preferred: str = "godot") -> str:
     explicit = _resolve_executable(preferred)
     if explicit:
         return explicit
+    # A caller-supplied executable is an explicit requirement.  Do not silently
+    # replace a misspelled/nonexistent path with an unrelated Godot discovered
+    # through the environment or PATH: callers use the returned value to report
+    # honest availability and to select the documented CPU fallback.  The
+    # conventional default still gets the normal fallback search below.
+    if preferred and preferred != "godot":
+        return preferred
     env_path = os.environ.get("GODOT_PATH") or os.environ.get("GODOT_EXECUTABLE")
     env_resolved = _resolve_executable(env_path)
     if env_resolved:
