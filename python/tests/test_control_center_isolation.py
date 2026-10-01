@@ -124,13 +124,18 @@ class TrainingPathIsolationTests(unittest.TestCase):
             "in-simulator operator scene would be a second, visual Control Center",
         )
         directory = PROJECT_ROOT / "scripts" / "control_center"
+        # Git does not track empty directories, and tools such as OneDrive or an
+        # editor may leave the directory itself behind after its tracked files are
+        # deleted.  An empty directory cannot restore the operator UI, so guard
+        # against content rather than a machine-local directory entry.
+        directory_has_entries = directory.is_dir() and any(directory.iterdir())
         self.assertFalse(
-            directory.exists(),
+            directory_has_entries or (directory.exists() and not directory.is_dir()),
             "scripts/control_center/ was removed with the rendered operator UI, "
             f"but {directory} still exists and contains {_describe(directory)}. "
             "If these are only stale build artefacts from before the headless-only "
             "refactor, clean the working tree (git clean -xdf scripts/control_center); "
-            "do not restore the directory",
+            "do not restore files in the directory",
         )
 
 
