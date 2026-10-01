@@ -128,6 +128,7 @@ func test_dictionary_round_trip_and_duplicate_are_independent() -> SandboxTest:
 	config.seed = 99
 	config.simulation_speed = 2.0
 	config.show_bottom_panel = false
+	config.ui_motion_enabled = false
 
 	var copy: ControlCenterConfig = config.duplicate_config()
 	t.assert_eq(copy.mode, config.mode)
@@ -136,6 +137,7 @@ func test_dictionary_round_trip_and_duplicate_are_independent() -> SandboxTest:
 	t.assert_eq(copy.seed, 99)
 	t.assert_almost_eq(copy.simulation_speed, 2.0, 0.001)
 	t.assert_false(copy.show_bottom_panel)
+	t.assert_false(copy.ui_motion_enabled)
 
 	copy.enemy_count = 1
 	t.assert_eq(config.enemy_count, 4, "the copy must not alias the original")
@@ -144,4 +146,7 @@ func test_dictionary_round_trip_and_duplicate_are_independent() -> SandboxTest:
 	restored.apply_dict(config.to_dict())
 	t.assert_eq(restored.to_dict()["enemy_count"], 4)
 	t.assert_eq(restored.to_dict()["mode_name"], "HUMAN")
+	t.assert_false(
+		restored.ui_motion_enabled, "presentation preference round-trips with the layout"
+	)
 	return t

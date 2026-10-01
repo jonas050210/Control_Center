@@ -127,6 +127,7 @@ func _build_layout() -> void:
 	# about TTK Testing's in-game presentation. It is built only with the
 	# interactive UI and therefore stays out of the headless/RL hot path.
 	ambient_backdrop = ControlCenterAmbientBackdrop.new()
+	ambient_backdrop.motion_enabled = session.config.ui_motion_enabled
 	add_child(ambient_backdrop)
 
 	var root := MarginContainer.new()
@@ -341,6 +342,7 @@ func _build_dashboard_pages() -> void:
 	settings_panel.setup(session)
 	settings_panel.settings_rebuilt.connect(_on_settings_rebuilt)
 	settings_panel.tile_layout_changed.connect(_on_tile_layout_changed)
+	settings_panel.presentation_changed.connect(_on_presentation_changed)
 	var settings_page := PanelContainer.new()
 	settings_page.add_theme_stylebox_override(
 		"panel", ControlCenterTheme.panel_style(ControlCenterTheme.COLOR_BACKGROUND_SOLID)
@@ -441,12 +443,15 @@ func set_page(page_id: String, persist: bool = true) -> void:
 	var selected_page: Control = _pages[resolved] as Control
 	for existing_id in _pages:
 		(_pages[existing_id] as Control).visible = str(existing_id) == resolved
-	# A short opacity transition makes context changes readable without
-	# slowing an operator down or animating live telemetry itself.
-	selected_page.modulate.a = 0.0
-	var transition := create_tween()
-	transition.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	transition.tween_property(selected_page, "modulate:a", 1.0, 0.14)
+	# Motion is an operator preference. Disabling it keeps navigation
+	# immediate and also stops the ambient backdrop redraw loop.
+	if session.config.ui_motion_enabled:
+		selected_page.modulate.a = 0.0
+		var transition := create_tween()
+		transition.set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+		transition.tween_property(selected_page, "modulate:a", 1.0, 0.14)
+	else:
+		selected_page.modulate.a = 1.0
 	for nav_id in _nav_buttons:
 		(_nav_buttons[nav_id] as Button).button_pressed = str(nav_id) == resolved
 	if resolved == "history":
@@ -708,4 +713,10 @@ func _on_training_state_changed(_state: int) -> void:
 func _on_tile_layout_changed() -> void:
 	_apply_tile_order()
 	_apply_panel_visibility()
+	refresh_now()
+
+
+func _on_presentation_changed() -> void:
+	if ambient_backdrop != null:
+		ambient_backdrop.set_motion_enabled(session.config.ui_motion_enabled)
 	refresh_now()

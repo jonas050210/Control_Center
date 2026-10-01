@@ -103,6 +103,12 @@ func test_full_gui_builds_and_refreshes_without_errors() -> SandboxTest:
 		Control.MOUSE_FILTER_IGNORE,
 		"the backdrop must never intercept Control Center input"
 	)
+	instance.session.config.ui_motion_enabled = false
+	ui._on_presentation_changed()
+	t.assert_false(
+		ui.ambient_backdrop.motion_enabled,
+		"reduced-motion preference stops the ambient backdrop loop"
+	)
 	t.assert_not_null(ui.status_bar, "top status bar")
 	t.assert_not_null(ui.agent_panel, "live agent view panel")
 	t.assert_not_null(ui.perception_panel, "what-does-the-AI-see panel")

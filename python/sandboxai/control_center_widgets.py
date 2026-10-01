@@ -217,18 +217,21 @@ class BackgroundRunner:
 # Small reusable widgets
 # ---------------------------------------------------------------------------
 
+# Shared desktop Control Center palette. This is an operator-facing local
+# calibration surface, not a reconstruction of a TTK Testing player HUD.
 _FONT_FAMILY = "Segoe UI"
-COLOR_BG = "#0b1120"
-COLOR_SURFACE = "#111827"
-COLOR_SURFACE_RAISED = "#151f32"
-COLOR_HOVER = "#1c2940"
-COLOR_TEXT = "#e7edf7"
-COLOR_ACCENT = "#38bdf8"
-COLOR_OK = "#4ade80"
-COLOR_WARN = "#fbbf24"
-COLOR_ERROR = "#fb7185"
-COLOR_MUTED = "#94a3b8"
-COLOR_BORDER = "#2b3a52"
+COLOR_BG = "#050a16"
+COLOR_SURFACE = "#0b1427"
+COLOR_SURFACE_RAISED = "#101d32"
+COLOR_HOVER = "#162943"
+COLOR_TEXT = "#e7f1ff"
+COLOR_ACCENT = "#35d7ff"
+COLOR_ACCENT_SECONDARY = "#9c8cff"
+COLOR_OK = "#4ee6a1"
+COLOR_WARN = "#ffc861"
+COLOR_ERROR = "#ff718d"
+COLOR_MUTED = "#91a7bf"
+COLOR_BORDER = "#29445f"
 
 
 class ToolTip:
@@ -382,7 +385,7 @@ class LineChart(tk.Canvas):
 
         for fraction in (0.0, 0.5, 1.0):
             gy = pad_top + fraction * plot_h
-            self.create_line(pad_left, gy, width - pad_right, gy, fill="#243044")
+            self.create_line(pad_left, gy, width - pad_right, gy, fill=COLOR_BORDER)
             value = y_max - fraction * (y_max - y_min)
             self.create_text(
                 pad_left - 6,
@@ -440,17 +443,17 @@ class LogPanel(ttk.Frame):
             height=16,
             wrap="none",
             state="disabled",
-            background="#0d1117",
-            foreground="#c9d1d9",
-            insertbackground="#c9d1d9",
+            background=COLOR_SURFACE,
+            foreground=COLOR_TEXT,
+            insertbackground=COLOR_TEXT,
             font=("Consolas", 9),
         )
         yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self.text.yview)
         self.text.configure(yscrollcommand=yscroll.set)
         self.text.pack(side="left", fill="both", expand=True)
         yscroll.pack(side="right", fill="y")
-        self.text.tag_configure("stderr", foreground="#ff7b72")
-        self.text.tag_configure("meta", foreground="#8b949e")
+        self.text.tag_configure("stderr", foreground=COLOR_ERROR)
+        self.text.tag_configure("meta", foreground=COLOR_MUTED)
         self.text.bind("<MouseWheel>", self._on_manual_scroll)
         self.text.bind("<Button-4>", self._on_manual_scroll)
         self.text.bind("<Button-5>", self._on_manual_scroll)

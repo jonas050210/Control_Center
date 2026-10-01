@@ -108,13 +108,15 @@ records what changed and why.
   `docs/ADAPTER_AND_DESKTOP_CONTROL_CENTER.md`.
 
 ### Changed
-- The interactive Godot Control Center now uses a high-contrast cyan/violet
-  glass-and-telemetry visual system: shadowed panels, clear hover/pressed
-  states, a non-interactive animated operator backdrop, branded status and
-  navigation zones, a radar-style simulation/perception map, and a compact
-  first-person instrumentation overlay. These remain explicitly local
-  calibration presentation, not a claim about TTK Testing's player HUD;
-  the backdrop is constructed only with the GUI and is ignored by input.
+- The interactive Godot and Tk desktop Control Centers now use a
+  high-contrast cyan/violet glass-and-telemetry visual system: shadowed
+  panels, clear hover/pressed states, branded status and navigation zones,
+  radar-style local perception rendering, and a compact first-person
+  instrumentation overlay. The Godot backdrop is constructed only with the
+  GUI, ignores input, and has a persisted reduced-motion preference that
+  stops backdrop/page-transition animation without changing simulation,
+  telemetry or training. These remain explicitly local calibration
+  presentation, not a claim about TTK Testing's player HUD.
 - CI (`python-tests.yml`) no longer duplicates the Python suite that
   `godot-tests.yml` was also running; adds pip caching, a
   `concurrency` group that cancels superseded runs, and pins every

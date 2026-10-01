@@ -14,12 +14,25 @@ const GLOW_COUNT: int = 7
 const GLOW_RADIUS_STEP: float = 90.0
 const SCAN_PERIOD_SECONDS: float = 9.0
 
+var motion_enabled: bool = true
 var _elapsed: float = 0.0
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	set_process(motion_enabled)
+	queue_redraw()
+
+
+## Presentation preference only. A static backdrop is useful for operators
+## who prefer reduced motion, and stopping this process loop avoids needless
+## redraws while leaving all simulation/telemetry work untouched.
+func set_motion_enabled(enabled: bool) -> void:
+	motion_enabled = enabled
+	if not enabled:
+		_elapsed = 0.0
+	set_process(motion_enabled)
 	queue_redraw()
 
 
@@ -53,7 +66,8 @@ func _draw() -> void:
 		)
 
 	_draw_grid(bounds)
-	_draw_scan_line(bounds)
+	if motion_enabled:
+		_draw_scan_line(bounds)
 	_draw_corner_brackets(bounds)
 
 
