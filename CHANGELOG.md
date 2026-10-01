@@ -200,8 +200,12 @@ records what changed and why.
   selected when the button was pressed. Evaluation comparisons and run reports
   now use the same selection-generation contract, so a slow disk read cannot
   overwrite a newer selection or leave vanished data presented as current.
-  Every dense Tk inventory table now has both native scroll axes, so a narrow
-  desktop never makes its right-hand run/checkpoint/error data unreachable.
+  Periodic Dashboard, Training, Benchmark, Evaluation, Runs, Agents and
+  System reads are now coalesced per page operation, preserving the bounded
+  worker pool and discarding a response that no longer belongs to its active
+  run/process selection. Every dense Tk inventory table now has both native
+  scroll axes, so a narrow desktop never makes its right-hand
+  run/checkpoint/error data unreachable.
 - Loading a behavior-cloning checkpoint could execute arbitrary code.
   `bc.py` passed `weights_only=False` to `torch.load` at three call
   sites, which unpickles whatever the file contains; a checkpoint is

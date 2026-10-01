@@ -152,7 +152,10 @@ dependency). Pages: **Dashboard**, **Training**, **Agents**, **Benchmarks**,
   launch/cancel and disk reads on a large run directory - blocks the GUI
   thread.
 * A page only submits background work and applies the result; it never
-  blocks waiting for it.
+  blocks waiting for it. Periodic reads are coalesced per page operation, so
+  a slow run-directory/process-status scan cannot fill the shared worker pool
+  with duplicate polls. Results that belong to a replaced run/process/
+  selection are rejected instead of being rendered as current telemetry.
 * `LogPanel` bounds the Text widget itself (old lines are deleted past a
   cap) independently of the adapter's own bounded buffer, distinguishes
   stdout from stderr (red), exposes both scroll axes for unwrapped commands

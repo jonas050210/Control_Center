@@ -7,6 +7,7 @@ remain in the independently tested viewmodel.
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -53,6 +54,11 @@ class Page(ttk.Frame):
         self.app = app
         self.adapter = app.adapter
         self._built = False
+        # A poll can touch a large run directory or a process registry. Keep
+        # at most one request per page operation in flight: piling identical
+        # reads into the shared three-worker pool makes a slow disk look like
+        # a frozen GUI and can render stale telemetry long after it mattered.
+        self._polls_in_flight: set[str] = set()
 
     def show(self) -> None:
         if not self._built:
@@ -74,6 +80,29 @@ class Page(ttk.Frame):
     def refresh(self) -> None:
         """Called on every poll tick while this page is visible. Must only
         submit background work; it must never block."""
+
+    def submit_poll(
+        self,
+        operation: str,
+        fn: Callable[[], Any],
+        callback: Callable[[Any, BaseException | None], None],
+    ) -> None:
+        """Submit one periodic read, skipping duplicates until it completes.
+
+        This is deliberately for idempotent refreshes only, never for a user
+        command such as Start, Stop or Force stop. The Tk callback removes the
+        guard immediately before handing the result to its page, so a failed
+        read never wedges a later refresh and the next normal tick can retry.
+        """
+        if operation in self._polls_in_flight:
+            return
+        self._polls_in_flight.add(operation)
+
+        def complete(result: Any, error: BaseException | None) -> None:
+            self._polls_in_flight.discard(operation)
+            callback(result, error)
+
+        self.app.background.submit(fn, complete)
 
     def report_error(self, context: str, error: BaseException) -> None:
         self.app.set_status(f"{context}: {error}", error=True)
@@ -133,14 +162,20 @@ class DashboardPage(Page):
         self._last_run_dir: str | None = None
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.dashboard_snapshot, self._on_snapshot)
+        self.submit_poll("dashboard", self.adapter.dashboard_snapshot, self._on_snapshot)
 
     def _on_snapshot(self, snapshot: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or snapshot is None:
             self.report_error("Dashboard refresh failed", error or RuntimeError("unknown error"))
             return
         view = vm.dashboard_view(snapshot)
+        previous_run_dir = self._last_run_dir
         self._last_run_dir = view.get("run_dir")
+        if self._last_run_dir != previous_run_dir:
+            # Never temporarily chart a prior run while the next telemetry
+            # read is still in flight for the newly discovered run.
+            for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
+                chart.set_points([])
         self.stats.update_values(
             {
                 "state": (view["state"] or "no runs yet", STATE_COLORS.get(view["state"] or "")),
@@ -200,16 +235,26 @@ class DashboardPage(Page):
             )
         self.checkpoints_label.configure(text="\n".join(checkpoint_lines))
 
-        if view["run_dir"]:
-            self.app.background.submit(
-                lambda: self.adapter.telemetry_series(view["run_dir"]), self._on_telemetry
+        run_dir = self._last_run_dir
+        if run_dir:
+            self.submit_poll(
+                "telemetry",
+                lambda: self.adapter.telemetry_series(run_dir),
+                lambda series, error: self._on_telemetry(run_dir, series, error),
             )
         else:
             for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
                 chart.set_points([])
 
-    def _on_telemetry(self, series: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or series is None or not series.get("available"):
+    def _on_telemetry(
+        self, run_dir: str, series: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if (
+            run_dir != self._last_run_dir
+            or error is not None
+            or series is None
+            or not series.get("available")
+        ):
             return
         data = series.get("series", {})
         self.reward_chart.set_points(data.get("mean_episode_reward", []))
@@ -341,9 +386,12 @@ class TrainingPage(Page):
             self.advanced_frame.pack_forget()
 
     def refresh(self) -> None:
-        if self.process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+        process_id = self.process_id
+        if process_id:
+            self.submit_poll(
+                "training-status",
+                lambda: self.adapter.process_status(process_id),
+                lambda status, error: self._on_process_status(process_id, status, error),
             )
 
     def _start(self) -> None:
@@ -373,15 +421,17 @@ class TrainingPage(Page):
         self.app.set_status(f"Training started ({self.process_id[:8]})")
 
     def _stop(self) -> None:
-        if not self.process_id:
+        process_id = self.process_id
+        if not process_id:
             return
-        self.app.background.submit(lambda: self.adapter.cancel(self.process_id), lambda *_: None)
+        self.app.background.submit(lambda: self.adapter.cancel(process_id), lambda *_: None)
         self.app.set_status(
             "Stop requested - the trainer will save a final checkpoint before exiting"
         )
 
     def _force_stop(self) -> None:
-        if not self.process_id:
+        process_id = self.process_id
+        if not process_id:
             return
         if not messagebox.askyesno(
             "Force stop",
@@ -389,14 +439,15 @@ class TrainingPage(Page):
             "NOT be saved. Continue?",
         ):
             return
-        self.app.background.submit(
-            lambda: self.adapter.force_stop(self.process_id), lambda *_: None
-        )
+        self.app.background.submit(lambda: self.adapter.force_stop(process_id), lambda *_: None)
 
     def _on_process_status(
-        self, status: dict[str, Any] | None, error: BaseException | None
+        self,
+        process_id: str,
+        status: dict[str, Any] | None,
+        error: BaseException | None,
     ) -> None:
-        if error is not None or status is None:
+        if process_id != self.process_id or error is not None or status is None:
             return
         state = status.get("state", "unknown")
         color = STATE_COLORS.get(state, COLOR_MUTED)
@@ -408,15 +459,18 @@ class TrainingPage(Page):
             self.force_stop_button.configure(state="disabled")
             if state == "failed" and status.get("error"):
                 self.app.set_status(f"Training process failed: {status['error']}", error=True)
-        self.app.background.submit(
-            lambda: self.adapter.process_log(
-                self.process_id, self.log_panel.stdout_after, self.log_panel.stderr_after
-            ),
-            self._on_log,
+        stdout_after = self.log_panel.stdout_after
+        stderr_after = self.log_panel.stderr_after
+        self.submit_poll(
+            f"training-log:{process_id}",
+            lambda: self.adapter.process_log(process_id, stdout_after, stderr_after),
+            lambda log, log_error: self._on_log(process_id, log, log_error),
         )
 
-    def _on_log(self, log: dict[str, Any] | None, error: BaseException | None) -> None:
-        if error is not None or log is None:
+    def _on_log(
+        self, process_id: str, log: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if process_id != self.process_id or error is not None or log is None:
             return
         self.log_panel.apply_log(log)
 
@@ -473,7 +527,7 @@ class AgentsPage(Page):
         self._log_in_flight: tuple[str, int] | None = None
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.list_processes, self._on_processes)
+        self.submit_poll("process-list", self.adapter.list_processes, self._on_processes)
         process_id = self._selected_process_id
         if process_id:
             self._request_log(process_id)
@@ -663,10 +717,13 @@ class BenchmarkPage(Page):
         self.process_id: str | None = None
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.benchmark_history, self._on_history)
-        if self.process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+        self.submit_poll("benchmark-history", self.adapter.benchmark_history, self._on_history)
+        process_id = self.process_id
+        if process_id:
+            self.submit_poll(
+                "benchmark-status",
+                lambda: self.adapter.process_status(process_id),
+                lambda status, error: self._on_process_status(process_id, status, error),
             )
 
     def _start(self) -> None:
@@ -707,9 +764,12 @@ class BenchmarkPage(Page):
         self.app.set_status(f"Benchmark started ({self.process_id[:8]})")
 
     def _on_process_status(
-        self, status: dict[str, Any] | None, error: BaseException | None
+        self,
+        process_id: str,
+        status: dict[str, Any] | None,
+        error: BaseException | None,
     ) -> None:
-        if error is not None or status is None:
+        if process_id != self.process_id or error is not None or status is None:
             return
         self.state_label.configure(
             text=status.get("state", "unknown"),
@@ -870,11 +930,14 @@ class EvaluationPage(Page):
         self.selected_checkpoint_label.configure(text=f"selected checkpoint: {path}")
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.discover_checkpoints, self._on_checkpoints)
-        self.app.background.submit(self.adapter.discover_evaluations, self._on_evaluations)
-        if self.process_id:
-            self.app.background.submit(
-                lambda: self.adapter.process_status(self.process_id), self._on_process_status
+        self.submit_poll("checkpoint-list", self.adapter.discover_checkpoints, self._on_checkpoints)
+        self.submit_poll("evaluation-list", self.adapter.discover_evaluations, self._on_evaluations)
+        process_id = self.process_id
+        if process_id:
+            self.submit_poll(
+                "evaluation-status",
+                lambda: self.adapter.process_status(process_id),
+                lambda status, error: self._on_process_status(process_id, status, error),
             )
 
     def _on_checkpoints(
@@ -938,9 +1001,12 @@ class EvaluationPage(Page):
         self.app.set_status(f"Evaluation started ({self.process_id[:8]})")
 
     def _on_process_status(
-        self, status: dict[str, Any] | None, error: BaseException | None
+        self,
+        process_id: str,
+        status: dict[str, Any] | None,
+        error: BaseException | None,
     ) -> None:
-        if error is not None or status is None:
+        if process_id != self.process_id or error is not None or status is None:
             return
         self.state_label.configure(
             text=f"evaluation process: {status.get('state')}",
@@ -1158,7 +1224,7 @@ class RunsPage(Page):
         return False
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.list_runs, self._on_runs)
+        self.submit_poll("run-list", self.adapter.list_runs, self._on_runs)
 
     def _on_runs(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or result is None:
@@ -1330,7 +1396,7 @@ class SystemPage(Page):
         self._sample_index = 0.0
 
     def refresh(self) -> None:
-        self.app.background.submit(self.adapter.system_status, self._on_status)
+        self.submit_poll("system-status", self.adapter.system_status, self._on_status)
 
     def _on_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or status is None:
