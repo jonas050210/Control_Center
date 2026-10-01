@@ -65,6 +65,16 @@ def _module_level_imports(path: Path) -> set[str]:
     return names
 
 
+def _describe(path: Path) -> str:
+    """Human-readable contents of ``path``, for actionable guard failures."""
+    if not path.exists():
+        return "nothing (the path does not exist)"
+    if not path.is_dir():
+        return "a file"
+    entries = sorted(child.name for child in path.iterdir())
+    return ", ".join(entries) if entries else "no entries (empty directory)"
+
+
 class TrainingPathIsolationTests(unittest.TestCase):
     def test_training_sources_never_reference_the_control_center(self):
         for relative in TRAINING_PATH_SOURCES:
@@ -107,14 +117,20 @@ class TrainingPathIsolationTests(unittest.TestCase):
 
     def test_the_in_simulator_control_center_scene_is_gone(self):
         """Headless-only: the rendered operator scene must not come back."""
+        scene = PROJECT_ROOT / "scenes" / "control_center.tscn"
         self.assertFalse(
-            (PROJECT_ROOT / "scenes" / "control_center.tscn").exists(),
+            scene.exists(),
             "the Control Center is the desktop application; a rendered "
             "in-simulator operator scene would be a second, visual Control Center",
         )
+        directory = PROJECT_ROOT / "scripts" / "control_center"
         self.assertFalse(
-            (PROJECT_ROOT / "scripts" / "control_center").exists(),
-            "scripts/control_center/ was removed with the rendered operator UI",
+            directory.exists(),
+            "scripts/control_center/ was removed with the rendered operator UI, "
+            f"but {directory} still exists and contains {_describe(directory)}. "
+            "If these are only stale build artefacts from before the headless-only "
+            "refactor, clean the working tree (git clean -xdf scripts/control_center); "
+            "do not restore the directory",
         )
 
 
