@@ -1159,7 +1159,28 @@ def _exercise_preset_transfer(app: object) -> None:
             raise AssertionError("importing with overwrite=True must succeed")
         if app.preset_name_for_import(target) != "smoke imported":
             raise AssertionError("preset_name_for_import must report the target name")
-    for name in ("smoke export", "smoke imported"):
+    # A preset carries its appearance: applying it must restore the accent,
+    # the theme and the density, through the same paths the pickers use.
+    app.set_accent("#F5A524")
+    app.set_theme("lime")
+    app.set_density("compact")
+    page.preset_name_var.set("smoke appearance")  # type: ignore[attr-defined]
+    page._save_preset()  # type: ignore[attr-defined]
+    app.set_accent("")
+    app.set_theme("corz")
+    app.set_density("comfort")
+    if not app.apply_layout_preset("smoke appearance"):
+        raise AssertionError("a saved preset could not be applied again")
+    if app.prefs.accent.lower() != "#f5a524" or app.palette.accent.lower() != "#f5a524":
+        raise AssertionError(f"a preset must restore its accent, got {app.prefs.accent!r}")
+    if app.bus.theme.name != "lime" or app.prefs.theme != "lime":
+        raise AssertionError(f"a preset must restore its theme, got {app.bus.theme.name!r}")
+    if app.prefs.density != "compact" or app.bus.density.name != "compact":
+        raise AssertionError(f"a preset must restore its density, got {app.prefs.density!r}")
+    app.set_accent("")
+    app.set_theme("corz")
+    app.set_density("comfort")
+    for name in ("smoke export", "smoke imported", "smoke appearance"):
         app.pages["Settings"].preset_choice_var.set(name)  # type: ignore[attr-defined]
         app.pages["Settings"]._delete_preset()  # type: ignore[attr-defined]
 

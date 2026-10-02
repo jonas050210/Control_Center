@@ -216,25 +216,29 @@ class ControlCenter(tk.Tk):
         )
         return True
 
-    def _reapply_appearance(self) -> None:
-        """Re-apply theme colours from the current preferences to every page."""
+    def _reapply_appearance(self, *, rebuild: bool = False) -> None:
+        """Re-apply the theme colours (and density) from the preferences.
+
+        ``rebuild`` is for a density change: the paddings have to be laid
+        out again, which recreates the page widgets (and restores what the
+        operator was looking at - see ``Page.rebuild_after_restyle``).
+        """
         theme = get_theme(self.prefs.theme, self.prefs.accent)
         density = DENSITIES.get(self.prefs.density, DENSITIES["comfort"])
         self.bus.set_theme(theme, scale=self.scale, density=density)
         self.style = apply_ttk_styles(self, theme, density=density, scale=self.scale)
         self._restyle_shell()
         for page in self.pages.values():
-            page.on_theme(theme)
+            if rebuild:
+                page.rebuild_after_restyle()
+            else:
+                page.on_theme(theme)
 
     def set_density(self, name: str, *, persist: bool = True) -> None:
         """Switch spacing/row height and rebuild the built pages."""
         density = DENSITIES.get(name, DENSITIES["comfort"])
         self.prefs.density = density.name
-        self.bus.set_theme(self.bus.theme, scale=self.scale, density=density)
-        self.style = apply_ttk_styles(self, self.bus.theme, density=density, scale=self.scale)
-        self._restyle_shell()
-        for page in list(self.pages.values()):
-            page.rebuild_after_restyle()
+        self._reapply_appearance(rebuild=True)
         if persist:
             self.save_preferences()
         self.notify(f"Density: {density.label}", kind="info", timeout_ms=2200)
@@ -307,31 +311,23 @@ class ControlCenter(tk.Tk):
         previous_mode = self.prefs.layout
         appearance = document.get("appearance")
         if isinstance(appearance, dict):
+            before = (self.prefs.theme, self.prefs.accent, self.prefs.density)
             accent = appearance.get("accent")
             if isinstance(accent, str):
                 # Old presets have no accent; they keep whatever is active.
                 self.prefs.accent = normalize_accent(accent)
             theme = appearance.get("theme")
             if isinstance(theme, str) and theme in THEMES:
-                self.bus.set_theme(
-                    get_theme(theme, self.prefs.accent),
-                    scale=self.scale,
-                    density=self.bus.density,
-                )
                 self.prefs.theme = theme
-                self.style = apply_ttk_styles(
-                    self, self.bus.theme, density=self.bus.density, scale=self.scale
-                )
-                self._restyle_shell()
-                for page in self.pages.values():
-                    page.on_theme(self.bus.theme)
             density = appearance.get("density")
             if isinstance(density, str) and density in DENSITIES:
                 self.prefs.density = density
-                self.bus.set_theme(self.bus.theme, scale=self.scale, density=DENSITIES[density])
-                self.style = apply_ttk_styles(
-                    self, self.bus.theme, density=DENSITIES[density], scale=self.scale
-                )
+            if before != (self.prefs.theme, self.prefs.accent, self.prefs.density):
+                # A different density needs the widgets laid out again, which
+                # is the same path the Settings pickers use. Nothing changed
+                # means nothing to repaint - a preset that only rearranges
+                # cards must not restyle the window.
+                self._reapply_appearance(rebuild=before[2] != self.prefs.density)
             mode = appearance.get("layout")
             if isinstance(mode, str) and mode in LAYOUT_MODES:
                 self.prefs.layout = mode
