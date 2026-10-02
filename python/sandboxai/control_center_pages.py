@@ -197,13 +197,70 @@ class Page(ttk.Frame):
             self._apply_tag_style(tree, tag, role)
 
     def rebuild_after_restyle(self) -> None:
-        """Rebuild the widgets after a density change so paddings/fonts fit."""
+        """Rebuild the widgets after a density change so paddings/fonts fit.
+
+        Destroying every child is what makes a new density fit, but it used
+        to wipe what the operator was looking at: the log they were
+        reading, the selected row, the page's scroll offset. The transient
+        view state is captured first and applied to the fresh widgets
+        afterwards, so a density change feels like a restyle and not like a
+        reload.
+        """
         if not self._built:
             return
+        view_state = self._capture_view_state()
         for child in self.winfo_children():
             child.destroy()
         self._built = False
         self.show()
+        self._restore_view_state(view_state)
+
+    def _capture_view_state(self) -> dict[str, Any]:
+        """Everything a rebuild should put back, keyed by attribute name."""
+        logs: dict[str, dict[str, Any]] = {}
+        selections: dict[str, tuple[str, ...]] = {}
+        scroll: list[float] = []
+        for name, value in vars(self).items():
+            if isinstance(value, LogPanel):
+                with contextlib.suppress(tk.TclError):
+                    logs[name] = value.snapshot_view()
+            elif isinstance(value, ttk.Treeview):
+                with contextlib.suppress(tk.TclError):
+                    selections[name] = tuple(value.selection())
+        for area in self._scroll_areas():
+            with contextlib.suppress(tk.TclError):
+                scroll.append(float(area.canvas.yview()[0]))
+        return {"logs": logs, "selections": selections, "scroll": scroll}
+
+    def _restore_view_state(self, state: dict[str, Any]) -> None:
+        for name, snapshot in state["logs"].items():
+            panel = getattr(self, name, None)
+            if isinstance(panel, LogPanel):
+                panel.restore_view(snapshot)
+        for name, selection in state["selections"].items():
+            tree = getattr(self, name, None)
+            if not selection or not isinstance(tree, ttk.Treeview):
+                continue
+            present = [item for item in selection if tree.exists(item)]
+            if present:
+                tree.selection_set(present)
+        for area, fraction in zip(self._scroll_areas(), state["scroll"], strict=False):
+            if fraction <= 0.0:
+                continue
+            # The scroll region exists only after the next layout pass, so
+            # the offset is applied on idle rather than right now.
+            self.after(0, lambda area=area, fraction=fraction: area.canvas.yview_moveto(fraction))
+
+    def _scroll_areas(self) -> list[ScrollArea]:
+        """Every ScrollArea in this page, in build order (stable per page)."""
+        found: list[ScrollArea] = []
+        pending = list(self.winfo_children())
+        while pending:
+            widget = pending.pop(0)
+            if isinstance(widget, ScrollArea):
+                found.append(widget)
+            pending.extend(widget.winfo_children())
+        return found
 
     def build(self) -> None:
         raise NotImplementedError

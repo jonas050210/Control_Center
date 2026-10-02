@@ -454,6 +454,25 @@ class Canvas(Widget):
     def itemconfigure(self, *a, **kw):
         return None
 
+    # -- scrolling --------------------------------------------------------
+    # Real canvases always answer yview() with a (first, last) pair; the
+    # restore path in Page._restore_view_state reads it, so the double must
+    # not answer None there (Tk never does).
+    def yview(self, *a):
+        if a and a[0] == "moveto":
+            self._tk_options["yview"] = a[1]
+        return (0.0, 1.0)
+
+    def xview(self, *a):
+        return (0.0, 1.0)
+
+    def yview_moveto(self, fraction):
+        self._tk_options["yview"] = fraction
+        return None
+
+    def configure_scrollregion(self, *a):
+        return None
+
     itemconfig = itemconfigure
 
     def itemcget(self, *a, **kw):
@@ -1319,7 +1338,16 @@ def run_smoke() -> int:
     def sweep_styles() -> None:
         for name in ("cyan", "light", "corz"):
             app.set_theme(name)
-        for name in ("compact", "ultra", "comfort"):
+        # A density change rebuilds a page around its widgets; what the
+        # operator was reading has to survive that rebuild.
+        app.show_page("Training")
+        marker = "density marker 4711"
+        app.pages["Training"].log_panel.apply_log({"stdout": [marker]})
+        app.set_density("compact")
+        surviving = app.pages["Training"].log_panel.text.get("1.0", "end-1c")
+        if marker not in str(surviving):
+            raise AssertionError("a density change wiped the log the operator was reading")
+        for name in ("ultra", "comfort"):
             app.set_density(name)
         for name in ("reduced", "cinematic", "normal"):
             app.set_motion(name)

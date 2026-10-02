@@ -65,6 +65,13 @@ look. Everything below is chosen on the **Settings** page and persisted in
 | Motion | Off, Reduced, Normal, Cinematic | Speed of the small transitions; **Off** renders final states immediately |
 | Corner radius, glow, grid | slider / toggles | Card rounding and the optional backdrop effects |
 
+A theme change only repaints (ttk styles, canvas colours and the table tag
+roles are re-applied). A **density** change has to rebuild the widgets so
+the new paddings fit; that rebuild captures what the operator was looking
+at first — the log text and its cursors, the selected rows, the page's
+scroll offset — and restores it on the fresh widgets, so the log does not
+blank out and the reading position survives.
+
 **Movable cards.** Pages that declare widgets (Dashboard, Training,
 Benchmarks) are arranged by a layout board. On **Settings -> Layout
 studio** every card can be moved up/down, given a 1x/2x/3x span and

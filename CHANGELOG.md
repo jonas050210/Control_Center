@@ -16,6 +16,12 @@ records what changed and why.
   adjustable corner radius and optional glow/grid effects. All of it
   applies live, persists in `.sandboxai/ui/preferences.json` and never
   drops a font below the 11 px floor.
+- **Restyles keep the view.** Switching density rebuilds a page's widgets
+  (the new paddings have to be laid out, not patched), which used to blank
+  the log panel, drop the selected rows and jump the page back to the top.
+  The rebuild now captures that transient view state first - log text and
+  poll cursors, tree selections, per-area scroll offsets - and re-applies
+  it to the fresh widgets.
 - **Movable cards and presets.** Dashboard, Training and Benchmarks
   arrange their cards on a layout board. Settings -> Layout studio moves
   a card up/down, changes its 1x/2x/3x span and hides it; the whole

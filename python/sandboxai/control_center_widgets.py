@@ -16,7 +16,7 @@ import sys
 import threading
 import tkinter as tk
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -1038,6 +1038,43 @@ class LogPanel(ttk.Frame):
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         self.text.configure(state="disabled")
+
+    def snapshot_view(self) -> dict[str, Any]:
+        """What to put back when the page rebuilt around this panel.
+
+        A density change destroys and recreates every widget on the page,
+        which used to blank the log and drop the reader's position. The
+        page captures this before the children go away and hands it to the
+        fresh panel, so the log survives the restyle.
+        """
+        return {
+            "text": self.text.get("1.0", "end-1c"),
+            "autoscroll": bool(self._autoscroll.get()),
+            "wrap": bool(self._wrap.get()),
+            "scrolled_up": bool(self._user_scrolled_up),
+            "stdout_after": self._stdout_after,
+            "stderr_after": self._stderr_after,
+            "yview": float(self.text.yview()[0]),
+        }
+
+    def restore_view(self, snapshot: Mapping[str, Any]) -> None:
+        """Re-apply a :meth:`snapshot_view` result to a freshly built panel."""
+        content = str(snapshot.get("text") or "")
+        self._autoscroll.set(bool(snapshot.get("autoscroll", True)))
+        self._wrap.set(bool(snapshot.get("wrap", True)))
+        self._on_wrap_toggled()
+        self._user_scrolled_up = bool(snapshot.get("scrolled_up", False))
+        # The cursors matter as much as the text: the next poll appends only
+        # what is new, so restoring the text without them would duplicate it.
+        self._stdout_after = int(snapshot.get("stdout_after", -1))
+        self._stderr_after = int(snapshot.get("stderr_after", -1))
+        if content:
+            self.text.configure(state="normal")
+            self.text.insert("1.0", content)
+            self.text.configure(state="disabled")
+            self.text.yview_moveto(float(snapshot.get("yview", 1.0)))
+        if self._autoscroll.get() and not self._user_scrolled_up:
+            self.text.see("end")
 
     def apply_log(self, log: dict[str, Any]) -> None:
         if "error" in log and not log.get("stdout") and not log.get("stderr"):
