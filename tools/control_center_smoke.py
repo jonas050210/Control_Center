@@ -192,8 +192,32 @@ class _Base:
     tag_bind = bind
 
     def event_generate(self, sequence, **kw):
+        """Deliver an event the way Tk's bindtags do.
+
+        Own bindings first, then the widget's class binding, then the
+        containing toplevel. A handler that returns ``"break"`` (as the
+        product code does) stops the propagation, which is exactly the
+        contract a pre-bound widget relies on; returns the same string so a
+        caller can assert on it.
+        """
+        if self._dispatch(sequence, kw) == "break":
+            return "break"
+        if self._tk_class_event(sequence) == "break":
+            return "break"
+        toplevel = self.winfo_toplevel()
+        if toplevel is not self and toplevel._dispatch(sequence, kw) == "break":
+            return "break"
+        return None
+
+    def _dispatch(self, sequence: str, kw: dict) -> object:
         for func in self._tk_binds.get(sequence, []):
-            func(Event(**kw))
+            if func(Event(**kw)) == "break":
+                return "break"
+        return None
+
+    def _tk_class_event(self, sequence: str) -> object:
+        """Tk's class bindings; modelled only where the harness hid a bug."""
+        return None
 
     # -- timers ----------------------------------------------------------
     def after(self, ms, func=None, *args):
@@ -546,6 +570,22 @@ class Listbox(Widget):
         if spec == "end":
             return len(self._items)
         return int(spec)
+
+    def _tk_class_event(self, sequence: str) -> object:
+        """A real Listbox steps its selection on Up/Down (browse mode).
+
+        Modelling this is what makes the harness catch arrows that are bound
+        on the *toplevel* instead of on the list: the class binding runs
+        first, the toplevel binding then steps a second time.
+        """
+        if sequence not in ("<Up>", "<Down>") or not self._items:
+            return None
+        step = 1 if sequence == "<Down>" else -1
+        current = self.curselection()
+        index = max(0, min(len(self._items) - 1, (current[0] if current else 0) + step))
+        self.selection_clear(0, "end")
+        self.selection_set(index)
+        return None
 
 
 class Scale(Widget):
@@ -1383,8 +1423,8 @@ def _exercise_command_palette(app: object, window: object) -> None:
 
     The fake ``event_generate`` only walks the bindings of the widget it is
     called on, so this covers the entry bindings (Down/Up/Return), the
-    "highlight survives a key release" rule, and the toplevel bindings that
-    make the arrows work while the list itself has the focus.
+    "highlight survives a key release" rule, and the list bindings that keep
+    the arrows working once the operator clicked into the list.
     """
 
     def child(kind: str) -> object:
@@ -1404,10 +1444,12 @@ def _exercise_command_palette(app: object, window: object) -> None:
     entry.event_generate("<KeyRelease>")
     if listing.curselection() != (1,):
         raise AssertionError("a key release must not undo the arrow-key move")
-    window.event_generate("<Up>")
+    listing.event_generate("<Up>")
     if listing.curselection() != (0,):
-        raise AssertionError("Up on the palette window must move the highlight back")
-    window.event_generate("<Down>")
+        raise AssertionError("Up on the palette list must move the highlight back")
+    listing.event_generate("<Down>")
+    if listing.curselection() != (1,):
+        raise AssertionError("the list binding must suppress Tk's own cursor step")
     if listing.get(listing.curselection()[0]) != "Training":
         raise AssertionError("the highlighted row must be the second page")
     entry.event_generate("<Return>")

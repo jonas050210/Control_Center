@@ -844,15 +844,16 @@ class ControlCenter(tk.Tk):
             if getattr(event, "widget", None) is window:
                 entry.focus_force()
 
-        # Arrows are bound on the toplevel as well as on the entry: Tk adds
-        # the toplevel to the bindtags of every child, so the keys keep
-        # working when the operator has clicked into the list. The entry
-        # binding still wins first (it returns "break") when the entry has
-        # the focus, so one keypress moves the highlight exactly once.
+        # The arrows are bound on the two focusable children themselves, so
+        # they work from the query field and after a click into the list. A
+        # binding on the toplevel would fire *after* the Listbox class
+        # binding, which already steps the cursor: one keypress, two rows.
+        # Both handlers return "break" (see _palette_move), which suppresses
+        # the class binding and keeps the step at exactly one row.
         entry.bind("<Down>", lambda _e: move(1))
         entry.bind("<Up>", lambda _e: move(-1))
-        window.bind("<Down>", lambda _e: move(1))
-        window.bind("<Up>", lambda _e: move(-1))
+        listing.bind("<Down>", lambda _e: move(1))
+        listing.bind("<Up>", lambda _e: move(-1))
         entry.bind("<KeyRelease>", refresh)
         entry.bind("<Return>", choose)
         listing.bind("<Double-Button-1>", choose)

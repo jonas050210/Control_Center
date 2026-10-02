@@ -30,7 +30,8 @@ records what changed and why.
   always picked the first entry), and neither `Escape` nor `Ctrl+K` closed
   the window from inside it - a second toplevel has its own bindtags, so it
   now carries its own bindings and the page accelerators `Ctrl+1..7` work
-  from it too. Arrow keys work from the query field and from the list, the
+  from it too. Arrow keys work from the query field and from the list (the
+  list binding wins over Tk's own cursor step, so a press moves one row), the
   highlight no longer snaps back to the first row on the key release that
   follows every arrow press, and the palette takes the keyboard focus once
   it is mapped (a window manager that keeps the focus on the parent window

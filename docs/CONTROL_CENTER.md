@@ -121,11 +121,12 @@ trace.
 carries those bindings itself in addition to the shell's, because Tk gives a
 second toplevel its own bindtags - and pressing `Ctrl+K` twice reuses the
 open palette instead of stacking a second window. The arrows are bound on
-the toplevel as well as on the query field, so they also work after a click
-into the list; the highlight only resets to the first row when the filtered
-page list actually changes (a key *release* must not undo an arrow press),
-and the palette forces the keyboard focus onto the query field once it is
-mapped.
+the query field and on the list itself - the handlers return `break`, which
+suppresses Tk's own Listbox cursor step, so one press moves exactly one row
+- and they therefore also work after a click into the list. The highlight
+only resets to the first row when the filtered page list actually changes (a
+key *release* must not undo an arrow press), and the palette forces the
+keyboard focus onto the query field once it is mapped.
 
 ## Pages
 

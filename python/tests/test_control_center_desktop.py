@@ -216,8 +216,9 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.assertEqual(listing.curselection(), (1,))
         press(entry, "<Up>")
         self.assertEqual(listing.curselection(), (0,))
-        # The arrows also work while the list itself holds the focus, because
-        # the toplevel is part of every child's bindtags.
+        # The arrows also work while the list itself holds the focus, and the
+        # list's own binding keeps Tk's Listbox cursor step out of the way so
+        # one keypress moves exactly one row (it used to move two).
         listing.focus_force()
         self.app.update()
         press(listing, "<Down>")
