@@ -293,6 +293,8 @@ class Variable:
 
     def set(self, value):
         self._value = value
+        for callback in tuple(self._callbacks):
+            callback("", "", "write")
 
     def trace_add(self, mode, callback):
         self._callbacks.append(callback)
@@ -1126,6 +1128,16 @@ def _exercise_benchmarks(page: object) -> None:
     page.mode_control.set("custom")  # type: ignore[attr-defined]
     page._on_mode_changed("custom")  # type: ignore[attr-defined]
     page.refresh()  # type: ignore[attr-defined]
+    if page.current_plan()["errors"]:  # type: ignore[attr-defined]
+        raise AssertionError(f"valid custom plan reported errors: {page.current_plan()}")  # type: ignore[attr-defined]
+    if str(page.run_button.cget("state")) == "disabled":  # type: ignore[attr-defined]
+        raise AssertionError("a valid custom plan must leave the run button enabled")
+    page.custom_worker_var.set("nonsense")  # type: ignore[attr-defined]
+    if not page.current_plan()["errors"]:  # type: ignore[attr-defined]
+        raise AssertionError("a malformed worker list must be reported as a plan error")
+    if str(page.run_button.cget("state")) != "disabled":  # type: ignore[attr-defined]
+        raise AssertionError("a malformed custom plan must disable the run button")
+    page.custom_worker_var.set("4")  # type: ignore[attr-defined]
 
 
 def _exercise_widgets(app: object) -> None:

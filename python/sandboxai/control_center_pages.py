@@ -1883,6 +1883,16 @@ class BenchmarkPage(Page):
         )
         self.phase_label.pack(anchor="w", pady=(2, 0))
 
+        # Re-plan while typing: a malformed list must disable Start right
+        # away instead of failing only after the click.
+        for var in (
+            self.custom_env_var,
+            self.custom_worker_var,
+            self.custom_steps_var,
+            self.custom_minutes_var,
+        ):
+            var.trace_add("write", lambda *_args: self._update_mode_plan())
+
         return intro_card
 
     def _build_live_card(self, parent: tk.Misc) -> tk.Widget:
@@ -1954,7 +1964,9 @@ class BenchmarkPage(Page):
         self._update_buttons()
 
     def _update_buttons(self) -> None:
-        self.run_button.configure(state="disabled" if self._running else "normal")
+        """Start follows both the run state and the plan's validity."""
+        invalid = bool(self.current_plan()["errors"])
+        self.run_button.configure(state="disabled" if (self._running or invalid) else "normal")
         self.cancel_button.configure(state="normal" if self._running else "disabled")
 
     def _refresh_workflow_labels(self) -> None:
