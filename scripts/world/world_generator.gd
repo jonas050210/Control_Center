@@ -15,6 +15,7 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const Obstacle = preload("res://scripts/world/obstacle.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 
 ## Every layout this generator can produce, in curriculum-ish order.
 const LAYOUT_IDS: Array = [

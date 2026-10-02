@@ -20,6 +20,7 @@ const PerceptionSystem = preload("res://scripts/perception/perception_system.gd"
 const ReactionProfile = preload("res://scripts/perception/reaction_profile.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const WorldGenerator = preload("res://scripts/world/world_generator.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 
 ## Enemy placement strategies. Each one is implemented once in
 ## `_place_enemies()` and reused by any scenario that asks for it.

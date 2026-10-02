@@ -273,6 +273,29 @@ records what changed and why.
   meet the TTK-only evidence boundary.
 
 ### Fixed
+- **Three scripts called `VectorMath` without preloading it, and the engine
+  refused to compile them.** `environment_reset.gd`, `world_generator.gd` and
+  `scenario_library.gd` were given a `VectorMath.yaw_deg_from_direction(...)`
+  call but only one of the three also received the matching
+  `const VectorMath = preload(...)` line. A `class_name` lives in the editor's
+  global class cache; a headless `--script` run on a fresh checkout has no
+  such cache, so the bare name is a compile error there. The three files did
+  not load, and every call into them failed with "Nonexistent function ...
+  in base 'GDScript'" - 38 engine tests went red with messages about
+  everything except the actual cause (an environment that never reset, a
+  weapon handling level that never armed, maps whose layout dictionary had no
+  `map_id`), while `ruff`, `mypy`, `gdlint`, `gdformat` and the Python suite
+  stayed green. Fixed by the missing preloads. The blind spot that let it
+  through was this analyzer itself: it accepted a bare `class_name`
+  reference because it is project-wide *by name*. It now has
+  `check_class_cache_references`, which reports exactly that reference when
+  the file neither preloads the class nor inherits the const from a
+  project-local base, and the new tests pin all three legitimate forms
+  (own preload, inherited const, own class name). The engine suite is the
+  only place that can prove this class of bug, which is why the CI failure
+  comment now carries a filtered error extract instead of only the last
+  50 KB of output - the root cause appears at the start of the log, not
+  in the summary that used to be the whole comment.
 - **A bearing had two opposite sign conventions, and eight of the eleven
   bearing fields used the wrong one.** The observation vector's bearings came
   from two implementations: `Observation` measured the angle as a yaw

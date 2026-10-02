@@ -25,6 +25,7 @@ const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const MapLibrary = preload("res://scripts/world/map_library.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
 
