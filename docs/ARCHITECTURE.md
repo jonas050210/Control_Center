@@ -322,7 +322,7 @@ scripts/
   self_play/  two-agent match foundation
   input/      human and stub controllers
   debug/      optional presentation-only debug overlay
-python/sandboxai/   49 modules, flat - see PYTHON_MODULE_MAP.md
+python/sandboxai/   52 modules, flat - see PYTHON_MODULE_MAP.md
 ```
 
 The Python side is not listed file-by-file here. It used to be, and the

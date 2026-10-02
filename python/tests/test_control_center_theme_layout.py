@@ -1,0 +1,345 @@
+"""Headless tests for the Control Center's design tokens and layout model.
+
+Both modules are deliberately Tk-free: the theme owns colours, density,
+font sizes and persisted preferences, the layout module owns the movable
+widgets and the saved presets. That means the parts of the GUI rework with
+real logic behind them are testable in an environment without Tkinter or a
+display - which is exactly where the Tk suite skips.
+
+The tests pin behaviour a user would notice: nothing renders below a
+readable font size, switching themes cannot lose a preference, and a
+corrupt or hand-edited preset can never break the window.
+"""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from sandboxai.control_center_layout import (
+    LayoutState,
+    PresetError,
+    PresetStore,
+    WidgetSpec,
+    deserialize,
+    move,
+    normalize,
+    reset_all,
+    reset_page,
+    safe_preset_name,
+    serialize,
+    set_span,
+    set_visible,
+)
+from sandboxai.control_center_theme import (
+    DENSITIES,
+    FONT_ROLES,
+    LAYOUT_MODES,
+    MIN_FONT_PX,
+    MOTION_LEVELS,
+    THEME_NAMES,
+    THEMES,
+    PreferencesStore,
+    UiPreferences,
+    UiScale,
+)
+
+SPECS = (
+    WidgetSpec("kpis", "Key figures", min_span=1, max_span=3),
+    WidgetSpec("charts", "Charts", min_span=1, max_span=3),
+    WidgetSpec("log", "Log", min_span=1, max_span=2, removable=False),
+)
+PAGES = {"Dashboard": SPECS}
+
+
+class ThemeTests(unittest.TestCase):
+    def test_every_theme_is_complete_and_distinct(self) -> None:
+        self.assertGreaterEqual(len(THEME_NAMES), 4)
+        for name in THEME_NAMES:
+            theme = THEMES[name]
+            with self.subTest(theme=name):
+                self.assertEqual(theme.name, name)
+                self.assertTrue(theme.label)
+                for field in ("bg", "shell", "panel", "card", "text", "accent", "ok", "error"):
+                    value = getattr(theme, field)
+                    self.assertTrue(
+                        value.startswith("#") and len(value) in (7, 9), f"{field}={value}"
+                    )
+        self.assertEqual(THEME_NAMES[0], "corz", "the default theme stays the first entry")
+        self.assertEqual(
+            len({THEMES[name].bg for name in THEME_NAMES}),
+            len(THEME_NAMES),
+            "two themes with the same background would be indistinguishable",
+        )
+
+    def test_themes_expose_a_contrasting_text_colour(self) -> None:
+        def luminance(hex_colour: str) -> float:
+            value = hex_colour.lstrip("#")[:6]
+            red, green, blue = (int(value[index : index + 2], 16) for index in (0, 2, 4))
+            return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255.0
+
+        for name in THEME_NAMES:
+            theme = THEMES[name]
+            with self.subTest(theme=name):
+                delta = abs(luminance(theme.text) - luminance(theme.bg))
+                self.assertGreater(delta, 0.35, "text must stay legible against the background")
+
+    def test_every_font_role_stays_at_or_above_the_readable_floor(self) -> None:
+        """The old UI shipped 8-9 pt help text; MIN_FONT_PX is the contract."""
+        for dpi in (96.0, 120.0, 144.0, 192.0):
+            scale = UiScale(dpi=dpi)
+            for role in FONT_ROLES:
+                for mono in (False, True):
+                    with self.subTest(dpi=dpi, role=role, mono=mono):
+                        family, size = scale.font(role, mono=mono)[:2]
+                        self.assertTrue(family)
+                        self.assertGreaterEqual(size, MIN_FONT_PX)
+
+    def test_density_steps_shrink_without_going_to_zero(self) -> None:
+        self.assertGreater(DENSITIES["comfort"].row_height, DENSITIES["ultra"].row_height)
+        for name, density in DENSITIES.items():
+            with self.subTest(density=name):
+                self.assertGreaterEqual(density.row_height, 20)
+                self.assertGreaterEqual(density.pad, 4)
+                self.assertGreaterEqual(density.gap, 4)
+
+    def test_motion_levels_cover_off_to_cinematic(self) -> None:
+        self.assertIn("off", MOTION_LEVELS)
+        self.assertEqual(MOTION_LEVELS["off"], "Off")
+
+
+class PreferencesTests(unittest.TestCase):
+    def test_preferences_survive_a_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = PreferencesStore(root)
+            store.save(
+                UiPreferences(theme="light", density="compact", layout="topbar", motion="off")
+            )
+            restored = PreferencesStore(root).load()
+        self.assertEqual(restored.theme, "light")
+        self.assertEqual(restored.density, "compact")
+        self.assertEqual(restored.layout, "topbar")
+        self.assertEqual(restored.motion, "off")
+
+    def test_unknown_values_fall_back_instead_of_crashing(self) -> None:
+        """A hand-edited or older preferences file must not break the window."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = PreferencesStore(root)
+            path = store.path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "theme": "does-not-exist",
+                        "density": "roomy",
+                        "layout": "diagonal",
+                        "motion": "warp",
+                        "radius": 9999,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            loaded = store.load()
+        self.assertIn(loaded.theme, THEME_NAMES)
+        self.assertIn(loaded.density, DENSITIES)
+        self.assertIn(loaded.layout, LAYOUT_MODES)
+        self.assertIn(loaded.motion, MOTION_LEVELS)
+        self.assertLessEqual(loaded.radius, 32)
+
+    def test_a_bom_prefixed_file_loads(self) -> None:
+        """PowerShell's ``Out-File -Encoding utf8`` writes a UTF-8 BOM."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = PreferencesStore(root)
+            store.save(UiPreferences(theme="lime"))
+            raw = store.path.read_text(encoding="utf-8")
+            store.path.write_text(raw, encoding="utf-8-sig")
+            loaded = PreferencesStore(root).load()
+        self.assertEqual(loaded.theme, "lime")
+
+
+class LayoutModelTests(unittest.TestCase):
+    def test_default_layout_lists_every_widget_once_in_order(self) -> None:
+        state = normalize(LayoutState(pages={}), PAGES)
+        placements = state.placements("Dashboard")
+        self.assertEqual([p.widget_id for p in placements], [spec.widget_id for spec in SPECS])
+        self.assertEqual([p.order for p in placements], [0, 1, 2])
+        self.assertTrue(all(p.visible for p in placements))
+        self.assertTrue(all(p.span == 1 for p in placements))
+
+    def test_move_changes_order_and_clamps_at_the_edges(self) -> None:
+        state = normalize(LayoutState(pages={}), PAGES)
+        state = move(state, "Dashboard", "log", -5)
+        self.assertEqual(
+            [p.widget_id for p in state.placements("Dashboard")], ["log", "kpis", "charts"]
+        )
+        state = move(state, "Dashboard", "log", 99)
+        self.assertEqual(
+            [p.widget_id for p in state.placements("Dashboard")], ["kpis", "charts", "log"]
+        )
+
+    def test_span_is_clamped_to_the_widget_spec_on_load(self) -> None:
+        """A preset written for an older widget set cannot over-span a card.
+
+        ``set_span`` stores what its caller asks for and documents that the
+        caller clamps; ``normalize`` (every load path) is the funnel that
+        enforces the widget's own ``min_span``/``max_span``.
+        """
+        state = normalize(LayoutState(pages={}), PAGES)
+        state = set_span(state, "Dashboard", "log", 3)
+        state = normalize(state, PAGES)
+        log = next(p for p in state.placements("Dashboard") if p.widget_id == "log")
+        self.assertEqual(log.span, 2)
+        state = normalize(set_span(state, "Dashboard", "kpis", 99), PAGES)
+        kpis = next(p for p in state.placements("Dashboard") if p.widget_id == "kpis")
+        self.assertEqual(kpis.span, 3)
+
+    def test_the_studio_only_offers_spans_the_spec_allows(self) -> None:
+        for spec in SPECS:
+            with self.subTest(spec=spec.widget_id):
+                self.assertLessEqual(spec.min_span, spec.max_span)
+                self.assertGreaterEqual(spec.min_span, 1)
+
+    def test_visible_only_returns_visible_widgets_by_default(self) -> None:
+        state = normalize(LayoutState(pages={}), PAGES)
+        state = set_visible(state, "Dashboard", "charts", False)
+        self.assertEqual([p.widget_id for p in state.visible("Dashboard")], ["kpis", "log"])
+        self.assertEqual(len(state.placements("Dashboard")), 3, "hidden widgets stay listed")
+
+    def test_normalize_repairs_unknown_and_retired_entries(self) -> None:
+        """Presets and preferences can be older than the page's widget list."""
+        from sandboxai.control_center_layout import WidgetPlacement
+
+        hand_edited = LayoutState(
+            pages={
+                "Dashboard": [
+                    WidgetPlacement("ghost", 2, True, 0),
+                    WidgetPlacement("kpis", 9, False, 1),
+                ],
+                "Retired": [WidgetPlacement("anything", 1, True, 0)],
+            }
+        )
+        state = normalize(hand_edited, PAGES)
+        self.assertEqual(state.pages.keys(), {"Dashboard"})
+        placements = state.placements("Dashboard")
+        self.assertNotIn("ghost", [p.widget_id for p in placements])
+        self.assertEqual([p.widget_id for p in placements], ["kpis", "charts", "log"])
+
+    def test_reset_restores_defaults(self) -> None:
+        state = normalize(LayoutState(pages={}), PAGES)
+        state = move(state, "Dashboard", "log", -2)
+        state = set_span(state, "Dashboard", "kpis", 3)
+        state = set_visible(state, "Dashboard", "charts", False)
+        page_reset = reset_page(state, "Dashboard", PAGES)
+        self.assertEqual(
+            [p.widget_id for p in page_reset.placements("Dashboard")], ["kpis", "charts", "log"]
+        )
+        self.assertTrue(all(p.visible for p in page_reset.placements("Dashboard")))
+        everything = reset_all(PAGES)
+        self.assertTrue(all(p.span == 1 for p in everything.placements("Dashboard")))
+
+    def test_serialize_round_trip_survives_deserialize(self) -> None:
+        state = normalize(LayoutState(pages={}), PAGES)
+        state = set_span(state, "Dashboard", "kpis", 2)
+        state = move(state, "Dashboard", "log", -1)
+        payload = json.loads(json.dumps(serialize(state)))
+        restored = deserialize(payload, PAGES)
+        self.assertEqual(
+            [(p.widget_id, p.span, p.order) for p in restored.placements("Dashboard")],
+            [(p.widget_id, p.span, p.order) for p in state.placements("Dashboard")],
+        )
+
+    def test_deserialize_falls_back_to_the_default_layout_for_junk(self) -> None:
+        """An unreadable preset must never leave the window without a layout."""
+        for junk in (None, [], {"pages": "not-a-dict"}, {"pages": {"Dashboard": "nope"}}):
+            with self.subTest(junk=junk):
+                state = deserialize(junk, PAGES)
+                self.assertEqual(
+                    [p.widget_id for p in state.placements("Dashboard")],
+                    ["kpis", "charts", "log"],
+                )
+
+
+class PresetStoreTests(unittest.TestCase):
+    def test_save_load_list_delete_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PresetStore(Path(tmp))
+            state = set_span(normalize(LayoutState(pages={}), PAGES), "Dashboard", "kpis", 3)
+            saved = store.save(
+                "My Layout", layout=state, appearance={"theme": "cyan", "density": "compact"}
+            )
+            self.assertEqual(saved, "My Layout")
+            self.assertIn("My Layout", store.list_presets())
+            document = store.load("My Layout")
+            self.assertIsNotNone(document)
+            self.assertEqual(document["appearance"]["theme"], "cyan")
+            restored = deserialize(document["layout"], PAGES)
+            self.assertEqual(restored.placements("Dashboard")[0].span, 3)
+            self.assertTrue(store.delete("My Layout"))
+            self.assertEqual(store.list_presets(), [])
+            self.assertIsNone(store.load("My Layout"))
+
+    def test_rename_moves_the_layout_and_its_appearance(self) -> None:
+        """Renaming must keep the preset, not drop it and make a new one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PresetStore(Path(tmp))
+            state = set_span(normalize(LayoutState(pages={}), PAGES), "Dashboard", "kpis", 2)
+            store.save("before", layout=state, appearance={"theme": "lime"})
+            renamed = store.rename("before", "after")
+            self.assertIn("after", store.list_presets())
+            self.assertNotIn("before", store.list_presets())
+            document = store.load("after")
+            self.assertEqual(document["appearance"]["theme"], "lime")
+            self.assertEqual(
+                deserialize(document["layout"], PAGES).placements("Dashboard")[0].span, 2
+            )
+            self.assertEqual(renamed, "after")
+            # Renaming onto an existing name would silently destroy the
+            # other preset, so it must be refused instead.
+            store.save("third", layout=state)
+            with self.assertRaises(PresetError):
+                store.rename("third", "after")
+
+    def test_safe_preset_name_cannot_escape_the_preset_directory(self) -> None:
+        """A preset name becomes a file name: it must not be able to walk out."""
+        for raw in ("../../etc/passwd", "..\\..\\windows\\system32", "sub/dir/name", "  ..  "):
+            with self.subTest(raw=raw):
+                try:
+                    name = safe_preset_name(raw)
+                except PresetError:
+                    continue
+                self.assertNotIn("/", name)
+                self.assertNotIn("\\", name)
+                self.assertFalse(name.startswith("."))
+                self.assertEqual(Path(name).name, name)
+        self.assertEqual(safe_preset_name("  My Layout  "), "My Layout")
+        self.assertEqual(safe_preset_name("cool!!layout??"), "coollayout")
+        with self.assertRaises(PresetError):
+            safe_preset_name("!!!")
+        with self.assertRaises(PresetError):
+            safe_preset_name("")
+
+    def test_a_broken_preset_file_is_reported_not_raised(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PresetStore(Path(tmp))
+            store.save("broken", layout=normalize(LayoutState(pages={}), PAGES), appearance={})
+            store._path("broken").write_text("{not json", encoding="utf-8")
+            self.assertIsNone(store.load("broken"))
+            self.assertTrue(store.error)
+
+    def test_presets_are_written_atomically(self) -> None:
+        """A crash mid-save must not leave a truncated preset behind."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PresetStore(Path(tmp))
+            store.save("atomic", layout=normalize(LayoutState(pages={}), PAGES), appearance={})
+            leftovers = [p.name for p in store._path("atomic").parent.glob("*.tmp")]
+            self.assertEqual(leftovers, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

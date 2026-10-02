@@ -152,6 +152,14 @@ jobs:
           xvfb-run -a .ui-venv/bin/python -m pytest \
             python/tests/test_control_center_desktop.py -q -rf 2>&1 | tee pytest-output.txt
 
+      # The smoke harness drives the same pages without Tk (it installs its
+      # own stub), so it also catches callback code the page-building pytest
+      # file never reaches: background completions, theme/density/motion
+      # cycles, the layout studio and the presets. Run both - a page can pass
+      # one and fail the other.
+      - name: Drive every page through the headless smoke harness
+        run: .ui-venv/bin/python tools/control_center_smoke.py
+
       - name: Publish the failures to the job summary
         if: failure()
         run: |

@@ -34,8 +34,22 @@ from .telemetry import resource_snapshot
 
 ## Practical sweep recommended for a mid-range desktop (e.g. i7-12700F /
 ## RTX 4060 Ti 8GB / 32GB RAM). Kept as a module constant so the CLI and any
-## script can share one canonical default instead of re-typing it.
-DEFAULT_ENVIRONMENT_COUNTS: tuple[int, ...] = (1, 2, 4, 8, 16, 24, 32, 48, 64)
+## script can share one canonical default instead of re-typing it. The upper
+## rungs used to stop at 64 environments; a 4-worker run at that width left
+## most cores idle, so the ladder now reaches 128.
+DEFAULT_ENVIRONMENT_COUNTS: tuple[int, ...] = (
+    1,
+    2,
+    4,
+    8,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96,
+    128,
+)
 
 ## Worker-process sweep. 1 is the historical single-process bridge and is
 ## always measured first so every multi-process number has a baseline in
@@ -82,7 +96,9 @@ def _emit_step_progress(
     )
     p50_ms = percentile(step_latencies, 0.50) * 1000.0 if step_latencies else None
     p95_ms = percentile(step_latencies, 0.95) * 1000.0 if step_latencies else None
-    jitter = (p95_ms / p50_ms) if (p50_ms is not None and p95_ms is not None and p50_ms > 0.0) else None
+    jitter = (
+        (p95_ms / p50_ms) if (p50_ms is not None and p95_ms is not None and p50_ms > 0.0) else None
+    )
     payload: dict[str, Any] = {
         "phase": phase,
         "environments": environment_count,
@@ -190,7 +206,9 @@ def _measure_single_config(
             step_latencies.append(now - step_started)
             episode_count += int(dones.sum())
             completed_steps += 1
-            if on_step_progress is not None and (now - last_progress_emit >= 0.15 or now >= deadline):
+            if on_step_progress is not None and (
+                now - last_progress_emit >= 0.15 or now >= deadline
+            ):
                 last_progress_emit = now
                 _emit_step_progress(
                     on_step_progress,

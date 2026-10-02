@@ -804,7 +804,9 @@ def test_ttk_testing_view_and_helpers():
                 }
             },
             "mechanics": {
-                "verified": [{"mechanic": "fire", "implementation_rule": "M1", "source_label": "s"}],
+                "verified": [
+                    {"mechanic": "fire", "implementation_rule": "M1", "source_label": "s"}
+                ],
                 "calibration_required": [
                     {
                         "mechanic": "recoil_values_and_pattern",
@@ -862,3 +864,78 @@ def test_ubuntu_cpu_turbo_convergence_and_tactical_lab_views():
     assert tactical["archetype"] == "AGGRESSIVE ENTRY FRAGGER"
 
 
+# ---------------------------------------------------------------------------
+# Training budget (Steps | Time) and the benchmark mode plan
+# ---------------------------------------------------------------------------
+
+
+def test_budget_view_steps_and_time_are_both_valid():
+    steps = vm.budget_view("steps", steps_raw="250000", minutes_raw="")
+    assert steps["errors"] == []
+    assert steps["steps"] == 250000
+    assert "250,000" in steps["budget_line"]
+
+    time = vm.budget_view("time", steps_raw="", minutes_raw="45")
+    assert time["errors"] == []
+    assert time["minutes"] == 45.0
+    # A time budget is a cooperative stop, and the wording has to say so:
+    # the trainer still finishes a boundary and saves its final checkpoint.
+    assert "cooperative stop" in time["budget_line"]
+
+
+def test_budget_view_rejects_unusable_values():
+    empty = vm.budget_view("steps", steps_raw="", minutes_raw="")
+    assert empty["errors"]
+    negative = vm.budget_view("steps", steps_raw="-5", minutes_raw="")
+    assert negative["errors"]
+    # A budget beyond a day is a typo, not a plan.
+    marathon = vm.budget_view("time", steps_raw="", minutes_raw="2000")
+    assert marathon["errors"]
+
+
+def test_auto_benchmark_plan_reaches_the_wide_ladder():
+    view = vm.benchmark_mode_view("auto", minutes_raw="15", cpu_count=32)
+    assert view["errors"] == []
+    assert view["environments"][-1] == 128
+    assert view["environments"][-3:] == [64, 96, 128]
+    # The worker ladder must probe past the conservative auto recommendation:
+    # that recommendation is what produced the 64-env / 4-worker runs that
+    # left the CPU at 10-20 %.
+    assert 32 in view["workers"]
+    assert view["expected_configurations"] > 20
+    assert "environments_note" in view
+
+
+def test_auto_benchmark_plan_is_the_pipeline_ladder():
+    from sandboxai.benchmark_pipeline import default_environment_counts, default_worker_counts
+
+    view = vm.benchmark_mode_view("auto", minutes_raw="15", cpu_count=32)
+    assert view["environments"] == list(default_environment_counts(32))
+    assert view["workers"] == list(default_worker_counts(128, 32))
+
+
+def test_push_benchmark_plan_goes_wider_than_auto():
+    auto = vm.benchmark_mode_view("auto", minutes_raw="15", cpu_count=32)
+    push = vm.benchmark_mode_view("push", minutes_raw="15", cpu_count=32)
+    assert max(push["environments"]) > max(auto["environments"])
+    assert push["warnings"], "push mode must say that it oversubscribes"
+
+
+def test_custom_benchmark_plan_skips_impossible_pairs():
+    view = vm.benchmark_mode_view(
+        "custom",
+        environment_text="16,32",
+        worker_text="4,64",
+        steps_raw="",
+        minutes_raw="5",
+    )
+    assert view["errors"] == []
+    # 64 workers cannot be fed by 16 or 32 environments, so those pairs are
+    # skipped rather than clamped into a duplicate of the 4-worker rows.
+    assert view["expected_configurations"] == 2
+    assert view["budget_mode"] == "time"
+
+    broken = vm.benchmark_mode_view(
+        "custom", environment_text="", worker_text="", steps_raw="", minutes_raw="5"
+    )
+    assert broken["errors"]

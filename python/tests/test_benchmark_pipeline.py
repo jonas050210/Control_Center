@@ -89,14 +89,24 @@ class TestPipelineBudget:
 
 class TestCandidatePlanning:
     def test_environment_ladder_is_host_scaled_not_hardcoded(self):
-        # A small host must not be planned a 64-environment sweep.
-        assert default_environment_counts(2) == (1, 2, 4, 8)
-        # A large host reaches the ladder cap.
-        assert default_environment_counts(32)[-1] == 64
+        # Every host probes at least the 64 rung: environments are sharded
+        # across workers, so the cheap side of the sweep must not be
+        # host-scaled away. The screening budget thins the rest.
+        assert default_environment_counts(2) == (1, 2, 4, 8, 16, 24, 32, 48, 64)
+        # A large host reaches the raised ceiling.
+        assert default_environment_counts(32)[-1] == 128
+        assert default_environment_counts(32)[-3:] == (64, 96, 128)
 
-    def test_worker_ladder_is_bounded_by_environment_count(self):
+    def test_worker_ladder_reaches_past_the_conservative_recommendation(self):
+        # 2 environments can never be fed by more than 2 workers.
         assert default_worker_counts(2, cpu_count=32) == (1, 2)
-        assert default_worker_counts(16, cpu_count=32) == (1, 2, 4, 8)
+        # The ladder is bounded by the environment count ...
+        assert default_worker_counts(16, cpu_count=32) == (1, 2, 4, 8, 16)
+        # ... and includes the host's own step, not just powers of two.
+        assert default_worker_counts(64, cpu_count=32) == (1, 2, 4, 8, 16, 32)
+        assert default_worker_counts(128, cpu_count=64) == (1, 2, 4, 8, 16, 32)
+        # Never above the module's own ceiling.
+        assert max(default_worker_counts(512, cpu_count=256)) == 32
 
     def test_plan_candidates_deduplicates_and_skips_invalid_pairs(self):
         # 4 workers with 2 environments would be clamped to 2 -> duplicate.

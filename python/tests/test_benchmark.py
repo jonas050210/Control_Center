@@ -41,7 +41,8 @@ class SummarizeScalingTests(unittest.TestCase):
         self.assertEqual(summary["diminishing_returns_at_environment_count"], 64)
 
     def test_default_environment_counts_cover_the_recommended_sweep(self):
-        self.assertEqual(DEFAULT_ENVIRONMENT_COUNTS, (1, 2, 4, 8, 16, 24, 32, 48, 64))
+        self.assertEqual(DEFAULT_ENVIRONMENT_COUNTS, (1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128))
+        self.assertEqual(DEFAULT_ENVIRONMENT_COUNTS, tuple(sorted(DEFAULT_ENVIRONMENT_COUNTS)))
 
 
 if __name__ == "__main__":

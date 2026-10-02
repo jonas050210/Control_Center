@@ -621,7 +621,7 @@ def capture_roblox_screenshot(project_root: str | Path) -> dict[str, Any]:
             "$bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height); "
             "$g = [System.Drawing.Graphics]::FromImage($bmp); "
             "$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); "
-            f"$bmp.Save('{str(out_path).replace(chr(39), chr(39)*2)}'); "
+            f"$bmp.Save('{str(out_path).replace(chr(39), chr(39) * 2)}'); "
             "$g.Dispose(); $bmp.Dispose();"
         )
         try:
@@ -897,5 +897,3 @@ def apply_ttk_calibration_preset(project_root: str | Path, preset_id: str) -> di
         "updated_mechanics": saved,
         "metrics": metrics,
     }
-
-

@@ -428,3 +428,50 @@ class DispatchTableTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingTkinterTests(unittest.TestCase):
+    """A Python without Tk must say so instead of printing a traceback.
+
+    Two shapes of "no Tk" exist and both are common in the wild: the
+    ``tkinter`` package is missing entirely (Debian/Ubuntu without
+    ``python3-tk``) or it is present but its ``_tkinter`` C extension is not
+    (conda/embedded builds, a half-repaired Windows install, a broken venv).
+    The second shape used to slip past the ``exc.name == "tkinter"`` check
+    and end in a ``ModuleNotFoundError: No module named '_tkinter'``
+    traceback that never tells the user what to install.
+    """
+
+    REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+    def _run_with_a_tkinter_that_cannot_import_its_backend(self, argv: list[str]):
+        with tempfile.TemporaryDirectory() as tmp:
+            stub = Path(tmp) / "tkinter"
+            stub.mkdir()
+            (stub / "__init__.py").write_text("import _tkinter\n", encoding="utf-8")
+            env = _subprocess_env()
+            env["PYTHONPATH"] = os.pathsep.join([tmp, env["PYTHONPATH"]])
+            return subprocess.run(
+                [sys.executable, *argv],
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=str(self.REPOSITORY_ROOT),
+                timeout=120,
+            )
+
+    def test_the_cli_command_reports_missing_tk_without_a_traceback(self) -> None:
+        result = self._run_with_a_tkinter_that_cannot_import_its_backend(
+            ["-m", "sandboxai", "control-center-desktop"]
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("needs Tkinter", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_main_py_reports_missing_tk_without_a_traceback(self) -> None:
+        result = self._run_with_a_tkinter_that_cannot_import_its_backend(
+            [str(self.REPOSITORY_ROOT / "main.py")]
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("needs Tkinter", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)

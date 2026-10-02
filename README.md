@@ -126,29 +126,37 @@ It provides:
 
 - **Dashboard** - live state, progress, steps/s, elapsed/ETA, environment
   and worker counts, agent lifecycle summary, device, reward
-- **Agents** - the launch form (validated against the same compatibility
-  rules the benchmark uses) plus every launched training/benchmark/
-  evaluation agent with its lifecycle state
-  (AVAILABLE -> LAUNCHING -> RUNNING -> PAUSED/STOPPING -> STOPPED/
-  FINISHED/FAILED), its Environment -> Worker topology, backend metrics,
-  and the full action set: Launch, Pause/Resume (training only - other
-  backends say why not), Stop, Restart (resuming from the run's latest
+- **Training** - the launch deck (validated against the same
+  compatibility rules the benchmark uses) with environment count, worker
+  count, device and a **Steps or Time** budget: a time-boxed run asks the
+  trainer for a cooperative stop at its next safe boundary and still
+  saves the final checkpoint. Below it: every launched training run with
+  its lifecycle state (AVAILABLE -> LAUNCHING -> RUNNING ->
+  PAUSED/STOPPING -> STOPPED/FINISHED/FAILED), its Environment -> Worker
+  topology, backend metrics, and the full action set: Launch,
+  Pause/Resume, Stop, Restart (resuming from the run's latest
   checkpoint), Force stop, Stop all
 - **Benchmarks** - the staged benchmark pipeline that *measures* this
   machine's runtime (environment count x worker count x device, startup,
-  warmup, throughput, latency percentiles, errors, stability) under a
-  Steps or a 1-60 minute Time budget, then recommends a configuration
-  with its reasoning - never a hard-coded guess. The recommendation can
-  be applied to the launch form in one click, and both it and the full
-  report are persisted; a Custom configuration gets the same validation
-  verdict the launcher enforces
+  warmup, throughput, latency percentiles, errors, stability) under an
+  **Auto**, **Push** or **Custom** plan: Auto scales from 64 to 128
+  environment processes and probes workers up to 32 (past the conservative
+  `--env-workers auto` recommendation) on a large host, Push widens the ladder
+  to 256 environments to find where throughput saturates. It then
+  recommends a configuration with its reasoning - never a hard-coded
+  guess. The recommendation is applied to the launch deck by itself, and
+  both it and the full report are persisted; a Custom configuration gets
+  the same validation verdict the launcher enforces
 - **Evaluations** - win/loss/timeout, combat, accuracy and
   action-head/zero-shot diagnostics plus multi-run comparison
 - **Runs / Checkpoints** - a browser over the on-disk run artifacts
 - **System / Telemetry** - real CPU/RAM/Godot/dependency status and
   bounded live telemetry charts; unavailable metrics are shown as such,
   never estimated
-- **Settings** - project/output roots and the Godot executable
+- **Settings** - theme, shell layout (rail/topbar/board), density,
+  motion, accent effects, the **Layout studio** (move, span and hide
+  cards), savable **presets**, project/output roots and the Godot
+  executable
 
 The Control Center is built entirely on
 `sandboxai.adapter.SandboxAIAdapter` - the same `train`/`benchmark`/

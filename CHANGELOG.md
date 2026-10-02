@@ -9,13 +9,55 @@ records what changed and why.
 ## Unreleased
 
 ### Control Center
-- The Benchmarks page is now a zero-configuration workflow: one *Start
-  benchmark* button runs the full staged pipeline with host-scaled
-  defaults, shows a live phase strip (discover → screen → devices →
-  validate → pick → apply) and applies the winning configuration
-  automatically (persisted recommendation + Agents launch form). The
-  budget/grid/finalist form and the custom-configuration card are gone
-  from the GUI; the CLI keeps every knob for scripted sweeps.
+- **Interface rework.** The window is now built from switchable design
+  choices instead of one hard-coded look: five themes (Corz, Midnight
+  Cyan, Neon Lime, Graphite Mono, Light), three shell layouts (rail,
+  topbar, command board), three density presets, four motion levels,
+  adjustable corner radius and optional glow/grid effects. All of it
+  applies live, persists in `.sandboxai/ui/preferences.json` and never
+  drops a font below the 11 px floor.
+- **Movable cards and presets.** Dashboard, Training and Benchmarks
+  arrange their cards on a layout board. Settings -> Layout studio moves
+  a card up/down, changes its 1x/2x/3x span and hides it; the whole
+  arrangement (plus theme and density) can be saved as a named preset
+  under `.sandboxai/ui/presets/<name>.json`, applied or deleted. A
+  preset written by an older build is repaired on load, and re-picking
+  the current shell layout no longer rebuilds (and therefore no longer
+  resets) every page.
+- **Training replaces Agents.** The page is now the training-only
+  operational core: launch deck (environment count, workers, device,
+  presets 25k/100k/500k steps, resume checkpoint, live verdict),
+  **Steps-or-Time budget** where a time-boxed run requests a cooperative
+  stop at the trainer's next safe boundary and still saves the final
+  checkpoint, plus the run table with its lifecycle actions, topology
+  and log. Benchmark and evaluation processes moved to their own pages.
+  The Dashboard gained an *Active runs* strip that lists any live
+  non-training process with a scoped Stop.
+- **Benchmarks: Auto, Push or Custom.** Auto plans a host-scaled ladder
+  from 64 to 128 environment processes and probes worker counts up to 32 -
+  including the host's own step, not just the powers of two below the
+  conservative `--env-workers auto` recommendation; Push widens the ladder
+  to 256 environments to find the saturation point; Custom takes explicit
+  environment/worker/step/minute lists. The previous single-button workflow
+  capped the sweep at 64 environments and stopped the worker ladder at
+  *physical cores - 2*, which is why a 64-env / 4-worker run could sit at
+  10-20 % CPU. Invalid plans disable the start button with the reason
+  instead of starting a doomed sweep.
+- **Chrome and readability.** Cards are rounded and themed; tables keep
+  every column reachable with overlay scrollbars and fit-to-width columns
+  instead of two permanently pinned native bars; the log panel wraps by
+  default (with a wrap toggle) and its overlay bars appear only while
+  scrolling; spacing and fonts scale with the display DPI.
+- The Benchmarks page runs the full staged pipeline with host-scaled
+  defaults in Auto mode, shows a live phase strip (discover → screen →
+  devices → validate → pick → apply) and applies the winning
+  configuration automatically (persisted recommendation + Training
+  launch deck). The budget/grid/finalist form and the custom-configuration
+  card are gone from the GUI; the CLI keeps every knob for scripted
+  sweeps, and Custom mode passes explicit lists through.
+- `tools/control_center_smoke.py` constructs the real application against
+  a small fake `tkinter` and drives every page: a development aid for
+  machines where the Tk suite skips. It verifies wiring, not pixels.
 - Failed launches now surface their real cause: a failing process's
   snapshot appends its last stderr line to the bare
   "process exited with code N", and the agent view prefers the backend's

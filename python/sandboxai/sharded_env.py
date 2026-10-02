@@ -123,6 +123,24 @@ def plan_shards(environment_count: int, worker_count: int) -> list[ShardSpec]:
     return shards
 
 
+def physical_core_estimate(cpu_count: int | None = None) -> int:
+    """Estimate physical cores from ``os.cpu_count()``.
+
+    ``os.cpu_count()`` reports logical threads; simulation is compute-bound
+    scalar GDScript, and the Godot bridge saturates about one physical core
+    per worker, so hyper-threads are counted at half value. This is the one
+    place that decision is made: the worker recommendation, the benchmark
+    pipeline's host-scaled sweep and the Control Center's plan all call it,
+    so a 32-thread machine cannot be described as 32 cores by one of them
+    and 16 by another.
+    """
+    logical = int(cpu_count if cpu_count is not None else (os.cpu_count() or 1))
+    logical = max(1, logical)
+    if logical <= 4:
+        return logical
+    return max(1, (logical + 1) // 2)
+
+
 def recommended_worker_count(
     environment_count: int,
     cpu_count: int | None = None,
@@ -131,17 +149,15 @@ def recommended_worker_count(
     """A conservative default for ``--env-workers auto``.
 
     One Godot bridge saturates about one core, so the useful worker count
-    is bounded by both the environment count and the number of cores left
-    after reserving some for the trainer process (PPO update, evaluation,
-    telemetry) and the OS. ``os.cpu_count()`` reports logical threads;
-    simulation is compute-bound scalar GDScript, so hyper-threads are
-    counted at half value.
+    is bounded by both the environment count and the number of physical
+    cores left after reserving some for the trainer process (PPO update,
+    evaluation, telemetry) and the OS. The *sweep* may probe above this
+    recommendation on purpose - measuring where throughput stops improving
+    is the point of the benchmark - but a default launch uses it.
     """
     if environment_count < 1:
         raise ValueError("environment_count must be >= 1")
-    logical = int(cpu_count if cpu_count is not None else (os.cpu_count() or 1))
-    physical_estimate = max(1, (logical + 1) // 2) if logical > 4 else logical
-    budget = max(1, physical_estimate - max(0, int(reserved_cores)))
+    budget = max(1, physical_core_estimate(cpu_count) - max(0, int(reserved_cores)))
     return max(1, min(int(environment_count), budget))
 
 
@@ -373,7 +389,7 @@ def apply_ubuntu_cpu_optimizations(
 
     trainer_threads = int(profile["recommended_trainer_threads"])
     torch_threads_set: int | None = None
-    with contextlib.suppress( Exception):
+    with contextlib.suppress(Exception):
         import torch  # type: ignore
 
         torch.set_num_threads(trainer_threads)

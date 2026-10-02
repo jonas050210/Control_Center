@@ -70,13 +70,14 @@ class ControlCenterConstructionTests(unittest.TestCase):
         titles = {page_class.title for page_class in PAGE_CLASSES}
         assert titles == {
             "Dashboard",
-            "Agents",
+            "Training",
             "Benchmarks",
             "Evaluations",
             "Runs / Checkpoints",
             "System / Telemetry",
             "Settings",
         }
+        assert "Agents" not in titles, "the Agents page is replaced by Training"
 
     def test_every_page_builds_and_refreshes_without_raising(self):
         for page_class in PAGE_CLASSES:
@@ -86,10 +87,17 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # empty (no runs yet) project directory - the most common state a
         # fresh user will actually see.
 
-    def test_dense_tables_keep_every_column_reachable_at_the_minimum_window_width(self):
-        """Tables must scroll horizontally rather than hide right-hand data."""
+    def test_dense_tables_keep_every_column_reachable_without_permanent_scrollbars(self):
+        """Tables keep right-hand data reachable through *overlay* bars.
+
+        The old UI pinned two native scrollbars under every table (the
+        loudest complaint about the layout). The contract now is: the data
+        stays reachable, the bars are overlay widgets that only appear while
+        something is actually scrollable, and a wide window stretches the
+        columns instead of leaving dead space.
+        """
         for title, attribute in (
-            ("Agents", "tree"),
+            ("Training", "tree"),
             ("Benchmarks", "tree"),
             ("Evaluations", "checkpoint_tree"),
             ("Evaluations", "eval_tree"),
@@ -104,7 +112,10 @@ class ControlCenterConstructionTests(unittest.TestCase):
             )
             scrollbar = table._horizontal_scrollbar
             self.assertEqual(str(scrollbar.cget("orient")), "horizontal")
-            self.assertEqual(scrollbar.winfo_manager(), "grid")
+            # An overlay bar is placed, never gridded into the layout, and it
+            # hides itself while everything fits.
+            self.assertNotEqual(scrollbar.winfo_manager(), "grid")
+            self.assertFalse(scrollbar._overflow() and scrollbar.winfo_manager() == "")
 
     def test_page_poll_gate_coalesces_slow_refreshes_without_losing_the_latest_one(
         self,
@@ -165,8 +176,8 @@ class ControlCenterConstructionTests(unittest.TestCase):
         """The launch slot must go INVALID before anything can be launched."""
         from unittest import mock
 
-        self.app.show_page("Agents")
-        page = self.app.pages["Agents"]
+        self.app.show_page("Training")
+        page = self.app.pages["Training"]
         page.field_vars["environment_count"].set("not-a-number")
         _drain_background(self.app)
         # The inline launch slot reports the parse error and disables the
@@ -184,20 +195,24 @@ class ControlCenterConstructionTests(unittest.TestCase):
         dialog.assert_not_called()
         launch.assert_not_called()
 
-    def test_benchmark_page_runs_the_whole_workflow_from_one_button(self):
-        """The Benchmark tab is zero-configuration: Start runs the pipeline
-        with its own defaults and the winning configuration is applied
-        automatically - no form fields, no manual apply step."""
+    def test_benchmark_page_runs_the_planned_workflow_and_applies_the_winner(self):
+        """Auto is the default mode: Start plans a host-scaled sweep, hands
+        only that plan to the pipeline, and applies the winning
+        configuration automatically - there is no separate apply step."""
         from unittest import mock
 
-        # Build the Agents page first so the automatic apply step has a
+        # Build the Training page first so the automatic apply step has a
         # live launch form to mirror the winning configuration into.
-        self.app.show_page("Agents")
+        self.app.show_page("Training")
         self.app.show_page("Benchmarks")
         page = self.app.pages["Benchmarks"]
-        # No manual configuration inputs exist on this page any more.
+        # No hidden budget/grid form: the mode selector drives the plan.
         self.assertFalse(hasattr(page, "pipeline_vars"))
-        self.assertFalse(hasattr(page, "custom_env_var"))
+        self.assertEqual(page.mode_control.get(), "auto")
+        plan = page.current_plan()
+        self.assertEqual(plan["errors"], [])
+        self.assertTrue(plan["environments"])
+        self.assertTrue(plan["workers"])
         recommendation = {
             "environment_count": 8,
             "env_workers": 2,
@@ -227,13 +242,23 @@ class ControlCenterConstructionTests(unittest.TestCase):
             page._start()
             _drain_background(self.app)
         run.assert_called_once()
-        # Only the workflow callbacks are passed - no user-entered budget,
-        # grid or finalist parameters.
-        self.assertEqual(set(run.call_args.kwargs), {"cancel", "on_progress"})
+        kwargs = run.call_args.kwargs
+        # Auto mode plans the host-scaled sweep itself and passes no
+        # user-entered budget, grid or finalist parameters.
+        self.assertEqual(kwargs["budget_mode"], plan["budget_mode"])
+        self.assertIn(kwargs["budget_mode"], {"steps", "time"})
+        self.assertEqual(kwargs["minutes"], plan["minutes"])
+        self.assertEqual(sorted(kwargs["environment_counts"]), sorted(plan["environments"]))
+        self.assertEqual(sorted(kwargs["worker_counts"]), sorted(plan["workers"]))
+        self.assertEqual(
+            set(kwargs)
+            - {"budget_mode", "steps", "minutes", "environment_counts", "worker_counts"},
+            {"cancel", "on_progress"},
+        )
         apply_call.assert_called_once()
         self.assertIs(page._applied, True)
-        # The Agents launch form mirrors the applied topology.
-        agents = self.app.pages["Agents"]
+        # The Training launch form mirrors the applied topology.
+        agents = self.app.pages["Training"]
         self.assertEqual(agents.field_vars["environment_count"].get(), "8")
         self.assertEqual(agents.field_vars["env_workers"].get(), "2")
 
@@ -295,12 +320,18 @@ class ControlCenterConstructionTests(unittest.TestCase):
             }
         )
         self.app.update()
-        # Text measurement varies with the virtual display/font selected by
-        # the platform (and can consider this sample to fit on a very wide
-        # runner), so assert the durable layout contract rather than an
-        # environment-dependent scroll fraction.
+        # Wrapping is on by default, which is what removes the horizontal bar
+        # from a log full of wide tracebacks in the first place.
+        self.assertTrue(panel._wrap.get())
+        self.assertEqual(str(panel.text.cget("wrap")), "word")
+        # Turning wrapping off keeps the wide lines intact and reveals the
+        # overlay bar (an overlay, not a permanently gridded native bar).
+        panel._wrap.set(False)
+        panel._on_wrap_toggled()
+        self.app.update()
+        self.assertEqual(str(panel.text.cget("wrap")), "none")
         self.assertEqual(str(panel._xscroll.cget("orient")), "horizontal")
-        self.assertEqual(panel._xscroll.winfo_manager(), "grid")
+        self.assertNotEqual(panel._xscroll.winfo_manager(), "grid")
         self.assertTrue(
             panel.text.cget("xscrollcommand"),
             "unwrapped process output reports horizontal movement to its scrollbar",
@@ -343,7 +374,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
         runs._on_detail("run-old", 3, {}, None)
         self.assertEqual(runs.detail_text.get("1.0", "end-1c"), "")
 
-    def test_agents_page_rejects_late_logs_and_binds_actions_to_the_clicked_agent(self):
+    def test_training_page_rejects_late_logs_and_binds_actions_to_the_clicked_run(self):
         """Background output/commands must stay attached to the selected agent.
 
         A slow file read for Agent A may finish after the operator selected
@@ -353,9 +384,9 @@ class ControlCenterConstructionTests(unittest.TestCase):
         """
         from unittest import mock
 
-        self.app.show_page("Agents")
+        self.app.show_page("Training")
         _drain_background(self.app)
-        page = self.app.pages["Agents"]
+        page = self.app.pages["Training"]
         page._last_views = [
             {"agent_id": "agent-a", "process_id": "proc-a"},
             {"agent_id": "agent-b", "process_id": "proc-b"},
@@ -653,3 +684,92 @@ class BackgroundRunnerOwnsGarbageCollectionTests(unittest.TestCase):
             "_pump did not collect, so cycles are left for whichever thread trips the "
             "allocation threshold - which is the bug",
         )
+
+
+@unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+class TrainingAndBenchmarkPlanTests(unittest.TestCase):
+    """The reworked launch path: Time|Steps on Training, Auto|Push|Custom on Benchmarks."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project_root = Path(self._tmp.name)
+        try:
+            self.app = _make_app(self.project_root)
+        except tk.TclError as exc:
+            self.skipTest(f"no display available for Tk: {exc}")
+        self.addCleanup(self._safe_destroy)
+
+    def _safe_destroy(self):
+        with contextlib.suppress(tk.TclError):
+            self.app._on_close()
+
+    def test_training_page_is_reachable_with_every_documented_control(self):
+        self.app.show_page("Training")
+        page = self.app.pages["Training"]
+        self.assertEqual(page.budget_mode.get(), "steps")
+        self.assertTrue(page.launch_button.winfo_exists())
+        self.assertIn("Time", page.budget_mode.choices())
+        self.assertIn("Steps", page.budget_mode.choices())
+
+    def test_time_budget_switches_the_plan_to_minutes_and_validates_the_entry(self):
+        self.app.show_page("Training")
+        page = self.app.pages["Training"]
+        page.budget_mode.set("time")
+        page._on_budget_mode("time")
+        budget = page.current_budget()
+        self.assertEqual(budget["mode"], "time")
+        self.assertEqual(budget["errors"], [])
+        self.assertIsNotNone(budget["minutes"])
+        self.assertIn("cooperative stop", budget["budget_line"])
+
+        page.budget_minutes_var.set("nonsense")
+        budget = page.current_budget()
+        self.assertTrue(budget["errors"])
+        self.assertEqual(budget["mode"], "time")
+
+        page.budget_minutes_var.set("1441")
+        self.assertTrue(page.current_budget()["errors"], "an absurd budget is refused")
+
+    def test_steps_preset_button_fills_the_step_field(self):
+        self.app.show_page("Training")
+        page = self.app.pages["Training"]
+        page.budget_mode.set("steps")
+        page._on_budget_mode("steps")
+        page.field_vars["total_training_steps"].set("1")
+        page._apply_step_preset("25000")
+        self.assertEqual(page.field_vars["total_training_steps"].get(), "25000")
+
+    def test_benchmark_custom_mode_requires_valid_lists(self):
+        self.app.show_page("Benchmarks")
+        page = self.app.pages["Benchmarks"]
+        page.mode_control.set("custom")
+        page._on_mode_changed("custom")
+        self.assertEqual(page.current_plan()["errors"], [])
+
+        page.custom_env_var.set("64, 128")
+        page.custom_worker_var.set("nonsense")
+        plan = page.current_plan()
+        self.assertTrue(plan["errors"])
+        self.assertEqual(str(page.run_button.cget("state")), "disabled")
+
+        page.custom_worker_var.set("32")
+        plan = page.current_plan()
+        # worker > envs is dropped with a warning rather than erroring out.
+        self.assertEqual(plan["errors"], [])
+        self.assertTrue(plan["warnings"])
+
+    def test_benchmark_auto_plan_covers_the_whole_host(self):
+        self.app.show_page("Benchmarks")
+        page = self.app.pages["Benchmarks"]
+        page.mode_control.set("auto")
+        page._on_mode_changed("auto")
+        plan = page.current_plan()
+        self.assertEqual(plan["mode"], "auto")
+        self.assertEqual(plan["errors"], [])
+        if not plan["environments"]:
+            self.skipTest("no environment ladder is available on this host")
+        self.assertEqual(plan["environments"], sorted(plan["environments"]))
+        self.assertLessEqual(max(plan["environments"]), 128 * 4)
