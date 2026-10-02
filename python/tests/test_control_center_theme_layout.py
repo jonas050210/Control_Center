@@ -18,6 +18,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from optional_deps import HAS_TKINTER, TKINTER_REASON
+
 from sandboxai.control_center_layout import (
     LayoutState,
     PresetError,
@@ -336,6 +338,62 @@ class AccentTests(unittest.TestCase):
             self.assertTrue(loaded.zoomed)
             # A junk accent in the file must not survive normalization.
             self.assertEqual(UiPreferences(accent="not-a-colour").normalized().accent, "")
+
+
+@unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+class ThemeBusOwnershipTests(unittest.TestCase):
+    """A rebuilt page must not leave dead repaint callbacks on the bus.
+
+    ``ThemeBus`` lives in the Tk-backed UI module, so this class skips where
+    Tkinter is missing; the smoke harness (fake Tk) pins the same contract
+    for the real window headlessly.
+    """
+
+    @staticmethod
+    def _bus_class():
+        from sandboxai.control_center_ui import ThemeBus
+
+        return ThemeBus
+
+    def test_a_listener_whose_widget_is_gone_is_dropped(self) -> None:
+        bus = self._bus_class()(THEMES["corz"])
+        alive_calls: list[str] = []
+
+        class Widget:
+            def __init__(self, alive: bool) -> None:
+                self.alive = alive
+
+            def winfo_exists(self) -> int:
+                return 1 if self.alive else 0
+
+            def apply_theme(self, theme: object) -> None:
+                alive_calls.append(theme.name)  # type: ignore[attr-defined]
+
+        corpse, live = Widget(False), Widget(True)
+        bus.subscribe(corpse.apply_theme, owner=corpse)
+        bus.subscribe(live.apply_theme, owner=live)
+
+        bus.set_theme(THEMES["cyan"])
+
+        # The live widget repainted, the destroyed one was neither called
+        # nor kept: one more switch leaves exactly the live listener.
+        self.assertEqual(alive_calls, ["cyan"])
+        self.assertEqual(len(bus._listeners), 1)
+
+        bus.set_theme(THEMES["lime"])
+        self.assertEqual(alive_calls, ["cyan", "lime"])
+        self.assertEqual(len(bus._listeners), 1)
+
+    def test_a_listener_without_an_owner_is_never_pruned(self) -> None:
+        # Callers that manage their own lifetime keep the old behavior.
+        bus = self._bus_class()(THEMES["corz"])
+        seen: list[str] = []
+        unsubscribe = bus.subscribe(lambda theme: seen.append(theme.name))
+        bus.set_theme(THEMES["graphite"])
+        self.assertEqual(seen, ["graphite"])
+        unsubscribe()
+        bus.set_theme(THEMES["corz"])
+        self.assertEqual(seen, ["graphite"])
 
 
 class PresetStoreTests(unittest.TestCase):

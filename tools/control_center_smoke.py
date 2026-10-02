@@ -1449,6 +1449,30 @@ def _exercise_scroll_area(app: object, host: object) -> None:
         raise AssertionError("a wheel outside the page must not scroll it")
 
 
+def _assert_theme_listeners_do_not_leak(app: object) -> None:
+    """Rebuilt pages must not leave dead theme listeners behind.
+
+    A density change destroys and recreates a page's widgets. Each of them
+    subscribes to the theme bus, so without ownership the listener list grew
+    by ~190 per change (97 -> 667 after three) and every later theme change
+    walked the corpses. The bus now drops listeners whose owner is gone; the
+    list may hold the dead ones until the next notification, but it must not
+    keep growing.
+    """
+    app.set_theme(app.prefs.theme)
+    settled = len(app.bus._listeners)
+    for _ in range(3):
+        app.set_density("compact")
+        app.set_density("comfort")
+    app.set_theme(app.prefs.theme)
+    pruned = len(app.bus._listeners)
+    if pruned > settled:
+        raise AssertionError(
+            f"theme listeners leak across rebuilds: {settled} live -> {pruned} after "
+            "three density sweeps"
+        )
+
+
 def _assert_every_widget_uses_the_app_bus(app: object) -> None:
     """No widget may be left on the module's default palette.
 
@@ -1679,6 +1703,11 @@ def run_smoke() -> int:
     _step(failures, "show and refresh every page", sweep_pages)
     _step(failures, "themes, densities, motion levels", sweep_styles)
     _step(failures, "settings, training, benchmark, telemetry", settings_and_pages)
+    _step(
+        failures,
+        "theme listeners are pruned with their widgets",
+        lambda: _assert_theme_listeners_do_not_leak(app),
+    )
     _step(failures, "reusable widgets", lambda: _exercise_widgets(app))
     _step(failures, "page handlers", lambda: _exercise_page_handlers(app))
     _step(failures, "close", app._on_close)
