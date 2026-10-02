@@ -28,7 +28,13 @@ from dataclasses import dataclass
 from tkinter import ttk
 from typing import Any
 
-from .control_center_layout import LayoutState, WidgetSpec, reset_page
+from .control_center_layout import (
+    LayoutState,
+    WidgetSpec,
+    columns_for_width,
+    placement_slots,
+    reset_page,
+)
 from .control_center_theme import DENSITIES, MOTION_SPEED, Density, Theme, UiScale
 
 __all__ = [
@@ -458,6 +464,11 @@ class SlimScrollbar(tk.Canvas):
         self._drag_offset = 0.0
         self._hide_after: str | None = None
         self._placed = False
+        #: Everything the last paint depended on. A Configure or a scroll
+        #: notification that repeats the same picture must not rebuild the
+        #: thumb items - the desktop resize test counts Configure events, and
+        #: repainting on an unchanged one is how a stream of them starts.
+        self._painted: tuple[Any, ...] | None = None
         super().__init__(
             parent,
             width=thickness if orient == "vertical" else 1,
@@ -516,7 +527,11 @@ class SlimScrollbar(tk.Canvas):
             return
         with contextlib.suppress(tk.TclError):
             self.place(**self._place)
-            self.lift(self)  # type: ignore[arg-type]
+            # Raise the bar above the content it overlays. ``Canvas.lift`` is
+            # the *item* operation (``lift <tag>``) - on a canvas the widget
+            # stacking call has to go through ``Misc``, otherwise this is a
+            # silent no-op.
+            tk.Misc.lift(self)
             self._placed = True
 
     def _remove(self) -> None:
@@ -609,17 +624,30 @@ class SlimScrollbar(tk.Canvas):
     # -- painting ---------------------------------------------------------
 
     def _redraw(self) -> None:
-        self.delete("thumb")
         length = self._track_length()
+        thickness = float(self.winfo_width() if self._orient == "vertical" else self.winfo_height())
+        theme = self._theme
+        key = (
+            length,
+            thickness,
+            self._first,
+            self._last,
+            self._hover,
+            self._dragging,
+            theme.border,
+            theme.text_muted,
+            theme.text_dim,
+        )
+        if key == self._painted:
+            return
+        self._painted = key
+        self.delete("thumb")
         if length <= 1 or not self._overflow():
             return
-        thickness = float(self.winfo_width() if self._orient == "vertical" else self.winfo_height())
         inset = max(1.0, thickness * 0.15)
         start, end = self._thumb_bounds()
-        track = self._theme.border
-        thumb = (
-            self._theme.text_muted if not (self._hover or self._dragging) else self._theme.text_dim
-        )
+        track = theme.border
+        thumb = theme.text_muted if not (self._hover or self._dragging) else theme.text_dim
         if self._orient == "vertical":
             rounded_rect(
                 self,
@@ -786,6 +814,10 @@ class ScrollArea(ttk.Frame):
             place={"relx": 1.0, "rely": 0.0, "relheight": 1.0, "anchor": "ne", "width": thickness},
         )
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        #: Last scrollregion / body width actually applied, so a repeated
+        #: Configure event cannot turn into a repeated geometry write.
+        self._scrollregion: tuple[int, int, int, int] | None = None
+        self._body_width = -1
         self.body.bind("<Configure>", self._on_body_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
         for sequence in ("<Enter>", "<MouseWheel>", "<Button-4>", "<Button-5>"):
@@ -805,13 +837,24 @@ class ScrollArea(ttk.Frame):
             self.canvas.configure(background=theme.bg)
 
     def _on_body_configure(self, _event: object = None) -> None:
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        # Only reconfigure when the region really changed: a ``<Configure>``
+        # fires for every pixel of a resize, and rewriting an unchanged
+        # scrollregion keeps the canvas's world-change bookkeeping busy.
+        region = self.canvas.bbox("all")
+        if region != self._scrollregion:
+            self._scrollregion = region
+            self.canvas.configure(scrollregion=region)
         self.scrollbar.set(*self.canvas.yview())
 
     def _on_canvas_configure(self, event: tk.Event) -> None:
         # Stretch the inner frame to the visible width so cards keep filling
-        # the window instead of leaving a dead gutter on the right.
-        self.canvas.itemconfigure(self._window, width=event.width)
+        # the window instead of leaving a dead gutter on the right. A repeat
+        # of the same width is ignored - the item resize is exactly one of the
+        # writes that can bounce back as the next Configure event.
+        width = max(1, int(getattr(event, "width", 0) or 0))
+        if width != self._body_width:
+            self._body_width = width
+            self.canvas.itemconfigure(self._window, width=width)
         self.scrollbar.set(*self.canvas.yview())
 
     def _contains(self, widget: object) -> bool:
@@ -869,13 +912,28 @@ class ScrollArea(ttk.Frame):
 # ---------------------------------------------------------------------------
 
 
-class RoundedPanel(tk.Canvas):
-    """A themed card with rounded corners, an optional header and a body frame.
+class RoundedPanel(tk.Frame):
+    """A themed card: a content-sized frame with its surface painted behind it.
 
-    The card's visible surface (``card``/``card_hover``) is painted on the
-    canvas, while a single child frame inset by the corner radius holds the
-    content. Because the content never reaches the corners, the rounded
-    silhouette stays intact, which a plain ``ttk.Frame`` cannot do.
+    The rounded surface, the accent rail and the two header texts live on a
+    ``tk.Canvas`` that is *placed* to fill the frame. ``place`` never
+    contributes to a parent's requested size, so painting a card can no
+    longer resize it, and the card's own height comes from its content the
+    ordinary way (the geometry manager asks the body frame).
+
+    That is the whole point of the shape. The first version drew the surface
+    on a canvas that hosted the content as a *window item* and re-derived its
+    own height from the body on every ``<Configure>``: content height ->
+    canvas height -> grid row height -> content width -> content height, a
+    loop Tk happily ran forever. It made the window resize itself continuously
+    (the desktop suite hung inside ``update()``, which only returns when the
+    event queue drains, and the layout board re-gridded its cards hundreds of
+    thousands of times a second). A frame whose size is decided by its
+    content, with a decoration that only follows, cannot enter that loop.
+
+    ``body`` stays the documented seam every page builds into; the card also
+    keeps the hover lift, the optional accent rail and the theme
+    subscription of the original.
     """
 
     def __init__(
@@ -900,29 +958,41 @@ class RoundedPanel(tk.Canvas):
         self._subtitle = subtitle
         self._accent = accent
         self._background_role = background_role
-        self._outer = self._theme.color(background_role)
         super().__init__(
             parent,
+            background=self._theme.color(background_role),
             highlightthickness=0,
             borderwidth=0,
-            background=self._outer,
-            height=1,
         )
+        header = self._header_height()
+        #: The frame every page fills. It is packed (so the card grows with
+        #: its content) and inset by the card's padding plus the header.
         self.body = ttk.Frame(self, style=body_style)
-        self._body_window = self.create_window(
-            padding, padding, window=self.body, anchor="nw", width=1, height=1
+        self.body.pack(
+            fill="both",
+            expand=True,
+            padx=padding,
+            pady=(padding + header, padding),
         )
+        self._surface = tk.Canvas(
+            self,
+            highlightthickness=0,
+            borderwidth=0,
+            background=self._theme.color(background_role),
+        )
+        self._surface.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+        # Created last, lowered below the body: the card's paint must never sit
+        # on top of its own controls. ``Canvas.lower`` is the *item* operation
+        # (``lower <tag>``) and would raise without an argument, so the widget
+        # stacking call has to go through ``Misc``.
+        tk.Misc.lower(self._surface)
         self._hover = False
-        #: Geometry the last painted frame was drawn for. ``<Configure>``
-        #: fires for every pixel of a resize, and repainting the rounded
-        #: surface, the accent bar and the two header texts each time made a
-        #: window drag noticeably heavy for no visible gain.
-        self._last_draw: tuple[int, int, int, bool] | None = None
-        #: Size currently applied to the body window, so a redundant resize
-        #: (and the Configure event it would produce) is skipped.
-        self._body_size: tuple[int, int] | None = None
-        self.bind("<Configure>", lambda _e: self._redraw(), add="+")
-        self.body.bind("<Configure>", lambda _e: self._on_body_configure(), add="+")
+        #: Geometry the last painted frame was drawn for. A ``<Configure>``
+        #: fires for every pixel of a resize; repainting the rounded surface,
+        #: the accent rail and the two header texts each time made a window
+        #: drag noticeably heavy for no visible gain.
+        self._last_draw: tuple[int, int, bool] | None = None
+        self._surface.bind("<Configure>", lambda _e: self._redraw(), add="+")
         self.bind("<Enter>", lambda _e: self._set_hover(True), add="+")
         self.bind("<Leave>", lambda _e: self._set_hover(False), add="+")
         self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
@@ -932,8 +1002,8 @@ class RoundedPanel(tk.Canvas):
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
         with contextlib.suppress(tk.TclError):
-            self._outer = theme.color(self._background_role)
-            self.configure(background=self._outer)
+            self.configure(background=theme.color(self._background_role))
+            self._surface.configure(background=theme.color(self._background_role))
             self._redraw(force=True)
 
     def _set_hover(self, hovering: bool) -> None:
@@ -942,33 +1012,23 @@ class RoundedPanel(tk.Canvas):
         self._hover = hovering
         self._redraw(force=True)
 
-    def _on_body_configure(self) -> None:
-        header = self._header_height()
-        needed = self.body.winfo_reqheight() + 2 * self._padding + header
-        if int(self.winfo_reqheight()) != needed:
-            self.configure(height=needed)
-        self._redraw()
-
     def _header_height(self) -> int:
         return self._bus.px(34, minimum=26) if self._title else 0
 
     def _redraw(self, *, force: bool = False) -> None:
-        width = max(1, self.winfo_width())
-        height = max(1, self.winfo_height())
-        # The body frame's own request is part of the key: a re-wrapped label
-        # changes it without changing the canvas geometry, and that case must
-        # still reach the body-window resize below.
-        needed = self.body.winfo_reqheight()
-        state = (width, height, needed, self._hover)
+        width = max(1, self._surface.winfo_width())
+        height = max(1, self._surface.winfo_height())
+        state = (width, height, self._hover)
         if not force and state == self._last_draw:
             return
         self._last_draw = state
-        self.delete("surface")
+        canvas = self._surface
+        canvas.delete("surface")
         radius = self._radius
         fill = self._theme.card_hover if self._hover else self._theme.card
         border = self._theme.border_strong if self._hover else self._theme.border
         rounded_rect(
-            self,
+            canvas,
             0,
             0,
             width,
@@ -981,7 +1041,7 @@ class RoundedPanel(tk.Canvas):
         )
         if self._accent:
             rounded_rect(
-                self,
+                canvas,
                 self._padding,
                 0,
                 self._padding + self._bus.px(46, minimum=24),
@@ -992,7 +1052,7 @@ class RoundedPanel(tk.Canvas):
                 tags="surface",
             )
         if self._title:
-            self.create_text(
+            canvas.create_text(
                 self._padding,
                 self._padding,
                 text=self._title,
@@ -1002,38 +1062,16 @@ class RoundedPanel(tk.Canvas):
                 tags="surface",
             )
         if self._subtitle:
-            self.create_text(
+            canvas.create_text(
                 self._padding,
-                self._padding + self._bus.px(20, minimum=16),
+                self._padding + self._bus.px(21, minimum=17),
                 text=self._subtitle,
                 anchor="nw",
                 fill=self._theme.text_muted,
                 font=self._bus.font("micro"),
                 tags="surface",
             )
-        self.tag_lower("surface")
-        header = self._header_height()
-        self.coords(self._body_window, self._padding, self._padding + header)
-        self._resize_body(max(1, width - 2 * self._padding), max(1, needed))
-
-    def _resize_body(self, width: int, height: int) -> None:
-        """Sizes the body window, and only when the value actually changes.
-
-        The body keeps exactly the size its content asks for. Deriving it from
-        the canvas height instead made the two depend on each other: a resize
-        fires ``<Configure>``, the handler resizes the window item, that fires
-        the next ``<Configure>``. Tk keeps delivering those events forever, so
-        ``update()`` - which only returns when the queue drains - never
-        returned, and the desktop suite died on its 180 s timeout instead of
-        on an assertion. Content still cannot be clipped: the canvas itself is
-        sized from the same request (``_on_body_configure``), and a card that
-        is shorter than its grid row leaves the spare pixels to the surface.
-        """
-        target = (max(1, int(width)), max(1, int(height)))
-        if self._body_size == target:
-            return
-        self._body_size = target
-        self.itemconfigure(self._body_window, width=target[0], height=target[1])
+        canvas.tag_lower("surface")
 
 
 class SegmentedControl(tk.Canvas):
@@ -1418,10 +1456,27 @@ class LayoutBoard(ttk.Frame):
     """Arranges a page's cards according to the saved layout state.
 
     Cards are built once (their factories run on first use so an unvisited
-    page costs nothing), then only re-gridded when the layout changes. A
-    card the operator hid is forgotten rather than destroyed, so showing it
-    again does not lose live state such as a selected table row.
+    page costs nothing), then only re-gridded when something actually
+    changed. A card the operator hid is forgotten rather than destroyed, so
+    showing it again does not lose live state such as a selected table row.
+
+    Three guards keep the board from feeding its own geometry back into Tk,
+    which is what used to make the window resize itself forever:
+
+    * the column count only moves when the *width* changed and the width
+      cleared a hysteresis band (:func:`~sandboxai.control_center_layout.columns_for_width`),
+      so a board parked on a threshold cannot flip between two counts;
+    * a resize is debounced to one idle tick and applied under a re-entrancy
+      guard, so a ``<Configure>`` delivered while the board re-grids its own
+      cards cannot recurse;
+    * :meth:`rebuild` compares the placement it computed with the one already
+      on screen and returns without touching a single widget when they match,
+      so no amount of stray Configure events can re-grid anything.
     """
+
+    #: Delay between a width change and the column-count decision. Long enough
+    #: to coalesce a drag, short enough to feel immediate.
+    RESIZE_DEBOUNCE_MS = 40
 
     def __init__(
         self,
@@ -1450,10 +1505,18 @@ class LayoutBoard(ttk.Frame):
         self._min_column_width = min_column_width
         #: Built on first use: the "everything is hidden" placeholder.
         self._empty: ttk.Frame | None = None
+        #: Placement currently on screen; ``rebuild`` is a no-op while the
+        #: computed placement equals this.
+        self._slots: tuple[tuple[str, int, int, int], ...] | None = None
+        self._empty_shown = False
+        self._last_width = -1
+        self._pending_columns: int | None = None
+        self._resize_job: str | None = None
+        self._applying = False
         for index in range(self._max_columns):
             self.columnconfigure(index, weight=1, uniform="board")
         self._unsubscribe = layout_bus.subscribe(lambda _state: self.rebuild(), owner=self)
-        self.bind("<Configure>", lambda _e: self._on_resize(), add="+")
+        self.bind("<Configure>", self._on_configure, add="+")
 
     def add(self, widget_id: str, factory: Callable[[tk.Misc], tk.Widget]) -> None:
         """Register a card builder; unregistered ids are ignored by rebuild."""
@@ -1468,6 +1531,10 @@ class LayoutBoard(ttk.Frame):
     def spec(self, widget_id: str) -> WidgetSpec | None:
         return self._specs.get(widget_id)
 
+    def columns(self) -> int:
+        """The column count currently in effect (layout tests read this)."""
+        return self._columns
+
     def rebuild(self) -> None:
         # Every registered card is built, even while it is hidden. Hiding a
         # card and then refreshing the page must not change page behaviour:
@@ -1479,47 +1546,48 @@ class LayoutBoard(ttk.Frame):
         for widget_id in self._specs:
             self._ensure_widget(widget_id)
         placements = self._layout_bus.state.visible(self._page_key)
-        for widget in self._widgets.values():
-            with contextlib.suppress(tk.TclError):
-                widget.grid_forget()
-        row = 0
-        column = 0
-        placed = 0
-        for placement in placements:
-            card = self._widgets.get(placement.widget_id)
-            if card is None:
-                continue
-            span = max(1, min(self._columns, placement.span))
-            if column + span > self._columns:
-                row += 1
-                column = 0
-            card.grid(
-                row=row,
-                column=column,
-                columnspan=span,
-                sticky="nsew",
-                padx=(0 if column == 0 else self._gap, 0),
-                pady=(0 if row == 0 else self._gap, 0),
-            )
-            placed += 1
-            column += span
-            if column >= self._columns:
-                row += 1
-                column = 0
-        # A preset can hide every card on a page. Without a placeholder that
-        # page is indistinguishable from a broken one, so the board offers the
-        # one action that fixes it instead of leaving a blank tab.
-        self._toggle_empty_state(placed == 0 and bool(self._specs))
+        slots = placement_slots(placements, columns=self._columns)
+        if slots == self._slots:
+            # Nothing moved. Touching the geometry manager anyway is what
+            # turned one stray Configure into a stream of them.
+            self._toggle_empty_state(bool(self._specs) and not slots)
+            return
+        self._applying = True
+        try:
+            for widget in self._widgets.values():
+                with contextlib.suppress(tk.TclError):
+                    widget.grid_forget()
+            for widget_id, row, column, span in slots:
+                card = self._widgets.get(widget_id)
+                if card is None:
+                    continue
+                card.grid(
+                    row=row,
+                    column=column,
+                    columnspan=span,
+                    sticky="nsew",
+                    padx=(0 if column == 0 else self._gap, 0),
+                    pady=(0 if row == 0 else self._gap, 0),
+                )
+            self._slots = slots
+            # A preset can hide every card on a page. Without a placeholder
+            # that page is indistinguishable from a broken one, so the board
+            # offers the one action that fixes it instead of leaving a blank
+            # tab.
+            self._toggle_empty_state(bool(self._specs) and not slots)
+        finally:
+            self._applying = False
 
     def _toggle_empty_state(self, show: bool) -> None:
-        """Show/hide the "every card is hidden" placeholder."""
+        """Show/hide the "every card is hidden" placeholder (idempotent)."""
         empty = self._empty
         if show and empty is None:
             empty = self._empty_state()
-        if empty is None:
+        if empty is None or show == self._empty_shown:
             return
+        self._empty_shown = show
         if show:
-            empty.grid(row=0, column=0, columnspan=self._max_columns, sticky="ew")
+            empty.grid(row=0, column=0, columnspan=max(1, self._columns), sticky="ew")
         else:
             empty.grid_forget()
 
@@ -1568,13 +1636,48 @@ class LayoutBoard(ttk.Frame):
         self._widgets[widget_id] = widget
         return widget
 
-    def _on_resize(self) -> None:
-        """Collapse to fewer columns on a narrow window instead of squeezing."""
-        width = self.winfo_width()
-        wanted = max(1, min(self._max_columns, max(1, width // self._min_column_width)))
-        if wanted == self._columns:
+    # -- responsive columns -------------------------------------------------
+
+    def _on_configure(self, event: tk.Event) -> None:
+        """React to a *width* change only; height churn must cost nothing."""
+        if self._applying:
             return
-        self._columns = wanted
-        for index in range(self._max_columns):
-            self.columnconfigure(index, weight=1 if index < wanted else 0, uniform="board")
+        width = int(getattr(event, "width", 0) or 0)
+        if width == self._last_width:
+            return
+        self._last_width = width
+        target = columns_for_width(
+            width,
+            max_columns=self._max_columns,
+            min_column_width=self._min_column_width,
+            current=self._columns,
+        )
+        if target == self._columns or target == self._pending_columns:
+            return
+        self._pending_columns = target
+        self._cancel_resize_job()
+        with contextlib.suppress(tk.TclError):
+            self._resize_job = self.after(self.RESIZE_DEBOUNCE_MS, self._apply_columns)
+
+    def _cancel_resize_job(self) -> None:
+        if self._resize_job is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            self.after_cancel(self._resize_job)
+        self._resize_job = None
+
+    def _apply_columns(self) -> None:
+        """Switch the board to the pending column count and re-grid once."""
+        self._resize_job = None
+        target = self._pending_columns
+        self._pending_columns = None
+        if target is None or target == self._columns:
+            return
+        self._columns = target
+        self._applying = True
+        try:
+            for index in range(self._max_columns):
+                self.columnconfigure(index, weight=1 if index < target else 0, uniform="board")
+        finally:
+            self._applying = False
         self.rebuild()

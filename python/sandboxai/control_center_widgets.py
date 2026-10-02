@@ -523,6 +523,11 @@ class PhaseStepper(tk.Canvas):
         self._display_fraction: float = 0.0
         self._anim_after_id: str | None = None
         self._motion_handle: int | None = None
+        #: Size of the last paint. A ``<Configure>`` that does not change the
+        #: size must not rebuild every canvas item again - a resize drag
+        #: delivers a stream of them, and repainting the same picture is pure
+        #: event churn.
+        self._painted_size: tuple[int, int] | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Destroy>", self._cancel_anim, add="+")
         self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
@@ -531,7 +536,7 @@ class PhaseStepper(tk.Canvas):
         self._theme = theme
         with contextlib.suppress(tk.TclError):
             self.configure(background=theme.panel, highlightbackground=theme.border)
-            self._redraw()
+            self._redraw(force=True)
 
     def _status_palette(self) -> dict[str, tuple[str, str, str]]:
         theme = self._theme
@@ -579,7 +584,7 @@ class PhaseStepper(tk.Canvas):
 
     def _set_display(self, value: float) -> None:
         self._display_fraction = max(0.0, min(1.0, value))
-        self._redraw()
+        self._redraw(force=True)
 
     def set_phases(self, phases: list[dict[str, str]], fraction: float = 0.0) -> None:
         self.set_state(phases, fraction)
@@ -589,10 +594,10 @@ class PhaseStepper(tk.Canvas):
         if abs(diff) <= 0.004 or not self.winfo_exists():
             self._display_fraction = self._fraction
             self._cancel_anim()
-            self._redraw()
+            self._redraw(force=True)
             return
         self._display_fraction += diff * 0.28
-        self._redraw()
+        self._redraw(force=True)
         if self._anim_after_id is None:
             with contextlib.suppress(tk.TclError):
                 self._anim_after_id = self.after(16, self._on_anim_tick)
@@ -601,11 +606,14 @@ class PhaseStepper(tk.Canvas):
         self._anim_after_id = None
         self._schedule_smooth_step()
 
-    def _redraw(self) -> None:
+    def _redraw(self, *, force: bool = False) -> None:
+        size = (max(int(self.winfo_width()), 1), max(int(self.winfo_height()), 1))
+        if not force and size == self._painted_size:
+            return
+        self._painted_size = size
         self.delete("all")
         theme = self._theme
-        width = max(int(self.winfo_width()), 1)
-        height = max(int(self.winfo_height()), 1)
+        width, height = size
         if not self._phases:
             return
         palette = self._status_palette()
@@ -715,6 +723,8 @@ class LineChart(tk.Canvas):
         self._color_override = color
         self._points: list[tuple[float, float]] = []
         self._hover_x: int | None = None
+        #: Size of the last paint; see :attr:`PhaseStepper._painted_size`.
+        self._painted_size: tuple[int, int] | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", self._on_leave)
@@ -728,11 +738,11 @@ class LineChart(tk.Canvas):
         self._theme = theme
         with contextlib.suppress(tk.TclError):
             self.configure(background=theme.card, highlightbackground=theme.border)
-            self._redraw()
+            self._redraw(force=True)
 
     def set_points(self, points: list[tuple[float, float]]) -> None:
         self._points = points
-        self._redraw()
+        self._redraw(force=True)
 
     def point_count(self) -> int:
         """Number of plotted samples (used by the animation/layout tests)."""
@@ -741,12 +751,12 @@ class LineChart(tk.Canvas):
     def _on_motion(self, event: tk.Event[Any]) -> None:
         self._hover_x = int(getattr(event, "x", 0))
         if len(self._points) >= 2:
-            self._redraw()
+            self._redraw(force=True)
 
     def _on_leave(self, _event: tk.Event[Any]) -> None:
         if self._hover_x is not None:
             self._hover_x = None
-            self._redraw()
+            self._redraw(force=True)
 
     def _draw_grid(
         self,
@@ -809,11 +819,14 @@ class LineChart(tk.Canvas):
         )
         return f"Step {vm.format_number(px, 0)}: {vm.format_number(py, 3)}   \u00b7   "
 
-    def _redraw(self) -> None:
+    def _redraw(self, *, force: bool = False) -> None:
+        size = (max(int(self.winfo_width()), 1), max(int(self.winfo_height()), 1))
+        if not force and size == self._painted_size:
+            return
+        self._painted_size = size
         self.delete("all")
         theme = self._theme
-        width = max(int(self.winfo_width()), 1)
-        height = max(int(self.winfo_height()), 1)
+        width, height = size
         pad_left, pad_right, pad_top, pad_bottom = 64, 16, 32, 20
         clean_title = self._title[:1].upper() + self._title[1:] if self._title else ""
         self.create_text(
@@ -1162,14 +1175,21 @@ def _scrollable_table(
     *,
     expand: bool = True,
     bus: ThemeBus | None = None,
+    empty_text: str = "",
 ) -> ttk.Treeview:
     """Build a sortable table whose overlay bars appear only when needed.
 
     Dense inventories still have to keep every column reachable on a narrow
     window, but two permanently visible native scrollbars were the single
-    loudest piece of chrome in the old UI. The table now stretches its
-    columns to fill the visible width when it can, and otherwise exposes an
-    overlay scrollbar while the pointer is inside it.
+    loudest piece of chrome in the old UI. The table stretches its columns to
+    *stretch* into spare width (Tk's own column stretching, no Python in the
+    loop) and otherwise exposes an overlay scrollbar while the pointer is
+    inside it.
+
+    ``empty_text`` gives the table a quiet overlay line for its empty state
+    ("No runs recorded yet - launch a training run to fill this in"). A table
+    that shows only headings reads like a broken one; the overlay is *placed*
+    rather than gridded, so it can never influence any geometry.
     """
     frame = ttk.Frame(parent)
     frame.pack(fill="both", expand=expand)
@@ -1177,36 +1197,75 @@ def _scrollable_table(
     tree.pack(fill="both", expand=True)
     active_bus = bus or _DEFAULT_BUS
     attach_overlay_scrollbars(frame, tree, active_bus, scale_px=active_bus.px)
-    _bind_fit_to_width(tree, columns)
+    if empty_text:
+        tree.empty_state = TableEmptyState(tree, active_bus, empty_text)  # type: ignore[attr-defined]
     return tree
 
 
-def _bind_fit_to_width(tree: ttk.Treeview, columns: tuple[tuple[str, str, int], ...]) -> None:
-    """Grow columns into spare width so a wide window never shows a bar.
+def refresh_table_empty(tree: Any) -> None:
+    """Update a table's empty-state overlay after its rows changed.
 
-    Columns keep their declared proportions; only the surplus space of a
-    window wider than the table's natural width is distributed. When the
-    window is narrower, the declared widths stand and the overlay
-    horizontal bar makes the rest reachable.
+    Pages call this right after they fill a table. The overlay also refreshes
+    on the table's own ``<Configure>``, so a page that forgets the call still
+    shows the hint as soon as the page is laid out.
     """
-    natural = sum(width for _key, _title, width in columns) or 1
-    weights = [width / natural for _key, _title, width in columns]
-    state = {"applied": -1}
+    state = getattr(tree, "empty_state", None)
+    if state is not None:
+        state.refresh()
 
-    def apply(event: tk.Event) -> None:
-        available = int(getattr(event, "width", 0))
-        if available <= 1 or available == state["applied"]:
-            return
-        state["applied"] = available
-        if available <= natural:
-            for key, _title, width in columns:
-                tree.column(key, width=width)
-            return
-        spare = available - natural
-        for (key, _title, _width), weight in zip(columns, weights, strict=True):
-            tree.column(key, width=int(natural * weight + spare * weight))
 
-    tree.bind("<Configure>", apply, add="+")
+class TableEmptyState:
+    """A centred hint shown while a table has no rows.
+
+    It lives in the table's own frame as a *placed* label, so showing or
+    hiding it never changes a requested size - the same rule the cards
+    follow. Visibility is derived from the tree itself, never tracked
+    separately, so a page cannot leave a stale "no data" line over rows.
+    """
+
+    def __init__(self, tree: ttk.Treeview, bus: ThemeBus, text: str) -> None:
+        self._tree = tree
+        self._bus = bus
+        self._label = ttk.Label(
+            tree.master,
+            text=text,
+            style="Empty.TLabel",
+            anchor="center",
+            justify="center",
+            wraplength=bus.px(420, minimum=240),
+        )
+        self._shown = False
+        tree.bind("<Configure>", lambda _event: self.refresh(), add="+")
+
+    @property
+    def text(self) -> str:
+        return str(self._label.cget("text"))
+
+    def set_text(self, text: str) -> None:
+        with contextlib.suppress(tk.TclError):
+            self._label.configure(text=text)
+        self.refresh()
+
+    def is_shown(self) -> bool:
+        """Whether the hint is currently placed (used by the smoke harness)."""
+        return self._shown
+
+    def refresh(self) -> None:
+        try:
+            empty = not self._tree.get_children("")
+            exists = bool(self._tree.winfo_exists())
+        except tk.TclError:  # the table was destroyed by a rebuild
+            return
+        show = empty and exists
+        if show == self._shown:
+            return
+        self._shown = show
+        with contextlib.suppress(tk.TclError):
+            if show:
+                self._label.place(relx=0.5, rely=0.5, anchor="center")
+                self._label.lift()
+            else:
+                self._label.place_forget()
 
 
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:

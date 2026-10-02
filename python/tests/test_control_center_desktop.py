@@ -188,11 +188,19 @@ class ControlCenterSettlingTests(unittest.TestCase):
         """The workflow that used to hang must not stream events afterwards.
 
         This is the path the desktop suite died on: the benchmark run updates
-        phases, log lines and its result table, and something in that update
-        kept the window busy for good. The probe drives the same workflow as
-        the real test but watches through the non-blocking pump, so a
-        regression is reported (with the widgets and counts that explain it)
-        instead of turning into a three-minute timeout.
+        phases, telemetry and its result table, and something in that update
+        kept the window busy for good - CI counted 396 489 ``<Configure>``
+        events in under a second. The probe drives the same workflow as the
+        real test but watches through the non-blocking pump, so a regression
+        is reported, with the widgets and counts that explain it, instead of
+        turning into a three-minute timeout.
+
+        A finished workflow is allowed exactly one layout wave: the report
+        replaces placeholder text, and a label whose width follows its text
+        nudges its neighbours once. What must never happen is a *stream* - a
+        window that re-decides its geometry from the Configure events that
+        decision produced. So the probe measures both: the wave itself stays
+        small, and an equally long window after it is perfectly quiet.
         """
         from unittest import mock
 
@@ -219,19 +227,37 @@ class ControlCenterSettlingTests(unittest.TestCase):
             page._start()
             for _ in range(10):
                 _pump_events(self.app, 0.05)
+            # Let the report's first layout wave land before measuring idleness.
+            _pump_events(self.app, 0.3)
+        settled = dict(configure_counts)
+        for _ in range(10):
+            _pump_events(self.app, 0.05)
+
         timers = len(str(self.app.tk.eval("after info")).split())
         total_configure = sum(configure_counts.values())
         worst = sorted(configure_counts.items(), key=lambda item: item[1], reverse=True)[:5]
-        detail = f"pending_after={timers} configure={total_configure} worst={worst}"
+        detail = (
+            f"pending_after={timers} settled={sum(settled.values())} "
+            f"total={total_configure} worst={worst}"
+        )
+        # The loop this guards against produced ~4e5 events in the same
+        # window: a bound three orders of magnitude below that still fails a
+        # storm while leaving room for the workflow's own layout wave.
         self.assertLess(
-            total_configure,
-            200,
+            sum(settled.values()),
+            2000,
             f"the finished benchmark workflow keeps resizing itself: {detail}",
         )
+        leaked = {
+            key: (settled.get(key, 0), count)
+            for key, count in configure_counts.items()
+            if count > settled.get(key, 0)
+        }
         self.assertEqual(
-            configure_counts,
+            leaked,
             {},
-            f"the finished benchmark workflow resizes widgets: {detail}",
+            "the finished benchmark workflow never stops resizing widgets "
+            f"(key -> (before, after)): {detail}",
         )
 
 

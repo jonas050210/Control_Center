@@ -1520,7 +1520,11 @@ def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
                     "mechanic": mech,
                     "base_status": group_key,
                     "status": effective_status,
-                    "measured_value": measured_val or "—",
+                    # An empty cell beats a bare dash: a wall of "—" reads
+                    # like a broken table, and this column is the one the
+                    # operator fills in. The page keeps dashes out of the
+                    # form field by testing the raw value.
+                    "measured_value": measured_val,
                     "rule": str(item.get("implementation_rule") or ""),
                     "source": str(item.get("source_label") or ""),
                     "notes": str(cal_entry.get("notes") or item.get("notes") or ""),

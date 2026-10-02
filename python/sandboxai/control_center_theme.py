@@ -691,6 +691,23 @@ def apply_ttk_styles(
             "foreground": theme.text_muted,
             "font": font("micro"),
         },
+        # A one-line explanation under a page heading ("No runs yet - launch
+        # a training run..."). Sits on the page background, quieter than the
+        # subtitle but not as faint as the disabled text colour.
+        "Hint.TLabel": {
+            "background": theme.bg,
+            "foreground": theme.text_dim,
+            "font": font("small"),
+        },
+        # The overlay a table shows while it has no rows. Its background has
+        # to be the table's own field background (``theme.panel``) or the hint
+        # would sit in a visible rectangle on top of the empty table.
+        "Empty.TLabel": {
+            "background": theme.panel,
+            "foreground": theme.text_dim,
+            "font": font("small"),
+            "padding": (scale.px(14), scale.px(10, minimum=6)),
+        },
     }
     for name, options in label_styles.items():
         style.configure(name, **options)

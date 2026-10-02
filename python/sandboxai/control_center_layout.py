@@ -12,6 +12,15 @@ before it is a Tk problem, so it lives here, display-free and unit-tested:
   missing, clamp what is out of range.
 * :class:`PresetStore` - named presets under ``.sandboxai/ui/presets`` with
   atomic writes.
+* :func:`columns_for_width` / :func:`placement_slots` - the *decisions* the
+  card board makes when the window is resized and when it lays its cards
+  out. They are plain functions so they can be pinned by tests without a
+  display: a board that re-decides its column count from inside the
+  ``<Configure>`` event of the very layout it just produced can feed its own
+  resize back into Tk and never settle (the desktop suite hung inside
+  ``update()`` because of exactly that), and the hysteresis in
+  :func:`columns_for_width` is what stops a window parked on a threshold
+  from oscillating between two counts.
 
 Nothing here imports Tk, so the whole feature is testable in CI without a
 display, and a corrupt preset can never stop the window from opening.
@@ -24,6 +33,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,11 +46,13 @@ __all__ = [
     "PresetStore",
     "WidgetPlacement",
     "WidgetSpec",
+    "columns_for_width",
     "default_layout",
     "deserialize",
     "layout_dir",
     "move",
     "normalize",
+    "placement_slots",
     "reset_all",
     "reset_page",
     "serialize",
@@ -300,6 +312,72 @@ def deserialize(data: Any, registry: SpecRegistry) -> LayoutState:
 # ---------------------------------------------------------------------------
 # Presets
 # ---------------------------------------------------------------------------
+
+
+def columns_for_width(
+    width: int,
+    *,
+    max_columns: int,
+    min_column_width: int,
+    current: int,
+    hysteresis: float = 0.08,
+) -> int:
+    """How many card columns fit into ``width`` without oscillating.
+
+    ``width // min_column_width`` alone is not enough: a window parked on a
+    threshold (or a layout whose columns are 1 px from the next step) makes
+    the board re-grid, which can change the width it re-measures, which
+    re-grids again - the loop that froze the desktop suite. Two rules keep it
+    monotone: a *width band* of ``hysteresis`` (8 % by default) that must be
+    cleared before the count moves at all, and a refusal to guess while the
+    board has not been laid out yet (``width <= 1`` keeps the current count).
+
+    A resize that clears the band by a lot still takes the full step: the
+    result is the count that fits the new width, never a single-step crawl.
+    """
+    if width <= 1:
+        return current
+    wanted = max(1, min(max_columns, max(1, int(width) // max(1, min_column_width))))
+    if wanted == current:
+        return current
+    margin = max(8, int(min_column_width * hysteresis))
+    if wanted < current:
+        # Shrinking: only give up a column once the width is clearly below it.
+        return wanted if width < current * min_column_width - margin else current
+    # Growing: only take a column once there is clearly room for it.
+    return wanted if width >= (current + 1) * min_column_width + margin else current
+
+
+def placement_slots(
+    placements: Iterable[WidgetPlacement],
+    *,
+    columns: int,
+    visible_ids: Iterable[str] | None = None,
+) -> tuple[tuple[str, int, int, int], ...]:
+    """Flatten placements into ``(widget_id, row, column, span)`` slots.
+
+    The board uses this both to lay its cards out and to decide whether a
+    ``rebuild`` has anything to do: an identical slot list means the cards
+    are already where they belong, and re-gridding them anyway is what turns
+    one stray ``<Configure>`` into an endless stream of them.
+    """
+    allowed = None if visible_ids is None else set(visible_ids)
+    slots: list[tuple[str, int, int, int]] = []
+    row = 0
+    column = 0
+    for placement in placements:
+        if allowed is not None and placement.widget_id not in allowed:
+            continue
+        span = max(1, min(max(1, columns), placement.span))
+        if column + span > columns:
+            row += 1
+            column = 0
+        slots.append((placement.widget_id, row, column, span))
+        column += span
+        if column >= columns:
+            row += 1
+            column = 0
+    return tuple(slots)
 
 
 def layout_dir(project_root: str | Path) -> Path:
