@@ -22,8 +22,11 @@ HumanController / policy
 ```
 
 Godot owns simulation state and rewards. Python owns neural networks,
-checkpoints, evaluation, datasets and telemetry. No paid API, cloud service,
-Roblox integration or visual-scene dependency is required.
+checkpoints, evaluation, datasets and telemetry. No paid API, cloud service
+or visual-scene dependency is required, and nothing here automates the real
+game: the optional TTK calibration helpers only detect, launch, focus and
+screenshot the Roblox client for a human to measure, as specified in
+[docs/TTK_TESTING_REFERENCE.md](docs/TTK_TESTING_REFERENCE.md).
 
 ## Requirements
 
@@ -150,6 +153,13 @@ It provides:
 - **Evaluations** - win/loss/timeout, combat, accuracy and
   action-head/zero-shot diagnostics plus multi-run comparison
 - **Runs / Checkpoints** - a browser over the on-disk run artifacts
+- **Stats** - every value the policy receives, decoded from a real
+  recording: the three tracked contacts (enemy position, distance,
+  bearing, health, visibility/source), the world objects around the agent,
+  hearing, memory, the raw observation vector and the recorded action.
+  The contract table is complete without a recording; a light replay is
+  labelled as such instead of being rendered with zeros that would look
+  like data
 - **System / Telemetry** - real CPU/RAM/Godot/dependency status and
   bounded live telemetry charts; unavailable metrics are shown as such,
   never estimated
@@ -335,7 +345,7 @@ sandboxai bc-train --dataset training/datasets/human_demo.jsonl \
 
 The trainer starts one Godot headless process containing the requested number
 of independent environments and uses a `MultiDiscrete([3,3,3,3,2,2])` action
-space. The structured observation is an 84-float `Box` (see
+space. The structured observation is a 106-float `Box` (see
 [`docs/OBSERVATION_ACTION_CONTRACT.md`](docs/OBSERVATION_ACTION_CONTRACT.md)
 for the full field-by-field table, including the multi-enemy tracking
 fields added for curriculum levels with more than one enemy).
@@ -384,7 +394,7 @@ see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
 - `--inference-device cpu` (default `auto`): run rollout/evaluation policy
   inference on CPU while PPO updates stay on `--device`. On CUDA hardware
   this removes the per-step host<->device round trip that makes GPU training
-  *slower* than CPU for the tiny (84 -> 128 -> 128) policy.
+  *slower* than CPU for the tiny (106 -> 128 -> 128) policy.
 - `--env-workers N|auto` (default 1): host the environments in N independent
   headless Godot processes instead of one. Shard *k* owns a contiguous slice
   of the environments and is launched with that slice's base seed, which is

@@ -151,7 +151,7 @@ Launch with `python3 main.py` from the repository root, or
 `tools/windows/start_control_center.bat` for a Windows launcher). It uses
 Tkinter from the standard library only (Windows-first, no paid/cloud
 dependency) and never renders the game. Pages: **Dashboard**, **Training**,
-**Benchmarks**, **Evaluations**, **Runs / Checkpoints**,
+**Benchmarks**, **Evaluations**, **Runs / Checkpoints**, **Stats**,
 **System / Telemetry**, **Settings**. The shell has three layouts (rail,
 topbar, command board), five themes and three density presets, all applied
 live and persisted in `.sandboxai/ui/preferences.json`; pages that declare

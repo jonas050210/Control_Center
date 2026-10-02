@@ -9,6 +9,103 @@ records what changed and why.
 ## Unreleased
 
 ### Control Center
+- **The Stats page.** A new page (the eighth) shows what the trained policy
+  actually receives, decoded from a real recording instead of guessed: the
+  three tracked contacts (relative position, distance, bearing, elevation,
+  health, visibility, in-FOV/LOS, information age, confidence, and whether
+  the belief came from vision or hearing), the world objects, cover and
+  memory rows around the agent, the hearing summary, the recorded action per
+  component, the raw observation vector grouped by contract section, and the
+  TTK Testing evidence manifest next to it. Without a recording the page
+  still shows the complete contract (`contract.OBSERVATION_SPEC`) with `n/a`
+  values rather than zeroes that would read like data, and a light replay is
+  labelled as light. The headline line carries the object block too
+  (`objects 2 (crate)`), so "is there cover next to me" is answered without
+  opening a table. The adapter side (`list_replays`, `replay_stats`) reads
+  a replay's header and tick count in one pass, caches both by
+  `(mtime_ns, size)` and the decoded episode by the same stamp, and every
+  call runs on the background pool, so nothing on the page blocks the Tk
+  thread.
+- **A replay rescan reads each recording at most once.** `list_replays()`
+  read every candidate twice (once for the header line, once to count ticks)
+  and kept only the 64 most recent headers, so a folder bigger than that was
+  re-read from disk on every Stats poll. Header and tick count now come from
+  a single pass and are cached together behind the file's `(mtime_ns, size)`
+  stamp; only the header line is JSON-decoded and ticks are recognized by
+  prefix, so a corrupt line cannot break the listing. Measured with
+  `tools/replay_scan_probe.py` (1200 synthetic recordings, 200 ticks each,
+  144.7 MB): a warm rescan went from a 38.8 ms median to 18-21 ms over
+  repeated runs (the rest is the directory scan itself), the cold scan
+  stayed at ~41-43 ms - it is one pass either way, and what disappeared is
+  the re-reading. Two adapter tests pin the behaviour: a
+  warm scan does not open an unchanged file, and a rewritten recording is
+  noticed.
+- **The Stats page keeps the list fresh, and never shows a replay that is
+  gone.** Three behaviours the page claimed but did not have: the 20-tick
+  rescan timer only ran while *no* replay was selected, so a recording
+  written during the session could never appear without pressing Rescan; a
+  rescan that found nothing left the last decoded replay on screen as if it
+  were still backed by a file; and a failed decode left the previous
+  contract warning up. The timer now keeps asking, an unchanged listing is
+  recognised by a `(path, size, mtime)` signature and left alone (so the
+  operator's selection and scroll position survive it), and both "nothing
+  found" and "decode failed" reset the page through one `_clear_decode()`
+  path. The evidence manifest is loaded once instead of on every tick. The
+  smoke harness pins all three by counting poll submissions and by
+  breaking each guard on purpose, which is how the checks were verified.
+- **A poll tick stopped reading whole training logs.** The worst offender
+  was not a bug in the GUI but in `run_inspection`: every poll of the Runs,
+  Evaluations and Dashboard pages counted the lines of every log a run owns,
+  and counting lines means reading the whole file. A finished run that kept a
+  30 MB `training.jsonl` was read end to end twice a second, forever, and
+  `tail_jsonl` decoded and parsed every line of its trailing megabyte to
+  return the last five. Line counts are now extended by only the appended
+  bytes (remembering `(bytes, lines)` and correcting for a half-written last
+  line; a file that shrank is recounted from zero, the same rule
+  `IncrementalJsonlTailer` uses), and the tail window is walked from its end,
+  stopping as soon as the requested rows are in hand. Measured with the new
+  `tools/control_center_poll_probe.py` on a 60-run corpus whose three newest
+  runs carry a 64 MB log, warm call before -> after: `dashboard_snapshot`
+  68.1 -> 4.3 ms, `discover_checkpoints` 144.8 -> 16.0 ms, `list_runs`
+  140.3 -> 14.5 ms. Six new tests pin the counter (append, mid-line
+  boundary, shrink, unchanged file, bounded cache) and the tail (a malformed
+  final line still cannot fail it, and it no longer parses the whole window).
+- **A poll result that has not changed no longer rebuilds the table.** The
+  Runs and Evaluations tables were cleared and re-inserted on every 600 ms
+  tick. That is wasted work, and in real Tk it also drops the operator's
+  row selection - the highlight disappears while the exact same rows come
+  back. Both inventories now compare a signature of the values they render
+  (`control_center_viewmodel.table_signature`) and leave an unchanged table
+  alone; a changed value still rebuilds it. The Evaluations table also
+  re-registered its Treeview tag colour once per tick, growing the theme
+  bookkeeping list that is replayed entry by entry on every theme switch;
+  `Page.tag_style` is idempotent now. The headless smoke harness checks all
+  three by counting the fake Treeview's delete/insert calls and the length of
+  the tag list, and fails when either guard is removed on purpose.
+- **Polling the visible page is now a checked guarantee.** The ticker
+  already refreshed only the current page, but nothing stopped a future
+  change from walking every page's `refresh()` on each 600 ms tick - eight
+  pages submitting background reads (run directories, benchmark history, the
+  Stats replay list) for a window nobody is looking at. The smoke harness now
+  counts `refresh()` calls per page and fails if a hidden page is polled;
+  breaking `_tick` on purpose makes it fail, which is how the check was
+  verified.
+- **Older recordings stay readable, and are labelled.** Growing the
+  observation contract must not make recorded evidence disappear, so
+  `SandboxAIAdapter.replay_stats()` reads a replay with
+  `strict_contract=False` and reports `contract_match` plus
+  `recorded_observation_dim`; the Stats page shows a warning line
+  ("recorded under an older contract (84 floats, current 106) - readable,
+  but not comparable with a current policy's input") instead of either
+  failing or pretending the numbers belong to the current vector. Two adapter
+  tests cover the older and the current case, and the replayed values are
+  read exactly as recorded - never padded.
+- **Every page renders its cards again.** `Page.board()` built the layout
+  board and never attached it: Dashboard, Training and Benchmarks rendered
+  their heading and then an empty page. The board is packed now, the static
+  page-contract test asserts a board always gets a geometry manager (the
+  real-Tk suite cannot run on a machine without Tkinter), and the headless
+  smoke sweep checks the same thing on every page.
 - **Interface rework.** The window is now built from switchable design
   choices instead of one hard-coded look: five themes (Corz, Midnight
   Cyan, Neon Lime, Graphite Mono, Light), three shell layouts (rail,
@@ -140,6 +237,20 @@ records what changed and why.
   lifecycle (failed red, running green, transitional amber).
 
 ### TTK Testing scope
+- **The bounded live-helper surface is documented, and the statements that
+  contradicted it are corrected.** `sandboxai.ttk_testing` had grown the
+  helpers the Control Center uses for a manual calibration session (process
+  and window probing, reading the client's own log for the live place id,
+  launching through the user's shortcut or the public deep link, focusing the
+  window, screenshot capture) while `docs/ARCHITECTURE.md`, `PROJECT.md`,
+  `README.md` and this file still said "no Roblox integration exists or is
+  planned". None of that removed the red lines - no memory reading, no input
+  injection, no packet inspection, no client modification, no gameplay
+  automation - so the docs now say exactly what the code does:
+  `docs/TTK_TESTING_REFERENCE.md` gains the allowed/never table for the
+  helper surface, and the Helmetcam row records that the official game
+  documents **P = Helmetcam** while the project still excludes it as a
+  presentation-only mode.
 - `sandboxai ttk-status` plus `sandboxai.ttk_testing`: one source-traceable
   TTK Testing evidence manifest. It separates verified controls and
   wound-painting/bleeding from calibration-required physics/weapon/reload
@@ -155,11 +266,97 @@ records what changed and why.
   `sidearm_finish_drill` and `smg_tracking_drill`, with a regression test
   preventing their return.
 - The unused external-game/Roblox adapter boundary, mock, command and
-  documentation. SandboxAI has no Roblox connection or automation path.
+  documentation. What survives is only the bounded calibration helper
+  surface (detect/launch/focus/screenshot, hand-typed values) described in
+  the TTK Testing scope entry above - never an automation path.
 - The unverified weapon-handling report, whose third-party claims did not
   meet the TTK-only evidence boundary.
 
+### Fixed
+- **A bearing had two opposite sign conventions, and eight of the eleven
+  bearing fields used the wrong one.** The observation vector's bearings came
+  from two implementations: `Observation` measured the angle as a yaw
+  difference
+  (positive = the agent's right, which is what the contract documents for
+  `enemy_bearing_norm` and what `look_yaw_axis = +1` does), while
+  `ArenaWorld` (objects, nearest obstacle), `SoundBus` (hearing) and the
+  memory context through `PerceptionSystem.bearing_deg` took the sign of
+  `forward.cross(direction).y` - the opposite direction in Godot's
+  right-handed frame. Consequences: a contact and the crate next to it were
+  reported on opposite sides of the agent, hearing pointed the wrong way
+  relative to every other channel, and the Stats page showed an operator the
+  mirrored world. The fix is one implementation of the convention
+  (`scripts/core/vector_math.gd`, `VectorMath.signed_bearing_*`) that every
+  caller now uses; `PerceptionSystem.bearing_deg`'s docstring said "negative
+  is left, positive is right" while its body computed the opposite, so the
+  comment was wrong too. Verified: the corrected formula agrees with the
+  yaw-difference reference to 1e-10 degrees over 200k random geometries (a
+  Python port, since no engine is available locally), new GDScript tests put
+  an enemy and a crate on the same 45-degree ray and require equal
+  normalized bearings from both, the sound test pins its sign, and a new
+  drift test in `python/tests/test_contract.py` fails if any GDScript file
+  outside `vector_math.gd` takes the sign of `cross().y` again (checked by
+  re-introducing one). The same hunt removed the two other angle formulas
+  that existed in more than one place: the yaw of a direction
+  (`rad_to_deg(atan2(x, -z))`, six copies in the agent, enemies, stub
+  controller, scenario/world generators and environment reset) and the
+  elevation of a point (`atan2(y, horizontal)`, one copy in the perception
+  system and one in `Observation`) are now `VectorMath.yaw_deg_from_direction`
+  and `VectorMath.elevation_deg`, with the same drift test covering both
+  (also checked by mutation). Both refactors are expression-for-expression
+  equivalent, so no behaviour changed. Recorded replays and the wire format
+  are unchanged; a policy trained before this fix simply saw some channels
+  mirrored.
+- **A stale contract-version expectation that only the training extras
+  would have caught.** `test_checkpoint_eval.py` asserted that an evaluation
+  report records `contract.version == 3`. The v4 object block made that 4,
+  but the test skips without torch/SB3, so the local suite stayed green and
+  CI would have failed on the first push. Running the full suite with the
+  training extras installed (`1123 passed, 46 skipped, 1 failed`) found it;
+  the same suite is green after the fix (`1124 passed, 46 skipped, 880
+  subtests`). The test now reads `contract.CONTRACT_VERSION` instead of a
+  literal, because the
+  report has to record the contract the code declares - the deliberate
+  freeze of the contract fingerprint lives in `test_manifest.py` and keeps
+  its literal on purpose.
+
 ### Added
+- **Contract v4: the policy can see the objects around it.** Three ranked
+  slots for the nearest *visible* world objects - closest surface point,
+  distance, bearing, a normalized kind ordinal and a per-slot visibility
+  flag - plus the visible total are appended as indices **84-105**; indices
+  0-83 are unchanged, and the arena fence (`Obstacle.Kind.BOUNDARY`) is never
+  reported. A slot is only filled by geometry the agent could actually see
+  from where it stands (FOV cone, `VISION_RANGE`, occlusion probe), which
+  keeps the contract's "no privileged information" rule intact: the policy
+  learns that cover exists and where it is, not what the map contains.
+  `SandboxConfig.OBJECT_KIND_COUNT`/`OBSERVATION_MAX_TRACKED_OBJECTS` mirror
+  the budgets, `ArenaWorld.visible_object_infos()` is the single visibility
+  query behind it, and the drift tests in `python/tests/test_contract.py`
+  compare every new field against `contract.OBSERVATION_SPEC`.
+- **Object-visibility regression tests, and the perception's own cone.**
+  `tests/test_observation_objects.gd` pins the contract-v4 query behaviour
+  that only a live engine can show: nearest visible object first, the fence
+  never reported, the FOV cone and vision range honoured, cover hiding what
+  stands behind it (while a box that directly faces the agent is still
+  reported - the occlusion probe must not count a box as its own blocker),
+  boxes that block neither sight nor movement skipped, empty slots neutral,
+  and the visible count *not* truncated at the three-slot budget. The
+  simulation now forwards its perception system's `fov_deg`/`vision_range`
+  into the observation context, so the objects in the vector are exactly the
+  ones that system could see, and `contract.OBSERVATION_COUNT_NORMALIZER`
+  (with its own Godot-constant drift test) mirrors
+  `Observation.COUNT_NORMALIZER` so the Control Center can render "2" or
+  "8+" instead of a normalized fraction.
+- **Observation-width drift test.** Every living document that restates the
+  vector width (`README.md`, `PROJECT.md`, `AGENTS.md`, `CONTRIBUTING.md`,
+  `docs/ARCHITECTURE.md`, `docs/CURRICULUM_AND_COMBAT.md`,
+  `docs/DEBUG_GUI_AND_BENCHMARKING.md`, the PR template) is now read as text
+  and its "<N>-float" / "<N>-field" / "<N> -> 128 -> 128" mentions must equal
+  `contract.OBSERVATION_FIELD_COUNT`; the contract document itself is only
+  checked on its *first* mention because its version history quotes the old
+  widths on purpose. Nine documents still claimed 84 floats when the v4 block
+  landed.
 - **Trainer-enforced wall-clock budget** (`TrainingConfig.max_train_minutes`,
   `sandboxai train --max-train-minutes`). The budget used to be a
   window-side request: the Control Center watched the elapsed time and

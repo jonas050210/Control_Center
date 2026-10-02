@@ -55,8 +55,8 @@ Human, stub AI, external PPO and demonstrations all pass through `Action`.
 
 ## Observation contract
 
-`Observation.to_array()` always returns **84** float32-compatible values
-(contract v3). The layout is strictly additive across three generations:
+`Observation.to_array()` always returns **106** float32-compatible values
+(contract v4). The layout is strictly additive across four generations:
 
 - **0–32 (v1)** agent state, the primary/nearest-alive enemy, weapon-ready
   and in-combat flags, two more individually tracked enemies.
@@ -68,6 +68,10 @@ Human, stub AI, external PPO and demonstrations all pass through `Action`.
   agent's own map knowledge (explored fraction, whether the current area is
   known, time since it was last here, remembered cover and remembered
   danger).
+- **84–105 (v4)** the three nearest objects the agent can actually see
+  (position, distance, bearing, kind, and a per-slot visibility flag)
+  plus how many objects are visible in total. Visibility-filtered like
+  everything else: no unseen geometry, no object IDs, no fence.
 
 No map id, lighting mode, enemy count, spawn list or geometry dump is ever
 part of the vector; a map is an environment, not a label. See
@@ -359,9 +363,13 @@ docstring and a test that fails when the two disagree.
   line-of-sight, sound, memory, obstacles, navigation state, corpses,
   exploration and environment conditions exist and are exposed through the
   dynamic read-only hooks the debug tooling probes.
-- No Roblox integration exists or is planned in this repository. TTK Testing
-  calibration uses only official sources and manual player-visible evidence;
-  see `docs/TTK_TESTING_REFERENCE.md`.
+- There is no automated Roblox integration: no memory reader, no input
+  injection, no packet inspection, no client modification and no gameplay
+  automation. The only client-facing code is the bounded manual calibration
+  helper surface (detect/launch/focus/screenshot plus a hand-typed
+  calibration file), which is specified in `docs/TTK_TESTING_REFERENCE.md`;
+  TTK Testing calibration itself uses only official sources and manual
+  player-visible evidence.
 - Godot itself must be installed locally; the repository cannot verify live
   Godot behavior on a machine without that executable. This milestone's
   Python-side changes were validated with a scripted fake Godot bridge

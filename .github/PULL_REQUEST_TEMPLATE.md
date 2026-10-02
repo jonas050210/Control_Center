@@ -13,7 +13,7 @@ Thanks for contributing. Keep the diff focused; see CONTRIBUTING.md.
      migration, not a silent edit (CONTRIBUTING.md -> "Non-negotiable
      contracts"). -->
 
-- [ ] Observation vector (84 floats) — `contract.py` / `observation.gd`
+- [ ] Observation vector (106 floats) — `contract.py` / `observation.gd`
 - [ ] Action space (`MultiDiscrete([3,3,3,3,2,2])`) — `contract.py` / `action.gd`
 - [ ] JSON-lines bridge commands — `rl_server.gd` / `godot_env.py`
 - [ ] Replay / demonstration / dataset on-disk format
