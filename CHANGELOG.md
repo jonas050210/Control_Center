@@ -250,6 +250,22 @@ records what changed and why.
   reads like data. The nested cards inside the benchmark and layout studio
   cards paint their corners in the surface they actually sit on.
 
+- **The window is sized for the display it opens on, and the wide tables use
+  the width.** The preferred size is 1800x980 with a 1280x800 floor: a
+  1920x1080 screen gets the full width for the benchmark measurements table
+  (which declares 14 columns) instead of the ~900 px its old 3:2 split with
+  the chart left it - the chart is a full-width card of its own now, and the
+  Stats page's headline contacts table spans the page while the three small
+  tables (objects/memory, hearing, action) sit in one row with widths that
+  fit a one-column card at that size. A remembered `WxH+X+Y` is clamped onto
+  the screen it is restored on and centred when it has no position, so a
+  geometry captured on a bigger monitor can no longer open a window with its
+  title bar off the top of the display (which reads as "the GUI shows
+  nothing"); *Settings -> Appearance -> Fit window to screen* recovers one on
+  demand and `F11` maximizes/restores. The placement rules are plain
+  functions (`fit_window_geometry`) with unit tests, so the Tk side only
+  passes the screen size in and applies the result.
+
 ### TTK Testing scope
 - **The bounded live-helper surface is documented, and the statements that
   contradicted it are corrected.** `sandboxai.ttk_testing` had grown the

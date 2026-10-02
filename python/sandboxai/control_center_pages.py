@@ -1972,7 +1972,14 @@ class BenchmarkPage(Page):
         WidgetSpec(
             "results",
             "Measurements",
-            "Live measurement table and the throughput scaling chart.",
+            "Every tested configuration, live: one row per screened topology.",
+            default_span=3,
+            max_span=3,
+        ),
+        WidgetSpec(
+            "scaling",
+            "Throughput scaling",
+            "Steps per second across the configurations that were measured.",
             default_span=3,
             max_span=3,
         ),
@@ -2017,6 +2024,7 @@ class BenchmarkPage(Page):
         board.add("plan", self._build_plan_card)
         board.add("live", self._build_live_card)
         board.add("results", self._build_results_card)
+        board.add("scaling", self._build_scaling_card)
         board.rebuild()
 
         self._cancel_event: threading.Event | None = None
@@ -2168,50 +2176,38 @@ class BenchmarkPage(Page):
         return card
 
     def _build_results_card(self, parent: tk.Misc) -> tk.Widget:
-        card = self.card(parent, "Measurements & scaling", "Every tested configuration, live")
-        # A ttk.Panedwindow would be the obvious way to split this card, but a
-        # panedwindow re-arranges its panes whenever a child reports a new
-        # requested size - and a table that fits its columns to the width it
-        # was given reports exactly that. The two of them together kept the
-        # benchmark page resizing itself forever (the desktop suite timed out
-        # inside the resulting event storm). A plain grid gives the same 3:2
-        # split, decides once, and cannot re-arrange anything.
-        bottom = ttk.Frame(card.body, style="CardInner.TFrame")
-        bottom.pack(fill="both", expand=True)
+        """The measurement table, as a full-width card.
 
-        results_card = self.card(
-            bottom,
-            "Measurements",
-            "Live stream of every tested configuration",
-            nested=True,
-        )
-        results_card.grid(row=0, column=0, sticky="nsew")
+        It used to share one card with the chart in a 3:2 split. The table
+        declares 1125 px of columns (14 of them) and the 3:2 left half of a
+        1920x1080 window is only about 900 px, so the project's marquee table
+        opened with a horizontal scrollbar on the very screens that have room
+        to spare. Full width gives it ~1450 px and the overlay bar disappears;
+        the chart gets its own full-width card right below instead of a
+        squeezed 600 px column.
+        """
+        card = self.card(parent, "Measurements", "Every tested configuration, live")
         self.tree = _scrollable_table(
-            results_card.body,
+            card.body,
             self.RESULT_COLUMNS,
             bus=self.app.bus,
             empty_text=("No measurements yet.\nPress Start benchmark to measure this machine."),
         )
         self.tag_style(self.tree, "failed", "error")
         self.tag_style(self.tree, "leader", "ok")
+        return card
 
-        chart_card = self.card(
-            bottom,
-            "Throughput scaling",
-            "Steps per second across configurations",
-            nested=True,
+    def _build_scaling_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent, "Throughput scaling", "Steps per second across the measured configurations"
         )
-        chart_card.grid(row=0, column=1, sticky="nsew", padx=(self.app.px(10, minimum=5), 0))
         self.throughput_chart = LineChart(
-            chart_card.body,
+            card.body,
             "Measured throughput (steps/s)",
             color=self.palette.accent,
             bus=self.app.bus,
         )
         self.throughput_chart.pack(fill="both", expand=True)
-        bottom.columnconfigure(0, weight=3, uniform="results")
-        bottom.columnconfigure(1, weight=2, uniform="results")
-        bottom.rowconfigure(0, weight=1)
         return card
 
     # -- workflow ----------------------------------------------------------
@@ -3791,6 +3787,21 @@ class SettingsPage(Page):
             style="Ghost.TButton",
             command=self._reset_appearance,
         ).pack(side="right")
+        # The recovery for a window that is off-screen or taller than the
+        # display it is on now (closed on a bigger monitor, RDP/WSLg session
+        # changed): pull it back and centre it without editing preferences.
+        fit = ttk.Button(
+            toggles,
+            text="Fit window to screen",
+            style="Ghost.TButton",
+            command=self.app.fit_window_to_screen,
+        )
+        fit.pack(side="right", padx=(0, self.app.px(8, minimum=4)))
+        ToolTip(
+            fit,
+            "Clamp the window to this display and center it (F11 maximizes)",
+            bus=self.app.bus,
+        )
 
     def _build_accent_row(self, parent: tk.Misc) -> None:
         """Accent colour: quick swatches plus a hex field for anything else."""
@@ -4668,23 +4679,28 @@ class StatsPage(Page):
         ("source", "Source", 70),
     )
 
+    # The declared widths are *minimums*: Tk's own column stretching fills
+    # whatever spare width the card gets, so these are chosen to fit the slot
+    # a one-column card really has on a 1920x1080 window (about 450 px inside
+    # the card padding) instead of forcing the overlay scrollbar on a screen
+    # that has room to spare. They still scroll on a narrow window.
     WORLD_COLUMNS = (
-        ("field", "Object / memory", 190),
-        ("distance", "Value", 80),
-        ("bearing", "Bearing", 80),
-        ("note", "What it is", 260),
+        ("field", "Object / memory", 140),
+        ("distance", "Value", 60),
+        ("bearing", "Bearing", 65),
+        ("note", "What it is", 180),
     )
 
     AUDIO_COLUMNS = (
-        ("field", "Hearing", 190),
-        ("value", "Value", 120),
-        ("note", "What it is", 260),
+        ("field", "Hearing", 150),
+        ("value", "Value", 90),
+        ("note", "What it is", 200),
     )
 
     ACTION_COLUMNS = (
-        ("component", "Action component", 130),
-        ("value", "Value", 60),
-        ("meaning", "Meaning", 420),
+        ("component", "Action component", 120),
+        ("value", "Value", 55),
+        ("meaning", "Meaning", 270),
     )
 
     VECTOR_COLUMNS = (
@@ -4735,7 +4751,8 @@ class StatsPage(Page):
             "contacts",
             "Contacts / enemies",
             "The three tracked enemies: position, distance, bearing, perception.",
-            default_span=2,
+            default_span=3,
+            max_span=3,
         ),
         WidgetSpec(
             "world",
@@ -4751,7 +4768,6 @@ class StatsPage(Page):
             "action",
             "Action the policy took",
             "The six action components emitted for the selected tick.",
-            default_span=2,
         ),
         WidgetSpec(
             "evidence",

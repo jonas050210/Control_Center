@@ -27,6 +27,7 @@ from sandboxai.control_center_layout import (
     WidgetSpec,
     columns_for_width,
     deserialize,
+    fit_window_geometry,
     move,
     normalize,
     placement_slots,
@@ -597,6 +598,92 @@ class PlacementSlotTests(unittest.TestCase):
         """The identity ``LayoutBoard.rebuild`` uses to skip the re-grid."""
         self.assertEqual(self._slots(columns=3), self._slots(columns=3))
         self.assertNotEqual(self._slots(columns=3), self._slots(columns=2))
+
+
+class WindowGeometryTests(unittest.TestCase):
+    """Where the window opens, and how big.
+
+    A remembered geometry is only a suggestion: the screen it was captured on
+    may have been bigger, or gone (a monitor change, a different WSLg/RDP
+    session, a laptop undocked from a 4K display). These pin the three rules -
+    fit the screen, stay reachable, centre what has no position - so a stale
+    preference file can never open a window the operator cannot get back.
+    """
+
+    def _parts(self, geometry: str) -> tuple[int, int, int, int]:
+        import re
+
+        match = re.fullmatch(r"(\d+)x(\d+)\+(\d+)\+(\d+)", geometry)
+        self.assertIsNotNone(match, f"{geometry!r} is not a Tk geometry string")
+        assert match is not None
+        return tuple(int(group) for group in match.groups())  # type: ignore[return-value]
+
+    def test_a_fresh_window_is_sized_for_a_1920x1080_screen(self) -> None:
+        width, height, x, y = self._parts(
+            fit_window_geometry(None, screen_width=1920, screen_height=1080)
+        )
+        self.assertEqual((width, height), (1800, 980))
+        self.assertEqual((x, y), ((1920 - 1800) // 2, (1080 - 980) // 2))
+
+    def test_a_saved_geometry_that_no_longer_fits_is_clamped_onto_the_screen(self) -> None:
+        """The 4K-to-1080p case: keep the intent, drop what cannot be shown."""
+        width, height, x, y = self._parts(
+            fit_window_geometry("3200x2000+5000+5000", screen_width=1920, screen_height=1080)
+        )
+        self.assertLessEqual(width, 1920)
+        self.assertLessEqual(height, 1080)
+        self.assertLessEqual(x + width, 1920)
+        self.assertLessEqual(y + height, 1080)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+
+    def test_a_window_restored_off_the_left_edge_comes_back(self) -> None:
+        _width, _height, x, y = self._parts(
+            fit_window_geometry("1500x900-300-200", screen_width=1920, screen_height=1080)
+        )
+        self.assertEqual((x, y), (0, 0))
+
+    def test_a_usable_saved_size_and_position_are_kept(self) -> None:
+        self.assertEqual(
+            fit_window_geometry("1500x900+120+80", screen_width=1920, screen_height=1080),
+            "1500x900+120+80",
+        )
+
+    def test_a_saved_size_below_the_minimum_is_raised_to_it(self) -> None:
+        width, height, _x, _y = self._parts(
+            fit_window_geometry("900x500+10+10", screen_width=1920, screen_height=1080)
+        )
+        self.assertEqual((width, height), (1280, 800))
+
+    def test_an_unreadable_geometry_is_treated_as_no_geometry(self) -> None:
+        self.assertEqual(
+            fit_window_geometry("nonsense", screen_width=1920, screen_height=1080),
+            fit_window_geometry(None, screen_width=1920, screen_height=1080),
+        )
+        self.assertEqual(
+            fit_window_geometry("", screen_width=1920, screen_height=1080),
+            fit_window_geometry(None, screen_width=1920, screen_height=1080),
+        )
+
+    def test_a_small_screen_gets_a_window_that_still_fits(self) -> None:
+        width, height, x, y = self._parts(
+            fit_window_geometry("1720x1000+0+0", screen_width=1366, screen_height=768)
+        )
+        self.assertLessEqual(width, 1366)
+        self.assertLessEqual(height, 768)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+        self.assertLessEqual(x + width, 1366)
+        self.assertLessEqual(y + height, 768)
+
+    def test_a_tiny_screen_never_produces_an_offscreen_window(self) -> None:
+        width, height, x, y = self._parts(
+            fit_window_geometry(None, screen_width=1024, screen_height=600)
+        )
+        self.assertLessEqual(width, 1024)
+        self.assertLessEqual(height, 600)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
 
 
 if __name__ == "__main__":

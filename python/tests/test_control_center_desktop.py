@@ -393,6 +393,12 @@ class ControlCenterConstructionTests(unittest.TestCase):
         something is actually scrollable, and a wide window stretches the
         columns instead of leaving dead space.
         """
+        # Pin the window the check is about. The CI virtual display is smaller
+        # than a desktop monitor, and the assertions below are about what a
+        # wide window does - not about what the runner's screen happens to be.
+        self.app.geometry("1760x1000")
+        self.app.update_idletasks()
+        _pump_events(self.app, 0.2)
         for title, attribute in (
             ("Training", "tree"),
             ("Benchmarks", "tree"),
@@ -413,6 +419,34 @@ class ControlCenterConstructionTests(unittest.TestCase):
             # hides itself while everything fits.
             self.assertNotEqual(scrollbar.winfo_manager(), "grid")
             self.assertFalse(scrollbar._overflow() and scrollbar.winfo_manager() == "")
+
+    def test_the_widest_table_shows_every_column_on_a_1920x1080_window(self):
+        """The marquee table must not scroll horizontally on a wide screen.
+
+        The benchmark measurements table declares 14 columns (1125 px). It
+        used to share a 3:2 split with the throughput chart, which left it
+        about 900 px on a 1920x1080 window - a horizontal overlay bar on the
+        very screens that have room to spare. It is a full-width card now, and
+        the chart has its own card below it. This is the real-Tk check that
+        the layout really hands the table its full width.
+        """
+        self.app.geometry("1760x1000")
+        self.app.update_idletasks()
+        _pump_events(self.app, 0.2)
+        self.app.show_page("Benchmarks")
+        _pump_events(self.app, 0.3)
+        page = self.app.pages["Benchmarks"]
+        tree = page.tree
+        _first, last = tree.xview()
+        self.assertGreaterEqual(
+            last,
+            0.999,
+            "the measurements table hides its right-hand columns on a 1920x1080 window",
+        )
+        self.assertFalse(
+            tree._horizontal_scrollbar._overflow(),
+            "the measurements table needed its overlay bar on a wide window",
+        )
 
     def test_every_widget_follows_the_application_theme_bus(self):
         """A widget built without a bus keeps the default palette forever.

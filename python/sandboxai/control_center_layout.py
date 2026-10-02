@@ -46,8 +46,13 @@ __all__ = [
     "PresetStore",
     "WidgetPlacement",
     "WidgetSpec",
+    "WINDOW_MIN_HEIGHT",
+    "WINDOW_MIN_WIDTH",
+    "WINDOW_PREFERRED_HEIGHT",
+    "WINDOW_PREFERRED_WIDTH",
     "columns_for_width",
     "default_layout",
+    "fit_window_geometry",
     "deserialize",
     "layout_dir",
     "move",
@@ -378,6 +383,76 @@ def placement_slots(
             row += 1
             column = 0
     return tuple(slots)
+
+
+#: Preferred window size. It targets a 1920x1080 display: wide enough that the
+#: widest tables (the benchmark measurements, the training registry) show all
+#: of their columns, and short enough to leave room for the title bar and the
+#: taskbar. A smaller screen shrinks it down to the minimum size.
+WINDOW_PREFERRED_WIDTH = 1800
+WINDOW_PREFERRED_HEIGHT = 980
+WINDOW_MIN_WIDTH = 1280
+WINDOW_MIN_HEIGHT = 800
+#: Screen space the window manager needs beside/below the window.
+_WINDOW_SCREEN_MARGIN_X = 80
+_WINDOW_SCREEN_MARGIN_Y = 100
+
+_GEOMETRY_PATTERN = re.compile(r"^(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?$")
+
+
+def fit_window_geometry(
+    saved: str | None,
+    *,
+    screen_width: int,
+    screen_height: int,
+    preferred_width: int = WINDOW_PREFERRED_WIDTH,
+    preferred_height: int = WINDOW_PREFERRED_HEIGHT,
+    min_width: int = WINDOW_MIN_WIDTH,
+    min_height: int = WINDOW_MIN_HEIGHT,
+) -> str:
+    """Place the window on the screen it will actually open on.
+
+    A remembered ``WxH+X+Y`` is only a suggestion: the screen it was captured
+    on may have been bigger, or gone entirely (a different monitor, a changed
+    RDP/WSLg session, a laptop undocked from a 4K display). Restoring it
+    blindly is how a window opens with its title bar off the top of the
+    screen or its content stretched past the bottom edge - the operator then
+    sees nothing and has no obvious way to get it back.
+
+    Three rules, in order:
+
+    * the *size* is clamped so the window plus the window manager's furniture
+      fits the screen (never smaller than ``min_width``/``min_height``, unless
+      the screen itself is smaller than that);
+    * the *position* is clamped so the whole window stays reachable, and a
+      window with no remembered position is centred;
+    * a saved string that does not parse is treated as "no saved geometry",
+      never as an error - a corrupt preference file must not stop the window
+      from opening.
+
+    Display-free on purpose: the decisions are pinned by unit tests, and the
+    Tk side only passes the screen's pixel size in and applies the result.
+    """
+    screen_w = max(1, int(screen_width))
+    screen_h = max(1, int(screen_height))
+    max_w = max(1, screen_w - _WINDOW_SCREEN_MARGIN_X)
+    max_h = max(1, screen_h - _WINDOW_SCREEN_MARGIN_Y)
+    floor_w = min(max(1, int(min_width)), max_w)
+    floor_h = min(max(1, int(min_height)), max_h)
+    match = _GEOMETRY_PATTERN.match(str(saved or "").strip())
+    if match is None:
+        width = min(max(int(preferred_width), floor_w), max_w)
+        height = min(max(int(preferred_height), floor_h), max_h)
+        x = (screen_w - width) // 2
+        y = (screen_h - height) // 2
+    else:
+        width = min(max(int(match.group(1)), floor_w), max_w)
+        height = min(max(int(match.group(2)), floor_h), max_h)
+        x = int(match.group(3)) if match.group(3) is not None else (screen_w - width) // 2
+        y = int(match.group(4)) if match.group(4) is not None else (screen_h - height) // 2
+        x = min(max(x, 0), max(0, screen_w - width))
+        y = min(max(y, 0), max(0, screen_h - height))
+    return f"{width}x{height}+{x}+{y}"
 
 
 def layout_dir(project_root: str | Path) -> Path:
