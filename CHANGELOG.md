@@ -25,6 +25,12 @@ records what changed and why.
   as `_cc_bus` so helper widgets can find it by walking up their parents,
   and both the smoke harness and the real-Tk suite walk every page and fail
   on a foreign bus.
+- **Command palette fixes.** `Ctrl+K` opened a second palette every time
+  it was pressed, the list could not be navigated with `Up`/`Down` (Return
+  always picked the first entry), and neither `Escape` nor `Ctrl+K` closed
+  the window from inside it - a second toplevel has its own bindtags, so it
+  now carries its own bindings and the page accelerators `Ctrl+1..7` work
+  from it too.
 - **One accent colour, free to choose.** Settings -> Appearance offers nine
   curated accents and a hex field; the colour is stored in the preferences
   and applied to *whichever* theme is active (`Theme.with_accent`), with

@@ -505,6 +505,7 @@ class Listbox(Widget):
     def __init__(self, master=None, **kw):
         super().__init__(master, **kw)
         self._items = []
+        self._selected: set[int] = set()
 
     def insert(self, index, *elements):
         self._items.extend(elements)
@@ -519,16 +520,28 @@ class Listbox(Widget):
         return len(self._items)
 
     def curselection(self):
-        return ()
+        return tuple(sorted(self._selected))
 
-    def see(self, *a):
+    def see(self, index):
+        self._tk_options["see"] = index
         return None
 
-    def activate(self, *a):
+    def activate(self, index):
+        self._tk_options["active"] = index
         return None
 
-    def selection_clear(self, *a):
+    def selection_clear(self, first=0, last=None):
+        self._selected.clear()
         return None
+
+    def selection_set(self, first, last=None):
+        self._selected.add(int(first))
+        return None
+
+    def index(self, spec):
+        if spec == "end":
+            return len(self._items)
+        return int(spec)
 
 
 class Scale(Widget):
@@ -1386,6 +1399,12 @@ def _exercise_page_handlers(app: object) -> None:
     app.show_page("Dashboard")
     app.pages["Dashboard"]._on_agents_summary(None, None)
     app.open_command_palette()
+    first = app._palette_window
+    if first is None or not first.winfo_exists():
+        raise AssertionError("Ctrl+K must open a command palette window")
+    app.open_command_palette()
+    if app._palette_window is not first:
+        raise AssertionError("a second Ctrl+K must reuse the open palette, not stack one")
     app.set_status("smoke status", toast=True)
     app.notify("smoke notify", kind="info")
     try:

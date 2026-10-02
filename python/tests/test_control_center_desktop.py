@@ -183,6 +183,31 @@ class ControlCenterConstructionTests(unittest.TestCase):
         for name in ("window test", "window import"):
             self.assertTrue(self.app.delete_layout_preset(name))
 
+    def test_command_palette_opens_once_and_moves_with_the_arrow_keys(self):
+        """Ctrl+K twice must not stack palettes, and Up/Down must pick a page."""
+        self.app.open_command_palette()
+        window = self.app._palette_window
+        self.assertTrue(window.winfo_exists())
+        self.app.open_command_palette()
+        self.assertIs(self.app._palette_window, window)
+
+        entry = next(child for child in window.winfo_children() if child.winfo_class() == "TEntry")
+        listing = next(
+            child for child in window.winfo_children() if child.winfo_class() == "Listbox"
+        )
+        self.assertGreater(listing.size(), 1)
+        self.assertEqual(listing.curselection(), (0,))
+        entry.event_generate("<Down>")
+        self.app.update()
+        self.assertEqual(listing.curselection(), (1,))
+        entry.event_generate("<Up>")
+        self.app.update()
+        self.assertEqual(listing.curselection(), (0,))
+        # Escape closes it; the next Ctrl+K opens a fresh one.
+        window.event_generate("<Escape>")
+        self.app.update()
+        self.assertFalse(window.winfo_exists())
+
     def test_window_state_is_remembered_without_breaking_startup(self):
         """Maximized-ness is a preference, and saving it must never raise."""
         self.app.save_preferences()

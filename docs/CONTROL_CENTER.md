@@ -114,6 +114,15 @@ entirely, `main.py` still starts, prints the exact fix (`python3-tk`, or
 a Python build with Tk) and exits cleanly instead of raising a stack
 trace.
 
+## Keyboard
+
+`Ctrl+K` opens the command palette, `Ctrl+1..7` jump straight to a page,
+`Escape` closes the palette, and `Up`/`Down` move its selection while the
+query field keeps the focus. The palette carries those bindings itself in
+addition to the shell's, because Tk gives a second toplevel its own
+bindtags - and pressing `Ctrl+K` twice reuses the open palette instead of
+stacking a second window.
+
 ## Pages
 
 ### Dashboard

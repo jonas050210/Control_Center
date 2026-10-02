@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import (  # messagebox re-export keeps the public test/embedding seam stable
     messagebox,
@@ -720,7 +721,20 @@ class ControlCenter(tk.Tk):
             page.adapter = self.adapter
 
     def open_command_palette(self) -> None:
-        """A keyboard-driven page switcher (Ctrl+K)."""
+        """A keyboard-driven page switcher (Ctrl+K).
+
+        Ctrl+K binds on the root window, which Tk includes in the bindtags of
+        every widget inside it, so the shortcut works from any field of the
+        main window. The palette itself is a separate toplevel with its own
+        bindtags, so it carries its own bindings: Ctrl+K closes it again
+        (pressing it twice must not stack a second palette), Escape closes
+        it, and the page accelerators Ctrl+1..7 switch straight from it.
+        """
+        existing = getattr(self, "_palette_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            existing.focus_force()
+            return
         window = tk.Toplevel(self)
         window.title("Command palette")
         window.configure(background=self.bus.theme.card)
@@ -750,6 +764,22 @@ class ControlCenter(tk.Tk):
             if listing.size():
                 listing.selection_clear(0, "end")
                 listing.selection_set(0)
+                listing.activate(0)
+
+        def move(direction: int) -> str:
+            """Move the highlighted entry; returns "break" so Tk does not also
+            move the listbox cursor itself."""
+            count = listing.size()
+            if not count:
+                return "break"
+            current = listing.curselection()
+            index = (current[0] if current else 0) + direction
+            index = max(0, min(count - 1, index))
+            listing.selection_clear(0, "end")
+            listing.selection_set(index)
+            listing.activate(index)
+            listing.see(index)
+            return "break"
 
         def choose(_event: object = None) -> None:
             selection = listing.curselection()
@@ -758,11 +788,35 @@ class ControlCenter(tk.Tk):
             self.show_page(str(listing.get(selection[0])))
             window.destroy()
 
+        def close(_event: object = None) -> None:
+            window.destroy()
+
+        def jump(name: str) -> None:
+            self.show_page(name)
+            window.destroy()
+
         entry.bind("<KeyRelease>", refresh)
         entry.bind("<Return>", choose)
-        entry.bind("<Escape>", lambda _e: window.destroy())
+        entry.bind("<Down>", lambda _e: move(1))
+        entry.bind("<Up>", lambda _e: move(-1))
         listing.bind("<Double-Button-1>", choose)
         listing.bind("<Return>", choose)
+        window.bind("<Escape>", close)
+        window.bind("<Control-Key-k>", close)
+
+        def jump_to(title: str) -> Callable[[object], None]:
+            """One handler per page: the lambda's default argument confused
+            mypy's type inference, and a named factory reads better anyway."""
+
+            def handler(_event: object = None) -> None:
+                jump(title)
+
+            return handler
+
+        for index, page_class in enumerate(PAGE_CLASSES):
+            window.bind(f"<Control-Key-{index + 1}>", jump_to(page_class.title))
+        window.protocol("WM_DELETE_WINDOW", close)
+        self._palette_window = window
         refresh()
         entry.focus_set()
 
