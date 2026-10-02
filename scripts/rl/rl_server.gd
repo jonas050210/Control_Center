@@ -80,28 +80,39 @@ func _serve_stdio() -> void:
 		for line in chunk.split("\n", false):
 			if line.strip_edges().is_empty():
 				continue
-			var parse_started: int = Time.get_ticks_usec() if profiling_enabled else 0
+			if not profiling_enabled:
+				var fast_request = JSON.parse_string(line)
+				var fast_response: Dictionary = (
+					_handle_self_play_request(fast_request)
+					if self_play_adapter != null
+					else _handle_request(fast_request)
+				)
+				print(JSON.stringify(fast_response))
+				if bool(fast_response.get("close", false)):
+					closing = true
+					break
+				continue
+			var parse_started: int = Time.get_ticks_usec()
 			var request = JSON.parse_string(line)
 			_profile_add_time("request_parse", parse_started)
 			var command: String = (
 				str(request.get("cmd", "invalid")) if request is Dictionary else "invalid"
 			)
-			var handle_started: int = Time.get_ticks_usec() if profiling_enabled else 0
+			var handle_started: int = Time.get_ticks_usec()
 			var response: Dictionary = (
 				_handle_self_play_request(request)
 				if self_play_adapter != null
 				else _handle_request(request)
 			)
 			_profile_add_time("command_%s" % command, handle_started)
-			var encode_started: int = Time.get_ticks_usec() if profiling_enabled else 0
+			var encode_started: int = Time.get_ticks_usec()
 			var encoded: String = JSON.stringify(response)
 			_profile_add_time("response_encode", encode_started)
-			var write_started: int = Time.get_ticks_usec() if profiling_enabled else 0
+			var write_started: int = Time.get_ticks_usec()
 			print(encoded)
 			_profile_add_time("response_write", write_started)
-			if profiling_enabled:
-				_profile_add_counter("request_bytes", line.to_utf8_buffer().size())
-				_profile_add_counter("response_bytes", encoded.to_utf8_buffer().size() + 1)
+			_profile_add_counter("request_bytes", line.to_utf8_buffer().size())
+			_profile_add_counter("response_bytes", encoded.to_utf8_buffer().size() + 1)
 			if bool(response.get("close", false)):
 				closing = true
 				break

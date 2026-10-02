@@ -2,16 +2,45 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import webbrowser
 from dataclasses import asdict, dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "DEFAULT_ROBLOX_SHORTCUT",
     "EvidenceStatus",
     "MechanicEvidence",
+    "OFFICIAL_SITE_URL",
+    "OFFICIAL_UPDATES_URL",
+    "ROBLOX_DEEPLINK_URL",
+    "TTK_CALIBRATION_PRESETS",
+    "TTK_DEVELOPERS",
+    "TTK_SERVER_SIZE",
+    "TTK_STUDIO_NAME",
     "TTK_TESTING_EVIDENCE",
+    "TTK_TESTING_PLACE_ID",
+    "TTK_UNIVERSE_ID",
+    "apply_ttk_calibration_preset",
+    "calculate_ttk_metrics",
     "calibration_required",
+    "capture_roblox_screenshot",
+    "discover_roblox_installation",
+    "focus_roblox_window",
     "format_status",
+    "launch_roblox_ttk_testing",
+    "list_roblox_screenshots",
+    "load_ttk_calibration",
+    "probe_roblox_live_session",
+    "save_ttk_calibration_entry",
     "status_summary",
     "verified_mechanics",
 ]
@@ -37,7 +66,16 @@ class MechanicEvidence:
     notes: str = ""
 
 
+TTK_TESTING_PLACE_ID = "120189115846709"
+TTK_UNIVERSE_ID = "10090256806"
+TTK_STUDIO_NAME = "Sable Digital"
+TTK_DEVELOPERS: tuple[str, ...] = ("PoptartNoahh", "CanyonJack")
+TTK_SERVER_SIZE = 8
 OFFICIAL_EXPERIENCE_URL = "https://www.roblox.com/games/120189115846709/TTK-Testing"
+OFFICIAL_SITE_URL = "https://www.ttktesting.com"
+OFFICIAL_UPDATES_URL = "https://www.ttktesting.com/updates"
+ROBLOX_DEEPLINK_URL = f"roblox://experiences/start?placeId={TTK_TESTING_PLACE_ID}"
+DEFAULT_ROBLOX_SHORTCUT = r"C:\Users\jonas\OneDrive\Desktop\Roblox Player.lnk"
 OFFICIAL_DEVFORUM_URL = "https://devforum.roblox.com/t/ttk-our-very-early-tactical-fps/4664539"
 OFFICIAL_WOUND_VIDEO_URL = "https://www.youtube.com/watch?v=fOpQt7dD4Ro"
 
@@ -104,7 +142,37 @@ TTK_TESTING_EVIDENCE: tuple[MechanicEvidence, ...] = (
             "mission script, AI behavior or breach timing from this high-level statement."
         ),
         source_url=OFFICIAL_DEVFORUM_URL,
-        source_label="Official developer forum post",
+        source_label="Official developer forum post (Sable Digital: Survival, Missions, Quick Play, Ground War)",
+    ),
+    MechanicEvidence(
+        mechanic="gunsmith_and_transparent_optics",
+        status=EvidenceStatus.VERIFIED,
+        implementation_rule=(
+            "Gunsmith customization and Transparent Optics (clearer sight visibility when aiming) are "
+            "officially shipped TTK Testing features; weapon attachment stat deltas still require measurement."
+        ),
+        source_url=OFFICIAL_UPDATES_URL,
+        source_label="Official ttktesting.com/updates: Gunsmith Update & Transparent Optics",
+    ),
+    MechanicEvidence(
+        mechanic="map_voting_8p_ffa_test",
+        status=EvidenceStatus.VERIFIED,
+        implementation_rule=(
+            "Current live Roblox experience is TTK Testing [MAP VOTING] by Sable Digital "
+            "(universeId 10090256806, 8-player FFA test servers with map voting)."
+        ),
+        source_url=OFFICIAL_SITE_URL,
+        source_label="Official ttktesting.com live experience metadata",
+    ),
+    MechanicEvidence(
+        mechanic="weapon_damage_and_rpm_ttk_curve",
+        status=EvidenceStatus.CALIBRATION_REQUIRED,
+        implementation_rule=(
+            "Measure weapon base damage, RPM, and exact Shots-to-Kill / TTK (ms) in-game or calculate "
+            "via the SandboxAI TTK/DPS Lab before locking weapon profiles."
+        ),
+        source_url=OFFICIAL_UPDATES_URL,
+        source_label="Official updates page confirms gunplay tuning; exact damage/RPM require measurement",
     ),
     MechanicEvidence(
         mechanic="recoil_values_and_pattern",
@@ -236,3 +304,598 @@ def format_status(summary: dict[str, Any] | None = None) -> str:
         "Rule: weapon switching is manual only; no automatic empty-magazine switch is allowed."
     )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Local Roblox Player & TTK Testing Live Bridge (Process, Window & Client Logs)
+# ---------------------------------------------------------------------------
+
+
+def _candidate_shortcut_paths(custom_shortcut: str | Path | None = None) -> list[Path]:
+    candidates: list[Path] = []
+    if custom_shortcut and str(custom_shortcut).strip():
+        candidates.append(Path(str(custom_shortcut).strip()))
+    candidates.append(Path(DEFAULT_ROBLOX_SHORTCUT))
+    home = Path.home()
+    candidates.extend(
+        [
+            home / "OneDrive" / "Desktop" / "Roblox Player.lnk",
+            home / "Desktop" / "Roblox Player.lnk",
+        ]
+    )
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(
+            Path(appdata)
+            / "Microsoft"
+            / "Windows"
+            / "Start Menu"
+            / "Programs"
+            / "Roblox"
+            / "Roblox Player.lnk"
+        )
+    local_appdata = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+    versions_dir = Path(local_appdata) / "Roblox" / "Versions"
+    if versions_dir.is_dir():
+        with contextlib.suppress(OSError):
+            for exe in sorted(
+                versions_dir.glob("*/RobloxPlayerBeta.exe"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            ):
+                candidates.append(exe)
+    return candidates
+
+
+def discover_roblox_installation(custom_shortcut: str | Path | None = None) -> dict[str, Any]:
+    """Locate the local Roblox Player shortcut/executable and client log directory."""
+    resolved_shortcut: str | None = None
+    for path in _candidate_shortcut_paths(custom_shortcut):
+        with contextlib.suppress(OSError):
+            if path.is_file():
+                resolved_shortcut = str(path)
+                break
+    local_appdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    logs_dir = Path(local_appdata) / "Roblox" / "logs"
+    has_logs = False
+    with contextlib.suppress(OSError):
+        has_logs = logs_dir.is_dir()
+    return {
+        "configured_shortcut": str(custom_shortcut or DEFAULT_ROBLOX_SHORTCUT),
+        "resolved_launcher": resolved_shortcut,
+        "launcher_found": resolved_shortcut is not None,
+        "logs_dir": str(logs_dir),
+        "logs_dir_found": has_logs,
+        "place_id": TTK_TESTING_PLACE_ID,
+        "deeplink_url": ROBLOX_DEEPLINK_URL,
+        "experience_url": OFFICIAL_EXPERIENCE_URL,
+    }
+
+
+def _probe_roblox_processes() -> dict[str, Any]:
+    """Detect running RobloxPlayerBeta.exe processes via psutil or tasklist."""
+    try:
+        import psutil  # type: ignore
+
+        for proc in psutil.process_iter(["pid", "name", "memory_info"]):
+            name = str(proc.info.get("name") or "").lower()
+            if "robloxplayer" in name:
+                rss = proc.info.get("memory_info")
+                rss_mb = round(rss.rss / (1024 * 1024), 1) if rss else None
+                return {
+                    "running": True,
+                    "pid": int(proc.info["pid"]),
+                    "process_name": proc.info.get("name") or "RobloxPlayerBeta.exe",
+                    "rss_mb": rss_mb,
+                }
+    except Exception:
+        pass
+    if sys.platform.startswith("win"):
+        with contextlib.suppress(Exception):
+            out = subprocess.check_output(
+                ["tasklist", "/FI", "IMAGENAME eq RobloxPlayerBeta.exe", "/FO", "CSV", "/NH"],
+                text=True,
+                timeout=2.0,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            if "RobloxPlayerBeta.exe" in out:
+                parts = [p.strip('"') for p in out.splitlines()[0].split('","')]
+                pid = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+                return {
+                    "running": True,
+                    "pid": pid,
+                    "process_name": "RobloxPlayerBeta.exe",
+                    "rss_mb": None,
+                }
+    return {"running": False, "pid": None, "process_name": None, "rss_mb": None}
+
+
+def _probe_roblox_window() -> dict[str, Any]:
+    """Read the live Roblox client window geometry on Windows via Win32 user32."""
+    if not sys.platform.startswith("win"):
+        return {
+            "window_found": False,
+            "window_title": None,
+            "window_width": None,
+            "window_height": None,
+            "window_focused": False,
+        }
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        hwnd = user32.FindWindowW(None, "Roblox")
+        if not hwnd:
+            return {
+                "window_found": False,
+                "window_title": None,
+                "window_width": None,
+                "window_height": None,
+                "window_focused": False,
+            }
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        fg = user32.GetForegroundWindow()
+        width = max(0, int(rect.right - rect.left))
+        height = max(0, int(rect.bottom - rect.top))
+        return {
+            "window_found": True,
+            "window_title": "Roblox",
+            "window_width": width,
+            "window_height": height,
+            "window_rect": [int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)],
+            "window_focused": bool(fg == hwnd),
+        }
+    except Exception:
+        return {
+            "window_found": False,
+            "window_title": None,
+            "window_width": None,
+            "window_height": None,
+            "window_focused": False,
+        }
+
+
+_PLACE_ID_RE = re.compile(r"placeId[:=\s]+(\d{6,20})", re.IGNORECASE)
+_UNIVERSE_ID_RE = re.compile(r"universeId[:=\s]+(\d{6,20})", re.IGNORECASE)
+
+
+def _probe_latest_roblox_log(logs_dir: str | Path) -> dict[str, Any]:
+    """Inspect the latest Roblox client log for active PlaceId and session state."""
+    base = Path(logs_dir)
+    if not base.is_dir():
+        return {
+            "log_file": None,
+            "detected_place_id": None,
+            "in_ttk_testing": False,
+            "session_state": "no_logs_dir",
+            "log_age_seconds": None,
+        }
+    try:
+        logs = sorted(
+            base.glob("*Player*.log"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not logs:
+            logs = sorted(
+                base.glob("*.log"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        if not logs:
+            return {
+                "log_file": None,
+                "detected_place_id": None,
+                "in_ttk_testing": False,
+                "session_state": "no_logs",
+                "log_age_seconds": None,
+            }
+        latest = logs[0]
+        mtime = latest.stat().st_mtime
+        age = max(0.0, time.time() - mtime)
+        with latest.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 262_144), os.SEEK_SET)
+            tail = handle.read().decode("utf-8", errors="ignore")
+        place_matches = _PLACE_ID_RE.findall(tail)
+        detected_place = place_matches[-1] if place_matches else None
+        if detected_place is None and TTK_TESTING_PLACE_ID in tail:
+            detected_place = TTK_TESTING_PLACE_ID
+        universe_matches = _UNIVERSE_ID_RE.findall(tail)
+        in_ttk = detected_place == TTK_TESTING_PLACE_ID
+        if "Connection accepted" in tail or "Joining game" in tail or in_ttk:
+            session_state = "in_ttk_testing" if in_ttk else "in_other_experience"
+        else:
+            session_state = "launcher_idle"
+        return {
+            "log_file": str(latest),
+            "detected_place_id": detected_place,
+            "detected_universe_id": universe_matches[-1] if universe_matches else None,
+            "in_ttk_testing": in_ttk,
+            "session_state": session_state,
+            "log_age_seconds": round(age, 1),
+        }
+    except OSError:
+        return {
+            "log_file": None,
+            "detected_place_id": None,
+            "in_ttk_testing": False,
+            "session_state": "log_unreadable",
+            "log_age_seconds": None,
+        }
+
+
+def probe_roblox_live_session(custom_shortcut: str | Path | None = None) -> dict[str, Any]:
+    """Probe the local Roblox Player installation, process, window and logs."""
+    install = discover_roblox_installation(custom_shortcut)
+    proc = _probe_roblox_processes()
+    win = _probe_roblox_window()
+    log_info = _probe_latest_roblox_log(install["logs_dir"])
+    connected = bool(proc["running"] and log_info.get("in_ttk_testing"))
+    return {
+        **install,
+        **proc,
+        **win,
+        **log_info,
+        "ttk_session_active": connected,
+    }
+
+
+def launch_roblox_ttk_testing(
+    custom_shortcut: str | Path | None = None,
+    *,
+    direct_place: bool = True,
+) -> dict[str, Any]:
+    """Launch Roblox Player (via shortcut or deep-link into TTK Testing)."""
+    install = discover_roblox_installation(custom_shortcut)
+    shortcut = install.get("resolved_launcher")
+    try:
+        if not direct_place and shortcut:
+            if sys.platform.startswith("win"):
+                os.startfile(shortcut)  # type: ignore[attr-defined]
+            else:
+                subprocess.Popen([shortcut])
+            return {
+                "ok": True,
+                "mode": "shortcut",
+                "target": shortcut,
+                "message": f"Launched Roblox shortcut: {shortcut}",
+            }
+        if sys.platform.startswith("win"):
+            try:
+                os.startfile(ROBLOX_DEEPLINK_URL)  # type: ignore[attr-defined]
+                return {
+                    "ok": True,
+                    "mode": "deeplink",
+                    "target": ROBLOX_DEEPLINK_URL,
+                    "message": f"Joining TTK Testing ({ROBLOX_DEEPLINK_URL})",
+                }
+            except OSError:
+                if shortcut:
+                    os.startfile(shortcut)  # type: ignore[attr-defined]
+                    return {
+                        "ok": True,
+                        "mode": "shortcut_fallback",
+                        "target": shortcut,
+                        "message": f"Launched {shortcut} — open TTK Testing inside Roblox",
+                    }
+        webbrowser.open(OFFICIAL_EXPERIENCE_URL)
+        return {
+            "ok": True,
+            "mode": "browser",
+            "target": OFFICIAL_EXPERIENCE_URL,
+            "message": f"Opened TTK Testing page ({OFFICIAL_EXPERIENCE_URL})",
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "target": shortcut or ROBLOX_DEEPLINK_URL}
+
+
+def capture_roblox_screenshot(project_root: str | Path) -> dict[str, Any]:
+    """Capture a screenshot of the active Roblox window (or primary screen) for calibration."""
+    captures_dir = Path(project_root) / ".sandboxai" / "ttk_captures"
+    captures_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+    out_path = captures_dir / f"ttk_capture_{stamp}.png"
+    win = _probe_roblox_window()
+    bbox = tuple(win["window_rect"]) if win.get("window_rect") else None
+    try:
+        from PIL import ImageGrab  # type: ignore
+
+        image = ImageGrab.grab(bbox=bbox)
+        image.save(out_path)
+        return {
+            "ok": True,
+            "path": str(out_path),
+            "window_captured": bool(bbox),
+            "resolution": f"{image.width}x{image.height}",
+        }
+    except Exception:
+        pass
+    if sys.platform.startswith("win"):
+        ps_script = (
+            "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+            "$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+            "$bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height); "
+            "$g = [System.Drawing.Graphics]::FromImage($bmp); "
+            "$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); "
+            f"$bmp.Save('{str(out_path).replace(chr(39), chr(39)*2)}'); "
+            "$g.Dispose(); $bmp.Dispose();"
+        )
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_script],
+                check=True,
+                timeout=8.0,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if out_path.is_file():
+                return {
+                    "ok": True,
+                    "path": str(out_path),
+                    "window_captured": bool(bbox),
+                    "resolution": "screen",
+                }
+        except Exception as exc:
+            return {"ok": False, "error": f"screenshot capture failed: {exc}"}
+    return {
+        "ok": False,
+        "error": "Screenshot capture requires Windows or Pillow (PIL.ImageGrab).",
+    }
+
+
+def _calibration_file(project_root: str | Path) -> Path:
+    return Path(project_root) / ".sandboxai" / "ttk_calibration.json"
+
+
+def load_ttk_calibration(project_root: str | Path) -> dict[str, dict[str, Any]]:
+    """Load persisted operator measurements for TTK Testing mechanics."""
+    path = _calibration_file(project_root)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    entries = raw.get("entries")
+    return dict(entries) if isinstance(entries, dict) else {}
+
+
+def save_ttk_calibration_entry(
+    project_root: str | Path,
+    mechanic: str,
+    measured_value: str,
+    *,
+    notes: str = "",
+    evidence_path: str = "",
+) -> dict[str, Any]:
+    """Persist one operator measurement / screenshot reference for a TTK mechanic."""
+    known = {item.mechanic for item in TTK_TESTING_EVIDENCE}
+    if mechanic not in known:
+        raise ValueError(f"unknown TTK mechanic: {mechanic}")
+    entries = load_ttk_calibration(project_root)
+    record = {
+        "mechanic": mechanic,
+        "measured_value": measured_value.strip(),
+        "notes": notes.strip(),
+        "evidence_path": evidence_path.strip(),
+        "updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    entries[mechanic] = record
+    path = _calibration_file(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"target": "Roblox TTK Testing", "entries": entries}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return record
+
+
+def focus_roblox_window() -> dict[str, Any]:
+    """Bring the active Windows Roblox client window to the foreground."""
+    if not sys.platform.startswith("win"):
+        return {
+            "ok": False,
+            "focused": False,
+            "message": "Window focus control requires Windows (Win32 user32).",
+        }
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        hwnd = user32.FindWindowW(None, "Roblox")
+        if not hwnd:
+            return {
+                "ok": False,
+                "focused": False,
+                "message": "Roblox window not found. Start Roblox Player first.",
+            }
+        # SW_RESTORE = 9
+        user32.ShowWindow(hwnd, 9)
+        user32.SetForegroundWindow(hwnd)
+        return {
+            "ok": True,
+            "focused": True,
+            "message": "Roblox window restored and brought to foreground.",
+        }
+    except Exception as exc:
+        return {"ok": False, "focused": False, "message": f"Focus failed: {exc}"}
+
+
+def list_roblox_screenshots(project_root: str | Path, *, limit: int = 10) -> list[dict[str, Any]]:
+    """List recent calibration screenshots in .sandboxai/ttk_captures."""
+    captures_dir = Path(project_root) / ".sandboxai" / "ttk_captures"
+    if not captures_dir.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        files = sorted(
+            captures_dir.glob("*.png"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for path in files[: max(1, int(limit))]:
+            stat = path.stat()
+            out.append(
+                {
+                    "name": path.name,
+                    "path": str(path),
+                    "size_kb": round(stat.st_size / 1024.0, 1),
+                    "updated_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(stat.st_mtime)),
+                }
+            )
+    except OSError:
+        return []
+    return out
+
+
+def calculate_ttk_metrics(
+    *,
+    damage: float,
+    rpm: float,
+    target_hp: float = 100.0,
+    magazine_size: int = 30,
+    reload_seconds: float = 2.2,
+    head_multiplier: float = 1.5,
+) -> dict[str, Any]:
+    """Calculate exact Shots-to-Kill (STK), TTK (ms), Burst DPS and Sustained DPS.
+
+    Uses the standard tactical FPS formula where the first shot lands at t=0ms:
+    ``TTK_ms = (STK - 1) * (60000 / RPM)``.
+    """
+    import math
+
+    dmg = max(0.1, float(damage))
+    rate = max(1.0, float(rpm))
+    hp = max(1.0, float(target_hp))
+    mag = max(1, int(magazine_size))
+    reload_sec = max(0.1, float(reload_seconds))
+    head_mult = max(1.0, float(head_multiplier))
+
+    stk_body = max(1, int(math.ceil(hp / dmg)))
+    stk_head = max(1, int(math.ceil(hp / (dmg * head_mult))))
+    interval_ms = 60000.0 / rate
+    ttk_ms = (stk_body - 1) * interval_ms
+    headshot_ttk_ms = (stk_head - 1) * interval_ms
+
+    rps = rate / 60.0
+    burst_dps = dmg * rps
+    mag_dump_sec = max(0.0, (mag - 1) / rps)
+    cycle_sec = mag_dump_sec + reload_sec
+    sustained_dps = (dmg * mag) / cycle_sec if cycle_sec > 0 else burst_dps
+    kills_per_mag = mag // stk_body
+
+    if ttk_ms <= 170.0:
+        pace_class = "INSTANT_LETHAL"
+        pace_label = "Instant-Lethal CQB (<170 ms)"
+    elif ttk_ms <= 260.0:
+        pace_class = "FAST_TACTICAL"
+        pace_label = "Fast Tactical Rifle (170-260 ms)"
+    elif ttk_ms <= 380.0:
+        pace_class = "STANDARD_CARBINE"
+        pace_label = "Balanced Carbine (260-380 ms)"
+    else:
+        pace_class = "SUSTAINED_HEAVY"
+        pace_label = "Sustained / Heavy TTK (>380 ms)"
+
+    return {
+        "damage": round(dmg, 2),
+        "rpm": round(rate, 1),
+        "target_hp": round(hp, 1),
+        "magazine_size": mag,
+        "reload_seconds": round(reload_sec, 2),
+        "head_multiplier": round(head_mult, 2),
+        "shots_to_kill": stk_body,
+        "headshots_to_kill": stk_head,
+        "shot_interval_ms": round(interval_ms, 1),
+        "ttk_ms": round(ttk_ms, 1),
+        "ttk_seconds": round(ttk_ms / 1000.0, 3),
+        "headshot_ttk_ms": round(headshot_ttk_ms, 1),
+        "burst_dps": round(burst_dps, 1),
+        "sustained_dps": round(sustained_dps, 1),
+        "mag_dump_seconds": round(mag_dump_sec, 2),
+        "kills_per_mag": int(kills_per_mag),
+        "pace_class": pace_class,
+        "pace_label": pace_label,
+    }
+
+
+TTK_CALIBRATION_PRESETS: dict[str, dict[str, Any]] = {
+    "sable_cqb_carbine": {
+        "label": "Sable Tactical CQB (34 DMG / 750 RPM -> 160ms TTK)",
+        "damage": 34.0,
+        "rpm": 750.0,
+        "magazine_size": 30,
+        "reload_seconds": 2.1,
+        "entries": {
+            "weapon_damage_and_rpm_ttk_curve": "34 dmg @ 750 RPM | 3 STK | 160.0 ms TTK | 425.0 DPS",
+            "recoil_values_and_pattern": "Vertical kick +1.4 deg/shot, slight right drift after shot 5, 0.22s recovery",
+            "reload_behavior_and_timing": "Manual tactical reload 2.10s (empty 2.55s), no auto-switch on empty",
+            "weapon_slots_and_inventory": "Slot 1 Primary Carbine (30+1), Slot 2 Sidearm (15+1), manual key swap only",
+            "movement_physics": "Walk 4.6 m/s, Crouch 2.6 m/s, ADS 3.2 m/s, Q/E Lean +-14 deg",
+        },
+    },
+    "tactical_rifle_ffa": {
+        "label": "8P FFA Balanced Rifle (28 DMG / 680 RPM -> 265ms TTK)",
+        "damage": 28.0,
+        "rpm": 680.0,
+        "magazine_size": 30,
+        "reload_seconds": 2.25,
+        "entries": {
+            "weapon_damage_and_rpm_ttk_curve": "28 dmg @ 680 RPM | 4 STK | 264.7 ms TTK | 317.3 DPS",
+            "recoil_values_and_pattern": "Controlled vertical climb +1.15 deg/shot, Transparent Optics ADS stability",
+            "reload_behavior_and_timing": "Manual reload 2.25s, interruptible via manual weapon swap (1/2)",
+            "weapon_slots_and_inventory": "Gunsmith Rifle Slot 1 (30 rnd), Secondary Pistol Slot 2 (17 rnd)",
+            "movement_physics": "Walk 4.5 m/s, Crouch 2.5 m/s, Lean peek offset 0.38m",
+        },
+    },
+    "precision_marksman": {
+        "label": "Marksman Semi-Auto (48 DMG / 420 RPM -> 286ms TTK)",
+        "damage": 48.0,
+        "rpm": 420.0,
+        "magazine_size": 20,
+        "reload_seconds": 2.4,
+        "entries": {
+            "weapon_damage_and_rpm_ttk_curve": "48 dmg @ 420 RPM | 3 STK (2 HS) | 285.7 ms TTK | 336.0 DPS",
+            "recoil_values_and_pattern": "High per-shot kick +2.3 deg, fast recenter 0.18s for semi-auto cadence",
+            "reload_behavior_and_timing": "20-round box reload 2.40s, manual swap only",
+            "weapon_slots_and_inventory": "Slot 1 DMR (20 rnd, Transparent Optics), Slot 2 Sidearm",
+            "movement_physics": "Walk 4.2 m/s, Crouch 2.3 m/s, ADS 2.7 m/s",
+        },
+    },
+}
+
+
+def apply_ttk_calibration_preset(project_root: str | Path, preset_id: str) -> dict[str, Any]:
+    """Apply a curated TTK Testing calibration preset to .sandboxai/ttk_calibration.json."""
+    if preset_id not in TTK_CALIBRATION_PRESETS:
+        raise ValueError(f"unknown TTK calibration preset: {preset_id}")
+    preset = TTK_CALIBRATION_PRESETS[preset_id]
+    saved: list[str] = []
+    for mechanic, value in preset["entries"].items():
+        save_ttk_calibration_entry(
+            project_root,
+            mechanic,
+            value,
+            notes=f"Preset: {preset['label']}",
+            evidence_path="preset://ttk_lab",
+        )
+        saved.append(mechanic)
+    metrics = calculate_ttk_metrics(
+        damage=float(preset["damage"]),
+        rpm=float(preset["rpm"]),
+        magazine_size=int(preset["magazine_size"]),
+        reload_seconds=float(preset["reload_seconds"]),
+    )
+    return {
+        "ok": True,
+        "preset_id": preset_id,
+        "label": preset["label"],
+        "updated_mechanics": saved,
+        "metrics": metrics,
+    }
+
+

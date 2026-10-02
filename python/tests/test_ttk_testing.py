@@ -5,14 +5,18 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import tempfile
 import unittest
 
 from sandboxai.cli import main
 from sandboxai.ttk_testing import (
     TTK_TESTING_EVIDENCE,
     EvidenceStatus,
+    apply_ttk_calibration_preset,
+    calculate_ttk_metrics,
     calibration_required,
     format_status,
+    load_ttk_calibration,
     status_summary,
     verified_mechanics,
 )
@@ -64,6 +68,21 @@ class EvidenceManifestTests(unittest.TestCase):
         self.assertIn("Needs screenshot/manual calibration", text)
         self.assertIn("Excluded from this project", text)
         self.assertIn("manual only", text)
+
+    def test_calculate_ttk_metrics_computes_exact_stk_and_ttk_ms(self) -> None:
+        metrics = calculate_ttk_metrics(damage=34.0, rpm=750.0, target_hp=100.0)
+        self.assertEqual(metrics["shots_to_kill"], 3)
+        self.assertAlmostEqual(metrics["ttk_ms"], 160.0, places=1)
+        self.assertAlmostEqual(metrics["burst_dps"], 425.0, places=1)
+        self.assertEqual(metrics["pace_class"], "INSTANT_LETHAL")
+
+    def test_apply_ttk_calibration_preset_persists_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            res = apply_ttk_calibration_preset(tmp, "sable_cqb_carbine")
+            self.assertTrue(res["ok"])
+            cal = load_ttk_calibration(tmp)
+            self.assertIn("weapon_damage_and_rpm_ttk_curve", cal)
+            self.assertIn("160.0 ms TTK", cal["weapon_damage_and_rpm_ttk_curve"]["measured_value"])
 
 
 class CliTests(unittest.TestCase):

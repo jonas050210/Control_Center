@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,184 @@ def percentile(values: list[float], quantile: float) -> float:
     return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
 
 
+def _emit_step_progress(
+    on_step_progress: Callable[[dict[str, Any]], None] | None,
+    *,
+    phase: str,
+    environment_count: int,
+    worker_count: int,
+    completed_steps: int,
+    target_steps: int,
+    elapsed_seconds: float,
+    max_seconds_per_config: float,
+    step_latencies: list[float],
+    episode_count: int,
+    startup_seconds: float,
+    warmup_seconds: float,
+    include_resources: bool = False,
+) -> None:
+    if on_step_progress is None:
+        return
+    total_steps = environment_count * completed_steps
+    sps = (total_steps / elapsed_seconds) if elapsed_seconds > 0.0 and completed_steps > 0 else None
+    eps = (
+        (episode_count / elapsed_seconds) if elapsed_seconds > 0.0 and completed_steps > 0 else None
+    )
+    p50_ms = percentile(step_latencies, 0.50) * 1000.0 if step_latencies else None
+    p95_ms = percentile(step_latencies, 0.95) * 1000.0 if step_latencies else None
+    jitter = (p95_ms / p50_ms) if (p50_ms is not None and p95_ms is not None and p50_ms > 0.0) else None
+    payload: dict[str, Any] = {
+        "phase": phase,
+        "environments": environment_count,
+        "workers": worker_count,
+        "completed_steps": completed_steps,
+        "target_steps": target_steps,
+        "total_steps": total_steps,
+        "elapsed_seconds": elapsed_seconds,
+        "max_seconds_per_config": max_seconds_per_config,
+        "steps_per_second": sps,
+        "episodes": episode_count,
+        "episodes_per_second": eps,
+        "vector_step_latency_p50_ms": p50_ms,
+        "vector_step_latency_p95_ms": p95_ms,
+        "latency_jitter": round(jitter, 3) if jitter is not None else None,
+        "startup_seconds": startup_seconds,
+        "warmup_seconds": warmup_seconds,
+    }
+    if include_resources:
+        payload["resources"] = resource_snapshot()
+    on_step_progress(payload)
+
+
+def _measure_single_config(
+    *,
+    project_path: str | Path,
+    godot_executable: str,
+    environment_count: int,
+    worker_count: int,
+    steps: int,
+    enemy_count: int,
+    seed: int,
+    curriculum_level: int,
+    max_seconds_per_config: float,
+    compact_infos: bool,
+    warmup_steps: int,
+    on_step_progress: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    startup_started = time.perf_counter()
+    _emit_step_progress(
+        on_step_progress,
+        phase="startup",
+        environment_count=environment_count,
+        worker_count=worker_count,
+        completed_steps=0,
+        target_steps=steps,
+        elapsed_seconds=0.0,
+        max_seconds_per_config=max_seconds_per_config,
+        step_latencies=[],
+        episode_count=0,
+        startup_seconds=0.0,
+        warmup_seconds=0.0,
+    )
+    client = make_batch_client(
+        project_path=project_path,
+        godot_executable=godot_executable,
+        environment_count=environment_count,
+        enemy_count=enemy_count,
+        seed=seed,
+        curriculum_level=curriculum_level,
+        worker_count=worker_count,
+        # PPO uses compact non-terminal infos. Benchmark that real
+        # wire path by default; full diagnostics remain available as
+        # an explicit serialization-stress comparison.
+        compact_infos=compact_infos,
+    )
+    try:
+        client.reset(seed)
+        startup_seconds = time.perf_counter() - startup_started
+        # MultiDiscrete idle action: all neutral axes, no shooting, no
+        # jump. Built from ACTION_NVEC rather than a literal so the
+        # benchmark cannot drift away from the action contract.
+        idle_action = [nvec // 2 if nvec == 3 else 0 for nvec in ACTION_NVEC]
+        actions = [list(idle_action) for _ in range(environment_count)]
+        warmup_seconds = 0.0
+        if warmup_steps:
+            _emit_step_progress(
+                on_step_progress,
+                phase="warmup",
+                environment_count=environment_count,
+                worker_count=worker_count,
+                completed_steps=0,
+                target_steps=steps,
+                elapsed_seconds=0.0,
+                max_seconds_per_config=max_seconds_per_config,
+                step_latencies=[],
+                episode_count=0,
+                startup_seconds=startup_seconds,
+                warmup_seconds=0.0,
+            )
+            warmup_started = time.perf_counter()
+            for _ in range(warmup_steps):
+                client.step(actions)
+            warmup_seconds = time.perf_counter() - warmup_started
+        started = time.perf_counter()
+        deadline = started + max_seconds_per_config
+        last_progress_emit = started - 1.0
+        episode_count = 0
+        completed_steps = 0
+        step_latencies: list[float] = []
+        for _ in range(steps):
+            step_started = time.perf_counter()
+            _observations, _rewards, dones, _infos = client.step(actions)
+            now = time.perf_counter()
+            step_latencies.append(now - step_started)
+            episode_count += int(dones.sum())
+            completed_steps += 1
+            if on_step_progress is not None and (now - last_progress_emit >= 0.15 or now >= deadline):
+                last_progress_emit = now
+                _emit_step_progress(
+                    on_step_progress,
+                    phase="stepping",
+                    environment_count=environment_count,
+                    worker_count=worker_count,
+                    completed_steps=completed_steps,
+                    target_steps=steps,
+                    elapsed_seconds=max(now - started, 1e-9),
+                    max_seconds_per_config=max_seconds_per_config,
+                    step_latencies=step_latencies,
+                    episode_count=episode_count,
+                    startup_seconds=startup_seconds,
+                    warmup_seconds=warmup_seconds,
+                    include_resources=True,
+                )
+            if now >= deadline:
+                break
+        elapsed = max(time.perf_counter() - started, 1e-9)
+        resources = resource_snapshot()
+        row = {
+            "environments": environment_count,
+            "workers": worker_count,
+            "environments_per_worker": environment_count / worker_count,
+            "steps_per_environment": completed_steps,
+            "total_steps": environment_count * completed_steps,
+            "elapsed_seconds": elapsed,
+            "steps_per_second": environment_count * completed_steps / elapsed,
+            "vector_step_latency_p50_ms": percentile(step_latencies, 0.50) * 1000.0,
+            "vector_step_latency_p95_ms": percentile(step_latencies, 0.95) * 1000.0,
+            "episodes": episode_count,
+            "episodes_per_second": episode_count / elapsed,
+            "time_boxed": completed_steps < steps,
+            "info_mode": "compact_training" if compact_infos else "full_diagnostics",
+            "resources": resources,
+            "startup_seconds": startup_seconds,
+            "warmup_steps": warmup_steps,
+            "warmup_seconds": warmup_seconds,
+        }
+        return row
+    finally:
+        client.close()
+
+
 def benchmark_simulation(
     project_path: str | Path,
     godot_executable: str = "godot",
@@ -69,6 +248,7 @@ def benchmark_simulation(
     worker_counts: list[int] | tuple[int, ...] = DEFAULT_WORKER_COUNTS,
     compact_infos: bool = True,
     warmup_steps: int = 0,
+    on_step_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Measure stepping throughput for one or more configurations.
 
@@ -97,70 +277,22 @@ def benchmark_simulation(
             {min(int(value), int(environment_count)) for value in worker_counts}
         )
         for worker_count in planned_workers:
-            startup_started = time.perf_counter()
-            client = make_batch_client(
-                project_path=project_path,
-                godot_executable=godot_executable,
-                environment_count=environment_count,
-                enemy_count=enemy_count,
-                seed=seed,
-                curriculum_level=curriculum_level,
-                worker_count=worker_count,
-                # PPO uses compact non-terminal infos. Benchmark that real
-                # wire path by default; full diagnostics remain available as
-                # an explicit serialization-stress comparison.
-                compact_infos=compact_infos,
+            results.append(
+                _measure_single_config(
+                    project_path=project_path,
+                    godot_executable=godot_executable,
+                    environment_count=environment_count,
+                    worker_count=worker_count,
+                    steps=steps,
+                    enemy_count=enemy_count,
+                    seed=seed,
+                    curriculum_level=curriculum_level,
+                    max_seconds_per_config=max_seconds_per_config,
+                    compact_infos=compact_infos,
+                    warmup_steps=warmup_steps,
+                    on_step_progress=on_step_progress,
+                )
             )
-            try:
-                client.reset(seed)
-                startup_seconds = time.perf_counter() - startup_started
-                # MultiDiscrete idle action: all neutral axes, no shooting, no
-                # jump. Built from ACTION_NVEC rather than a literal so the
-                # benchmark cannot drift away from the action contract.
-                idle_action = [nvec // 2 if nvec == 3 else 0 for nvec in ACTION_NVEC]
-                actions = [list(idle_action) for _ in range(environment_count)]
-                warmup_seconds = 0.0
-                if warmup_steps:
-                    warmup_started = time.perf_counter()
-                    for _ in range(warmup_steps):
-                        client.step(actions)
-                    warmup_seconds = time.perf_counter() - warmup_started
-                started = time.perf_counter()
-                deadline = started + max_seconds_per_config
-                episode_count = 0
-                completed_steps = 0
-                step_latencies: list[float] = []
-                for _ in range(steps):
-                    step_started = time.perf_counter()
-                    _observations, _rewards, dones, _infos = client.step(actions)
-                    step_latencies.append(time.perf_counter() - step_started)
-                    episode_count += int(dones.sum())
-                    completed_steps += 1
-                    if time.perf_counter() >= deadline:
-                        break
-                elapsed = max(time.perf_counter() - started, 1e-9)
-                row = {
-                    "environments": environment_count,
-                    "workers": worker_count,
-                    "environments_per_worker": environment_count / worker_count,
-                    "steps_per_environment": completed_steps,
-                    "total_steps": environment_count * completed_steps,
-                    "elapsed_seconds": elapsed,
-                    "steps_per_second": environment_count * completed_steps / elapsed,
-                    "vector_step_latency_p50_ms": percentile(step_latencies, 0.50) * 1000.0,
-                    "vector_step_latency_p95_ms": percentile(step_latencies, 0.95) * 1000.0,
-                    "episodes": episode_count,
-                    "episodes_per_second": episode_count / elapsed,
-                    "time_boxed": completed_steps < steps,
-                    "info_mode": "compact_training" if compact_infos else "full_diagnostics",
-                    "resources": resource_snapshot(),
-                    "startup_seconds": startup_seconds,
-                    "warmup_steps": warmup_steps,
-                    "warmup_seconds": warmup_seconds,
-                }
-                results.append(row)
-            finally:
-                client.close()
     if output_dir is not None:
         destination = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)

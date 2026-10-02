@@ -1027,6 +1027,134 @@ class SandboxAIAdapter:
         return runtime
 
     # ------------------------------------------------------------------
+    # Roblox TTK Testing live bridge & calibration
+    # ------------------------------------------------------------------
+
+    def ttk_testing_status(self, custom_shortcut: str | None = None) -> dict[str, Any]:
+        """Return live Roblox Player/TTK Testing status + evidence & calibration state."""
+        from .ttk_testing import (
+            TTK_CALIBRATION_PRESETS,
+            list_roblox_screenshots,
+            load_ttk_calibration,
+            probe_roblox_live_session,
+            status_summary,
+        )
+
+        summary = status_summary()
+        live = probe_roblox_live_session(custom_shortcut)
+        calibration = load_ttk_calibration(self.project_root)
+        screenshots = list_roblox_screenshots(self.project_root)
+        return {
+            **summary,
+            "live_session": live,
+            "calibration": calibration,
+            "recent_screenshots": screenshots,
+            "presets": {
+                key: {"label": val["label"], "damage": val["damage"], "rpm": val["rpm"]}
+                for key, val in TTK_CALIBRATION_PRESETS.items()
+            },
+        }
+
+    def launch_roblox_ttk_testing(
+        self, custom_shortcut: str | None = None, *, direct_place: bool = True
+    ) -> dict[str, Any]:
+        """Launch Roblox Player (via shortcut or deep-link into TTK Testing)."""
+        from .ttk_testing import launch_roblox_ttk_testing
+
+        return launch_roblox_ttk_testing(custom_shortcut, direct_place=direct_place)
+
+    def focus_roblox_window(self) -> dict[str, Any]:
+        """Restore and focus the active Roblox client window on Windows."""
+        from .ttk_testing import focus_roblox_window
+
+        return focus_roblox_window()
+
+    def capture_roblox_screenshot(self) -> dict[str, Any]:
+        """Capture a calibration screenshot of the active Roblox window."""
+        from .ttk_testing import capture_roblox_screenshot
+
+        return capture_roblox_screenshot(self.project_root)
+
+    def save_ttk_calibration(
+        self,
+        mechanic: str,
+        measured_value: str,
+        *,
+        notes: str = "",
+        evidence_path: str = "",
+    ) -> dict[str, Any]:
+        """Save an operator measurement for one TTK Testing mechanic."""
+        from .ttk_testing import save_ttk_calibration_entry
+
+        return save_ttk_calibration_entry(
+            self.project_root,
+            mechanic,
+            measured_value,
+            notes=notes,
+            evidence_path=evidence_path,
+        )
+
+    def apply_ttk_preset(self, preset_id: str) -> dict[str, Any]:
+        """Apply a curated TTK Testing weapon/mechanics calibration preset."""
+        from .ttk_testing import apply_ttk_calibration_preset
+
+        return apply_ttk_calibration_preset(self.project_root, preset_id)
+
+    def calculate_ttk_preview(
+        self,
+        *,
+        damage: float,
+        rpm: float,
+        target_hp: float = 100.0,
+        magazine_size: int = 30,
+        reload_seconds: float = 2.2,
+        head_multiplier: float = 1.5,
+    ) -> dict[str, Any]:
+        """Calculate exact Shots-to-Kill, TTK (ms), Burst DPS and Sustained DPS."""
+        from .ttk_testing import calculate_ttk_metrics
+
+        return calculate_ttk_metrics(
+            damage=damage,
+            rpm=rpm,
+            target_hp=target_hp,
+            magazine_size=magazine_size,
+            reload_seconds=reload_seconds,
+            head_multiplier=head_multiplier,
+        )
+
+    # ------------------------------------------------------------------
+    # Ubuntu CPU Performance Turbo
+    # ------------------------------------------------------------------
+
+    def ubuntu_cpu_status(
+        self,
+        *,
+        environment_count: int | None = None,
+        env_workers: int | None = None,
+    ) -> dict[str, Any]:
+        """Inspect Ubuntu/Linux CPU topology and anti-thrashing turbo state."""
+        from .sharded_env import ubuntu_cpu_runtime_profile
+
+        return ubuntu_cpu_runtime_profile(
+            environment_count=environment_count,
+            env_workers=env_workers,
+        )
+
+    def enable_ubuntu_cpu_turbo(
+        self,
+        *,
+        worker_count: int | None = None,
+        environment_count: int | None = None,
+    ) -> dict[str, Any]:
+        """Activate Ubuntu CPU thread-pinning and single-thread BLAS turbo mode."""
+        from .sharded_env import apply_ubuntu_cpu_optimizations
+
+        return apply_ubuntu_cpu_optimizations(
+            worker_count=worker_count,
+            environment_count=environment_count,
+        )
+
+    # ------------------------------------------------------------------
     # Process registry
     # ------------------------------------------------------------------
 
@@ -1097,6 +1225,14 @@ class SandboxAIAdapter:
         status.json, same event log, same checkpoint inventory).
         """
         cfg = config if isinstance(config, TrainingConfig) else TrainingConfig.from_dict(config)
+        if cfg.resolved_env_workers() > 1 or os.environ.get("SANDBOXAI_CPU_TURBO") == "1":
+            with contextlib.suppress(Exception):
+                from .sharded_env import apply_ubuntu_cpu_optimizations
+
+                apply_ubuntu_cpu_optimizations(
+                    worker_count=cfg.resolved_env_workers(),
+                    environment_count=cfg.environment_count,
+                )
         run_dir, command = self._managed_training(cfg, checkpoint)
         meta = {
             "run_id": cfg.run_id or run_dir.name,

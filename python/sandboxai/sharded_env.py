@@ -248,6 +248,147 @@ def worker_compatibility(
     )
 
 
+_THREAD_ENV_VARS: tuple[str, ...] = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+def ubuntu_cpu_runtime_profile(
+    *,
+    cpu_count: int | None = None,
+    environment_count: int | None = None,
+    env_workers: int | None = None,
+) -> dict[str, Any]:
+    """Inspect host CPU topology and return Ubuntu-CPU optimization guidance.
+
+    Designed for Linux/Ubuntu CPU training setups where multi-process Godot
+    sharding + compact bridge payloads + controlled BLAS/PyTorch thread counts
+    deliver the highest end-to-end steps/s.
+    """
+    import platform
+    from pathlib import Path
+
+    logical = int(cpu_count if cpu_count is not None else (os.cpu_count() or 1))
+    affinity_cores: list[int] = []
+    if hasattr(os, "sched_getaffinity"):
+        with contextlib.suppress(OSError):
+            affinity_cores = sorted(os.sched_getaffinity(0))
+    usable_logical = len(affinity_cores) if affinity_cores else logical
+    physical_estimate = max(1, (usable_logical + 1) // 2) if usable_logical > 4 else usable_logical
+
+    cpu_model = platform.processor() or "x86_64 CPU"
+    cpuinfo_path = Path("/proc/cpuinfo")
+    if cpuinfo_path.is_file():
+        with contextlib.suppress(OSError):
+            for line in cpuinfo_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.lower().startswith("model name") and ":" in line:
+                    cpu_model = line.split(":", 1)[1].strip()
+                    break
+
+    governor = "unknown"
+    gov_path = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+    if gov_path.is_file():
+        with contextlib.suppress(OSError):
+            governor = gov_path.read_text(encoding="utf-8", errors="ignore").strip() or "unknown"
+
+    os_release = platform.system()
+    distro_name = os_release
+    os_release_path = Path("/etc/os-release")
+    if os_release_path.is_file():
+        with contextlib.suppress(OSError):
+            for line in os_release_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    distro_name = line.split("=", 1)[1].strip().strip('"')
+                    break
+
+    is_linux = os_release.lower() == "linux"
+    is_ubuntu = "ubuntu" in distro_name.lower()
+
+    rec_workers = max(1, min(physical_estimate, max(1, physical_estimate - 1)))
+    if env_workers is not None and int(env_workers) > 0:
+        active_workers = int(env_workers)
+    else:
+        active_workers = rec_workers
+
+    rec_envs = max(8, active_workers * 4)
+    if environment_count is not None and int(environment_count) > 0:
+        active_envs = int(environment_count)
+    else:
+        active_envs = rec_envs
+
+    trainer_threads = max(1, min(4, usable_logical - active_workers))
+    thread_env = {key: os.environ.get(key, "") for key in _THREAD_ENV_VARS}
+    anti_thrash_active = all(os.environ.get(key) == "1" for key in _THREAD_ENV_VARS[:3])
+
+    return {
+        "os_name": distro_name,
+        "is_linux": is_linux,
+        "is_ubuntu": is_ubuntu,
+        "cpu_model": cpu_model,
+        "logical_cores": usable_logical,
+        "physical_cores_est": physical_estimate,
+        "affinity_count": len(affinity_cores) if affinity_cores else usable_logical,
+        "cpu_governor": governor,
+        "recommended_workers": rec_workers,
+        "recommended_envs": rec_envs,
+        "active_workers": active_workers,
+        "active_envs": active_envs,
+        "recommended_trainer_threads": trainer_threads,
+        "anti_thrash_active": anti_thrash_active,
+        "thread_env": thread_env,
+        "compact_infos_recommended": True,
+        "fast_bridge_active": True,
+    }
+
+
+def apply_ubuntu_cpu_optimizations(
+    *,
+    worker_count: int | None = None,
+    environment_count: int | None = None,
+    pin_Single_thread_blas: bool = True,
+) -> dict[str, Any]:
+    """Apply Ubuntu-CPU anti-thrashing and thread-budget optimizations in-process.
+
+    When multiple Godot worker processes run concurrently on Ubuntu CPU, leaving
+    OpenMP/MKL/OpenBLAS unrestricted causes every worker and NumPy/PyTorch call
+    to spawn ``logical_cores`` threads, creating severe context-switch thrashing.
+    Pinning BLAS env vars to ``1`` and sizing PyTorch intra-op threads to the
+    remaining core budget maximizes multi-shard CPU throughput.
+    """
+    profile = ubuntu_cpu_runtime_profile(
+        environment_count=environment_count,
+        env_workers=worker_count,
+    )
+    applied_env: dict[str, str] = {}
+    if pin_Single_thread_blas:
+        for key in _THREAD_ENV_VARS:
+            os.environ[key] = "1"
+            applied_env[key] = "1"
+        os.environ["SANDBOXAI_CPU_TURBO"] = "1"
+        applied_env["SANDBOXAI_CPU_TURBO"] = "1"
+
+    trainer_threads = int(profile["recommended_trainer_threads"])
+    torch_threads_set: int | None = None
+    with contextlib.suppress( Exception):
+        import torch  # type: ignore
+
+        torch.set_num_threads(trainer_threads)
+        torch_threads_set = int(torch.get_num_threads())
+
+    updated = ubuntu_cpu_runtime_profile(
+        environment_count=environment_count,
+        env_workers=worker_count,
+    )
+    updated["applied_env"] = applied_env
+    updated["torch_threads"] = torch_threads_set
+    updated["turbo_enabled"] = True
+    return updated
+
+
 class ShardedBatchClient:
     """``GodotBatchClient``-compatible facade over several bridge processes.
 
@@ -275,6 +416,9 @@ class ShardedBatchClient:
         self.base_seed = base_seed
         self.shards: list[ShardSpec] = plan_shards(environment_count, worker_count)
         self.worker_count = len(self.shards)
+        if self.worker_count > 1:
+            for env_key in _THREAD_ENV_VARS:
+                os.environ.setdefault(env_key, "1")
         self.clients: list[GodotBatchClient] = []
         self._pending: list[PendingRequest | None] = [None] * self.worker_count
         # A list assignment such as ``self.clients = list(pool.map(...))``
@@ -401,12 +545,14 @@ class ShardedBatchClient:
             return {"cmd": "reset", "seed": shard_seed}
 
         responses = self._broadcast(payload)
-        observations = np.concatenate(
-            [np.asarray(response["observations"], dtype=np.float32) for response in responses],
-            axis=0,
+        observations = np.empty(
+            (self.environment_count, self.observation_dim),
+            dtype=np.float32,
         )
         infos: list[dict[str, Any]] = []
-        for response in responses:
+        for worker, response in enumerate(responses):
+            shard = self.shards[worker]
+            observations[shard.offset : shard.stop] = response["observations"]
             infos.extend(response.get("infos", []))
         return observations, infos
 
@@ -426,23 +572,21 @@ class ShardedBatchClient:
 
         responses = self._broadcast(payload)
         convert_started = time.perf_counter() if profiler is not None else 0.0
-        observations = np.concatenate(
-            [np.asarray(response["observations"], dtype=np.float32) for response in responses],
-            axis=0,
+        observations = np.empty(
+            (self.environment_count, self.observation_dim),
+            dtype=np.float32,
         )
-        rewards = np.concatenate(
-            [np.asarray(response["rewards"], dtype=np.float32) for response in responses],
-            axis=0,
-        )
-        dones = np.concatenate(
-            [np.asarray(response["dones"], dtype=np.bool_) for response in responses],
-            axis=0,
-        )
+        rewards = np.empty(self.environment_count, dtype=np.float32)
+        dones = np.empty(self.environment_count, dtype=np.bool_)
         infos: list[dict[str, Any]] = []
         for worker, response in enumerate(responses):
+            shard = self.shards[worker]
+            observations[shard.offset : shard.stop] = response["observations"]
+            rewards[shard.offset : shard.stop] = response["rewards"]
+            dones[shard.offset : shard.stop] = response["dones"]
             shard_infos = response.get("infos")
             if shard_infos is None:
-                shard_infos = [{} for _ in range(self.shards[worker].count)]
+                shard_infos = [{} for _ in range(shard.count)]
             infos.extend(shard_infos)
         if profiler is not None:
             profiler.record("env.numpy_conversion", time.perf_counter() - convert_started)

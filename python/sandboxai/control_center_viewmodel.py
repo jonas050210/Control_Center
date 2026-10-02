@@ -111,6 +111,52 @@ def format_timestamp(value: Any) -> str:
         return "n/a"
 
 
+def format_ascii_bar(fraction: Any, width: int = 10) -> str:
+    """Render a compact ASCII HUD bar ``[████░░░░░░]`` for a ``[0, 1]`` fraction."""
+    number = _finite_number(fraction)
+    if number is None or width <= 0:
+        return "[" + "·" * max(width, 1) + "]"
+    clamped = max(0.0, min(1.0, number))
+    filled = int(round(clamped * width))
+    return "[" + ("█" * filled) + ("░" * (width - filled)) + "]"
+
+
+def estimate_training_duration(total_steps: Any, steps_per_second: Any) -> str | None:
+    """Return formatted ETA from real measured ``steps_per_second``, or ``None``."""
+    steps = _finite_number(total_steps)
+    sps = _finite_number(steps_per_second)
+    if steps is None or sps is None or steps <= 0.0 or sps <= 0.0:
+        return None
+    return format_duration(steps / sps)
+
+
+def ppo_health_view(ppo_diagnostics: dict[str, Any] | None) -> dict[str, Any]:
+    """Summarize PPO optimization health from real diagnostics."""
+    if not ppo_diagnostics or not isinstance(ppo_diagnostics, dict):
+        return {"status": "N/A", "healthy": None, "summary": "PPO diagnostics: n/a"}
+    kl = _finite_number(ppo_diagnostics.get("approx_kl"))
+    clip = _finite_number(ppo_diagnostics.get("clip_fraction"))
+    ev = _finite_number(ppo_diagnostics.get("explained_variance"))
+    ent = _finite_number(ppo_diagnostics.get("entropy"))
+    alerts: list[str] = []
+    if kl is not None and kl > 0.04:
+        alerts.append("KL SPIKE")
+    if clip is not None and clip > 0.35:
+        alerts.append("HIGH CLIP")
+    if ev is not None and ev < 0.0:
+        alerts.append("VALUE DRIFT")
+    if ent is not None and abs(ent) < 0.01:
+        alerts.append("LOW ENTROPY")
+    status = " / ".join(alerts) if alerts else "OPTIMAL"
+    summary = (
+        f"PPO [{status}] — KL={format_number(kl, 4)}, "
+        f"clip={format_number(clip, 3)}, "
+        f"EV={format_number(ev, 3)}, "
+        f"entropy={format_number(ent, 3)}"
+    )
+    return {"status": status, "healthy": not alerts, "summary": summary}
+
+
 # ---------------------------------------------------------------------------
 # Chart support
 # ---------------------------------------------------------------------------
@@ -687,36 +733,95 @@ def benchmark_workflow_view(
     return {"phases": phases, "phase_line": phase_line, "detail": detail}
 
 
-def benchmark_pipeline_rows(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _format_pipeline_row(stage_name: str | None, row: dict[str, Any]) -> dict[str, Any]:
+    resources = row.get("resources") or {}
+    p50 = row.get("vector_step_latency_p50_ms")
+    p95 = row.get("vector_step_latency_p95_ms")
+    jitter = row.get("latency_jitter")
+    p50_val = _finite_number(p50)
+    p95_val = _finite_number(p95)
+    if jitter is None and p50_val is not None and p95_val is not None and p50_val > 0.0:
+        jitter = round(p95_val / p50_val, 3)
+    return {
+        "stage": stage_name or row.get("stage"),
+        "status": row.get("status", "ok"),
+        "environments": row.get("environments"),
+        "workers": row.get("workers"),
+        "device": row.get("device"),
+        "steps": row.get("steps") or row.get("total_steps"),
+        "steps_per_second": row.get("steps_per_second"),
+        "speedup": row.get("speedup_vs_baseline"),
+        "episodes_per_second": row.get("episodes_per_second"),
+        "p50_ms": p50,
+        "p95_ms": p95,
+        "jitter": jitter,
+        "startup_seconds": row.get("startup_seconds"),
+        "elapsed_seconds": row.get("elapsed_seconds") or row.get("wall_seconds"),
+        "cpu_percent": resources.get("cpu_percent") or row.get("host_cpu_percent_mean"),
+        "bottleneck": row.get("bottleneck"),
+        "error": row.get("error"),
+    }
+
+
+def _enrich_pipeline_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Populate speedup and bottleneck for any rows that do not yet carry them."""
+    measured = [
+        r
+        for r in rows
+        if r.get("status", "ok") in ("ok", "measured")
+        and _finite_number(r.get("steps_per_second")) is not None
+        and float(r["steps_per_second"]) > 0.0
+    ]
+    if not measured:
+        return rows
+    smallest = min(
+        measured,
+        key=lambda r: (
+            int(_finite_number(r.get("environments")) or 1),
+            int(_finite_number(r.get("workers")) or 1),
+        ),
+    )
+    baseline_sps = float(smallest["steps_per_second"])
+    peak_sps = max(float(r["steps_per_second"]) for r in measured)
+    for row in rows:
+        sps = _finite_number(row.get("steps_per_second"))
+        if row.get("speedup") is None and sps is not None and sps > 0.0 and baseline_sps > 0.0:
+            row["speedup"] = round(sps / baseline_sps, 2)
+        if not row.get("bottleneck"):
+            jitter = _finite_number(row.get("jitter"))
+            if row.get("status", "ok") not in ("ok", "measured"):
+                row["bottleneck"] = str(row.get("status", "failed"))
+            elif jitter is not None and jitter > 4.0:
+                row["bottleneck"] = "jitter-bound"
+            elif sps is not None and peak_sps > 0.0 and sps >= peak_sps * 0.90:
+                row["bottleneck"] = "optimal"
+            else:
+                row["bottleneck"] = "scaling"
+    return rows
+
+
+def benchmark_pipeline_rows(
+    report: dict[str, Any] | None,
+    live_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Flatten one pipeline report's measured configurations into table rows.
 
     Screening and validation rows are labelled by stage; a failed or
     skipped configuration keeps its status and error so the table shows
-    what actually happened, not a green wash.
+    what actually happened, not a green wash. While a benchmark is running,
+    ``live_rows`` supplies the already-completed measurements in real time.
     """
-    if not report:
-        return []
-    rows: list[dict[str, Any]] = []
-    for stage in report.get("stages", []):
-        for row in stage.get("configurations", []):
-            rows.append(
-                {
-                    "stage": stage.get("name"),
-                    "status": row.get("status", "ok"),
-                    "environments": row.get("environments"),
-                    "workers": row.get("workers"),
-                    "device": row.get("device"),
-                    "steps": row.get("steps") or row.get("total_steps"),
-                    "steps_per_second": row.get("steps_per_second"),
-                    "p50_ms": row.get("vector_step_latency_p50_ms"),
-                    "p95_ms": row.get("vector_step_latency_p95_ms"),
-                    "jitter": row.get("latency_jitter"),
-                    "startup_seconds": row.get("startup_seconds"),
-                    "elapsed_seconds": row.get("elapsed_seconds") or row.get("wall_seconds"),
-                    "error": row.get("error"),
-                }
-            )
-    return rows
+    if report:
+        rows: list[dict[str, Any]] = []
+        for stage in report.get("stages", []):
+            for row in stage.get("configurations", []):
+                rows.append(_format_pipeline_row(stage.get("name"), row))
+        return _enrich_pipeline_rows(rows)
+    if live_rows:
+        return _enrich_pipeline_rows(
+            [_format_pipeline_row(row.get("stage"), row) for row in live_rows]
+        )
+    return []
 
 
 def benchmark_recommendation_view(recommendation: dict[str, Any] | None) -> dict[str, Any]:
@@ -758,6 +863,7 @@ def pipeline_progress_view(event: dict[str, Any] | None) -> dict[str, Any]:
     index = event.get("index")
     total = event.get("total")
     configuration = event.get("configuration") or {}
+    live = event.get("live") or {}
     label = ""
     if configuration:
         label = (
@@ -765,13 +871,267 @@ def pipeline_progress_view(event: dict[str, Any] | None) -> dict[str, Any]:
             f"{configuration.get('workers', '?')} workers"
         )
     if isinstance(index, int) and isinstance(total, int) and total:
-        fraction = (index + 1) / total
+        sub_fraction = 0.0
+        if event.get("status") == "completed":
+            sub_fraction = 1.0
+        elif live:
+            elapsed = _finite_number(live.get("elapsed_seconds")) or 0.0
+            cap = _finite_number(live.get("max_seconds_per_config")) or 0.0
+            done_steps = _finite_number(live.get("completed_steps")) or 0.0
+            target_steps = _finite_number(live.get("target_steps")) or 0.0
+            time_frac = (elapsed / cap) if cap > 0.0 else 0.0
+            step_frac = (done_steps / target_steps) if (0.0 < target_steps < 10**8) else 0.0
+            sub_fraction = min(0.99, max(time_frac, step_frac))
+        fraction = (
+            ((index + sub_fraction) / total)
+            if event.get("status") == "running"
+            else ((index + 1) / total)
+        )
         text = f"{stage}: {index + 1}/{total}{label} ({event.get('status', '')})"
+        if live and live.get("steps_per_second") is not None:
+            text += (
+                f" • {format_number(live.get('steps_per_second'), 1)} steps/s "
+                f"({format_number(live.get('total_steps'))} steps)"
+            )
     else:
         fraction = None
         message = event.get("message") or event.get("status", "")
         text = f"{stage}: {message}"
     return {"text": text, "stage": stage, "fraction": fraction}
+
+
+def _extract_best_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    measured = [
+        row
+        for row in rows
+        if row.get("status", "ok") in ("ok", "measured")
+        and _finite_number(row.get("steps_per_second")) is not None
+        and float(row["steps_per_second"]) > 0.0
+    ]
+    if not measured:
+        return None
+    return max(measured, key=lambda item: float(item["steps_per_second"]))
+
+
+def _format_live_benchmark_cards(
+    *,
+    running: bool,
+    event: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+    rows: list[dict[str, Any]],
+    best_row: dict[str, Any] | None,
+) -> dict[str, Any]:
+    live = (event or {}).get("live") or {}
+    config = (event or {}).get("configuration") or {}
+    rec = (report or {}).get("recommendation") if report else None
+
+    # Active topology
+    if running and config:
+        envs = config.get("environments", "?")
+        workers = config.get("workers", "?")
+        dev = config.get("device") or "bridge"
+        active_config = f"{envs} envs / {workers} w ({dev})"
+    elif rec and isinstance(rec.get("environment_count"), int):
+        active_config = (
+            f"{rec['environment_count']} envs / {rec.get('env_workers', 1)} w "
+            f"({rec.get('device', 'cpu')})"
+        )
+    elif best_row:
+        active_config = f"{best_row.get('environments')} envs / {best_row.get('workers')} w"
+    else:
+        active_config = "n/a"
+
+    # Live & Peak FPS
+    live_fps = _finite_number(
+        live.get("steps_per_second")
+        or (event or {}).get("steps_per_second")
+        or (rec or {}).get("expected_steps_per_second")
+        or (best_row or {}).get("steps_per_second")
+    )
+    peak_candidates = [
+        float(r["steps_per_second"])
+        for r in rows
+        if _finite_number(r.get("steps_per_second")) is not None
+    ]
+    if live_fps is not None:
+        peak_candidates.append(live_fps)
+    peak_fps = max(peak_candidates) if peak_candidates else None
+
+    # Live Steps
+    if running and live.get("total_steps") is not None:
+        live_steps_text = (
+            f"{format_number(live.get('total_steps'))} "
+            f"({format_number(live.get('completed_steps'))}/env)"
+        )
+    elif running and config.get("steps") is not None:
+        live_steps_text = f"target {format_number(config.get('steps'))}"
+    elif rows:
+        total_measured = sum(
+            int(r["steps"]) for r in rows if _finite_number(r.get("steps")) is not None
+        )
+        live_steps_text = format_number(total_measured) if total_measured > 0 else "n/a"
+    else:
+        live_steps_text = "n/a"
+
+    # Latency & Jitter
+    p50 = _finite_number(
+        live.get("vector_step_latency_p50_ms")
+        or (rec or {}).get("latency_p50_ms")
+        or (best_row or {}).get("p50_ms")
+    )
+    p95 = _finite_number(
+        live.get("vector_step_latency_p95_ms")
+        or (rec or {}).get("latency_p95_ms")
+        or (best_row or {}).get("p95_ms")
+    )
+    latency_text = (
+        f"{format_number(p50, 2)} / {format_number(p95, 2)} ms"
+        if (p50 is not None and p95 is not None)
+        else "n/a"
+    )
+    jitter = _finite_number(live.get("latency_jitter") or (best_row or {}).get("jitter"))
+    if jitter is None and p50 is not None and p95 is not None and p50 > 0.0:
+        jitter = p95 / p50
+    jitter_stable = (jitter <= 4.0) if jitter is not None else None
+    jitter_text = (
+        f"{format_number(jitter, 2)}x ({'STABLE' if jitter_stable else 'HIGH JITTER'})"
+        if jitter is not None
+        else "n/a"
+    )
+
+    # Elapsed & Host CPU
+    elapsed_val = _finite_number(
+        live.get("elapsed_seconds")
+        or (event or {}).get("stage_elapsed_seconds")
+        or (report or {}).get("elapsed_seconds")
+    )
+    resources = live.get("resources") or {}
+    cpu_pct = _finite_number(resources.get("cpu_percent") or (best_row or {}).get("cpu_percent"))
+    elapsed_str = format_duration(elapsed_val)
+    if cpu_pct is not None and elapsed_str != "n/a":
+        elapsed_host_text = f"{elapsed_str} • CPU {format_number(cpu_pct, 0)}%"
+    elif cpu_pct is not None:
+        elapsed_host_text = f"CPU {format_number(cpu_pct, 0)}%"
+    else:
+        elapsed_host_text = elapsed_str
+
+    return {
+        "active_config": active_config,
+        "live_fps": live_fps,
+        "live_phase": live.get("phase"),
+        "live_fps_text": f"{format_number(live_fps, 1)} steps/s" if live_fps is not None else "n/a",
+        "peak_fps": peak_fps,
+        "peak_speedup": (best_row or {}).get("speedup"),
+        "peak_fps_text": f"{format_number(peak_fps, 1)} steps/s" if peak_fps is not None else "n/a",
+        "live_steps": _finite_number(live.get("total_steps"))
+        if running and live.get("total_steps") is not None
+        else (
+            sum(int(r["steps"]) for r in rows if _finite_number(r.get("steps")) is not None)
+            if rows
+            else None
+        ),
+        "steps_per_env": _finite_number(live.get("completed_steps")) if running else None,
+        "live_steps_text": live_steps_text,
+        "p50_ms": p50,
+        "p95_ms": p95,
+        "latency_text": latency_text,
+        "jitter": jitter,
+        "jitter_text": jitter_text,
+        "jitter_stable": jitter_stable,
+        "elapsed_seconds": elapsed_val,
+        "cpu_percent": cpu_pct,
+        "elapsed_host_text": elapsed_host_text,
+    }
+
+
+def benchmark_live_telemetry_view(
+    *,
+    running: bool,
+    event: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+    applied: bool | None = None,
+) -> dict[str, Any]:
+    """Full live HUD model for the Benchmark tab.
+
+    Combines stage progression, real-time step/FPS/latency/jitter readouts,
+    the current leading configuration, streaming table rows and throughput
+    chart coordinates without inventing a single number.
+    """
+    workflow = benchmark_workflow_view(
+        running=running, event=event, report=report, applied=applied
+    )
+    live_rows = (event or {}).get("completed_rows") if running else None
+    rows = benchmark_pipeline_rows(report, live_rows=live_rows)
+    best_row = _extract_best_row(rows)
+    cards = _format_live_benchmark_cards(
+        running=running, event=event, report=report, rows=rows, best_row=best_row
+    )
+    prog = pipeline_progress_view(event)
+    raw_idx = (event or {}).get("index")
+    raw_tot = (event or {}).get("total")
+    if running:
+        stage_label = str((event or {}).get("stage") or "starting").upper()
+        stage_status_text = (
+            f"{stage_label} ({int(raw_idx) + 1}/{int(raw_tot)})"
+            if isinstance(raw_idx, int) and isinstance(raw_tot, int) and raw_tot
+            else stage_label
+        )
+        fraction = float(prog["fraction"]) if prog.get("fraction") is not None else 0.05
+    elif report is not None:
+        stage_label = str(report.get("status", "completed")).upper()
+        stage_status_text = stage_label
+        fraction = 1.0 if report.get("status") == "completed" else 0.0
+    else:
+        stage_label = "IDLE"
+        stage_status_text = "IDLE"
+        fraction = 0.0
+
+    if running and best_row is not None:
+        speedup_val = _finite_number(best_row.get("speedup"))
+        speedup_suffix = f", {format_number(speedup_val, 2)}x speedup" if speedup_val else ""
+        leader_summary = (
+            f"{best_row.get('environments')} environments / "
+            f"{best_row.get('workers')} workers — "
+            f"{format_number(best_row.get('steps_per_second'), 1)} steps/s "
+            f"(p50 {format_number(best_row.get('p50_ms'), 2)} ms, "
+            f"jitter {format_number(best_row.get('jitter'), 2)}x{speedup_suffix})"
+        )
+        leader_text = f"LEADING SO FAR: {leader_summary}"
+    elif report and report.get("recommendation"):
+        rec = report.get("recommendation") or {}
+        rec_view = benchmark_recommendation_view(rec)
+        speedup_val = _finite_number(rec.get("speedup_vs_baseline") or (best_row or {}).get("speedup"))
+        speedup_suffix = f" ({format_number(speedup_val, 2)}x speedup vs baseline)" if speedup_val else ""
+        leader_summary = f"{rec_view['summary']}{speedup_suffix}"
+        leader_text = f"WINNER SELECTED: {leader_summary}"
+    else:
+        leader_summary = "awaiting benchmark telemetry"
+        leader_text = ""
+
+    chart_points: list[tuple[float, float]] = []
+    for idx_row, row in enumerate(rows, start=1):
+        sps = _finite_number(row.get("steps_per_second"))
+        if sps is not None and sps > 0.0:
+            chart_points.append((float(idx_row), sps))
+    if running and cards["live_fps"] is not None and (event or {}).get("status") == "running":
+        chart_points.append((float(len(chart_points) + 1), float(cards["live_fps"])))
+
+    return {
+        **workflow,
+        **cards,
+        "stage_label": stage_label,
+        "index": (int(raw_idx) + 1) if isinstance(raw_idx, int) else None,
+        "total": int(raw_tot) if isinstance(raw_tot, int) else None,
+        "stage_status_text": stage_status_text,
+        "progress_fraction": max(0.0, min(1.0, fraction)),
+        "leader_summary": leader_summary,
+        "leader_text": leader_text,
+        "rows": rows,
+        "best_row_key": (
+            (best_row.get("environments"), best_row.get("workers")) if best_row else None
+        ),
+        "chart_points": chart_points,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -849,17 +1209,7 @@ class TrainingFieldSpec:
 
 
 TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
-    # --- Basic: what almost every run changes. ---------------------------
-    TrainingFieldSpec(
-        "run_id", "Run ID", "str", "basic", help="Blank = timestamped automatically."
-    ),
-    TrainingFieldSpec(
-        "experiment_id",
-        "Experiment ID",
-        "str",
-        "basic",
-        help="Optional grouping prefix for the run directory.",
-    ),
+    # --- Basic: the five core controls shown in the Agents launch deck. ---
     TrainingFieldSpec(
         "environment_count",
         "Environments",
@@ -874,12 +1224,40 @@ TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
         "basic",
         help="Bridge processes hosting the environments. 0 = auto.",
     ),
-    TrainingFieldSpec("total_training_steps", "Total timesteps", "int", "basic"),
-    TrainingFieldSpec("device", "Device", "choice", "basic", choices=("auto", "cpu", "cuda")),
     TrainingFieldSpec(
-        "curriculum_mode", "Curriculum mode", "choice", "basic", choices=("auto", "fixed")
+        "total_training_steps",
+        "Total timesteps",
+        "int",
+        "basic",
+        help="Total environment transitions collected during training.",
     ),
-    # --- Advanced: PPO/optimizer/curriculum internals. --------------------
+    TrainingFieldSpec(
+        "device",
+        "Device",
+        "choice",
+        "basic",
+        choices=("auto", "cpu", "cuda"),
+        help="Training compute target.",
+    ),
+    TrainingFieldSpec(
+        "curriculum_mode",
+        "Curriculum mode",
+        "choice",
+        "basic",
+        choices=("auto", "fixed"),
+        help="Automatic progression vs. fixed stage.",
+    ),
+    # --- Internal / programmatic defaults (not shown in the GUI deck). ----
+    TrainingFieldSpec(
+        "run_id", "Run ID", "str", "advanced", help="Blank = timestamped automatically."
+    ),
+    TrainingFieldSpec(
+        "experiment_id",
+        "Experiment ID",
+        "str",
+        "advanced",
+        help="Optional grouping prefix for the run directory.",
+    ),
     TrainingFieldSpec(
         "curriculum_level",
         "Fixed curriculum level",
@@ -1040,3 +1418,312 @@ def training_field_groups() -> dict[str, list[TrainingFieldSpec]]:
     for spec in TRAINING_FIELDS:
         groups.setdefault(spec.group, []).append(spec)
     return groups
+
+
+def launch_field_specs() -> list[TrainingFieldSpec]:
+    """The streamlined fields exposed on the Agents launch deck."""
+    return training_field_groups()["basic"]
+
+
+# ---------------------------------------------------------------------------
+# Roblox TTK Testing Live Bridge & Calibration viewmodel
+# ---------------------------------------------------------------------------
+
+
+def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
+    """Display model for the Roblox TTK Testing live bridge & calibration view."""
+    if not status or not isinstance(status, dict):
+        return {
+            "available": False,
+            "connected": False,
+            "roblox_running": False,
+            "status_badge": "ROBLOX // OFFLINE",
+            "launcher_text": "n/a",
+            "window_text": "no window",
+            "place_text": "n/a",
+            "rows": [],
+            "verified_count": 0,
+            "calibrated_count": 0,
+            "pending_count": 0,
+        }
+    live = status.get("live_session") or {}
+    calibration = status.get("calibration") or {}
+    mechanics_groups = status.get("mechanics") or {}
+
+    running = bool(live.get("running"))
+    in_ttk = bool(live.get("in_ttk_testing"))
+    connected = bool(live.get("ttk_session_active"))
+
+    if connected:
+        badge = f"Connected to TTK Testing (PID {live.get('pid') or '?'})"
+    elif running:
+        badge = f"Roblox running (PID {live.get('pid') or '?'}) — open TTK Testing"
+    else:
+        badge = "Roblox offline (click Launch)"
+
+    launcher_text = (
+        str(live.get("resolved_launcher"))
+        if live.get("launcher_found")
+        else f"shortcut not found ({live.get('configured_shortcut') or 'default'})"
+    )
+    if live.get("window_found"):
+        focus_str = "focused" if live.get("window_focused") else "background"
+        window_text = (
+            f"{live.get('window_width')}x{live.get('window_height')} ({focus_str})"
+        )
+    elif running:
+        window_text = "process active (headless / minimized)"
+    else:
+        window_text = "closed"
+
+    detected_place = live.get("detected_place_id")
+    if in_ttk:
+        place_text = f"{detected_place} (TTK Testing ✓)"
+    elif detected_place:
+        place_text = f"{detected_place} (other experience)"
+    else:
+        place_text = f"target {live.get('place_id', '120189115846709')}"
+
+    rows: list[dict[str, Any]] = []
+    verified_count = 0
+    calibrated_count = 0
+    pending_count = 0
+    for group_key in ("verified", "calibration_required", "excluded"):
+        for item in mechanics_groups.get(group_key, []):
+            mech = str(item.get("mechanic") or "")
+            cal_entry = calibration.get(mech) or {}
+            measured_val = str(cal_entry.get("measured_value") or "").strip()
+            if group_key == "verified":
+                verified_count += 1
+                effective_status = "VERIFIED (CALIBRATED)" if measured_val else "VERIFIED"
+            elif group_key == "calibration_required":
+                if measured_val:
+                    calibrated_count += 1
+                    effective_status = "CALIBRATED"
+                else:
+                    pending_count += 1
+                    effective_status = "NEEDS CALIBRATION"
+            else:
+                effective_status = "EXCLUDED"
+            rows.append(
+                {
+                    "mechanic": mech,
+                    "base_status": group_key,
+                    "status": effective_status,
+                    "measured_value": measured_val or "—",
+                    "rule": str(item.get("implementation_rule") or ""),
+                    "source": str(item.get("source_label") or ""),
+                    "notes": str(cal_entry.get("notes") or item.get("notes") or ""),
+                    "evidence_path": str(cal_entry.get("evidence_path") or ""),
+                }
+            )
+    total_calibratable = max(1, calibrated_count + pending_count)
+    cal_pct = round(100.0 * calibrated_count / total_calibratable, 1)
+    cal_bar = format_ascii_bar(calibrated_count / total_calibratable, 8)
+    progress_text = f"{cal_bar} {calibrated_count}/{total_calibratable} ({cal_pct:.0f}%)"
+    return {
+        "available": True,
+        "connected": connected,
+        "roblox_running": running,
+        "status_badge": badge,
+        "launcher_text": launcher_text,
+        "window_text": window_text,
+        "place_text": place_text,
+        "log_file": live.get("log_file"),
+        "rss_mb": live.get("rss_mb"),
+        "rows": rows,
+        "verified_count": verified_count,
+        "calibrated_count": calibrated_count,
+        "pending_count": pending_count,
+        "calibration_progress_pct": cal_pct,
+        "calibration_progress_text": progress_text,
+        "studio_summary": "Sable Digital (PoptartNoahh & CanyonJack) | Universe 10090256806 | 8P FFA [MAP VOTING]",
+        "recent_screenshots": list(status.get("recent_screenshots") or []),
+        "presets": dict(status.get("presets") or {}),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Ubuntu CPU Performance Turbo, Training Convergence & Tactical Combat Lab
+# ---------------------------------------------------------------------------
+
+
+def ubuntu_cpu_turbo_view(profile: dict[str, Any] | None) -> dict[str, Any]:
+    """Presentation model for the Ubuntu CPU Performance Turbo engine."""
+    if not profile or not isinstance(profile, dict):
+        return {
+            "available": False,
+            "badge": "CPU TURBO // STANDBY",
+            "summary": "n/a",
+            "recommended_envs": 16,
+            "recommended_workers": 4,
+            "anti_thrash_active": False,
+        }
+    active = bool(profile.get("anti_thrash_active") or profile.get("turbo_enabled"))
+    rec_envs = int(profile.get("recommended_envs") or 16)
+    rec_workers = int(profile.get("recommended_workers") or 4)
+    logical = int(profile.get("logical_cores") or 1)
+    physical = int(profile.get("physical_cores_est") or 1)
+    gov = str(profile.get("cpu_governor") or "unknown")
+    os_name = str(profile.get("os_name") or "Linux")
+    badge = (
+        f"Ubuntu CPU Turbo Active ({rec_envs}e/{rec_workers}w, OMP=1)"
+        if active
+        else f"CPU Ready ({physical}C/{logical}T {os_name})"
+    )
+    summary = (
+        f"{os_name}  ·  {physical} phys / {logical} threads  ·  gov={gov}  ·  "
+        f"Optimal: {rec_envs} Envs x {rec_workers} Workers  ·  "
+        f"BLAS Anti-Thrash: {'ON (OMP/MKL=1)' if active else 'OFF'}"
+    )
+    return {
+        "available": True,
+        "badge": badge,
+        "summary": summary,
+        "os_name": os_name,
+        "cpu_model": str(profile.get("cpu_model") or "CPU"),
+        "logical_cores": logical,
+        "physical_cores_est": physical,
+        "cpu_governor": gov,
+        "recommended_envs": rec_envs,
+        "recommended_workers": rec_workers,
+        "recommended_trainer_threads": int(profile.get("recommended_trainer_threads") or 2),
+        "anti_thrash_active": active,
+    }
+
+
+def training_convergence_view(
+    reward_points: list[tuple[float, float]] | list[float] | None,
+) -> dict[str, Any]:
+    """Detect whether a training run is improving, plateauing, or regressing."""
+    values: list[float] = []
+    for item in reward_points or []:
+        if isinstance(item, (tuple, list)) and len(item) >= 2:
+            val = _finite_number(item[1])
+        else:
+            val = _finite_number(item)
+        if val is not None:
+            values.append(val)
+
+    if len(values) < 6:
+        return {
+            "state": "WARMING_UP",
+            "badge": "WARMING UP",
+            "delta_pct": 0.0,
+            "recommendation": "Collecting initial PPO rollouts (need >= 6 updates for trend radar).",
+        }
+
+    half = max(3, min(10, len(values) // 2))
+    recent = values[-half:]
+    prev = values[-2 * half : -half] if len(values) >= 2 * half else values[:half]
+    recent_mean = sum(recent) / len(recent)
+    prev_mean = sum(prev) / len(prev)
+    peak = max(values)
+    denom = max(abs(prev_mean), 1.0)
+    delta_pct = ((recent_mean - prev_mean) / denom) * 100.0
+    drop_from_peak_pct = ((peak - recent_mean) / max(abs(peak), 1.0)) * 100.0
+
+    if drop_from_peak_pct > 8.0 and recent_mean < prev_mean:
+        return {
+            "state": "REGRESSING",
+            "badge": f"REGRESSING (-{drop_from_peak_pct:.1f}% vs peak)",
+            "delta_pct": round(delta_pct, 1),
+            "recommendation": "Reward dropped from peak — evaluate best.zip checkpoint or lower LR.",
+        }
+    if delta_pct >= 3.0:
+        return {
+            "state": "IMPROVING",
+            "badge": f"IMPROVING (+{delta_pct:.1f}%)",
+            "delta_pct": round(delta_pct, 1),
+            "recommendation": "Policy is actively climbing — keep training on current curriculum.",
+        }
+    if len(values) >= 10 and abs(delta_pct) < 3.0:
+        return {
+            "state": "PLATEAU",
+            "badge": f"PLATEAU ({delta_pct:+.1f}%)",
+            "delta_pct": round(delta_pct, 1),
+            "recommendation": "Reward stabilized — ready for Evaluation or next Curriculum stage.",
+        }
+    return {
+        "state": "STEADY",
+        "badge": f"STEADY ({delta_pct:+.1f}%)",
+        "delta_pct": round(delta_pct, 1),
+        "recommendation": "Steady progression across recent rollouts.",
+    }
+
+
+def _episode_metric_mean(detail: dict[str, Any], summary_key: str, ep_key: str) -> float | None:
+    direct = _finite_number(detail.get(summary_key))
+    if direct is not None:
+        return direct
+    eps = detail.get("per_episode") or detail.get("episode_metrics") or []
+    if not isinstance(eps, list):
+        return None
+    vals = [_finite_number(e.get(ep_key)) for e in eps if isinstance(e, dict)]
+    clean = [v for v in vals if v is not None]
+    return (sum(clean) / len(clean)) if clean else None
+
+
+def tactical_combat_profile_view(detail: dict[str, Any] | None) -> dict[str, Any]:
+    """Compute tactical FPS combat profile (K/D, Damage Trade, Archetype) from evaluation data."""
+    if not detail or not detail.get("available"):
+        return {
+            "available": False,
+            "kd_ratio": "n/a",
+            "damage_trade": "n/a",
+            "lethality": "n/a",
+            "survival_rate": "n/a",
+            "archetype": "NO EVALUATION DATA",
+            "archetype_summary": "Select or run an evaluation to profile tactical combat behavior.",
+        }
+
+    win_rate = _finite_number(detail.get("win_rate")) or 0.0
+    loss_rate = _finite_number(detail.get("loss_rate")) or 0.0
+    kills = _episode_metric_mean(detail, "mean_kills", "kills")
+    deaths = _episode_metric_mean(detail, "mean_deaths", "deaths")
+    dmg_dealt = _episode_metric_mean(detail, "mean_damage_dealt", "damage_dealt")
+    dmg_taken = _episode_metric_mean(detail, "mean_damage_taken", "damage_taken")
+    mean_len = _finite_number(detail.get("mean_episode_length")) or 0.0
+
+    eff_kills = kills if kills is not None else win_rate
+    eff_deaths = deaths if deaths is not None else max(loss_rate, 0.1)
+    kd_val = eff_kills / max(eff_deaths, 0.1)
+
+    if dmg_dealt is not None and dmg_taken is not None:
+        trade_val = dmg_dealt / max(dmg_taken, 1.0)
+        trade_str = f"{trade_val:.2f}x ({dmg_dealt:.0f} / {dmg_taken:.0f} HP)"
+    else:
+        trade_val = (win_rate + 0.05) / max(loss_rate + 0.05, 0.1)
+        trade_str = f"{trade_val:.2f}x (win/loss proxy)"
+
+    survival_pct = max(0.0, min(100.0, (1.0 - loss_rate) * 100.0))
+    lethality_pct = max(0.0, min(100.0, win_rate * 100.0))
+
+    if win_rate >= 0.70 and (mean_len > 0 and mean_len <= 180):
+        archetype = "AGGRESSIVE ENTRY FRAGGER"
+        summary = "Fast-closing high-lethality policy that finishes engagements quickly."
+    elif win_rate >= 0.65 and trade_val >= 1.5:
+        archetype = "TACTICAL MARKSMAN"
+        summary = "High damage-trade efficiency with strong cover discipline and low HP loss."
+    elif survival_pct >= 75.0 and win_rate < 0.65:
+        archetype = "EVASIVE ANCHOR"
+        summary = "Prioritizes survival and positioning; increase offensive reward weight for faster TTK."
+    elif win_rate >= 0.45:
+        archetype = "BALANCED COMBATANT"
+        summary = "Solid mid-tier duelist trading evenly; continue curriculum training."
+    else:
+        archetype = "DEVELOPING RECRUIT"
+        summary = "Early-stage policy still learning aim acquisition and engagement spacing."
+
+    return {
+        "available": True,
+        "kd_ratio": f"{kd_val:.2f}",
+        "damage_trade": trade_str,
+        "lethality": f"{lethality_pct:.1f}%",
+        "survival_rate": f"{survival_pct:.1f}%",
+        "archetype": archetype,
+        "archetype_summary": summary,
+    }
+
+
+

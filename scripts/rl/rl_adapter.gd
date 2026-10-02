@@ -63,27 +63,35 @@ func reset_indices(indices: Array, seed_base: int = -1) -> Array:
 
 
 func step(actions: Array, compact_info: bool = false) -> Dictionary:
+	var action_count: int = actions.size()
 	var resolved: Array = []
-	for action_value in actions:
-		resolved.append(_resolve_action(action_value))
+	resolved.resize(action_count)
+	for i in range(action_count):
+		resolved[i] = _resolve_action(actions[i])
 
 	var results: Array = simulation_manager.step_all(
 		resolved, SandboxConfig.SIMULATION_DT, compact_info
 	)
+	var count: int = results.size()
 	var observations: Array = []
 	var rewards: Array = []
 	var dones: Array = []
 	var infos: Array = []
-	for result in results:
-		observations.append(_observation_to_array(result.observation))
-		rewards.append(float(result.reward))
-		dones.append(bool(result.done))
-		var info: Dictionary = result.info.duplicate(true)
+	observations.resize(count)
+	rewards.resize(count)
+	dones.resize(count)
+	infos.resize(count)
+	for i in range(count):
+		var result: Dictionary = results[i]
+		observations[i] = _observation_to_array(result.observation)
+		rewards[i] = float(result.reward)
+		dones[i] = bool(result.done)
+		var info: Dictionary = result.info if compact_info else result.info.duplicate(true)
 		if result.has("terminal_observation"):
 			info["terminal_observation"] = _observation_to_array(result.terminal_observation)
 		var done_reason: String = str(info.get("done_reason", ""))
 		info["TimeLimit.truncated"] = done_reason == "timeout"
-		infos.append(info)
+		infos[i] = info
 
 	return {
 		"observations": observations,

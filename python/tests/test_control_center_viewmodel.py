@@ -716,3 +716,149 @@ def test_pipeline_progress_view_formats_counts_and_messages():
     assert messaged["text"] == "devices: reusing profile"
     assert messaged["fraction"] is None
     assert vm.pipeline_progress_view(None) == {"text": "idle", "stage": None, "fraction": None}
+
+
+def test_launch_field_specs_exclude_run_id_and_experiment_id():
+    names = [spec.name for spec in vm.launch_field_specs()]
+    assert names == [
+        "environment_count",
+        "env_workers",
+        "total_training_steps",
+        "device",
+        "curriculum_mode",
+    ]
+
+
+def test_benchmark_live_telemetry_view_tracks_live_step_events():
+    live_event = {
+        "stage": "screening",
+        "status": "running",
+        "index": 1,
+        "total": 4,
+        "configuration": {"environments": 16, "workers": 4},
+        "live": {
+            "phase": "stepping",
+            "completed_steps": 120,
+            "total_steps": 1920,
+            "target_steps": 600,
+            "steps_per_second": 960.0,
+            "vector_step_latency_p50_ms": 1.4,
+            "vector_step_latency_p95_ms": 2.8,
+            "latency_jitter": 2.0,
+            "elapsed_seconds": 2.0,
+            "resources": {"cpu_percent": 55.0},
+        },
+        "completed_rows": [
+            {
+                "stage": "screening",
+                "status": "ok",
+                "environments": 1,
+                "workers": 1,
+                "steps": 600,
+                "steps_per_second": 300.0,
+                "vector_step_latency_p50_ms": 3.0,
+                "vector_step_latency_p95_ms": 4.5,
+                "latency_jitter": 1.5,
+            }
+        ],
+    }
+    view = vm.benchmark_live_telemetry_view(running=True, event=live_event, report=None)
+    assert view["live_fps"] == 960.0
+    assert view["peak_fps"] == 960.0
+    assert view["live_steps"] == 1920.0
+    assert view["steps_per_env"] == 120.0
+    assert view["p50_ms"] == 1.4
+    assert view["p95_ms"] == 2.8
+    assert view["jitter"] == 2.0
+    assert view["cpu_percent"] == 55.0
+    assert len(view["rows"]) == 1
+    assert len(view["chart_points"]) == 2
+
+
+def test_ttk_testing_view_and_helpers():
+    assert vm.format_ascii_bar(0.5, 4) == "[██░░]"
+    assert vm.estimate_training_duration(6000, 100.0) == "1m 00s"
+    health = vm.ppo_health_view(
+        {"approx_kl": 0.01, "clip_fraction": 0.1, "explained_variance": 0.8, "entropy": -1.2}
+    )
+    assert health["status"] == "OPTIMAL" and health["healthy"] is True
+    tview = vm.ttk_testing_view(
+        {
+            "live_session": {
+                "running": True,
+                "pid": 4242,
+                "in_ttk_testing": True,
+                "ttk_session_active": True,
+                "launcher_found": True,
+                "resolved_launcher": r"C:\Users\jonas\OneDrive\Desktop\Roblox Player.lnk",
+                "window_found": True,
+                "window_width": 1920,
+                "window_height": 1080,
+                "window_focused": True,
+                "detected_place_id": "120189115846709",
+            },
+            "calibration": {
+                "recoil_values_and_pattern": {
+                    "measured_value": "vertical_kick=1.4deg",
+                    "notes": "measured from screenshot",
+                }
+            },
+            "mechanics": {
+                "verified": [{"mechanic": "fire", "implementation_rule": "M1", "source_label": "s"}],
+                "calibration_required": [
+                    {
+                        "mechanic": "recoil_values_and_pattern",
+                        "implementation_rule": "measure",
+                        "source_label": "s",
+                    }
+                ],
+                "excluded": [],
+            },
+        }
+    )
+    assert tview["connected"] is True
+    assert "120189115846709" in tview["place_text"]
+    assert tview["calibrated_count"] == 1
+    assert tview["calibration_progress_pct"] == 100.0
+
+
+def test_ubuntu_cpu_turbo_convergence_and_tactical_lab_views():
+    uview = vm.ubuntu_cpu_turbo_view(
+        {
+            "os_name": "Ubuntu 24.04 LTS",
+            "cpu_model": "AMD Ryzen",
+            "logical_cores": 16,
+            "physical_cores_est": 8,
+            "cpu_governor": "performance",
+            "recommended_envs": 28,
+            "recommended_workers": 7,
+            "recommended_trainer_threads": 4,
+            "anti_thrash_active": True,
+        }
+    )
+    assert uview["available"] is True
+    assert uview["anti_thrash_active"] is True
+    assert "28e/7w" in uview["badge"]
+
+    conv_up = vm.training_convergence_view([(i * 1000, float(i * 10)) for i in range(1, 13)])
+    assert conv_up["state"] == "IMPROVING"
+    conv_flat = vm.training_convergence_view([(i * 1000, 50.0) for i in range(1, 15)])
+    assert conv_flat["state"] == "PLATEAU"
+
+    tactical = vm.tactical_combat_profile_view(
+        {
+            "available": True,
+            "win_rate": 0.75,
+            "loss_rate": 0.20,
+            "mean_kills": 1.5,
+            "mean_deaths": 0.5,
+            "mean_damage_dealt": 150.0,
+            "mean_damage_taken": 60.0,
+            "mean_episode_length": 140.0,
+        }
+    )
+    assert tactical["available"] is True
+    assert tactical["kd_ratio"] == "3.00"
+    assert tactical["archetype"] == "AGGRESSIVE ENTRY FRAGGER"
+
+

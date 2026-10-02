@@ -29,11 +29,18 @@ state.
    first-person weapon/world view; it supports the existing no-Helmetcam
    presentation decision, but contains no HUD, timing, or numerical evidence.
 2. [Official developer forum announcement](https://devforum.roblox.com/t/ttk-our-very-early-tactical-fps/4664539)
-   — confirms the product direction around PvE, PvP and door-kicking. It does
-   not publish map scripts, AI rules, timing, weapon values, or physics.
+   — by **Sable Digital** (`PoptartNoahh` and `CanyonJack`), confirming the
+   product direction around PvE, PvP, door-kicking, and planned modes
+   (*Survival*, *Missions*, *Quick Play*, *Ground War*). It does not publish
+   map scripts, AI rules, timing, weapon values, or physics.
 3. [Official developer video: “TTK - wound painting/bleeding”](https://www.youtube.com/watch?v=fOpQt7dD4Ro)
    — confirms the wound-painting/bleeding feature family. Its title does not
    establish damage-over-time, healing, fatality, or any numerical rule.
+4. [Official TTK Testing website & updates](https://www.ttktesting.com/updates)
+   — confirms the live experience metadata (`TTK Testing [MAP VOTING]`,
+   `universeId=10090256806`, `placeId=120189115846709`, 8-player server size),
+   the **Gunsmith Update**, and **Transparent Optics** (clearer sight
+   visibility while aiming).
 
 TTK Testing is updated frequently. An older store snapshot that happened to
 name an input or weapon is not proof for the current build; current official
