@@ -72,7 +72,7 @@ Desktop Control Center (Tk, control_center_desktop.py)
   `start_benchmark(...)`, `start_evaluation(checkpoint, ...)` validate their
   inputs (`ValueError`/`FileNotFoundError`) *before* spawning a process, and
   attach a small `meta` summary (env/worker counts, device, checkpoint, ...)
-  so the Agents/Dashboard pages never need to re-parse a command line.
+  so the Training/Dashboard pages never need to re-parse a command line.
 
 ## Hardware wizard (first-start device comparison)
 
@@ -150,9 +150,14 @@ Launch with `python3 main.py` from the repository root, or
 `--project-path`/`--output-root`; see
 `tools/windows/start_control_center.bat` for a Windows launcher). It uses
 Tkinter from the standard library only (Windows-first, no paid/cloud
-dependency) and never renders the game. Pages: **Dashboard**, **Agents**,
+dependency) and never renders the game. Pages: **Dashboard**, **Training**,
 **Benchmarks**, **Evaluations**, **Runs / Checkpoints**,
-**System / Telemetry**, **Settings**.
+**System / Telemetry**, **Settings**. The shell has three layouts (rail,
+topbar, command board), five themes and three density presets, all applied
+live and persisted in `.sandboxai/ui/preferences.json`; pages that declare
+widgets expose a layout board whose card order, span and visibility are
+editable in **Settings -> Layout studio** and savable as a preset under
+`.sandboxai/ui/presets/`.
 
 * All adapter calls run on a small background thread pool
   (`BackgroundRunner`); results are handed back to the Tk thread through a
@@ -174,8 +179,10 @@ dependency) and never renders the game. Pages: **Dashboard**, **Agents**,
   and tracebacks, and supports pausing auto-scroll without pausing polling.
   Wheel/scrollbar/keyboard reading retains the operator's position; it resumes
   follow only after the newest output is visible.
-* Dense inventory tables use native horizontal and vertical scrollbars rather
-  than hiding right-hand values at the minimum desktop window width. Agents
+* Dense inventory tables keep every column reachable with *overlay*
+  scrollbars and fit-to-width columns instead of pinning two native
+  scrollbars under every table; the log panel wraps by default (the wrap
+  toggle restores unwrapped tracebacks with the overlay bar). Training
   captures a process selection and its incremental log cursors per request,
   coalesces a slow poll, and discards a late result for an old selection; a
   scoped Stop/Force Stop request captures the clicked process id before the
@@ -195,6 +202,6 @@ dependency) and never renders the game. Pages: **Dashboard**, **Agents**,
   go through `sandboxai.agents.AgentManager`, which derives operator-facing
   states from the OS process, the trainer's `status.json` and the requested
   action, restarts from the run's newest checkpoint, and refuses actions a
-  backend cannot honour with the reason. The Agents page only ever acts on
+  backend cannot honour with the reason. The Training page only ever acts on
   agents this Control Center itself launched; there is no arbitrary command
   execution surface.

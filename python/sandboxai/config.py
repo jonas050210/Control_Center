@@ -233,6 +233,17 @@ class TrainingConfig:
     entropy_coefficient: float = 0.01
     clip_range: float = 0.2
     total_training_steps: int = 1_000_000
+    ## Wall-clock budget in minutes; 0 (default) disables it and keeps the
+    ## historical behavior (the run ends at `total_training_steps`).
+    ##
+    ## A positive value is enforced by the TRAINER, at the first PPO step
+    ## boundary after the budget is spent: that path runs the normal
+    ## shutdown, so the final checkpoint is still written. A 30-minute
+    ## budget over a 6-hour plan is therefore a supported combination
+    ## instead of a kill - the run is time-boxed, never truncated inside an
+    ## update. The Control Center keeps its own later watchdog only for a
+    ## process that can no longer reach a safe boundary.
+    max_train_minutes: float = 0.0
     checkpoint_frequency: int = 100_000
     evaluation_frequency: int = 50_000
     evaluation_episodes: int = 20
@@ -396,6 +407,10 @@ class TrainingConfig:
             # policy collapse during training.
             (self.entropy_coefficient >= 0.0, "entropy_coefficient must be non-negative"),
             (self.total_training_steps >= 1, "total_training_steps must be positive"),
+            (
+                self.max_train_minutes >= 0,
+                "max_train_minutes must be non-negative (0 = no wall-clock budget)",
+            ),
             (
                 self.checkpoint_frequency >= 1 and self.evaluation_frequency >= 1,
                 "checkpoint/evaluation frequency must be positive",

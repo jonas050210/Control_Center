@@ -16,13 +16,30 @@ import sys
 import threading
 import tkinter as tk
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from tkinter import messagebox, ttk
 from typing import Any
 
 from . import control_center_viewmodel as vm
+from .control_center_theme import (
+    FONT_FAMILY,
+    MONO_FONT_FAMILY,
+    Theme,
+    get_theme,
+)
+from .control_center_ui import (
+    SCROLLBAR_THICKNESS,
+    AnimatedValue,
+    MotionController,
+    SlimScrollbar,
+    ThemeBus,
+    attach_overlay_scrollbars,
+    ease_out_cubic,
+    lerp_color,
+    rounded_rect,
+)
 
 # ---------------------------------------------------------------------------
 # Background work: keeps every adapter call off the Tk event loop thread.
@@ -253,30 +270,57 @@ class BackgroundRunner:
 # Small reusable widgets
 # ---------------------------------------------------------------------------
 
-# Shared desktop Control Center palette: Clean Studio Dark (Linear / Raycast style).
-_FONT_FAMILY = "Segoe UI" if sys.platform.startswith("win") else "DejaVu Sans"
-_MONO_FONT = "Consolas" if sys.platform.startswith("win") else "DejaVu Sans Mono"
-COLOR_BG = "#0b0c0e"
-COLOR_SURFACE = "#121418"
-COLOR_SURFACE_RAISED = "#181b20"
-COLOR_HOVER = "#22262e"
-COLOR_TEXT = "#f4f5f7"
-COLOR_ACCENT = "#3b82f6"
-COLOR_ACCENT_SECONDARY = "#6366f1"
-COLOR_OK = "#10b981"
-COLOR_WARN = "#f59e0b"
-COLOR_ERROR = "#ef4444"
-COLOR_MUTED = "#8e95a2"
-COLOR_BORDER = "#242830"
-COLOR_GRID = "#191c22"
+# Shared desktop Control Center palette. These module constants are the
+# *default* theme's colours: they keep standalone widget construction (and
+# the older imports in tests) working, while every live widget reads
+# ``ThemeBus.theme`` so a theme switch repaints it. New code should prefer
+# ``app.palette`` / ``bus.theme`` over these constants.
+_FONT_FAMILY = FONT_FAMILY
+_MONO_FONT = MONO_FONT_FAMILY
+_DEFAULT_THEME = get_theme("corz")
+_DEFAULT_BUS = ThemeBus(_DEFAULT_THEME)
+COLOR_BG = _DEFAULT_THEME.bg
+COLOR_SURFACE = _DEFAULT_THEME.panel
+COLOR_SURFACE_RAISED = _DEFAULT_THEME.card
+COLOR_HOVER = _DEFAULT_THEME.card_hover
+COLOR_TEXT = _DEFAULT_THEME.text
+COLOR_ACCENT = _DEFAULT_THEME.accent
+COLOR_ACCENT_SECONDARY = _DEFAULT_THEME.accent_second
+COLOR_OK = _DEFAULT_THEME.ok
+COLOR_WARN = _DEFAULT_THEME.warn
+COLOR_ERROR = _DEFAULT_THEME.error
+COLOR_MUTED = _DEFAULT_THEME.text_muted
+COLOR_BORDER = _DEFAULT_THEME.border
+COLOR_GRID = _DEFAULT_THEME.card_hover
+
+
+def _bus_from_ancestors(widget: tk.Misc) -> ThemeBus | None:
+    """The nearest ancestor's ThemeBus, for helpers built without one.
+
+    Widgets that take a bus stamp it as ``_cc_bus``, and a page stamps the
+    shell's bus on itself, so a small helper (a tooltip on a button, a chart
+    inside a card) can be constructed without repeating ``bus=`` and still
+    follow a live theme switch instead of the module's default palette.
+    """
+    node: Any = widget
+    seen = 0
+    while node is not None and seen < 64:
+        bus = getattr(node, "_cc_bus", None)
+        if isinstance(bus, ThemeBus):
+            return bus
+        node = getattr(node, "master", None)
+        seen += 1
+    return None
 
 
 class ToolTip:
     """Small, delayed keyboard/mouse help bubble for otherwise terse controls."""
 
-    def __init__(self, widget: tk.Widget, text: str) -> None:
+    def __init__(self, widget: tk.Widget, text: str, *, bus: ThemeBus | None = None) -> None:
         self.widget = widget
         self.text = text
+        self.bus = bus or _bus_from_ancestors(widget) or _DEFAULT_BUS
+        self._cc_bus = self.bus
         self._after_id: str | None = None
         self._window: tk.Toplevel | None = None
         widget.bind("<Enter>", self._schedule, add="+")
@@ -301,6 +345,7 @@ class ToolTip:
         if self._window is not None or not self.text or not self.widget.winfo_exists():
             return
         self._after_id = None
+        theme = self.bus.theme
         tip = tk.Toplevel(self.widget)
         tip.wm_overrideredirect(True)
         tip.wm_geometry(
@@ -310,14 +355,14 @@ class ToolTip:
             tip,
             text=self.text,
             justify="left",
-            background=COLOR_SURFACE_RAISED,
-            foreground=COLOR_TEXT,
+            background=theme.card,
+            foreground=theme.text,
             relief="solid",
             borderwidth=1,
             padx=10,
             pady=6,
-            font=(_FONT_FAMILY, 9),
-            wraplength=320,
+            font=self.bus.font("small"),
+            wraplength=360,
         ).pack()
         self._window = tip
 
@@ -335,67 +380,143 @@ class ToolTip:
 
 
 class StatCard(ttk.Frame):
-    """One cleanly aligned metric card with subtle status indicator and hover feedback."""
+    """One KPI card: rounded surface, accent rail and an animated value.
 
-    def __init__(self, parent: tk.Misc, label: str) -> None:
+    The value animates (count-up for numbers, a colour settle for text) so a
+    polling refresh reads as live telemetry rather than a label flicker. A
+    disabled motion level applies the final value immediately, which keeps
+    tests and low-motion operators on exactly the same numbers.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        label: str,
+        *,
+        bus: ThemeBus | None = None,
+        motion: MotionController | None = None,
+    ) -> None:
         super().__init__(parent, style="Card.TFrame", padding=(0, 0))
-        self._accent_bar = tk.Frame(self, height=2, background=COLOR_BORDER, borderwidth=0)
+        self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
+        self._theme = self._bus.theme
+        self._motion = motion
+        self._accent_bar = tk.Frame(self, height=2, background=self._theme.border, borderwidth=0)
         self._accent_bar.pack(fill="x", side="top")
-        self._body = ttk.Frame(self, style="CardInner.TFrame", padding=(14, 10))
+        padding = self._bus.px(16, minimum=10)
+        self._body = ttk.Frame(
+            self, style="CardInner.TFrame", padding=(padding, self._bus.px(11, minimum=8))
+        )
         self._body.pack(fill="both", expand=True)
         clean_label = label[:1].upper() + label[1:] if label else ""
         self._title_lbl = ttk.Label(self._body, text=clean_label, style="CardLabel.TLabel")
         self._title_lbl.pack(anchor="w")
-        self._value = ttk.Label(self._body, text="n/a", style="CardValue.TLabel")
-        self._value.pack(anchor="w", pady=(4, 0))
+        self._value = tk.Label(
+            self._body,
+            text="n/a",
+            background=self._theme.card,
+            foreground=self._theme.text,
+            anchor="w",
+            font=self._bus.font("h2", bold=True, mono=True),
+        )
+        self._value.pack(anchor="w", pady=(self._bus.px(4, minimum=2), 0), fill="x")
+        self._animated = AnimatedValue(self._value, motion or MotionController(self, level="off"))
         self._current_color: str | None = None
+        self._unsubscribe = self._bus.subscribe(self.apply_theme)
 
-    def set(self, text: str, color: str | None = None) -> None:
+    def apply_theme(self, theme: Theme) -> None:
+        self._theme = theme
+        with contextlib.suppress(tk.TclError):
+            self._value.configure(background=theme.card)
+            self._accent_bar.configure(background=self._current_color or theme.border)
+
+    def set(
+        self,
+        text: str,
+        color: str | None = None,
+        *,
+        value: float | None = None,
+        formatter: Callable[[float], str] | None = None,
+    ) -> None:
         self._current_color = color
-        self._value.configure(text=text, foreground=color or COLOR_TEXT)
-        self._accent_bar.configure(background=color or COLOR_BORDER)
+        self._animated.set(
+            text,
+            color or self._theme.text,
+            value=value,
+            formatter=formatter,
+            animate=self._motion is not None,
+        )
+        self._accent_bar.configure(background=color or self._theme.border)
 
 
 class StatRow(ttk.Frame):
     """A balanced grid of :class:`StatCard` modules built from an ordered label tuple."""
 
     def __init__(
-        self, parent: tk.Misc, labels: tuple[str, ...], *, max_columns: int = 5
+        self,
+        parent: tk.Misc,
+        labels: tuple[str, ...],
+        *,
+        max_columns: int = 5,
+        bus: ThemeBus | None = None,
+        motion: MotionController | None = None,
     ) -> None:
         super().__init__(parent)
+        self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
         self._cards: dict[str, StatCard] = {}
         columns = min(max_columns, max(1, len(labels)))
+        gap = self._bus.px(6, minimum=3)
         for index, label in enumerate(labels):
-            card = StatCard(self, label)
+            card = StatCard(self, label, bus=self._bus, motion=motion)
             row, column = divmod(index, columns)
-            card.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
+            card.grid(row=row, column=column, sticky="nsew", padx=gap, pady=gap)
             self.columnconfigure(column, weight=1, uniform="stats")
             self._cards[label] = card
 
-    def update_values(self, values: dict[str, tuple[str, str | None]]) -> None:
+    def column_count(self) -> int:
+        """How many KPI columns the current grid holds (layout tests use this)."""
+        return max(1, len(self._cards))
+
+    def update_values(
+        self,
+        values: dict[str, tuple[str, str | None]],
+        *,
+        numeric: dict[str, tuple[float, str, Callable[[float], str]]] | None = None,
+    ) -> None:
+        """Update cards; ``numeric`` optionally supplies count-up values."""
         for label, (text, color) in values.items():
-            if label in self._cards:
-                self._cards[label].set(text, color)
+            card = self._cards.get(label)
+            if card is None:
+                continue
+            if numeric and label in numeric:
+                value, _fallback, formatter = numeric[label]
+                card.set(text, color, value=value, formatter=formatter)
+            else:
+                card.set(text, color)
 
 
 class PhaseStepper(tk.Canvas):
-    """Clean horizontal workflow stepper with smooth 60 FPS animated progress bar."""
+    """Clean horizontal workflow stepper with a smoothly animated track."""
 
-    _STATUS_PALETTE: dict[str, tuple[str, str, str]] = {
-        "pending": (COLOR_SURFACE_RAISED, COLOR_BORDER, COLOR_MUTED),
-        "active": ("#172554", COLOR_ACCENT, COLOR_TEXT),
-        "done": ("#064e3b", COLOR_OK, COLOR_OK),
-        "skipped": ("#3f2e08", COLOR_WARN, COLOR_WARN),
-        "failed": ("#450a0a", COLOR_ERROR, COLOR_ERROR),
-    }
-
-    def __init__(self, parent: tk.Misc, height: int = 52) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        height: int = 52,
+        *,
+        bus: ThemeBus | None = None,
+        motion: MotionController | None = None,
+    ) -> None:
+        self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
+        self._theme = self._bus.theme
+        self._motion = motion
         super().__init__(
             parent,
-            height=height,
-            background=COLOR_SURFACE,
+            height=height if self._motion is None else max(height, 42),
+            background=self._theme.panel,
             highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
+            highlightbackground=self._theme.border,
         )
         self._phases: list[dict[str, str]] = []
         self._fraction: float = 0.0
@@ -403,6 +524,23 @@ class PhaseStepper(tk.Canvas):
         self._anim_after_id: str | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Destroy>", self._cancel_anim, add="+")
+        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+
+    def apply_theme(self, theme: Theme) -> None:
+        self._theme = theme
+        with contextlib.suppress(tk.TclError):
+            self.configure(background=theme.panel, highlightbackground=theme.border)
+            self._redraw()
+
+    def _status_palette(self) -> dict[str, tuple[str, str, str]]:
+        theme = self._theme
+        return {
+            "pending": (theme.card, theme.border, theme.text_muted),
+            "active": (theme.card_active, theme.accent, theme.text),
+            "done": (theme.card, theme.ok, theme.ok),
+            "skipped": (theme.card, theme.warn, theme.warn),
+            "failed": (theme.card, theme.error, theme.error),
+        }
 
     def _cancel_anim(self, _event: object = None) -> None:
         if self._anim_after_id is not None:
@@ -416,7 +554,20 @@ class PhaseStepper(tk.Canvas):
         self._fraction = target
         if target == 0.0 and self._display_fraction > 0.5:
             self._display_fraction = 0.0
+        if self._motion is not None:
+            start = self._display_fraction
+            self._motion.tween(
+                320,
+                lambda progress: self._set_display(
+                    start + (target - start) * ease_out_cubic(progress)
+                ),
+            )
+            return
         self._schedule_smooth_step()
+
+    def _set_display(self, value: float) -> None:
+        self._display_fraction = max(0.0, min(1.0, value))
+        self._redraw()
 
     def set_phases(self, phases: list[dict[str, str]], fraction: float = 0.0) -> None:
         self.set_state(phases, fraction)
@@ -440,24 +591,27 @@ class PhaseStepper(tk.Canvas):
 
     def _redraw(self) -> None:
         self.delete("all")
+        theme = self._theme
         width = max(int(self.winfo_width()), 1)
         height = max(int(self.winfo_height()), 1)
         if not self._phases:
             return
+        palette = self._status_palette()
         count = len(self._phases)
-        pad_x = 14
-        gap = 12
-        box_h = 28
-        box_y0 = 8
+        pad_x = self._bus.px(14, minimum=8)
+        gap = self._bus.px(10, minimum=6)
+        box_h = self._bus.px(28, minimum=22)
+        box_y0 = self._bus.px(8, minimum=5)
         box_y1 = box_y0 + box_h
         slot_w = max(40.0, (width - 2 * pad_x - (count - 1) * gap) / count)
+        radius = min(self._bus.px(8, minimum=4), box_h / 2)
         for idx, phase in enumerate(self._phases):
             status = phase.get("status", "pending")
-            bg, border, fg = self._STATUS_PALETTE.get(status, self._STATUS_PALETTE["pending"])
+            bg, border, fg = palette.get(status, palette["pending"])
             x0 = pad_x + idx * (slot_w + gap)
             x1 = x0 + slot_w
             if idx < count - 1:
-                conn_color = COLOR_OK if status == "done" else COLOR_BORDER
+                conn_color = theme.ok if status == "done" else theme.border
                 self.create_line(
                     x1,
                     (box_y0 + box_y1) / 2,
@@ -466,36 +620,60 @@ class PhaseStepper(tk.Canvas):
                     fill=conn_color,
                     width=1,
                 )
-            self.create_rectangle(x0, box_y0, x1, box_y1, fill=bg, outline=border, width=1)
-            dot_color = border if status != "pending" else COLOR_MUTED
+            rounded_rect(
+                self,
+                x0,
+                box_y0,
+                x1,
+                box_y1,
+                radius,
+                fill=bg,
+                outline=border,
+                width=1,
+            )
+            dot_color = border if status != "pending" else theme.text_muted
             self.create_oval(
-                x0 + 10,
+                x0 + self._bus.px(11, minimum=7),
                 (box_y0 + box_y1) / 2 - 3,
-                x0 + 16,
+                x0 + self._bus.px(17, minimum=12),
                 (box_y0 + box_y1) / 2 + 3,
                 fill=dot_color,
                 outline="",
             )
             label = str(phase.get("label", "")).capitalize()
             self.create_text(
-                x0 + 23,
+                x0 + self._bus.px(24, minimum=18),
                 (box_y0 + box_y1) / 2,
                 anchor="w",
                 text=f"{idx + 1}. {label}",
                 fill=fg,
-                font=(_FONT_FAMILY, 9, "bold" if status == "active" else "normal"),
+                font=self._bus.font("small", bold=status == "active"),
             )
-        # Smoothly animated bottom progress track
-        bar_y0 = height - 7
-        bar_y1 = height - 3
-        self.create_rectangle(
-            pad_x, bar_y0, width - pad_x, bar_y1, fill=COLOR_BG, outline=""
+        # Animated bottom progress track.
+        bar_y0 = height - self._bus.px(7, minimum=4)
+        bar_y1 = height - self._bus.px(3, minimum=2)
+        rounded_rect(
+            self,
+            pad_x,
+            bar_y0,
+            width - pad_x,
+            bar_y1,
+            2,
+            fill=theme.bg,
+            outline="",
         )
         if self._display_fraction > 0.0:
             fill_w = (width - 2 * pad_x) * self._display_fraction
-            bar_color = COLOR_OK if self._fraction >= 0.999 else COLOR_ACCENT
-            self.create_rectangle(
-                pad_x, bar_y0, pad_x + fill_w, bar_y1, fill=bar_color, outline=""
+            bar_color = theme.ok if self._fraction >= 0.999 else theme.accent
+            rounded_rect(
+                self,
+                pad_x,
+                bar_y0,
+                max(pad_x + fill_w, pad_x + 4),
+                bar_y1,
+                2,
+                fill=bar_color,
+                outline="",
             )
 
 
@@ -508,26 +686,45 @@ class LineChart(tk.Canvas):
         title: str,
         height: int = 152,
         *,
-        color: str = COLOR_ACCENT,
+        color: str | None = None,
+        bus: ThemeBus | None = None,
     ) -> None:
+        self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
+        self._theme = self._bus.theme
         super().__init__(
             parent,
             height=height,
-            background=COLOR_SURFACE_RAISED,
+            background=self._theme.card,
             highlightthickness=1,
-            highlightbackground=COLOR_BORDER,
+            highlightbackground=self._theme.border,
         )
         self._title = title
-        self._color = color
+        self._color_override = color
         self._points: list[tuple[float, float]] = []
         self._hover_x: int | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", self._on_leave)
+        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+
+    @property
+    def _color(self) -> str:
+        return self._color_override or self._theme.accent
+
+    def apply_theme(self, theme: Theme) -> None:
+        self._theme = theme
+        with contextlib.suppress(tk.TclError):
+            self.configure(background=theme.card, highlightbackground=theme.border)
+            self._redraw()
 
     def set_points(self, points: list[tuple[float, float]]) -> None:
         self._points = points
         self._redraw()
+
+    def point_count(self) -> int:
+        """Number of plotted samples (used by the animation/layout tests)."""
+        return len(self._points)
 
     def _on_motion(self, event: tk.Event[Any]) -> None:
         self._hover_x = int(getattr(event, "x", 0))
@@ -553,15 +750,15 @@ class LineChart(tk.Canvas):
         plot_h = height - pad_top - pad_bottom
         for fraction in (0.0, 0.5, 1.0):
             gy = pad_top + fraction * plot_h
-            self.create_line(pad_left, gy, width - pad_right, gy, fill=COLOR_GRID)
+            self.create_line(pad_left, gy, width - pad_right, gy, fill=self._theme.border)
             value = y_max - fraction * (y_max - y_min)
             self.create_text(
-                pad_left - 8,
+                pad_left - self._bus.px(8, minimum=5),
                 gy,
                 anchor="e",
                 text=vm.format_number(value, 2),
-                fill=COLOR_MUTED,
-                font=(_MONO_FONT, 8),
+                fill=self._theme.text_muted,
+                font=self._bus.font("micro", mono=True),
             )
 
     def _draw_hover(
@@ -578,31 +775,42 @@ class LineChart(tk.Canvas):
         hover_x = self._hover_x
         if hover_x is None or not points:
             return None
-        best_idx = min(
-            range(len(points)),
-            key=lambda i: abs(coords[2 * i] - hover_x),
-        )
+        best_idx = min(range(len(points)), key=lambda i: abs(coords[2 * i] - hover_x))
         hx, hy = coords[2 * best_idx], coords[2 * best_idx + 1]
         px, py = points[best_idx]
-        self.create_line(hx, pad_top, hx, height - pad_bottom, fill=COLOR_BORDER, dash=(3, 3))
-        self.create_oval(
-            hx - 4, hy - 4, hx + 4, hy + 4, fill=self._color, outline=COLOR_TEXT, width=1
+        self.create_line(
+            hx,
+            pad_top,
+            hx,
+            height - pad_bottom,
+            fill=self._theme.border_strong,
+            dash=(3, 3),
         )
-        return f"Step {vm.format_number(px, 0)}: {vm.format_number(py, 3)}   ·   "
+        self.create_oval(
+            hx - 4,
+            hy - 4,
+            hx + 4,
+            hy + 4,
+            fill=self._color,
+            outline=self._theme.text,
+            width=1,
+        )
+        return f"Step {vm.format_number(px, 0)}: {vm.format_number(py, 3)}   \u00b7   "
 
     def _redraw(self) -> None:
         self.delete("all")
+        theme = self._theme
         width = max(int(self.winfo_width()), 1)
         height = max(int(self.winfo_height()), 1)
-        pad_left, pad_right, pad_top, pad_bottom = 56, 16, 30, 18
+        pad_left, pad_right, pad_top, pad_bottom = 64, 16, 32, 20
         clean_title = self._title[:1].upper() + self._title[1:] if self._title else ""
         self.create_text(
-            12,
-            8,
+            self._bus.px(12, minimum=6),
+            self._bus.px(8, minimum=4),
             anchor="nw",
             text=clean_title,
-            font=(_FONT_FAMILY, 9, "bold"),
-            fill=COLOR_TEXT,
+            font=self._bus.font("small", bold=True),
+            fill=theme.text,
         )
         points = vm.downsample_series(
             self._points, max_points=max(width - pad_left - pad_right, 10)
@@ -611,9 +819,9 @@ class LineChart(tk.Canvas):
             self.create_text(
                 width / 2,
                 height / 2 + 6,
-                text="Waiting for telemetry...",
-                fill=COLOR_MUTED,
-                font=(_FONT_FAMILY, 9),
+                text="Waiting for telemetry\u2026",
+                fill=theme.text_muted,
+                font=self._bus.font("small"),
             )
             return
         xs = [p[0] for p in points]
@@ -636,28 +844,36 @@ class LineChart(tk.Canvas):
             coords.extend((cx, cy))
         baseline_y = height - pad_bottom
         poly_coords = [coords[0], baseline_y, *coords, coords[-2], baseline_y]
-        self.create_polygon(*poly_coords, fill="#172554", stipple="gray25", outline="")
+        area_color = lerp_color(theme.card, self._color, 0.18)
+        self.create_polygon(*poly_coords, fill=area_color, outline="")
         self.create_line(*coords, fill=self._color, width=2, smooth=False)
         last_x, last_y = coords[-2], coords[-1]
         self.create_oval(
-            last_x - 3, last_y - 3, last_x + 3, last_y + 3, fill=self._color, outline=COLOR_SURFACE_RAISED
+            last_x - 3,
+            last_y - 3,
+            last_x + 3,
+            last_y + 3,
+            fill=self._color,
+            outline=theme.card,
         )
         cursor_prefix = (
-            self._draw_hover(points, coords, width, height, pad_left, pad_right, pad_top, pad_bottom)
+            self._draw_hover(
+                points, coords, width, height, pad_left, pad_right, pad_top, pad_bottom
+            )
             or ""
         )
         summary = (
-            f"{cursor_prefix}Min {vm.format_number(raw_y_min, 2)}   ·   "
-            f"Max {vm.format_number(raw_y_max, 2)}   ·   "
+            f"{cursor_prefix}Min {vm.format_number(raw_y_min, 2)}   \u00b7   "
+            f"Max {vm.format_number(raw_y_max, 2)}   \u00b7   "
             f"Latest {vm.format_number(ys[-1], 3)}"
         )
         self.create_text(
             width - pad_right,
-            8,
+            self._bus.px(8, minimum=4),
             anchor="ne",
             text=summary,
-            fill=COLOR_TEXT if cursor_prefix else COLOR_MUTED,
-            font=(_MONO_FONT, 8),
+            fill=theme.text if cursor_prefix else theme.text_muted,
+            font=self._bus.font("micro", mono=True),
         )
 
 
@@ -674,8 +890,18 @@ class LogPanel(ttk.Frame):
       hours.
     """
 
-    def __init__(self, parent: tk.Misc, max_lines: int = 4000) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        max_lines: int = 4000,
+        *,
+        bus: ThemeBus | None = None,
+        motion: MotionController | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._bus = bus or _DEFAULT_BUS
+        self._theme = self._bus.theme
+        self._motion = motion
         self._max_lines = max_lines
         self._stdout_after = -1
         self._stderr_after = -1
@@ -689,36 +915,83 @@ class LogPanel(ttk.Frame):
             variable=self._autoscroll,
             command=self._on_autoscroll_toggled,
         ).pack(side="left")
+        # Wrapping is on by default: process output is read, not compared,
+        # and wrap=word removes the horizontal scrollbar entirely. Turning it
+        # off keeps long command lines/tracebacks intact and reveals the
+        # overlay bar only while the reader is actually interacting.
+        self._wrap = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            toolbar,
+            text="Wrap lines",
+            variable=self._wrap,
+            command=self._on_wrap_toggled,
+        ).pack(side="left", padx=(10, 0))
         ttk.Button(toolbar, text="Clear view", command=self.clear).pack(side="left", padx=(8, 0))
-        self._truncated_label = ttk.Label(toolbar, text="", foreground=COLOR_WARN)
+        self._truncated_label = ttk.Label(toolbar, text="", style="PillWarn.TLabel")
         self._truncated_label.pack(side="right")
         text_frame = ttk.Frame(self)
         text_frame.pack(fill="both", expand=True, pady=(4, 0))
         self.text = tk.Text(
             text_frame,
             height=16,
-            wrap="none",
+            wrap="word",
             state="disabled",
-            background=COLOR_SURFACE,
-            foreground=COLOR_TEXT,
-            insertbackground=COLOR_TEXT,
-            font=("Consolas", 9),
+            background=self._theme.panel,
+            foreground=self._theme.text,
+            insertbackground=self._theme.text,
+            relief="flat",
+            borderwidth=0,
+            padx=10,
+            pady=6,
+            font=self._bus.font("small", mono=True),
         )
-        # Process output routinely contains wide commands, paths and tracebacks.
-        # With ``wrap=\"none\"`` a horizontal scrollbar is therefore a
-        # readability requirement, not a decorative extra. Grid lets both
-        # native scrollbars share the same data surface without clipping each
-        # other on compact windows.
-        text_frame.columnconfigure(0, weight=1)
-        text_frame.rowconfigure(0, weight=1)
-        self._yscroll = ttk.Scrollbar(text_frame, orient="vertical", command=self._scroll_text_y)
-        self._xscroll = ttk.Scrollbar(text_frame, orient="horizontal", command=self.text.xview)
+        self.text.pack(fill="both", expand=True)
+        thickness = self._bus.px(SCROLLBAR_THICKNESS, minimum=6)
+        self._yscroll = SlimScrollbar(
+            text_frame,
+            self._bus,
+            orient="vertical",
+            command=self._scroll_text_y,
+            thickness=thickness,
+            place={"relx": 1.0, "rely": 0.0, "relheight": 1.0, "anchor": "ne", "width": thickness},
+        )
+        self._xscroll = SlimScrollbar(
+            text_frame,
+            self._bus,
+            orient="horizontal",
+            command=self.text.xview,
+            thickness=thickness,
+            place={"relx": 0.0, "rely": 1.0, "relwidth": 1.0, "anchor": "sw", "height": thickness},
+        )
         self.text.configure(yscrollcommand=self._on_text_scroll, xscrollcommand=self._xscroll.set)
-        self.text.grid(row=0, column=0, sticky="nsew")
-        self._yscroll.grid(row=0, column=1, sticky="ns")
-        self._xscroll.grid(row=1, column=0, sticky="ew")
-        self.text.tag_configure("stderr", foreground=COLOR_ERROR)
-        self.text.tag_configure("meta", foreground=COLOR_MUTED)
+        self.text.tag_configure("stderr", foreground=self._theme.error)
+        self.text.tag_configure("meta", foreground=self._theme.text_muted)
+        self.text.bind("<Enter>", lambda _e: self._reveal_scrollbars(), add="+")
+        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+
+    def apply_theme(self, theme: Theme) -> None:
+        self._theme = theme
+        with contextlib.suppress(tk.TclError):
+            self.text.configure(
+                background=theme.panel,
+                foreground=theme.text,
+                insertbackground=theme.text,
+            )
+            self.text.tag_configure("stderr", foreground=theme.error)
+            self.text.tag_configure("meta", foreground=theme.text_muted)
+
+    def _reveal_scrollbars(self) -> None:
+        self._yscroll.reveal()
+        if not self._wrap.get():
+            self._xscroll.reveal()
+
+    def _on_wrap_toggled(self) -> None:
+        wrapping = bool(self._wrap.get())
+        self.text.configure(wrap="word" if wrapping else "none")
+        if not wrapping:
+            self._reveal_scrollbars()
+        if self._autoscroll.get() and not self._user_scrolled_up:
+            self.text.see("end")
         # Wheel input covers the common pointer path, while the wrapped
         # scrollbar command and navigation keys cover track dragging,
         # scrollbar arrows and keyboard readers. Previously only wheel
@@ -744,6 +1017,7 @@ class LogPanel(ttk.Frame):
         self._user_scrolled_up = True
         self.text.yview(*args)
         self._sync_follow_state()
+        self._yscroll.reveal()
 
     def _sync_follow_state(self) -> None:
         """Resume live follow only when the viewport is genuinely at the end."""
@@ -788,6 +1062,43 @@ class LogPanel(ttk.Frame):
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         self.text.configure(state="disabled")
+
+    def snapshot_view(self) -> dict[str, Any]:
+        """What to put back when the page rebuilt around this panel.
+
+        A density change destroys and recreates every widget on the page,
+        which used to blank the log and drop the reader's position. The
+        page captures this before the children go away and hands it to the
+        fresh panel, so the log survives the restyle.
+        """
+        return {
+            "text": self.text.get("1.0", "end-1c"),
+            "autoscroll": bool(self._autoscroll.get()),
+            "wrap": bool(self._wrap.get()),
+            "scrolled_up": bool(self._user_scrolled_up),
+            "stdout_after": self._stdout_after,
+            "stderr_after": self._stderr_after,
+            "yview": float(self.text.yview()[0]),
+        }
+
+    def restore_view(self, snapshot: Mapping[str, Any]) -> None:
+        """Re-apply a :meth:`snapshot_view` result to a freshly built panel."""
+        content = str(snapshot.get("text") or "")
+        self._autoscroll.set(bool(snapshot.get("autoscroll", True)))
+        self._wrap.set(bool(snapshot.get("wrap", True)))
+        self._on_wrap_toggled()
+        self._user_scrolled_up = bool(snapshot.get("scrolled_up", False))
+        # The cursors matter as much as the text: the next poll appends only
+        # what is new, so restoring the text without them would duplicate it.
+        self._stdout_after = int(snapshot.get("stdout_after", -1))
+        self._stderr_after = int(snapshot.get("stderr_after", -1))
+        if content:
+            self.text.configure(state="normal")
+            self.text.insert("1.0", content)
+            self.text.configure(state="disabled")
+            self.text.yview_moveto(float(snapshot.get("yview", 1.0)))
+        if self._autoscroll.get() and not self._user_scrolled_up:
+            self.text.see("end")
 
     def apply_log(self, log: dict[str, Any]) -> None:
         if "error" in log and not log.get("stdout") and not log.get("stderr"):
@@ -834,33 +1145,56 @@ def _safe_line(line: Any) -> str:
 
 
 def _scrollable_table(
-    parent: tk.Misc, columns: tuple[tuple[str, str, int], ...], *, expand: bool = True
+    parent: tk.Misc,
+    columns: tuple[tuple[str, str, int], ...],
+    *,
+    expand: bool = True,
+    bus: ThemeBus | None = None,
 ) -> ttk.Treeview:
-    """Build a sortable table with both axes reachable on a narrow window.
+    """Build a sortable table whose overlay bars appear only when needed.
 
-    Result inventories have deliberately descriptive columns (run location,
-    timestamp, error, checkpoint kind). Shrinking them to fit a fixed window
-    turns their values into ellipses, while a vertical-only scrollbar made the
-    rightmost columns unreachable. The wrapper keeps a conventional native
-    table and makes its full width explicitly reachable instead.
+    Dense inventories still have to keep every column reachable on a narrow
+    window, but two permanently visible native scrollbars were the single
+    loudest piece of chrome in the old UI. The table now stretches its
+    columns to fill the visible width when it can, and otherwise exposes an
+    overlay scrollbar while the pointer is inside it.
     """
     frame = ttk.Frame(parent)
     frame.pack(fill="both", expand=expand)
-    frame.columnconfigure(0, weight=1)
-    frame.rowconfigure(0, weight=1)
     tree = _sortable_table(frame, columns)
-    tree.grid(row=0, column=0, sticky="nsew")
-    yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-    yscroll.grid(row=0, column=1, sticky="ns")
-    xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-    xscroll.grid(row=1, column=0, sticky="ew")
-    tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-    # The attributes are intentionally private presentation seams: desktop
-    # tests verify that every dense inventory preserves horizontal reachability
-    # without teaching pages Tk grid details.
-    tree._horizontal_scrollbar = xscroll  # type: ignore[attr-defined]
-    tree._vertical_scrollbar = yscroll  # type: ignore[attr-defined]
+    tree.pack(fill="both", expand=True)
+    active_bus = bus or _DEFAULT_BUS
+    attach_overlay_scrollbars(frame, tree, active_bus, scale_px=active_bus.px)
+    _bind_fit_to_width(tree, columns)
     return tree
+
+
+def _bind_fit_to_width(tree: ttk.Treeview, columns: tuple[tuple[str, str, int], ...]) -> None:
+    """Grow columns into spare width so a wide window never shows a bar.
+
+    Columns keep their declared proportions; only the surplus space of a
+    window wider than the table's natural width is distributed. When the
+    window is narrower, the declared widths stand and the overlay
+    horizontal bar makes the rest reachable.
+    """
+    natural = sum(width for _key, _title, width in columns) or 1
+    weights = [width / natural for _key, _title, width in columns]
+    state = {"applied": -1}
+
+    def apply(event: tk.Event) -> None:
+        available = int(getattr(event, "width", 0))
+        if available <= 1 or available == state["applied"]:
+            return
+        state["applied"] = available
+        if available <= natural:
+            for key, _title, width in columns:
+                tree.column(key, width=width)
+            return
+        spare = available - natural
+        for (key, _title, _width), weight in zip(columns, weights, strict=True):
+            tree.column(key, width=int(natural * weight + spare * weight))
+
+    tree.bind("<Configure>", apply, add="+")
 
 
 def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:

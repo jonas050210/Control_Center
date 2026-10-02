@@ -126,29 +126,44 @@ It provides:
 
 - **Dashboard** - live state, progress, steps/s, elapsed/ETA, environment
   and worker counts, agent lifecycle summary, device, reward
-- **Agents** - the launch form (validated against the same compatibility
-  rules the benchmark uses) plus every launched training/benchmark/
-  evaluation agent with its lifecycle state
-  (AVAILABLE -> LAUNCHING -> RUNNING -> PAUSED/STOPPING -> STOPPED/
-  FINISHED/FAILED), its Environment -> Worker topology, backend metrics,
-  and the full action set: Launch, Pause/Resume (training only - other
-  backends say why not), Stop, Restart (resuming from the run's latest
+- **Training** - the launch deck (validated against the same
+  compatibility rules the benchmark uses) with environment count, worker
+  count, device and a **Steps or Time** budget: a time-boxed run carries
+  its minutes into the training config, so the trainer stops itself at its
+  next safe step boundary and still saves the final checkpoint. Below it: every launched training run with
+  its lifecycle state (AVAILABLE -> LAUNCHING -> RUNNING ->
+  PAUSED/STOPPING -> STOPPED/FINISHED/FAILED), its Environment -> Worker
+  topology, backend metrics, and the full action set: Launch,
+  Pause/Resume, Stop, Restart (resuming from the run's latest
   checkpoint), Force stop, Stop all
 - **Benchmarks** - the staged benchmark pipeline that *measures* this
   machine's runtime (environment count x worker count x device, startup,
-  warmup, throughput, latency percentiles, errors, stability) under a
-  Steps or a 1-60 minute Time budget, then recommends a configuration
-  with its reasoning - never a hard-coded guess. The recommendation can
-  be applied to the launch form in one click, and both it and the full
-  report are persisted; a Custom configuration gets the same validation
-  verdict the launcher enforces
+  warmup, throughput, latency percentiles, errors, stability) under an
+  **Auto**, **Push** or **Custom** plan: Auto scales from 64 to 128
+  environment processes and probes workers up to 32 (past the conservative
+  `--env-workers auto` recommendation) on a large host, Push widens the ladder
+  to 256 environments to find where throughput saturates. It then
+  recommends a configuration with its reasoning - never a hard-coded
+  guess. The recommendation is applied to the launch deck by itself, and
+  both it and the full report are persisted; a Custom configuration gets
+  the same validation verdict the launcher enforces
 - **Evaluations** - win/loss/timeout, combat, accuracy and
   action-head/zero-shot diagnostics plus multi-run comparison
 - **Runs / Checkpoints** - a browser over the on-disk run artifacts
 - **System / Telemetry** - real CPU/RAM/Godot/dependency status and
   bounded live telemetry charts; unavailable metrics are shown as such,
   never estimated
-- **Settings** - project/output roots and the Godot executable
+- **Settings** - theme, shell layout (rail/topbar/board), density,
+  motion, a free **accent colour** (nine swatches or any `#rrggbb`) that
+  any theme can wear, accent effects, the **Layout studio** (move, span and
+  hide cards), savable **presets** that can also be exported to a file and
+  imported back, project/output roots and the Godot executable
+
+The desktop suite runs with `python3 tools/desktop_tests.py`: it uses the
+real Tk window when the machine has Tkinter and a display (or `xvfb-run`),
+and otherwise runs the static contracts plus the headless smoke harness and
+prints the exact package to install. `--strict` fails instead of falling
+back, which is what the CI job `desktop-ui-tests` does.
 
 The Control Center is built entirely on
 `sandboxai.adapter.SandboxAIAdapter` - the same `train`/`benchmark`/
@@ -334,6 +349,13 @@ sandboxai train \
   --checkpoint-frequency 100000 --evaluation-frequency 50000 \
   --seed 1234 --device auto --curriculum-level 3
 ```
+
+`--max-train-minutes 30` time-boxes a run: the trainer stops itself at the
+first safe step boundary after those minutes and saves the final checkpoint
+anyway, so a 30-minute budget over a multi-hour plan is a supported
+combination rather than a kill. `0` (the default) makes the step count the
+only limit. The expiry is recorded in `run_summary.json` as
+`"stop_reason": "time_budget"`.
 
 `--rollout-length 0` is the default auto schedule: it keeps the aggregate
 rollout near 16,384 transitions as `--env-count` changes (while capping the

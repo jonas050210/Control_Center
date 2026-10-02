@@ -9,13 +9,117 @@ records what changed and why.
 ## Unreleased
 
 ### Control Center
-- The Benchmarks page is now a zero-configuration workflow: one *Start
-  benchmark* button runs the full staged pipeline with host-scaled
-  defaults, shows a live phase strip (discover → screen → devices →
-  validate → pick → apply) and applies the winning configuration
-  automatically (persisted recommendation + Agents launch form). The
-  budget/grid/finalist form and the custom-configuration card are gone
-  from the GUI; the CLI keeps every knob for scripted sweeps.
+- **Interface rework.** The window is now built from switchable design
+  choices instead of one hard-coded look: five themes (Corz, Midnight
+  Cyan, Neon Lime, Graphite Mono, Light), three shell layouts (rail,
+  topbar, command board), three density presets, four motion levels,
+  adjustable corner radius and optional glow/grid effects. All of it
+  applies live, persists in `.sandboxai/ui/preferences.json` and never
+  drops a font below the 11 px floor.
+- **Every widget follows the live theme again.** Eleven construction sites
+  (the benchmark phase stepper and live cards, the throughput and telemetry
+  charts, the System stat row, several tooltips) built their widget without
+  a `ThemeBus`, so those widgets subscribed to the module's default Corz
+  palette and never repainted on a theme or accent change - invisible
+  without a display. They now pass the shell's bus, a page stamps its bus
+  as `_cc_bus` so helper widgets can find it by walking up their parents,
+  and both the smoke harness and the real-Tk suite walk every page and fail
+  on a foreign bus.
+- **Command palette fixes.** `Ctrl+K` opened a second palette every time
+  it was pressed, the list could not be navigated with `Up`/`Down` (Return
+  always picked the first entry), and neither `Escape` nor `Ctrl+K` closed
+  the window from inside it - a second toplevel has its own bindtags, so it
+  now carries its own bindings and the page accelerators `Ctrl+1..7` work
+  from it too. Arrow keys work from the query field and from the list (the
+  list binding wins over Tk's own cursor step, so a press moves one row), the
+  highlight no longer snaps back to the first row on the key release that
+  follows every arrow press, and the palette takes the keyboard focus once
+  it is mapped (a window manager that keeps the focus on the parent window
+  would otherwise leave it open but deaf).
+- **The wheel scrolls the whole page again.** A page scroll area only bound
+  the wheel on its own canvas, so with the pointer over a card's labels (the
+  normal place to be) nothing moved and the overlay scrollbar looked like
+  the only way down. The area now binds the wheel on the containing toplevel
+  and scrolls when the pointer is inside its content, while a log `Text`, a
+  table or the scrollbar itself keep the wheel and a wheel outside the area
+  leaves it alone. The smoke harness models Tk's bindtags (own bindings,
+  class, toplevel) so the routing is checked headlessly, and a real-Tk test
+  builds a deliberately overflowing page and drives both cases.
+- **One accent colour, free to choose.** Settings -> Appearance offers nine
+  curated accents and a hex field; the colour is stored in the preferences
+  and applied to *whichever* theme is active (`Theme.with_accent`), with
+  the label ink derived from it (white while a bold UI label keeps its 3:1
+  contrast, dark otherwise). Picking a theme's own accent is a no-op, so
+  the designed pairs stay as authored. Presets carry the accent too.
+  Fixed along the way: `Theme.contrast_ratio` unpacked `sorted()` the wrong
+  way round and reported the reciprocal of the WCAG ratio (a 3.7:1 pair
+  came back as 0.27); it had no caller, which is why it survived, and it
+  now has tests.
+- **Preset export/import.** A preset can be written to a JSON file and read
+  back on another machine or project (`PresetStore.export` /
+  `import_preset`, Settings -> Presets). The exported document carries
+  layout, appearance, accent and note; an import keeps the name inside the
+  file and refuses to replace an existing preset unless that is confirmed.
+- **The window remembers being maximized.** `UiPreferences.zoomed` is
+  saved with the geometry and re-applied at startup (best effort: a window
+  manager that does not support `state("zoomed")` must not break startup).
+- **A density rebuild keeps the keyboard focus**, not just the log, the
+  selections and the scroll offsets.
+- **`tools/desktop_tests.py`.** One command that runs the real-Tk desktop
+  suite when the machine can (Tkinter + display, or `xvfb-run`) and falls
+  back to the static contracts and the smoke harness otherwise, printing
+  the exact package to install. `--strict` fails instead of falling back;
+  the `desktop-ui-tests` CI job now goes through that script.
+- **Restyles keep the view.** Switching density rebuilds a page's widgets
+  (the new paddings have to be laid out, not patched), which used to blank
+  the log panel, drop the selected rows and jump the page back to the top.
+  The rebuild now captures that transient view state first - log text and
+  poll cursors, tree selections, per-area scroll offsets - and re-applies
+  it to the fresh widgets.
+- **Movable cards and presets.** Dashboard, Training and Benchmarks
+  arrange their cards on a layout board. Settings -> Layout studio moves
+  a card up/down, changes its 1x/2x/3x span and hides it; the whole
+  arrangement (plus theme and density) can be saved as a named preset
+  under `.sandboxai/ui/presets/<name>.json`, applied or deleted. A
+  preset written by an older build is repaired on load, and re-picking
+  the current shell layout no longer rebuilds (and therefore no longer
+  resets) every page.
+- **Training replaces Agents.** The page is now the training-only
+  operational core: launch deck (environment count, workers, device,
+  presets 25k/100k/500k steps, resume checkpoint, live verdict),
+  **Steps-or-Time budget** where a time-boxed run carries its minutes into
+  the training config (`max_train_minutes`) and the trainer stops itself
+  at the next safe step boundary, still saving the final checkpoint, plus
+  the run table with its lifecycle actions, topology and log. The window's
+  own watchdog only steps in after a grace period if a run can no longer
+  reach a safe boundary. Benchmark and evaluation processes moved to their own pages.
+  The Dashboard gained an *Active runs* strip that lists any live
+  non-training process with a scoped Stop.
+- **Benchmarks: Auto, Push or Custom.** Auto plans a host-scaled ladder
+  from 64 to 128 environment processes and probes worker counts up to 32 -
+  including the host's own step, not just the powers of two below the
+  conservative `--env-workers auto` recommendation; Push widens the ladder
+  to 256 environments to find the saturation point; Custom takes explicit
+  environment/worker/step/minute lists. The previous single-button workflow
+  capped the sweep at 64 environments and stopped the worker ladder at
+  *physical cores - 2*, which is why a 64-env / 4-worker run could sit at
+  10-20 % CPU. Invalid plans disable the start button with the reason
+  instead of starting a doomed sweep.
+- **Chrome and readability.** Cards are rounded and themed; tables keep
+  every column reachable with overlay scrollbars and fit-to-width columns
+  instead of two permanently pinned native bars; the log panel wraps by
+  default (with a wrap toggle) and its overlay bars appear only while
+  scrolling; spacing and fonts scale with the display DPI.
+- The Benchmarks page runs the full staged pipeline with host-scaled
+  defaults in Auto mode, shows a live phase strip (discover → screen →
+  devices → validate → pick → apply) and applies the winning
+  configuration automatically (persisted recommendation + Training
+  launch deck). The budget/grid/finalist form and the custom-configuration
+  card are gone from the GUI; the CLI keeps every knob for scripted
+  sweeps, and Custom mode passes explicit lists through.
+- `tools/control_center_smoke.py` constructs the real application against
+  a small fake `tkinter` and drives every page: a development aid for
+  machines where the Tk suite skips. It verifies wiring, not pixels.
 - Failed launches now surface their real cause: a failing process's
   snapshot appends its last stderr line to the bare
   "process exited with code N", and the agent view prefers the backend's
@@ -56,6 +160,20 @@ records what changed and why.
   meet the TTK-only evidence boundary.
 
 ### Added
+- **Trainer-enforced wall-clock budget** (`TrainingConfig.max_train_minutes`,
+  `sandboxai train --max-train-minutes`). The budget used to be a
+  window-side request: the Control Center watched the elapsed time and
+  asked the process to stop, which only worked while that window was
+  open. It is now part of the training loop (`ppo._TimeBudget` +
+  `_should_continue_step`, checked in the same per-step path that honours
+  an operator stop), so the run ends at the first safe step boundary after
+  the budget regardless of who started it, and reports why:
+  `run_summary.json` gains `stop_reason`, `max_train_minutes` and
+  `elapsed_minutes`, and a run stopped by the budget is written to the
+  run manifest as `stopped` instead of `completed`. A resumed run gets a
+  fresh budget. Unit-tested without stable-baselines3
+  (`python/tests/test_ppo_time_budget.py`).
+
 - `sandboxai.hardware_profile`: the single device-comparison
   implementation behind the first-start hardware wizard. It compares CPU,
   Hybrid (GPU updates + CPU inference) and CUDA — offering the GPU

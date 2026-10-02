@@ -67,6 +67,14 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--entropy-coefficient", type=float)
     parser.add_argument("--clip-range", type=float)
     parser.add_argument("--steps", type=int, dest="total_training_steps")
+    parser.add_argument(
+        "--max-train-minutes",
+        type=float,
+        help=(
+            "Stop the run at the first safe step boundary after this many minutes "
+            "(0 = no wall-clock budget). The final checkpoint is still saved."
+        ),
+    )
     parser.add_argument("--checkpoint-frequency", type=int)
     parser.add_argument("--evaluation-frequency", type=int)
     parser.add_argument("--evaluation-episodes", type=int)
@@ -779,7 +787,10 @@ def _cmd_control_center_desktop(args: argparse.Namespace) -> int:
     try:
         from .control_center_desktop import main as desktop_main
     except ImportError as exc:
-        if exc.name == "tkinter":
+        # Both failure shapes mean "this Python has no Tk": the ``tkinter``
+        # package may be missing, or it may be present without its
+        # ``_tkinter`` C extension (conda/embedded builds, broken venvs).
+        if exc.name in {"tkinter", "_tkinter"}:
             print(
                 "The Control Center needs Tkinter, which this Python installation "
                 "does not provide. Install the python3-tk system package (or use a "

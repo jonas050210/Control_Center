@@ -149,7 +149,7 @@ class ProcessRecord:
     returncode: int | None = None
     error: str | None = None
     #: Small, kind-specific launch summary (environment/worker counts,
-    #: checkpoint path, ...) so the Agents/Dashboard pages do not need to
+    #: checkpoint path, ...) so the Training/Dashboard pages do not need to
     #: re-parse the launched command line.
     meta: dict[str, Any] = field(default_factory=dict)
     #: (sequence, line) pairs, bounded to ProcessManager.max_lines. The
@@ -290,7 +290,7 @@ class ProcessManager:
                 "started_at": record.started_at,
                 # The OS pid of the process this Control Center itself
                 # launched. Always safe to show (it is not a handle to
-                # anything the GUI did not start) and is what the Agents
+                # anything the GUI did not start) and is what the Training
                 # page needs to answer "which real process is this".
                 "pid": record.process.pid,
                 "stdout": [text for _, text in record.stdout[-100:]],

@@ -1,6 +1,6 @@
 # Python module map
 
-`sandboxai` is a flat package: all 49 modules sit directly under
+`sandboxai` is a flat package: all 52 modules sit directly under
 `python/sandboxai/`. That is deliberate. Every module's import path is
 public API - it appears in the docs, in user scripts and in saved run
 manifests - so rearranging the files into subpackages would rewrite
@@ -110,14 +110,19 @@ What a result was produced by, and how to find it again afterwards.
 
 The Tkinter engineering GUI. It reaches the rest of the system only
 through `adapter`, and the Tk-free `control_center_viewmodel` holds the
-presentation logic so it can be tested without a display.
+presentation logic so it can be tested without a display. `control_center_theme`
+and `control_center_layout` are Tk-free as well: they own the design tokens,
+preferences and the movable-widget presets, so both are testable headless.
 
 | Module | Summary |
 | --- | --- |
 | [`adapter`](../python/sandboxai/adapter.py) | Stable application boundary for the SandboxAI Control Center. |
 | [`agents`](../python/sandboxai/agents.py) | Agent lifecycle management for the headless Control Center. |
 | [`control_center_desktop`](../python/sandboxai/control_center_desktop.py) | Tk desktop Control Center backed exclusively by :mod:`sandboxai.adapter`. |
+| [`control_center_layout`](../python/sandboxai/control_center_layout.py) | Movable page widgets and savable UI presets for the Control Center. |
 | [`control_center_pages`](../python/sandboxai/control_center_pages.py) | Desktop Control Center pages. |
+| [`control_center_theme`](../python/sandboxai/control_center_theme.py) | Design tokens, themes, DPI scaling and persisted UI preferences for the Control Center. |
+| [`control_center_ui`](../python/sandboxai/control_center_ui.py) | Reusable Tk primitives for the Control Center's restyled interface. |
 | [`control_center_viewmodel`](../python/sandboxai/control_center_viewmodel.py) | Pure presentation logic for the desktop Control Center. |
 | [`control_center_widgets`](../python/sandboxai/control_center_widgets.py) | Reusable Tk infrastructure and presentation widgets for the desktop Control Center. |
 

@@ -151,6 +151,109 @@ class _SelectionState:
     best_score: float
     eval_patience_counter: int = 0
     stop_training: bool = False
+    # Why the run stopped early ("" = it did not). The first observer wins:
+    # an operator stop, the wall-clock budget the trainer enforces itself, or
+    # one of the evaluation-driven early stops below.
+    stop_reason: str = ""
+
+
+class _TimeBudget:
+    """The trainer's own wall-clock budget, in seconds (0 = no budget).
+
+    A tiny object rather than arithmetic inline in the callback: this is
+    the whole policy ("has the budget been spent?") and it is testable
+    without stable-baselines3, torch or an engine.
+    """
+
+    def __init__(self, minutes: float) -> None:
+        self.minutes = max(0.0, float(minutes))
+        self.seconds = self.minutes * 60.0
+        self.started = time.monotonic()
+
+    def restart(self) -> None:
+        """A resumed run gets a fresh budget; the clock starts with the loop."""
+        self.started = time.monotonic()
+
+    def elapsed_seconds(self) -> float:
+        return time.monotonic() - self.started
+
+    @property
+    def enabled(self) -> bool:
+        return self.seconds > 0.0
+
+    def reached(self) -> bool:
+        return self.enabled and self.elapsed_seconds() >= self.seconds
+
+
+def _stop_for_operator(run_control: RunControl | None, state: _SelectionState) -> bool:
+    """Operator commands first: a stop request always wins."""
+    if run_control is None or run_control.checkpoint():
+        return False
+    state.stop_training = True
+    state.stop_reason = state.stop_reason or "operator"
+    return True
+
+
+def _should_continue_step(
+    budget: _TimeBudget,
+    state: _SelectionState,
+    *,
+    run_control: RunControl | None,
+    telemetry: Any,
+    timesteps: int,
+) -> bool:
+    """One place decides whether this PPO step may continue.
+
+    Module-level so the whole stop policy (operator, then wall clock) is
+    testable without stable-baselines3, torch or an engine.
+    """
+    if state.stop_training:
+        # Something already ended this run (an operator stop on an earlier
+        # step, an evaluation early stop, or this budget). Never re-announce
+        # it: the reason that won is the one the summary reports.
+        return False
+    if _stop_for_operator(run_control, state):
+        return False
+    return not _stop_for_time_budget(
+        budget, state, telemetry=telemetry, run_control=run_control, timesteps=timesteps
+    )
+
+
+def _stop_for_time_budget(
+    budget: _TimeBudget,
+    state: _SelectionState,
+    *,
+    telemetry: Any,
+    run_control: RunControl | None,
+    timesteps: int,
+) -> bool:
+    """Stop training once the wall-clock budget is spent; report the reason.
+
+    Module-level so the policy is testable without stable-baselines3: it
+    takes the clock, the shared stop state and the two publishers, and
+    returns whether training must end at this step boundary. The final
+    checkpoint is written by PPO's normal shutdown, exactly as for an
+    operator stop.
+    """
+    if state.stop_training or not budget.reached():
+        return False
+    state.stop_training = True
+    state.stop_reason = "time_budget"
+    values = {
+        "event": "time_budget_reached",
+        "elapsed_seconds": round(budget.elapsed_seconds(), 3),
+        "budget_minutes": budget.minutes,
+        "timesteps": timesteps,
+    }
+    telemetry.write(values)
+    if run_control is not None:
+        run_control.update(state="Stopping", **values)
+        run_control.event(
+            "system",
+            f"wall-clock budget of {budget.minutes:g} min reached; saving the final checkpoint",
+            values,
+        )
+    return True
 
 
 # --- callback factories --------------------------------------------------
@@ -353,6 +456,10 @@ def _make_metrics_callback(
         def __init__(self):
             super().__init__()
             self.started = time.perf_counter()
+            # The trainer's own budget: a run resumed from a checkpoint gets
+            # a fresh one, because "this run may take N minutes" is a
+            # property of the run, not of the checkpoint lineage.
+            self.budget = _TimeBudget(config.max_train_minutes)
             self.last_telemetry_step = 0
             self.episode_count = 0
             self.episode_metrics_buffer: list[dict[str, Any]] = []
@@ -364,6 +471,7 @@ def _make_metrics_callback(
             self.interval_shoot_requests = 0
 
         def _on_training_start(self) -> None:
+            self.budget.restart()
             self.start_timesteps = self.num_timesteps
             self.target_timesteps = self.start_timesteps + config.total_training_steps
             self.last_telemetry_step = self.start_timesteps
@@ -388,8 +496,13 @@ def _make_metrics_callback(
                 run_control.event("system", "PPO optimization started", start_values)
 
         def _on_step(self) -> bool:
-            if run_control is not None and not run_control.checkpoint():
-                state.stop_training = True
+            if not _should_continue_step(
+                self.budget,
+                state,
+                run_control=run_control,
+                telemetry=telemetry,
+                timesteps=self.num_timesteps,
+            ):
                 return False
             if pipeline is not None:
                 # One attribute write per vector step: the pipeline stamps
@@ -824,8 +937,10 @@ class _EvaluationDriver:
                 and self.state.eval_patience_counter >= self.config.early_stopping_patience
             ):
                 self.state.stop_training = True
+                self.state.stop_reason = self.state.stop_reason or "early_stopping"
         if self.config.min_eval_reward is not None and reward >= self.config.min_eval_reward:
             self.state.stop_training = True
+            self.state.stop_reason = self.state.stop_reason or "eval_reward_reached"
 
 
 def _make_evaluation_callback(
@@ -1442,6 +1557,9 @@ def train_ppo(
                 0, model.num_timesteps - metrics_callback.start_timesteps
             ),
             "stopped": bool(run_control is not None and run_control.stop_requested),
+            "stop_reason": state.stop_reason or "completed",
+            "max_train_minutes": config.max_train_minutes,
+            "elapsed_minutes": round(metrics_callback.budget.elapsed_seconds() / 60.0, 3),
             "warm_start": warm_start,
             "training_profile": str(profile_path) if profile_path is not None else None,
         }
@@ -1455,9 +1573,7 @@ def train_ppo(
             write_manifest(
                 run_dir,
                 pipeline.manifest(
-                    "stopped"
-                    if run_control is not None and run_control.stop_requested
-                    else "completed"
+                    "stopped" if state.stop_reason in {"operator", "time_budget"} else "completed"
                 ),
             )
             result["curriculum"] = pipeline.driver.curriculum_snapshot()

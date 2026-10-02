@@ -39,12 +39,20 @@ def main() -> int:
     try:
         from sandboxai.control_center_desktop import main as control_center_main
     except ImportError as exc:
-        if exc.name == "tkinter":
+        # A Python without Tk fails in one of two ways: `import tkinter`
+        # itself (no Tkinter package at all) or `import _tkinter` from
+        # inside it (the package exists but its C extension does not - a
+        # common case with conda/embedded builds and broken venvs). Both
+        # mean the same thing to the user, and both deserve the fix rather
+        # than a traceback that ends in a module name they never typed.
+        if exc.name in {"tkinter", "_tkinter"}:
             print(
                 "The Control Center needs Tkinter, which this Python "
                 "installation does not provide. Install the python3-tk "
-                "system package (Debian/Ubuntu) or use a Python build "
-                "with Tk support, then run `python3 main.py` again.",
+                "system package (Debian/Ubuntu), repair the Python install "
+                "with Tk support (Windows installer: Modify -> tcl/tk), or "
+                "use a Python build with Tk, then run `python3 main.py` "
+                "again.",
                 file=sys.stderr,
             )
             return 1

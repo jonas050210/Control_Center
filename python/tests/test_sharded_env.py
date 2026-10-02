@@ -20,6 +20,7 @@ from sandboxai.godot_env import GodotBatchClient, make_batch_client
 from sandboxai.sharded_env import (
     ShardedBatchClient,
     ShardFailure,
+    physical_core_estimate,
     plan_shards,
     recommended_worker_count,
 )
@@ -57,6 +58,31 @@ class ShardStartupFailureTests(unittest.TestCase):
                 )
         self.assertEqual(len(created), 1)
         self.assertTrue(created[0].closed)
+
+
+class PhysicalCoreEstimateTests(unittest.TestCase):
+    """One host-size estimate, shared by the worker default and the sweep.
+
+    The pipeline and the Control Center both call this: a machine described
+    as 16 cores by one and 8 by the other used to produce a plan the window
+    advertised differently from the sweep that ran.
+    """
+
+    def test_small_hosts_keep_every_thread(self):
+        for logical in (1, 2, 3, 4):
+            self.assertEqual(physical_core_estimate(logical), logical)
+
+    def test_large_hosts_halve_the_hyper_threads(self):
+        self.assertEqual(physical_core_estimate(8), 4)
+        self.assertEqual(physical_core_estimate(16), 8)
+        self.assertEqual(physical_core_estimate(32), 16)
+        self.assertEqual(physical_core_estimate(64), 32)
+
+    def test_a_missing_or_bogus_count_never_returns_zero(self):
+        self.assertGreaterEqual(physical_core_estimate(0), 1)
+        self.assertGreaterEqual(physical_core_estimate(-8), 1)
+        with patch("sandboxai.sharded_env.os.cpu_count", return_value=None):
+            self.assertGreaterEqual(physical_core_estimate(), 1)
 
 
 class ShardPlanningTests(unittest.TestCase):

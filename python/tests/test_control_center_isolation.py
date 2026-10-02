@@ -46,7 +46,14 @@ PYTHON_TRAINING_MODULES = (
     "hardware_profile.py",
 )
 
-GUI_MODULE_NAMES = ("control_center_desktop", "control_center_pages", "control_center_widgets")
+GUI_MODULE_NAMES = (
+    "control_center_desktop",
+    "control_center_layout",
+    "control_center_pages",
+    "control_center_theme",
+    "control_center_ui",
+    "control_center_widgets",
+)
 
 # Leftovers that Windows/OneDrive, Godot and editors drop into a directory
 # whose tracked files are already deleted. None of them carries GDScript or

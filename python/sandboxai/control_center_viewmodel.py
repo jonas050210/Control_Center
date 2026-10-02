@@ -345,7 +345,7 @@ def runs_table_rows(list_runs_result: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Agents (process registry)
+# Agent process registry
 # ---------------------------------------------------------------------------
 
 
@@ -505,7 +505,7 @@ def benchmark_history_rows(history: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
-# Agents (lifecycle registry)
+# Agent lifecycle registry
 # ---------------------------------------------------------------------------
 
 #: Operator-facing lifecycle states and how they are coloured. Derived
@@ -1057,9 +1057,7 @@ def benchmark_live_telemetry_view(
     the current leading configuration, streaming table rows and throughput
     chart coordinates without inventing a single number.
     """
-    workflow = benchmark_workflow_view(
-        running=running, event=event, report=report, applied=applied
-    )
+    workflow = benchmark_workflow_view(running=running, event=event, report=report, applied=applied)
     live_rows = (event or {}).get("completed_rows") if running else None
     rows = benchmark_pipeline_rows(report, live_rows=live_rows)
     best_row = _extract_best_row(rows)
@@ -1100,8 +1098,12 @@ def benchmark_live_telemetry_view(
     elif report and report.get("recommendation"):
         rec = report.get("recommendation") or {}
         rec_view = benchmark_recommendation_view(rec)
-        speedup_val = _finite_number(rec.get("speedup_vs_baseline") or (best_row or {}).get("speedup"))
-        speedup_suffix = f" ({format_number(speedup_val, 2)}x speedup vs baseline)" if speedup_val else ""
+        speedup_val = _finite_number(
+            rec.get("speedup_vs_baseline") or (best_row or {}).get("speedup")
+        )
+        speedup_suffix = (
+            f" ({format_number(speedup_val, 2)}x speedup vs baseline)" if speedup_val else ""
+        )
         leader_summary = f"{rec_view['summary']}{speedup_suffix}"
         leader_text = f"WINNER SELECTED: {leader_summary}"
     else:
@@ -1209,7 +1211,7 @@ class TrainingFieldSpec:
 
 
 TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
-    # --- Basic: the five core controls shown in the Agents launch deck. ---
+    # --- Basic: the five core controls shown in the Training launch deck. ---
     TrainingFieldSpec(
         "environment_count",
         "Environments",
@@ -1248,6 +1250,16 @@ TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
         help="Automatic progression vs. fixed stage.",
     ),
     # --- Internal / programmatic defaults (not shown in the GUI deck). ----
+    TrainingFieldSpec(
+        "max_train_minutes",
+        "Max train minutes",
+        "float",
+        "advanced",
+        help=(
+            "Trainer-enforced wall-clock budget; the Budget row owns this value. "
+            "0 = run to the step count only."
+        ),
+    ),
     TrainingFieldSpec(
         "run_id", "Run ID", "str", "advanced", help="Blank = timestamped automatically."
     ),
@@ -1421,7 +1433,7 @@ def training_field_groups() -> dict[str, list[TrainingFieldSpec]]:
 
 
 def launch_field_specs() -> list[TrainingFieldSpec]:
-    """The streamlined fields exposed on the Agents launch deck."""
+    """The streamlined fields exposed on the Training launch deck."""
     return training_field_groups()["basic"]
 
 
@@ -1468,9 +1480,7 @@ def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
     )
     if live.get("window_found"):
         focus_str = "focused" if live.get("window_focused") else "background"
-        window_text = (
-            f"{live.get('window_width')}x{live.get('window_height')} ({focus_str})"
-        )
+        window_text = f"{live.get('window_width')}x{live.get('window_height')} ({focus_str})"
     elif running:
         window_text = "process active (headless / minimized)"
     else:
@@ -1707,7 +1717,9 @@ def tactical_combat_profile_view(detail: dict[str, Any] | None) -> dict[str, Any
         summary = "High damage-trade efficiency with strong cover discipline and low HP loss."
     elif survival_pct >= 75.0 and win_rate < 0.65:
         archetype = "EVASIVE ANCHOR"
-        summary = "Prioritizes survival and positioning; increase offensive reward weight for faster TTK."
+        summary = (
+            "Prioritizes survival and positioning; increase offensive reward weight for faster TTK."
+        )
     elif win_rate >= 0.45:
         archetype = "BALANCED COMBATANT"
         summary = "Solid mid-tier duelist trading evenly; continue curriculum training."
@@ -1726,4 +1738,319 @@ def tactical_combat_profile_view(detail: dict[str, Any] | None) -> dict[str, Any
     }
 
 
+# ---------------------------------------------------------------------------
+# Training budget (Steps vs. Time) and benchmark mode planning
+# ---------------------------------------------------------------------------
 
+#: Budget selectors the Training page renders as a segmented control.
+BUDGET_MODES: tuple[tuple[str, str], ...] = (("steps", "Steps"), ("time", "Time"))
+
+#: Benchmark modes: the automatic host-scaled sweep, its deliberately
+#: oversubscribing "push" variant, and the fully manual candidate lists.
+BENCHMARK_MODES: tuple[tuple[str, str], ...] = (
+    ("auto", "Auto"),
+    ("push", "Push"),
+    ("custom", "Custom"),
+)
+
+#: Environment ladders. ``auto`` is the host-scaled sweep (capped at 128
+#: environments, which is where the sharded bridge stops scaling on a
+#: 16-32 thread desktop), ``push`` continues to 256 to find the plateau.
+#: Push mode keeps climbing past the Auto ceiling. The point of Push is to
+#: measure where throughput stops improving, so it is allowed to oversubscribe
+#: the host on purpose.
+PUSH_ENVIRONMENT_LADDER: tuple[int, ...] = (16, 32, 64, 96, 128, 192, 256)
+PUSH_WORKER_LADDER: tuple[int, ...] = (1, 2, 4, 8, 16, 24, 32, 48)
+
+
+def _physical_cores(cpu_count: int | None) -> int:
+    """Physical-core estimate - the sharding module's, with a GUI default.
+
+    The Control Center passes ``os.cpu_count()``; a bare ``None`` only
+    happens in tests and previews, where eight logical cores is the least
+    surprising machine to plan for.
+    """
+    from .sharded_env import physical_core_estimate
+
+    return physical_core_estimate(cpu_count if cpu_count else 8)
+
+
+def budget_view(
+    mode: str,
+    *,
+    steps_raw: str,
+    minutes_raw: str,
+    steps_per_second: float | None = None,
+    checkpoint_frequency: int | None = None,
+) -> dict[str, Any]:
+    """Validate and describe the *Steps* or *Time* training budget.
+
+    The Time budget is honest about what it is: the window asks the trainer
+    to stop at its next safe boundary, which is up to one checkpoint
+    interval later, and the trainer then saves its final checkpoint. Nothing
+    here predicts a step count it did not measure; the estimate is only
+    shown when a measured ``steps_per_second`` exists.
+    """
+    chosen = "time" if str(mode) == "time" else "steps"
+    view: dict[str, Any] = {
+        "mode": chosen,
+        "steps": None,
+        "minutes": None,
+        "errors": [],
+        "warnings": [],
+        "estimate": None,
+        "budget_line": "",
+    }
+    if chosen == "steps":
+        try:
+            steps = int(str(steps_raw).strip())
+        except (TypeError, ValueError):
+            view["errors"].append("Total timesteps must be a whole number")
+            return view
+        if steps <= 0:
+            view["errors"].append("Total timesteps must be positive")
+            return view
+        view["steps"] = steps
+        view["budget_line"] = f"{format_number(steps)} steps"
+        if steps_per_second and steps_per_second > 0:
+            eta = estimate_training_duration(steps, steps_per_second)
+            if eta:
+                view["estimate"] = eta
+        return view
+
+    try:
+        minutes = float(str(minutes_raw).strip())
+    except (TypeError, ValueError):
+        view["errors"].append("Time budget must be a number of minutes")
+        return view
+    if minutes <= 0:
+        view["errors"].append("Time budget must be positive")
+        return view
+    if minutes > 24 * 60:
+        view["errors"].append("Time budget above 1440 minutes (24 h) is refused")
+        return view
+    view["minutes"] = minutes
+    view["budget_line"] = (
+        f"{format_number(minutes, 1)} min (cooperative stop, final checkpoint saved)"
+    )
+    if steps_per_second and steps_per_second > 0:
+        view["estimate"] = (
+            f"~{format_number(minutes * 60 * steps_per_second)} steps at the measured rate"
+        )
+    if (
+        checkpoint_frequency
+        and checkpoint_frequency > 0
+        and steps_per_second
+        and steps_per_second > 0
+    ):
+        interval_minutes = (checkpoint_frequency / steps_per_second) / 60.0
+        if interval_minutes > minutes / 4:
+            view["warnings"].append(
+                "Checkpoint interval is about "
+                f"{format_number(interval_minutes, 1)} min — the stop can land up to that "
+                "much after the budget"
+            )
+    return view
+
+
+def parse_int_list(text: str) -> list[int]:
+    """Parse ``"16, 32,64"`` into a de-duplicated, ascending candidate list."""
+    values: list[int] = []
+    for chunk in str(text).replace(";", ",").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            value = int(chunk)
+        except ValueError as exc:
+            raise ValueError(f"'{chunk}' is not a whole number") from exc
+        if value < 1:
+            raise ValueError(f"'{chunk}' must be at least 1")
+        values.append(value)
+    return sorted(set(values))
+
+
+def _positive_number(
+    raw: str, errors: list[str], label: str, *, allow_float: bool = False
+) -> float | None:
+    """Parse a positive number for a form field, appending one clear error."""
+    text = str(raw).strip()
+    if not text:
+        errors.append(f"{label} must be given")
+        return None
+    try:
+        value = float(text) if allow_float else int(text)
+    except ValueError:
+        errors.append(f"{label} must be a {'number' if allow_float else 'whole number'}")
+        return None
+    if value <= 0:
+        errors.append(f"{label} must be positive")
+        return None
+    return float(value) if allow_float else int(value)
+
+
+def _custom_benchmark_plan(
+    view: dict[str, Any],
+    *,
+    environment_text: str,
+    worker_text: str,
+    steps_raw: str,
+    minutes_raw: str,
+) -> dict[str, Any]:
+    """Validate the manual candidate lists and budget for Custom mode."""
+    try:
+        environments = parse_int_list(environment_text)
+    except ValueError as exc:
+        view["errors"].append(f"Environments: {exc}")
+        environments = []
+    try:
+        workers = parse_int_list(worker_text)
+    except ValueError as exc:
+        view["errors"].append(f"Workers: {exc}")
+        workers = []
+    if not environments:
+        view["errors"].append("Environments: give at least one value (e.g. 16,32,64)")
+    if not workers:
+        view["errors"].append("Workers: give at least one value (e.g. 4,8)")
+    if any(environment > 512 for environment in environments):
+        view["errors"].append("Environments above 512 are refused")
+    if any(worker > 128 for worker in workers):
+        view["errors"].append("Workers above 128 are refused")
+    steps_text = str(steps_raw).strip()
+    minutes_text = str(minutes_raw).strip()
+    if steps_text:
+        view["budget_mode"] = "steps"
+        steps = _positive_number(steps_text, view["errors"], "Steps per configuration")
+        view["steps"] = steps
+    else:
+        view["budget_mode"] = "time"
+        view["minutes"] = _positive_number(
+            minutes_text, view["errors"], "Minutes", allow_float=True
+        )
+    view["environments"] = environments
+    view["workers"] = workers
+    configurations = sum(
+        1 for environment in environments for worker in workers if worker <= environment
+    )
+    view["expected_configurations"] = configurations
+    wanted = len(environments) * len(workers)
+    if 0 < configurations < wanted:
+        view["warnings"].append(
+            f"{wanted - configurations} of {wanted} requested configurations are skipped: "
+            "a worker count above the environment count cannot run"
+        )
+    if configurations == 0 and not view["errors"]:
+        view["errors"].append(
+            "No valid pair: a worker count above the environment count is skipped"
+        )
+    view["summary"] = (
+        f"custom sweep: {len(environments)} environment(s) x {len(workers)} worker count(s)"
+        f" -> {configurations} configuration(s)"
+    )
+    return view
+
+
+def _automatic_benchmark_plan(
+    view: dict[str, Any],
+    *,
+    mode: str,
+    physical: int,
+    logical: int,
+    minutes_raw: str,
+    measured_steps_per_second: float | None,
+) -> dict[str, Any]:
+    """Host-scaled candidate ladders for the Auto and Push modes.
+
+    Auto uses the pipeline's own ladder (:mod:`sandboxai.benchmark_pipeline`),
+    so the plan shown in the window and the sweep the pipeline runs are the
+    same numbers - two hand-maintained ladders drifted apart before, which is
+    how a run could stop at four workers while the window advertised more.
+    """
+    from .benchmark_pipeline import default_environment_counts, default_worker_counts
+
+    if mode == "push":
+        ceiling = max(32, min(256, physical * 16))
+        environments = [value for value in PUSH_ENVIRONMENT_LADDER if value <= ceiling]
+        worker_ceiling = min(48, max(4, physical * 2))
+        workers = [value for value in PUSH_WORKER_LADDER if value <= worker_ceiling]
+        if workers[-1:] != [worker_ceiling]:
+            workers.append(worker_ceiling)
+        view["warnings"].append(
+            "Push mode deliberately oversubscribes: it keeps measuring past the knee of the "
+            "scaling curve to find where throughput stops improving"
+        )
+    else:
+        environments = list(default_environment_counts(logical))
+        widest = max(environments)
+        workers = list(default_worker_counts(widest, logical))
+        view["environments_note"] = (
+            "Auto probes past the conservative --env-workers auto recommendation, so a wide "
+            "environment count cannot look slow only because it was starved of workers"
+        )
+    view["environments"] = environments
+    view["workers"] = workers
+    view["budget_mode"] = "time"
+    try:
+        view["minutes"] = float(str(minutes_raw).strip()) if str(minutes_raw).strip() else 15.0
+    except ValueError:
+        view["minutes"] = 15.0
+    view["expected_configurations"] = sum(
+        1 for environment in environments for worker in workers if worker <= environment
+    )
+    view["summary"] = (
+        f"{mode} sweep scaled to {logical} logical / {physical} physical cores: "
+        f"up to {max(environments)} environments, up to {max(workers)} workers"
+    )
+    if measured_steps_per_second:
+        view["summary"] += f" (last measured {format_number(measured_steps_per_second, 1)} steps/s)"
+    return view
+
+
+def benchmark_mode_view(
+    mode: str,
+    *,
+    environment_text: str = "",
+    worker_text: str = "",
+    steps_raw: str = "",
+    minutes_raw: str = "",
+    cpu_count: int | None = None,
+    measured_steps_per_second: float | None = None,
+) -> dict[str, Any]:
+    """Plan a benchmark run for the Auto, Push or Custom selector.
+
+    This is a *plan*: which environment/worker topologies will be measured
+    and with which budget. Every number the pipeline later reports comes
+    from the real bridge benchmark; the plan only decides what to try, which
+    is why it is safe to scale it from the host's core count.
+    """
+    chosen = str(mode) if str(mode) in {key for key, _ in BENCHMARK_MODES} else "auto"
+    physical = _physical_cores(cpu_count)
+    logical = int(cpu_count) if cpu_count else 8
+    view: dict[str, Any] = {
+        "mode": chosen,
+        "errors": [],
+        "warnings": [],
+        "environments": [],
+        "workers": [],
+        "budget_mode": "time",
+        "minutes": None,
+        "steps": None,
+        "summary": "",
+        "expected_configurations": 0,
+    }
+    if chosen == "custom":
+        return _custom_benchmark_plan(
+            view,
+            environment_text=environment_text,
+            worker_text=worker_text,
+            steps_raw=steps_raw,
+            minutes_raw=minutes_raw,
+        )
+    return _automatic_benchmark_plan(
+        view,
+        mode=chosen,
+        physical=physical,
+        logical=logical,
+        minutes_raw=minutes_raw,
+        measured_steps_per_second=measured_steps_per_second,
+    )

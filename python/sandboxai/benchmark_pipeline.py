@@ -70,7 +70,10 @@ from pathlib import Path
 from typing import Any
 
 from .benchmark import benchmark_simulation
-from .sharded_env import recommended_worker_count, worker_compatibility
+from .sharded_env import (
+    physical_core_estimate,
+    worker_compatibility,
+)
 
 PIPELINE_FORMAT = "sandboxai.benchmark_pipeline/v1"
 RECOMMENDATION_FORMAT = "sandboxai.recommended_config/v1"
@@ -212,31 +215,55 @@ def available_runtime(
 
 
 def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
-    """Environment ladder scaled to the host (capped at four times the cores).
+    """Environment ladder scaled to the host (64 to 128 environments).
 
-    Not a recommendation — it is the sweep the pipeline will *measure*.
-    The cap keeps a small machine from burning its budget on environment
-    counts it cannot feed, while a big machine still probes up to 64.
+    Not a recommendation — it is the sweep the pipeline will *measure*, and
+    the screening budget thins it (``fit_candidates_to_budget``), so the
+    upper rungs cost nothing on a host that cannot feed them. The ceiling
+    used to be 64, which is exactly why a run could stop at 64 environments
+    with several workers and leave most of a big machine idle: the plan
+    never tried the wider topologies.
     """
-    logical = int(cpu_count if cpu_count is not None else (os.cpu_count() or 1))
-    cap = max(8, min(64, logical * 4))
-    ladder = (1, 2, 4, 8, 16, 24, 32, 48, 64)
+    physical = physical_core_estimate(cpu_count)
+    # Floor of 64: environments are sharded across workers, so a wide
+    # environment count is cheap - the workers are what consume cores. A
+    # modest host therefore still gets to *measure* the wide topologies
+    # instead of never trying them, and the screening budget decides how
+    # many of these rungs actually get run.
+    cap = max(64, min(128, physical * 8))
+    ladder = (1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128)
     counts = [value for value in ladder if value <= cap]
     if cap not in counts:
         counts.append(cap)
     return tuple(sorted(counts))
 
 
+#: Widest worker count the default sweep will probe. Above this the
+#: improvement per extra Godot process is noise for a desktop host, and the
+#: grid only gets more expensive to screen.
+MAX_DEFAULT_WORKERS = 32
+
+
 def default_worker_counts(environment_count: int, cpu_count: int | None = None) -> tuple[int, ...]:
-    """Worker ladder for one environment count: 1 plus powers of two up to
-    the sharding module's own recommendation for this host."""
-    max_workers = recommended_worker_count(environment_count, cpu_count)
+    """Worker ladder for one environment count: 1, powers of two, and the host's own step.
+
+    The ladder deliberately reaches past the conservative ``auto`` worker
+    count (``recommended_worker_count``, which reserves cores for the
+    trainer): a sweep that never probes above the recommendation cannot
+    discover that a wide environment count was starved by too few workers -
+    which is exactly the reading a 64-environment / 4-worker run gave. The
+    rungs are bounded by the environment count (more workers than
+    environments would be collapsed anyway) and by
+    :data:`MAX_DEFAULT_WORKERS`.
+    """
+    ceiling = min(MAX_DEFAULT_WORKERS, max(2, physical_core_estimate(cpu_count) * 2))
+    ceiling = min(ceiling, int(environment_count))
     counts = {1}
     for power in (2, 4, 8, 16, 32):
-        if power <= max_workers:
+        if power <= ceiling:
             counts.add(power)
-    if max_workers > 1 and len(counts) == 1:
-        counts.add(max_workers)
+    if ceiling > 1:
+        counts.add(ceiling)
     return tuple(sorted(counts))
 
 
@@ -685,9 +712,7 @@ def recommend(
     baseline_sps = _baseline_steps_per_second(screen_rows)
     chosen_bridge_sps = float(chosen_row["steps_per_second"])
     speedup = (
-        round(chosen_bridge_sps / baseline_sps, 2)
-        if baseline_sps and baseline_sps > 0.0
-        else None
+        round(chosen_bridge_sps / baseline_sps, 2) if baseline_sps and baseline_sps > 0.0 else None
     )
     warnings = _recommendation_warnings(
         screen_rows, _row_key(chosen_row), jitter_threshold=jitter_threshold

@@ -27,7 +27,7 @@ the two must not contradict each other.
 | **No Godot binary**, and the release download is network-blocked | You cannot run the GDScript suite. Use `gdlint`, `gdformat --check` and `sandboxai.gdscript_analysis.analyze('.')`. The `godot-tests.yml` CI job is the real check. |
 | System Python is **PEP 668 managed** | `pip install -e .` fails. Create a venv: `python3 -m venv /tmp/venv`. |
 | `download.pytorch.org` is **SSL-blocked** locally | Install torch from PyPI locally. CI uses the CPU index, where it works. |
-| `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally (one of 9 skips). CI job `desktop-ui-tests` covers it. |
+| `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally (one of 9 skips). CI job `desktop-ui-tests` covers it. Use `python3 tools/desktop_tests.py`: it runs the real suite when Tk and a display (or `xvfb-run`) exist and otherwise falls back to the static contracts plus `tools/control_center_smoke.py`, printing the exact package to install. `--strict` fails instead of falling back - that is what CI runs. |
 
 Setup that works:
 
@@ -43,12 +43,33 @@ PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
 
 ```bash
 ruff check .                 # All checks passed!
-ruff format --check .        # 126 files already formatted
-mypy                         # Success: no issues found in 48 source files
+ruff format --check .        # 136 files already formatted
+mypy                         # Success: no issues found in 54 source files
 gdlint scripts tests         # Success: no problems found
 gdformat --check scripts tests
-PYTHONPATH=python python -m pytest -q   # 945 passed, 18 skipped, 711 subtests
+PYTHONPATH=python python -m pytest -q
+python3 tools/control_center_smoke.py   # all smoke steps passed
+python3 tools/desktop_tests.py          # real-Tk suite, or the fallback + how to enable it
 ```
+
+The last line is the headless GUI run: it builds every page, cycles every
+theme/density/motion/layout, drives the layout studio and the presets and
+drains the background callbacks. It needs no display and no Tk, so it runs
+anywhere the pytest suite can. CI runs it in the `desktop-ui-tests` job
+next to the real-Tk pytest file; locally it is the only way to execute the
+GUI at all when `python3-tk` is unavailable (see the Tk row above). It
+checks wiring, not pixels - a pass is not GUI coverage.
+
+The counts in those comments are the shape of a green run, not a target:
+the suite grows with every change (`pytest` prints its own totals, and
+the environment decides how many optional-extra tests skip). Run the
+commands and read their output; do not edit a number to match.
+
+Those counts were last taken with the training extras installed. This
+checkout shows `960 passed, 139 skipped, 849 subtests` without
+torch/SB3/gymnasium and without Tkinter (the extra skips are those
+optional extras plus `test_control_center_desktop.py`), so a green run
+here looks different from a green run in CI and both are correct.
 
 `mypy` takes **no arguments** — its configuration lives in
 `pyproject.toml`. It is deliberately **not** `--strict`: the torch/SB3
@@ -64,7 +85,7 @@ reverted; do not re-enable it.
 
 ## 4. Repository shape
 
-- `python/sandboxai/` — 47 documented modules, **flat on purpose**. See
+- `python/sandboxai/` — 52 documented modules, **flat on purpose**. See
   `docs/PYTHON_MODULE_MAP.md`; it is generated from the module docstrings
   and enforced by a test. Do not reorganise into subpackages: every
   import path is public API and appears in docs, user scripts and saved
