@@ -30,13 +30,27 @@ the two must not contradict each other.
 | `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally. CI job `desktop-ui-tests` covers it. Use `python3 tools/desktop_tests.py`: it runs the real suite when Tk and a display (or `xvfb-run`) exist and otherwise falls back to the static contracts plus `tools/control_center_smoke.py`, printing the exact package to install. `--strict` fails instead of falling back - that is what CI runs. |
 
 Setup that works (the extras are `pip install -e ".[training,test,dev]"` from
-`pyproject.toml`, spelled out because `pip install -e .` fails here):
+`pyproject.toml`, spelled out because `pip install -e .` fails here).
+**`numpy` is not an extra**: it is the one entry in the package's core
+`dependencies`, two test modules import it at module level, and without it
+pytest dies during collection (`1 error in 0.9s: No module named 'numpy'`) -
+it only *looks* optional because torch happens to pull it in:
 
 ```bash
 python3 -m venv /tmp/venv
 /tmp/venv/bin/pip install torch gymnasium stable-baselines3 tensorboard \
-    psutil coverage ruff mypy gdtoolkit pyyaml pytest pytest-timeout
+    numpy psutil coverage ruff mypy gdtoolkit pyyaml pytest pytest-timeout
 cd /home/user/SandboxAI
+PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
+```
+
+The same environment without the training extras (this is the one behind the
+"1030 passed, 147 skipped" figure below - keep `numpy`, drop torch and
+friends):
+
+```bash
+python3 -m venv /tmp/venv
+/tmp/venv/bin/pip install numpy psutil ruff mypy gdtoolkit pyyaml pytest pytest-timeout
 PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
 ```
 
@@ -52,7 +66,7 @@ reinstall the extras before you trust the count):
 ```bash
 python3 -m venv /tmp/venv-full
 /tmp/venv-full/bin/pip install torch gymnasium stable-baselines3 tensorboard \
-    psutil ruff mypy gdtoolkit pyyaml pytest pytest-timeout
+    numpy psutil ruff mypy gdtoolkit pyyaml pytest pytest-timeout
 PYTHONPATH=python /tmp/venv-full/bin/python -m pytest -q
 ```
 
