@@ -316,6 +316,15 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- **A destroyed widget can no longer freeze every animation.** The shared
+  16 ms `MotionController` called each tween frame unguarded, so when a
+  density change rebuilt a page mid-animation its next frame painted a
+  destroyed widget, Tk raised `TclError` inside the ticker, and the ticker
+  stopped scheduling itself - every remaining animation in the window went
+  quiet. Failing frames and loop callbacks are now dropped individually;
+  the smoke harness schedules a raising tween next to a healthy one and
+  fails if the healthy one stops running (verified by letting the error
+  escape again: it fires).
 - **Theme listeners of rebuilt pages no longer pile up.** Every widget that
   repaints itself subscribes to the window's `ThemeBus`, and a density
   change destroys and recreates a page's widgets. The subscriptions had no

@@ -386,20 +386,30 @@ class MotionController:
             if tween.started_at is None:
                 tween.started_at = now
             progress = (now - tween.started_at) / max(1, tween.duration_ms)
-            if progress >= 1.0:
+            finished = progress >= 1.0
+            if finished:
                 self._tweens.pop(handle, None)
-                tween.on_frame(1.0)
-                if tween.on_done is not None:
+            try:
+                tween.on_frame(1.0 if finished else progress)
+                if finished and tween.on_done is not None:
                     tween.on_done()
-            else:
-                tween.on_frame(progress)
+            except tk.TclError:
+                # The widget this animation was painting is gone - a page
+                # rebuild destroys its widgets, and a density change can
+                # land mid-animation. Dropping the tween keeps one dead
+                # widget from taking the whole ticker (and with it every
+                # other animation in the window) down with it.
+                self._tweens.pop(handle, None)
         if self._loops:
             started = self._loop_started or now
             elapsed = (now - started) / 1000.0
             wave = ease_in_out((elapsed % 2.0) / 2.0) * 2
             wave = wave if wave <= 1.0 else 2.0 - wave
-            for callback in list(self._loops.values()):
-                callback(wave)
+            for handle, callback in list(self._loops.items()):
+                try:
+                    callback(wave)
+                except tk.TclError:
+                    self._loops.pop(handle, None)
         if self._tweens or self._loops:
             self._schedule()
 

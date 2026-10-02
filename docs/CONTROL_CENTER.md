@@ -98,6 +98,11 @@ at first — the log text and its cursors, the selected rows, the page's
 scroll offset — and restores it on the fresh widgets, so the log does not
 blank out and the reading position survives.
 
+One 16 ms `MotionController` drives every transition, and it isolates each
+callback: a frame that raises `TclError` because its widget was destroyed by
+a rebuild is dropped instead of stopping the ticker. Without that, a density
+change landing mid-animation froze every other animation in the window.
+
 **Scrolling.** Tk delivers the wheel to the widget under the pointer, so a
 page scroll area binds it on the *containing toplevel* - the one tag Tk adds
 to every descendant's bindtags - and scrolls only when the pointer is inside

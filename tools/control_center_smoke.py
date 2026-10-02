@@ -1473,6 +1473,35 @@ def _assert_theme_listeners_do_not_leak(app: object) -> None:
         )
 
 
+def _assert_motion_survives_a_dead_widget(app: object) -> None:
+    """One destroyed widget must not stop every animation in the window.
+
+    A density change rebuilds a page while its animations (a segmented
+    control's indicator, an animated number) may still be mid-flight. Their
+    next frame then paints a destroyed widget and Tk raises ``TclError`` -
+    inside the shared 16 ms ticker, which used to stop scheduling itself,
+    silently freezing every remaining animation.
+    """
+    import tkinter as tk
+
+    frames: list[float] = []
+
+    def exploding(_progress: float) -> None:
+        raise tk.TclError("application has been destroyed")
+
+    app.motion.tween(40, exploding)
+    app.motion.tween(40, frames.append)
+    app.motion._tick()  # must not raise: the ticker isolates each callback
+
+    if not frames:
+        raise AssertionError("a raising tween stopped the healthy one from running")
+    if not app.motion.running and any(
+        tween.on_frame is frames.append for tween in app.motion._tweens.values()
+    ):
+        raise AssertionError("the ticker stopped scheduling while a tween was still live")
+    app.motion.stop_all()
+
+
 def _assert_every_widget_uses_the_app_bus(app: object) -> None:
     """No widget may be left on the module's default palette.
 
@@ -1707,6 +1736,11 @@ def run_smoke() -> int:
         failures,
         "theme listeners are pruned with their widgets",
         lambda: _assert_theme_listeners_do_not_leak(app),
+    )
+    _step(
+        failures,
+        "one dead widget cannot stop the ticker",
+        lambda: _assert_motion_survives_a_dead_widget(app),
     )
     _step(failures, "reusable widgets", lambda: _exercise_widgets(app))
     _step(failures, "page handlers", lambda: _exercise_page_handlers(app))
