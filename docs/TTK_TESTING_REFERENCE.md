@@ -16,9 +16,12 @@ sandboxai ttk-status
 sandboxai ttk-status --json
 ```
 
-The command is deliberately a status report, not a game connection. It does
-not drive Roblox, inspect a client, read memory, or access any non-player
-state.
+The command is deliberately a status report, not a game connection: it
+prints the evidence table and never drives Roblox. The separate helper
+functions the Control Center calls for a manual calibration session are
+documented, and bounded, in "The bounded live-helper surface" below; they
+launch, focus and photograph the client, and never read memory, inject input
+or access non-player state.
 
 ## Evidence sources checked on 2026-10-01
 
@@ -40,11 +43,52 @@ state.
    — confirms the live experience metadata (`TTK Testing [MAP VOTING]`,
    `universeId=10090256806`, `placeId=120189115846709`, 8-player server size),
    the **Gunsmith Update**, and **Transparent Optics** (clearer sight
-   visibility while aiming).
+   visibility while aiming). The same page announces **v0.06** (teams,
+   spectating, modes, launchers, gunplay improvements) as "recently slightly
+   delayed", i.e. **not live**.
+5. Official experience description, re-read on 2026-10-02 through the public
+   game listing — documents **"Press P to go into Helmetcam!"** plus the
+   Transparent Optics setting, PC/mobile/Xbox/PS5 platforms, and the intended
+   direction (co-op PvE squad AI, doorkicker scenarios and missions, team
+   PvP) while the live mode is still free-for-all. This supersedes source 1's
+   control list, which did not mention the Helmetcam.
+6. Public listings and community guides (third-party, read 2026-10-02) —
+   the experience title rotates with the live mode (`TTK Testing [HARDPOINT]`
+   on one day, `[MAP VOTING]` on another), concurrency readings are in the
+   low thousands (about 2,300 concurrent, about 2,600 peak), maps named in
+   player guides include *Institute*, *Research Station* and *Compound*,
+   sprint is a held modifier, and there is no XP/economy yet. These sources
+   are useful for "what players currently see" and are **not** evidence for
+   any numeric value.
+7. Community wiki weapon overview (third-party, read 2026-10-02) — weapon
+   classes (pistols, assault rifles, battle rifles/DMRs, bolt-action snipers,
+   shotguns), the V0.04 gunsmith options (optics/grips/muzzle), the V0.03
+   flash grenade and roadmap launchers. The wiki states there are **no
+   official damage tables** and that balance changes with every patch, which
+   is exactly why `calculate_ttk_metrics` keeps its calibration requirement
+   instead of shipping preset damage numbers.
 
 TTK Testing is updated frequently. An older store snapshot that happened to
 name an input or weapon is not proof for the current build; current official
 sources and player-visible evidence win.
+
+## The bounded live-helper surface
+
+`sandboxai.ttk_testing` is not only a status report; it also carries the few
+helpers the desktop Control Center uses to make a **manual** calibration
+session convenient. They are bounded on purpose, and this section is the
+contract for them:
+
+| Allowed | Never |
+| --- | --- |
+| Detect whether Roblox Player is running (process and window probing with the operating system's own tools) and which place it reports. | Read or write process memory, inject input, send synthetic clicks/keys, or script gameplay. |
+| Read the Roblox client's **own log file** under the user's logs directory to see the live `PlaceId` and session state. | Inspect network traffic, modify game files, hook the client, or use a private/official API that is not player-visible. |
+| Launch the experience through the user's own Roblox shortcut or the public deep link, focus the window, and capture a screenshot of the screen/window. | Automate matches, farming, aiming or any in-game action; the human plays, the tool only opens and photographs. |
+| Write calibration values a human typed after watching that screenshot into `.sandboxai/ttk_calibration.json`. | Promote a calibration value into a Roblox fact: everything numeric stays "calibration required" until it is measured player-visibly. |
+
+Nothing in this surface feeds the training pipeline. The policy's observation
+comes from the local Godot simulator; the helper exists so a human can
+measure the real game and type the result in.
 
 ## Implementation matrix
 
@@ -56,7 +100,7 @@ sources and player-visible evidence win.
 | Verified product direction | PvE, PvP, door kicking | Treat only as high-level direction, not a license to invent missions, maps, door timings, or AI behavior. |
 | Needs calibration | Weapon roster/slots, ammo, reload behavior/timing, recoil/bloom/falloff, damage/TTK, fire modes | Do not claim any value or behavior as TTK Testing until it is visible in a current source or measured manually. |
 | Needs calibration | Walk/sprint/jump/gravity, ADS/crouch/lean movement and collision | Do not reuse generic SandboxAI numbers as Roblox facts. Measure player-visible outcomes first. |
-| Excluded by project decision | Helmet-camera presentation | The project uses normal first-person presentation with its regular GUI. Do not add a Helmetcam mode. |
+| Excluded by project decision (the game has one) | Helmet-camera presentation | The official description documents **P = Helmetcam** in the live game (source 5). The project still does not implement a helmet camera: the calibrated mechanics are movement, weapons and perception, and a camera mode changes presentation, not those mechanics. Do not add a Helmetcam mode. |
 | Excluded | Automatic weapon switch; sidearm-finish/pressure-reload/faster-reload drills | These are not TTK Testing mechanics for this project and must not be reintroduced under another name. |
 
 ## Cleanup already applied

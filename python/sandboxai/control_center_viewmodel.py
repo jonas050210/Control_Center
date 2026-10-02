@@ -2054,3 +2054,627 @@ def benchmark_mode_view(
         minutes_raw=minutes_raw,
         measured_steps_per_second=measured_steps_per_second,
     )
+
+
+# ---------------------------------------------------------------------------
+# The Stats page: what the policy actually receives
+# ---------------------------------------------------------------------------
+
+#: Contact slots the observation vector tracks individually.
+_CONTACT_SLOTS: tuple[tuple[str, str], ...] = (
+    ("primary", "Contacts 1 (closest)"),
+    ("secondary", "Contacts 2"),
+    ("tertiary", "Contacts 3"),
+)
+
+
+def _field_section(name: str) -> str:
+    """Which block of the vector a field belongs to, for the grouped table.
+
+    Derived from the field name (never from a second hand-kept list), so a
+    field added to ``contract.OBSERVATION_SPEC`` lands in the right block
+    automatically.
+    """
+    if name.startswith("agent_"):
+        return "Agent"
+    if name.startswith("primary_enemy_") or name.startswith("enemy_"):
+        return "Contact 1 (closest)"
+    if name.startswith("secondary_enemy_"):
+        return "Contact 2"
+    if name.startswith("tertiary_enemy_"):
+        return "Contact 3"
+    if name.startswith("overflow_"):
+        return "Contacts beyond slot 3"
+    if name.startswith("target_"):
+        return "Target selection"
+    if (
+        name.startswith(("last_sound_", "second_sound_", "sound_"))
+        or name.startswith("audible_")
+        or name.startswith("distinct_sound_")
+    ):
+        return "Hearing"
+    if name.startswith(("remembered_", "explored_")) or name in {
+        "current_area_known",
+        "time_since_area_visited_norm",
+        "contact_uncertainty_norm",
+    }:
+        return "Memory and exploration"
+    if name.startswith(("nearest_obstacle", "visible_enemy_count", "corpse_count")):
+        return "World and objects"
+    return "Environment"
+
+
+def _format_observation_value(values: Any) -> str:
+    """One observation field's value(s) as the operator reads them."""
+    if values is None:
+        return "n/a"
+    if isinstance(values, (list, tuple)):
+        parts = [format_number(_finite_number(item), 3) for item in values]
+        return ", ".join("n/a" if part is None else part for part in parts)
+    number = _finite_number(values)
+    return "n/a" if number is None else format_number(number, 3)
+
+
+def observation_field_rows(observation: Any = None) -> list[dict[str, Any]]:
+    """Every field of the observation contract, with this tick's value.
+
+    This is the literal answer to "what does the trained policy see": the
+    rows come from ``contract.OBSERVATION_SPEC`` (the same table the bridge
+    and the tests are checked against), and only the value column depends on
+    a recorded observation. Without one the table is still complete - it is
+    the contract, not a recording.
+    """
+    from .contract import OBSERVATION_SPEC, observation_slice
+
+    values: list[float] = []
+    if observation is not None:
+        values = [float(value) for value in observation]
+    rows: list[dict[str, Any]] = []
+    for field in OBSERVATION_SPEC:
+        index = (
+            str(field.index)
+            if field.width == 1
+            else f"{field.index}\u2013{field.index + field.width - 1}"
+        )
+        raw: Any = None
+        if values and len(values) >= field.index + field.width:
+            raw = observation_slice(values, field.name) if field.width > 1 else values[field.index]
+        rows.append(
+            {
+                "index": index,
+                "field": field.name,
+                "section": _field_section(field.name),
+                "meaning": field.description,
+                "normalization": field.normalization,
+                "value": _format_observation_value(raw),
+            }
+        )
+    return rows
+
+
+def observation_section_rows(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Group field rows by their section, in contract order."""
+    grouped: list[tuple[str, list[dict[str, Any]]]] = []
+    for row in rows:
+        section = str(row.get("section") or "Other")
+        if grouped and grouped[-1][0] == section:
+            grouped[-1][1].append(row)
+        else:
+            grouped.append((section, [row]))
+    return grouped
+
+
+def _obs_scalar(observation: Any, name: str) -> float | None:
+    """One scalar observation field by name, or ``None``."""
+    if observation is None:
+        return None
+    from .contract import OBSERVATION_INDEX
+
+    position = OBSERVATION_INDEX.get(name)
+    if position is None:
+        return None
+    index, width = position
+    values = list(observation)
+    if width != 1 or len(values) <= index:
+        return None
+    return _finite_number(values[index])
+
+
+def _obs_vector(observation: Any, name: str) -> list[float]:
+    """One vector observation field by name, or an empty list."""
+    if observation is None:
+        return []
+    from .contract import OBSERVATION_INDEX
+
+    position = OBSERVATION_INDEX.get(name)
+    if position is None:
+        return []
+    index, width = position
+    values = list(observation)
+    if len(values) < index + width:
+        return []
+    return [float(value) for value in values[index : index + width]]
+
+
+def _triple(values: list[float]) -> str:
+    """A relative-position triple or a metre distance, as text."""
+    if not values:
+        return "n/a"
+    return "(" + ", ".join(format_number(value, 3) for value in values) + ")"
+
+
+def contact_rows(observation: Any) -> list[dict[str, Any]]:
+    """The three individually tracked contacts, decoded from the vector.
+
+    The policy never receives a world-space enemy position: every slot holds
+    a *relative* position, a distance, a bearing and the perception flags
+    (visible / in FOV / line of sight / information age / confidence /
+    source). That is exactly what this table shows, so an operator can see
+    when the policy is aiming at a memory instead of a sighting.
+    """
+    rows: list[dict[str, Any]] = []
+    for slot, label in _CONTACT_SLOTS:
+        prefix = f"{slot}_enemy_"
+        # Only slots 2 and 3 carry an explicit alive flag; the primary slot's
+        # "is anyone alive" answer is the alive-enemy count, exactly as the
+        # contract documents the dead-enemy fallback.
+        alive_name = "alive_enemy_count_norm" if slot == "primary" else f"{slot}_enemy_alive"
+        alive = _obs_scalar(observation, alive_name) if observation is not None else None
+        health = _obs_scalar(observation, f"{prefix}health_norm")
+        distance = _obs_scalar(observation, f"{prefix}distance_norm")
+        bearing = _obs_scalar(observation, f"{prefix}bearing_norm")
+        elevation = _obs_scalar(observation, f"{prefix}elevation_norm")
+        position = _obs_vector(observation, f"{prefix}relative_position_norm")
+        visible = _obs_scalar(observation, f"{prefix}visible")
+        in_fov = _obs_scalar(observation, "primary_enemy_in_fov") if slot == "primary" else None
+        los = _obs_scalar(observation, "primary_enemy_los_clear") if slot == "primary" else None
+        age = _obs_scalar(observation, f"{prefix}info_age_norm")
+        confidence = (
+            _obs_scalar(observation, "primary_enemy_confidence") if slot == "primary" else None
+        )
+        from_vision = (
+            _obs_scalar(observation, "primary_enemy_source_visual") if slot == "primary" else None
+        )
+        from_sound = (
+            _obs_scalar(observation, "primary_enemy_source_sound") if slot == "primary" else None
+        )
+        if alive is None and not position and distance is None:
+            state = "not tracked"
+        elif alive is not None and alive < 0.5:
+            state = "dead / absent"
+        elif visible is not None and visible < 0.5:
+            state = "remembered (no sighting)"
+        else:
+            state = "visible"
+        source = "n/a"
+        if from_vision is not None or from_sound is not None:
+            source = (
+                "vision"
+                if (from_vision or 0.0) >= 0.5
+                else ("sound" if (from_sound or 0.0) >= 0.5 else "none")
+            )
+        rows.append(
+            {
+                "slot": label,
+                "state": state,
+                "relative_position": _triple(position),
+                "distance": _format_fraction(distance),
+                "bearing": _format_fraction(bearing),
+                "elevation": _format_fraction(elevation),
+                "health": _format_fraction(health),
+                "visible": _format_flag(visible),
+                "in_fov": _format_flag(in_fov),
+                "los": _format_flag(los),
+                "info_age": _format_fraction(age),
+                "confidence": _format_fraction(confidence),
+                "source": source,
+            }
+        )
+    return rows
+
+
+def _format_fraction(value: float | None, decimals: int = 3) -> str:
+    """A normalised value as text (``n/a`` when absent, never 0 by default)."""
+    return "n/a" if value is None else format_number(value, decimals)
+
+
+def _format_flag(value: float | None) -> str:
+    """A 0/1 observation flag as yes/no/unknown."""
+    if value is None:
+        return "n/a"
+    return "yes" if value >= 0.5 else "no"
+
+
+def _count_text(count_norm: float | None, normalizer: int | None = None) -> str:
+    """A normalized count field as a human count ("2", "8+" or "n/a").
+
+    The vector stores ``count / N`` clamped to 1.0, so the last bucket means
+    "N or more" and must not be displayed as an exact number. ``None`` stays
+    ``n/a`` instead of becoming a zero that looks measured.
+    """
+    from .contract import OBSERVATION_COUNT_NORMALIZER
+
+    if count_norm is None:
+        return "n/a"
+    limit = int(normalizer or OBSERVATION_COUNT_NORMALIZER)
+    count = int(round(max(0.0, min(1.0, float(count_norm))) * limit))
+    return f"{limit}+" if count >= limit else str(count)
+
+
+def _object_kind_label(kind_norm: float | None) -> str:
+    """The object kind behind ``object_k_kind_norm``, in operator language.
+
+    The contract stores the ordinal divided by ``len(OBJECT_KIND_NAMES) - 1``
+    (never the raw enum), so the label is recovered by rounding back. An
+    unknown value reads "unknown kind" instead of being silently snapped to
+    the nearest entry.
+    """
+    from .contract import OBJECT_KIND_NAMES
+
+    if kind_norm is None:
+        return "unknown kind"
+    ordinal = round(kind_norm * (len(OBJECT_KIND_NAMES) - 1))
+    if not 0 <= ordinal < len(OBJECT_KIND_NAMES):
+        return "unknown kind"
+    return OBJECT_KIND_NAMES[ordinal].replace("_", " ")
+
+
+def _object_slot_row(observation: Any, rank: int) -> dict[str, Any]:
+    """One contract-v4 object slot: a live sighting, or honestly empty."""
+    prefix = f"object_{rank}"
+    visible = _obs_scalar(observation, f"{prefix}_visible")
+    if observation is None:
+        return {
+            "field": f"visible object {rank}",
+            "distance": "n/a",
+            "bearing": "n/a",
+            "note": "nearest visible object (contract v4); no recording loaded",
+        }
+    if visible is None or visible < 0.5:
+        return {
+            "field": f"visible object {rank}",
+            "distance": "n/a",
+            "bearing": "n/a",
+            "note": "no object in this slot: nothing visible there this tick",
+        }
+    kind = _object_kind_label(_obs_scalar(observation, f"{prefix}_kind_norm"))
+    return {
+        "field": f"visible object {rank}",
+        "distance": _format_fraction(_obs_scalar(observation, f"{prefix}_distance_norm")),
+        "bearing": _format_fraction(_obs_scalar(observation, f"{prefix}_bearing_norm")),
+        "note": f"{kind} - in the FOV cone and not occluded",
+    }
+
+
+def world_rows(observation: Any) -> list[dict[str, Any]]:
+    """World, object and memory fields in operator language.
+
+    "Objects" are the cover boxes, walls and corpses the simulation actually
+    has. Each row says whether that knowledge is a live sighting or a memory,
+    because that distinction is what the policy is trained on. Without a
+    recording the rows keep their shape and read ``n/a`` - the set of fields
+    is part of the contract, the values are not.
+    """
+    return [
+        {
+            "field": "nearest object (cover / wall)",
+            "distance": _format_fraction(
+                _obs_scalar(observation, "nearest_obstacle_distance_norm")
+            ),
+            "bearing": _format_fraction(_obs_scalar(observation, "nearest_obstacle_bearing_norm")),
+            "note": "live geometry in front of the agent",
+        },
+        {
+            "field": "forward clearance",
+            "distance": _format_fraction(_obs_scalar(observation, "agent_forward_clearance_norm")),
+            "bearing": "n/a",
+            "note": "first sight-blocking surface straight ahead",
+        },
+        {
+            "field": "corpses in the arena",
+            "distance": _format_fraction(_obs_scalar(observation, "corpse_count_norm")),
+            "bearing": "n/a",
+            "note": "count of dead bodies (environmental information)",
+        },
+        {
+            "field": "remembered cover",
+            "distance": _format_fraction(
+                _obs_scalar(observation, "remembered_cover_distance_norm")
+            ),
+            "bearing": _format_fraction(_obs_scalar(observation, "remembered_cover_bearing_norm")),
+            "note": "from the agent's own map memory, not a live sighting",
+        },
+        {
+            "field": "remembered danger",
+            "distance": _format_fraction(
+                _obs_scalar(observation, "remembered_danger_distance_norm")
+            ),
+            "bearing": _format_fraction(_obs_scalar(observation, "remembered_danger_bearing_norm")),
+            "note": "place the agent was last hurt",
+        },
+        {
+            "field": "map explored",
+            "distance": _format_fraction(_obs_scalar(observation, "explored_fraction")),
+            "bearing": "n/a",
+            "note": "share of the map the agent has actually looked at",
+        },
+        _object_slot_row(observation, 1),
+        _object_slot_row(observation, 2),
+        _object_slot_row(observation, 3),
+        {
+            "field": "objects visible now",
+            "distance": _format_fraction(_obs_scalar(observation, "visible_object_count_norm")),
+            "bearing": "n/a",
+            "note": (
+                "how many objects the query returned this tick "
+                f"({_count_text(_obs_scalar(observation, 'visible_object_count_norm'))})"
+            ),
+        },
+    ]
+
+
+def audio_rows(observation: Any) -> list[dict[str, Any]]:
+    """The hearing channel: what the policy perceives, not what is audible."""
+    return [
+        {
+            "field": "loudest event direction",
+            "value": _triple(_obs_vector(observation, "last_sound_direction")),
+            "note": "unit vector with the documented directional error",
+        },
+        {
+            "field": "loudest event distance",
+            "value": _format_fraction(_obs_scalar(observation, "last_sound_distance_norm")),
+            "note": "normalised by the arena diagonal",
+        },
+        {
+            "field": "loudest event loudness",
+            "value": _format_fraction(_obs_scalar(observation, "last_sound_loudness")),
+            "note": "after distance and wall occlusion",
+        },
+        {
+            "field": "loudest event category",
+            "value": _format_fraction(_obs_scalar(observation, "last_sound_category_norm")),
+            "note": "footstep/jump/land/shot/impact/death/environment",
+        },
+        {
+            "field": "loudest event age",
+            "value": _format_fraction(_obs_scalar(observation, "last_sound_age_norm")),
+            "note": "seconds since the event, normalised",
+        },
+        {
+            "field": "audible events this tick",
+            "value": _format_fraction(_obs_scalar(observation, "audible_event_count_norm")),
+            "note": "how many events the agent can hear right now",
+        },
+        {
+            "field": "direction precision",
+            "value": _format_fraction(_obs_scalar(observation, "sound_direction_error_norm")),
+            "note": "how imprecisely the loudest event can be placed",
+        },
+    ]
+
+
+def action_rows(action: Any) -> list[dict[str, Any]]:
+    """The action vector the policy emitted, per component."""
+    from .contract import ACTION_SPEC
+
+    values = [int(value) for value in action] if action else []
+    rows: list[dict[str, Any]] = []
+    for field in ACTION_SPEC:
+        value = values[field.index] if len(values) > field.index else None
+        rows.append(
+            {
+                "component": field.name,
+                "value": "n/a" if value is None else str(value),
+                "meaning": field.description,
+            }
+        )
+    return rows
+
+
+def _nearest_object_suffix(observation: Any) -> str:
+    """``" (crate)"`` when slot 1 holds a sighting, otherwise nothing.
+
+    Reads the same slot the world table shows, so the headline and the table
+    can never disagree about what the nearest visible object is.
+    """
+    if observation is None:
+        return ""
+    visible = _obs_scalar(observation, "object_1_visible")
+    if visible is None or visible < 0.5:
+        return ""
+    return f" ({_object_kind_label(_obs_scalar(observation, 'object_1_kind_norm'))})"
+
+
+def observation_summary_view(observation: Any) -> dict[str, Any]:
+    """The one-line answer to "what is the policy looking at right now"."""
+    if observation is None:
+        return {
+            "available": False,
+            "summary": "No observation loaded.",
+            "headline": "n/a",
+        }
+    in_combat = _obs_scalar(observation, "in_combat")
+    ready = _obs_scalar(observation, "weapon_ready")
+    health = _obs_scalar(observation, "agent_health_norm")
+    alive = _obs_scalar(observation, "alive_enemy_count_norm")
+    visible = _obs_scalar(observation, "visible_enemy_count_norm")
+    remembered = _obs_scalar(observation, "remembered_enemy_count_norm")
+    distance = _obs_scalar(observation, "enemy_distance_norm")
+    illumination = _obs_scalar(observation, "local_illumination")
+    in_cover = _obs_scalar(observation, "agent_in_cover")
+    parts = [
+        f"health {format_fraction_as_percent(health) if health is not None else 'n/a'}",
+        f"objects {_count_text(_obs_scalar(observation, 'visible_object_count_norm'))}"
+        + _nearest_object_suffix(observation),
+        f"weapon {'ready' if (ready or 0.0) >= 0.5 else 'not ready'}",
+        f"contacts alive {format_fraction_as_percent(alive) if alive is not None else 'n/a'}",
+        f"visible {format_fraction_as_percent(visible) if visible is not None else 'n/a'}",
+        f"remembered {format_fraction_as_percent(remembered) if remembered is not None else 'n/a'}",
+        f"closest {format_number(distance, 3) if distance is not None else 'n/a'}",
+        f"cover {'yes' if (in_cover or 0.0) >= 0.5 else 'no'}",
+        f"light {format_number(illumination, 2) if illumination is not None else 'n/a'}",
+    ]
+    return {
+        "available": True,
+        "in_combat": bool((in_combat or 0.0) >= 0.5),
+        "headline": ("in combat" if (in_combat or 0.0) >= 0.5 else "not engaging"),
+        "summary": "   ·   ".join(parts),
+    }
+
+
+def replay_contract_view(result: dict[str, Any]) -> dict[str, Any]:
+    """Does this recording match the contract the policy trains on?
+
+    A replay is evidence and keeps loading after the observation vector grows
+    (the adapter reads it with ``strict_contract=False``), so the page has to
+    say which contract the numbers came from. ``recorded_observation_dim`` is
+    the width in the file; a mismatch means those values cannot be compared
+    with a current policy's input, even though they are still readable.
+    """
+    recorded = result.get("recorded_observation_dim")
+    current = int(result.get("current_observation_dim") or 0)
+    matches = result.get("contract_match")
+    if matches is None:
+        return {"matches": True, "severity": "text_dim", "text": "contract n/a"}
+    if matches:
+        return {
+            "matches": True,
+            "severity": "text_dim",
+            "text": f"recorded under the current contract ({recorded} floats)",
+        }
+    return {
+        "matches": False,
+        "severity": "warn",
+        "text": (
+            f"recorded under an older contract ({recorded} floats, current {current}) - "
+            "readable, but not comparable with a current policy's input"
+        ),
+    }
+
+
+def table_signature(
+    rows: list[dict[str, Any]], keys: tuple[str, ...]
+) -> tuple[tuple[Any, ...], ...]:
+    """A cheap identity for a table's contents.
+
+    Pages poll on a timer and rebuild their Treeviews from the result. A
+    rebuild re-inserts every row and drops the operator's selection, so a page
+    that receives the same rows as last time should leave the table alone.
+    Comparing this signature decides that. Only the keys that are rendered are
+    part of it, so a change that would not be visible does not force a
+    rebuild, and vice versa.
+    """
+    return tuple(tuple(row.get(key) for key in keys) for row in rows)
+
+
+def replay_table_rows(replays: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per recorded replay, as the Stats page's source picker."""
+    rows: list[dict[str, Any]] = []
+    for replay in replays:
+        header = replay.get("header") or {}
+        detail = str(header.get("detail") or replay.get("detail") or "light")
+        rows.append(
+            {
+                "name": str(replay.get("name") or replay.get("path") or ""),
+                "run": str(replay.get("run") or ""),
+                "detail": detail,
+                "ticks": format_number(replay.get("ticks"), 0),
+                "seed": str(header.get("seed") if header.get("seed") is not None else "n/a"),
+                "map": str(header.get("map_id") or "n/a"),
+                "scenario": str(header.get("scenario") or "n/a"),
+                "curriculum": str(
+                    header.get("curriculum_level")
+                    if header.get("curriculum_level") is not None
+                    else "n/a"
+                ),
+                "enemies": str(
+                    header.get("enemy_count") if header.get("enemy_count") is not None else "n/a"
+                ),
+                "observations": "yes" if detail == "detailed" else "no",
+                "size": format_bytes(replay.get("size_bytes")),
+            }
+        )
+    return rows
+
+
+def stats_source_view(info: dict[str, Any] | None) -> dict[str, Any]:
+    """Headline + guidance for the replay the Stats page is showing."""
+    if not info:
+        return {
+            "available": False,
+            "headline": "No replay selected",
+            "detail": (
+                "Replays are written to <output root>/<run>/replays/. A light replay "
+                "has no observation vector; record with replay_detail=detailed to see "
+                "exactly what the policy received."
+            ),
+            "tick_count": 0,
+            "detailed": False,
+        }
+    header = info.get("header") or {}
+    detailed = str(header.get("detail") or "") == "detailed"
+    detail = (
+        "Observation vector recorded per tick — this is the policy's real input."
+        if detailed
+        else (
+            "This is a light replay: it stores actions and rewards, not the "
+            "observation vector. Re-run with replay_detail=detailed to inspect "
+            "what the policy saw."
+        )
+    )
+    return {
+        "available": True,
+        "detailed": detailed,
+        "tick_count": int(info.get("tick_count") or 0),
+        "headline": (
+            f"{info.get('name', '')}   ·   seed {header.get('seed')}   ·   "
+            f"{header.get('map_id') or 'generated map'}   ·   "
+            f"level {header.get('curriculum_level')}"
+        ),
+        "detail": detail,
+        "policy": str(header.get("policy_id") or header.get("checkpoint") or "n/a"),
+    }
+
+
+def ttk_evidence_view(summary: dict[str, Any] | None) -> dict[str, Any]:
+    """Counts + rows for the TTK Testing calibration evidence table."""
+    if not summary:
+        return {"available": False, "headline": "n/a", "rows": [], "checked_on": ""}
+    mechanics = summary.get("mechanics") or {}
+
+    def count(status: str) -> int:
+        return len(mechanics.get(status) or [])
+
+    verified = count("verified")
+    pending = count("calibration_required")
+    excluded = count("excluded")
+    return {
+        "available": True,
+        "checked_on": str(summary.get("evidence_checked_on") or ""),
+        "verified": verified,
+        "calibration_required": pending,
+        "excluded": excluded,
+        "headline": (
+            f"{verified} verified   ·   {pending} need calibration   ·   {excluded} excluded"
+        ),
+    }
+
+
+def ttk_evidence_rows(summary: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The evidence matrix as table rows (mechanic, status, rule, source)."""
+    if not summary:
+        return []
+    rows: list[dict[str, Any]] = []
+    for status, items in (summary.get("mechanics") or {}).items():
+        for item in items or []:
+            rows.append(
+                {
+                    "mechanic": str(item.get("mechanic") or ""),
+                    "status": status.replace("_", " "),
+                    "rule": str(item.get("implementation_rule") or ""),
+                    "source": str(item.get("source_label") or item.get("source_url") or ""),
+                    "measured_value": str(item.get("notes") or ""),
+                }
+            )
+    return rows

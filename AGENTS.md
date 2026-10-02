@@ -27,23 +27,58 @@ the two must not contradict each other.
 | **No Godot binary**, and the release download is network-blocked | You cannot run the GDScript suite. Use `gdlint`, `gdformat --check` and `sandboxai.gdscript_analysis.analyze('.')`. The `godot-tests.yml` CI job is the real check. |
 | System Python is **PEP 668 managed** | `pip install -e .` fails. Create a venv: `python3 -m venv /tmp/venv`. |
 | `download.pytorch.org` is **SSL-blocked** locally | Install torch from PyPI locally. CI uses the CPU index, where it works. |
-| `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally (one of 9 skips). CI job `desktop-ui-tests` covers it. Use `python3 tools/desktop_tests.py`: it runs the real suite when Tk and a display (or `xvfb-run`) exist and otherwise falls back to the static contracts plus `tools/control_center_smoke.py`, printing the exact package to install. `--strict` fails instead of falling back - that is what CI runs. |
+| `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally. CI job `desktop-ui-tests` covers it. Use `python3 tools/desktop_tests.py`: it runs the real suite when Tk and a display (or `xvfb-run`) exist and otherwise falls back to the static contracts plus `tools/control_center_smoke.py`, printing the exact package to install. `--strict` fails instead of falling back - that is what CI runs. |
 
-Setup that works:
+Setup that works (the extras are `pip install -e ".[training,test,dev]"` from
+`pyproject.toml`, spelled out because `pip install -e .` fails here).
+**`numpy` is not an extra**: it is the one entry in the package's core
+`dependencies`, two test modules import it at module level, and without it
+pytest dies during collection (`1 error in 0.9s: No module named 'numpy'`) -
+it only *looks* optional because torch happens to pull it in:
 
 ```bash
 python3 -m venv /tmp/venv
 /tmp/venv/bin/pip install torch gymnasium stable-baselines3 tensorboard \
-    psutil coverage ruff mypy gdtoolkit pyyaml
+    numpy psutil coverage ruff mypy gdtoolkit pyyaml pytest pytest-timeout
 cd /home/user/SandboxAI
 PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
 ```
+
+The same environment without the training extras (this is the one behind the
+"1030 passed, 147 skipped" figure below - keep `numpy`, drop torch and
+friends):
+
+```bash
+python3 -m venv /tmp/venv
+/tmp/venv/bin/pip install numpy psutil ruff mypy gdtoolkit pyyaml pytest pytest-timeout
+PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
+```
+
+**A skip is not a pass.** Without the training extras, 110+ tests skip
+silently (PPO, BC, checkpoint/evaluation, action audit) - and one of them
+asserted an evaluation report's `contract.version` as a literal, so the v4
+object block broke it without a single local failure while CI would have gone
+red on the first push. A green run on this machine is only half the answer;
+before claiming one, install the extras into a second environment and run the
+suite there too (the local venv above is disposable, so keep a second one or
+reinstall the extras before you trust the count):
+
+```bash
+python3 -m venv /tmp/venv-full
+/tmp/venv-full/bin/pip install torch gymnasium stable-baselines3 tensorboard \
+    numpy psutil ruff mypy gdtoolkit pyyaml pytest pytest-timeout
+PYTHONPATH=python /tmp/venv-full/bin/python -m pytest -q
+```
+
+The only tests that legitimately skip everywhere are the Tk-dependent ones
+(no `python3-tk` here, covered by the `desktop-ui-tests` CI job) and
+`test_gdscript_static.py`'s gdtoolkit checks in an environment without it.
 
 ## 3. The gates — all of them must pass
 
 ```bash
 ruff check .                 # All checks passed!
-ruff format --check .        # 136 files already formatted
+ruff format --check .        # 141 files already formatted
 mypy                         # Success: no issues found in 54 source files
 gdlint scripts tests         # Success: no problems found
 gdformat --check scripts tests
@@ -66,10 +101,10 @@ the environment decides how many optional-extra tests skip). Run the
 commands and read their output; do not edit a number to match.
 
 Those counts were last taken with the training extras installed. This
-checkout shows `960 passed, 139 skipped, 849 subtests` without
+checkout shows `1030 passed, 147 skipped, 880 subtests` without
 torch/SB3/gymnasium and without Tkinter (the extra skips are those
-optional extras plus `test_control_center_desktop.py`), so a green run
-here looks different from a green run in CI and both are correct.
+optional extras plus the Tk-dependent Control Center tests), so a green
+run here looks different from a green run in CI and both are correct.
 
 `mypy` takes **no arguments** — its configuration lives in
 `pyproject.toml`. It is deliberately **not** `--strict`: the torch/SB3
@@ -222,7 +257,7 @@ Ubuntu under Windows 11 (WSL), i7-12700F (8P + 4E cores), RTX 4060 Ti,
 32 GB RAM, Godot 4.7.2.
 
 **A GPU does not help this workload, and that is expected.** The policy is
-84 → 128 → 128. Per-step kernel launches and host↔device transfers cost
+106 → 128 → 128. Per-step kernel launches and host↔device transfers cost
 more than the arithmetic saves; the maintainer measured CPU at roughly
 twice the throughput and that matches `README.md:403-405`, which offers
 `--inference-device cpu` for exactly this reason. Do not "fix" this and

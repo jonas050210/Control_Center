@@ -538,6 +538,20 @@ class SandboxAIAdapter:
         self.agents = AgentManager(self.processes, self)
         self._series_cache: OrderedDict[str, _RunSeries] = OrderedDict()
         self._series_cache_limit = 6
+        #: Stats page: replay header + tick count (one cheap pass, see
+        #: ``_replay_meta``) and one parsed episode, both keyed by
+        #: (path, size, mtime) so a poll never re-reads what has not changed.
+        #: The metadata limit is large on purpose: an entry is a small tuple,
+        #: and the page rescans the folder on a timer, so the whole corpus
+        #: stays warm instead of only the most recently read files.
+        self._replay_meta_cache: OrderedDict[
+            str, tuple[tuple[int, int], dict[str, Any] | None, str, int]
+        ] = OrderedDict()
+        self._replay_meta_cache_limit = 2048
+        self._replay_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any], Any]] = (
+            OrderedDict()
+        )
+        self._replay_cache_limit = 2
         #: executable -> (monotonic time, runtime facts) for compatibility
         #: checks; probing the Godot version is a subprocess call, too slow
         #: for every poll. Keyed by the requested executable (None = the
@@ -1074,6 +1088,196 @@ class SandboxAIAdapter:
         from .ttk_testing import capture_roblox_screenshot
 
         return capture_roblox_screenshot(self.project_root)
+
+    def ttk_evidence(self) -> dict[str, Any]:
+        """The TTK Testing evidence manifest, without probing a game client.
+
+        ``ttk_testing_status`` answers "is Roblox running on this machine";
+        this answers "what is actually evidenced about TTK Testing", which is
+        what the Stats page documents next to the policy's own input. It
+        reads no process, no window and no log - it is the static manifest.
+        """
+        from .ttk_testing import status_summary
+
+        return status_summary()
+
+    def ttk_calibration_notes(self) -> dict[str, dict[str, Any]]:
+        """Operator-recorded measurements for the evidence table (may be empty)."""
+        from .ttk_testing import load_ttk_calibration
+
+        return load_ttk_calibration(self.project_root)
+
+    # ------------------------------------------------------------------
+    # Stats page: what the policy actually receives (replays)
+    # ------------------------------------------------------------------
+
+    def list_replays(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Every recorded replay under the output root, newest first.
+
+        Replays live in ``<run>/replays/*.jsonl`` and start with a single
+        header line, so the listing reads that one line per file instead of
+        parsing the (potentially huge) rest. A file whose header cannot be
+        read is still listed - with its error - rather than silently dropped,
+        because "my replay is missing" is worse than "my replay is broken".
+        """
+        limit = max(1, int(limit))
+        entries: list[dict[str, Any]] = []
+        root = self.output_root
+        if not root.is_dir():
+            return entries
+        candidates: list[Path] = []
+        with contextlib.suppress(OSError):
+            # <output root>/runs/<run id>/replays/*.jsonl is the layout the
+            # pipeline writes (TrainingConfig.run_directory), so the scan has
+            # to walk one level deeper than a single glob would.
+            candidates = sorted(
+                root.glob("runs/*/replays/*.jsonl"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )[:limit]
+            if not candidates:
+                candidates = sorted(
+                    root.rglob("replays/*.jsonl"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )[:limit]
+        for path in candidates:
+            entry: dict[str, Any] = {
+                "path": str(path),
+                "name": path.name,
+                "run": path.parent.parent.name,
+            }
+            with contextlib.suppress(OSError):
+                entry["size_bytes"] = path.stat().st_size
+                entry["modified"] = path.stat().st_mtime
+            header, error, ticks = self._replay_meta(path)
+            if header is not None:
+                entry["header"] = header
+                entry["ticks"] = ticks
+            if error:
+                entry["error"] = error
+            entries.append(entry)
+        return entries
+
+    def _replay_meta(self, path: Path) -> tuple[dict[str, Any] | None, str, int]:
+        """Header and tick count from one pass, cached by (mtime, size).
+
+        The Stats page rescans the replay folder on a timer, so a warm scan
+        must not re-read a single byte: header and tick count are stored
+        behind the file's stamp. Only the header line is JSON-decoded; ticks
+        are recognized by their line prefix, so one corrupt line cannot break
+        the listing. A replay also holds events and a result line, which is
+        why ticks are counted by prefix rather than by lines: a 3-tick
+        episode must not report 6.
+        """
+        cached = self._replay_meta_cache.get(str(path))
+        try:
+            stat = path.stat()
+        except OSError as exc:  # pragma: no cover - file vanished mid-scan
+            return None, str(exc), 0
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if cached is not None and cached[0] == stamp:
+            return cached[1], cached[2], cached[3]
+        header: dict[str, Any] | None = None
+        error = ""
+        ticks = 0
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for index, raw in enumerate(handle):
+                    if index == 0:
+                        payload = json.loads(raw) if raw.strip() else None
+                        if isinstance(payload, dict) and "header" in payload:
+                            header = payload["header"]
+                    elif raw.lstrip().startswith('{"tick"'):
+                        ticks += 1
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            error = str(exc)
+        if (
+            self._replay_meta_cache_limit
+            and len(self._replay_meta_cache) >= self._replay_meta_cache_limit
+        ):
+            self._replay_meta_cache.popitem(last=False)
+        self._replay_meta_cache[str(path)] = (stamp, header, error, ticks)
+        return header, error, ticks
+
+    def replay_stats(self, path: str | Path, tick: int | None = None) -> dict[str, Any]:
+        """One replay decoded for the Stats page: header, tick, observation.
+
+        The whole episode is parsed once per (path, size, mtime) and cached,
+        because stepping through ticks must not re-read a file. Returns the
+        requested tick's observation and action when the recording is
+        ``detailed``; a light replay reports that the vector was not
+        recorded instead of inventing one.
+
+        A replay recorded under an *older* observation contract is still
+        read (``strict_contract=False``, the same allowance the CLI's
+        ``--allow-contract-mismatch`` makes): a recording is evidence and
+        evidence should not expire when the vector grows. The result says so
+        explicitly - ``contract_match`` is false and
+        ``recorded_observation_dim`` carries the width it was recorded with -
+        so the page can label the values as not comparable instead of
+        silently painting them into the current contract's table.
+        """
+        from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+        from .replay import load_replay
+
+        source = Path(path)
+        if not source.exists():
+            raise FileNotFoundError(f"replay not found: {source}")
+        stat = source.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = self._replay_cache.get(str(source))
+        if cached is None or cached[0] != stamp:
+            episode = load_replay(source, strict_contract=False)
+            header = episode.header
+            info: dict[str, Any] = {
+                "path": str(source),
+                "name": source.name,
+                "run": source.parent.parent.name,
+                "header": header.to_dict(),
+                "tick_count": len(episode.ticks),
+                "detailed": episode.detailed,
+                "contract_match": (
+                    int(header.observation_dim) == OBSERVATION_FIELD_COUNT
+                    and tuple(int(value) for value in header.action_nvec) == tuple(ACTION_NVEC)
+                ),
+                "recorded_observation_dim": int(header.observation_dim),
+                "current_observation_dim": OBSERVATION_FIELD_COUNT,
+            }
+            self._replay_cache[str(source)] = (stamp, info, episode)
+            if self._replay_cache_limit and len(self._replay_cache) > self._replay_cache_limit:
+                self._replay_cache.popitem(last=False)
+        else:
+            info, episode = cached[1], cached[2]
+        index = 0 if tick is None else max(0, min(int(tick), len(episode.ticks) - 1))
+        result = dict(info)
+        result["tick_index"] = index
+        if episode.ticks:
+            current = episode.ticks[index]
+            result["action"] = list(current.action)
+            result["reward"] = float(current.reward)
+            result["done"] = bool(current.done)
+            result["observation"] = (
+                [float(value) for value in current.observation]
+                if current.observation is not None
+                else None
+            )
+            result["events"] = [
+                {
+                    "kind": event.kind,
+                    "tick": event.tick,
+                    "data": dict(event.data or {}),
+                }
+                for event in episode.events
+                if event.tick == current.tick
+            ]
+        else:
+            result["action"] = []
+            result["reward"] = None
+            result["done"] = False
+            result["observation"] = None
+            result["events"] = []
+        return result
 
     def save_ttk_calibration(
         self,

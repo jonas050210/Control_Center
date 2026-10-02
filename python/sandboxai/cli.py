@@ -670,7 +670,7 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     results["config_valid"] = True
 
     # 2. Dataset creation and validation. Observations use the real
-    # 84-field contract dimension (OBSERVATION_FIELD_COUNT) so the smoke
+    # contract dimension (OBSERVATION_FIELD_COUNT) so the smoke
     # test exercises (and produces checkpoints compatible with) the actual
     # observation space.
     from .contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT

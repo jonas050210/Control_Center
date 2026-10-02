@@ -21,7 +21,7 @@ LOCAL GAME STATE (Godot calibration simulator)
         |
 Observation Adapter        <- Observation.build() in Godot
         |
-Normalized Observation Vector (84 float32 values, all in [-1, 1])
+Normalized Observation Vector (106 float32 values, all in [-1, 1])
         |
 PPO Policy (MultiDiscrete([3,3,3,3,2,2]) actions)
         |
@@ -39,14 +39,18 @@ GAME
    health, aliveness) that a player standing in the agent's position could
    plausibly perceive (e.g. "an enemy is roughly there, at that range, and
    looks hurt"). Nothing about off-screen/undetected enemies, hidden
-   cooldown internals beyond "is my weapon ready", or global level layout is
-   exposed.
+   cooldown internals beyond "is my weapon ready", objects the agent has
+   never looked at, or global level layout is exposed: the three object slots
+   of contract v4 are filled by the same visibility query the agent's own
+   perception uses, never by the map's object list.
 2. **Normalized ranges.** Every field is designed to sit in `[-1, 1]`
    (booleans are emitted as `0.0`/`1.0`). Distances are divided by the
    arena's maximum diagonal distance; positions by the arena half-extent;
    velocities by the agent's move speed.
-3. **Stable dimension.** The vector is always exactly 84 floats, regardless
-   of curriculum level or configured enemy count. Enemies beyond the 3rd
+3. **Stable dimension.** The vector is always exactly 106 floats, regardless
+   of curriculum level, configured enemy count or how much cover is in the
+   map: three enemy slots and three object slots are budgets, and the visible
+   object *count* field carries the rest. Enemies beyond the 3rd
    nearest alive one still exist and affect the simulation (they can still
    attack/be attacked) but are not individually reported — the policy must
    generalize from the nearest few threats, which is also what is
@@ -83,7 +87,7 @@ Below level 6 the gating is disabled and indices 10–32 keep their original
 ground-truth meaning byte-for-byte, so curriculum levels 1–4 reproduce the
 pre-world dynamics exactly.
 
-## Observation vector (84 floats)
+## Observation vector (106 floats)
 
 `Observation.to_array()` / `python/sandboxai/contract.py:OBSERVATION_SPEC`.
 
@@ -102,7 +106,7 @@ pre-world dynamics exactly.
 
 From curriculum level 5 the weapon gains recoil, bloom, fire modes,
 magazines and reloads (see `docs/CURRICULUM_AND_COMBAT.md`). **This adds no
-observation fields and no action fields** — the vector is still exactly 84
+observation fields and no action fields** — the vector is still exactly 106
 floats and the action space is still `MultiDiscrete([3,3,3,3,2,2])`.
 
 The one semantic change is to index 15. `WeaponState.is_ready()` now also
@@ -118,7 +122,7 @@ Everything else is felt indirectly and deliberately so:
   `agent_forward` and in the bearing/elevation fields;
 - **bloom** is not observed at all. It is a function of the agent's own
   recent fire, so a recurrent or frame-stacked policy can infer it, and
-  exposing it would have meant breaking the 84-float contract;
+  exposing it would have meant breaking the 106-float contract;
 - **ammunition count** is not observed either, for the same reason.
 
 Below level 5 the handling layer is inert and index 15 keeps its original
@@ -127,6 +131,27 @@ unaffected.
 
 | 16 | `in_combat` | Primary enemy alive and within weapon range | 0/1 |
 | 17 | `enemy_bearing_norm` | Signed horizontal aim offset to the primary enemy | angle / 180°, in [-1,1]; 0 = dead-center, sign matches `look_yaw_axis` (+ = turn right to face it) |
+
+**One sign convention for every bearing.** All eleven bearing fields
+(`primary`/`secondary`/`tertiary_enemy_bearing_norm`, `last`/`second_sound_
+bearing_norm`, `nearest_obstacle_bearing_norm`, the two `remembered_*` ones
+and the three object slots) are *positive to the agent's right* -
+the direction a positive `look_yaw_axis` turns - and negative to the left,
+so a contact's bearing can be compared with the cover next to it without a
+per-field flip. They are all produced by `VectorMath.signed_bearing_*`
+(`scripts/core/vector_math.gd`), which is the single implementation of it;
+`python/tests/test_contract.py` fails if a second one appears. It is not
+cosmetic: the three enemy fields used a yaw difference while the other eight
+(the world, sound and memory queries) took the sign of
+`forward.cross(direction).y`, which is the opposite in Godot's right-handed
+frame, so the vector (and the Stats page) put a contact and the crate beside
+it on opposite sides.
+
+The vertical angle follows the same rule: the `*_elevation_norm` fields are
+positive when the contact is **above** the eye, negative below. Yaw itself
+(the agent's `yaw_deg`, and the direction a spawn or the stub controller
+faces) is `atan2(x, -z)` everywhere, so `yaw = 0` looks along `(0, 0, -1)`
+and `yaw = 90` along `+x`. All three formulas live in `VectorMath`.
 | 18 | `alive_enemy_count_norm` | How many configured enemies are alive right now | alive / total configured enemies, [0,1] |
 | 19–21 | `secondary_enemy_relative_position_norm` (x,y,z) | 2nd-nearest alive enemy, relative position | as above; zero vector if absent |
 | 22 | `secondary_enemy_distance_norm` | Distance to 2nd-nearest alive enemy | [0,1]; `1.0` (max) if absent |
@@ -187,6 +212,22 @@ unaffected.
 | 81 | `remembered_danger_distance_norm` | Distance to the nearest place the agent was hurt | / max arena diagonal, [0,1]; 0 if none |
 | 82 | `remembered_danger_bearing_norm` | Bearing to that place | angle / 180°, [-1,1] |
 | 83 | `contact_uncertainty_norm` | Mean staleness of memory-only contacts | 1 − confidence, averaged, [0,1] |
+| 84–86 | `object_1_relative_position_norm` (x,y,z) | Closest surface point of the nearest **visible** object, relative to the agent | x,z / max arena diagonal; y / wall height |
+| 87 | `object_1_distance_norm` | Distance to that object | / max arena diagonal, [0,1]; 1 if none visible |
+| 88 | `object_1_bearing_norm` | Signed horizontal offset to it | angle / 180°, [-1,1]; 0 if none visible |
+| 89 | `object_1_kind_norm` | What kind of object it is (cover box, crate, pillar, platform, wall, ...) | kind ordinal / 6, [0,1] |
+| 90 | `object_1_visible` | This slot holds a real sighting | 0/1 |
+| 91–93 | `object_2_relative_position_norm` (x,y,z) | Same for the second-nearest visible object | as above |
+| 94 | `object_2_distance_norm` | Distance to it | [0,1]; 1 if the slot is empty |
+| 95 | `object_2_bearing_norm` | Signed horizontal offset to it | [-1,1]; 0 if empty |
+| 96 | `object_2_kind_norm` | Its kind | ordinal / 6, [0,1] |
+| 97 | `object_2_visible` | This slot holds a real sighting | 0/1 |
+| 98–100 | `object_3_relative_position_norm` (x,y,z) | Same for the third-nearest visible object | as above |
+| 101 | `object_3_distance_norm` | Distance to it | [0,1]; 1 if the slot is empty |
+| 102 | `object_3_bearing_norm` | Signed horizontal offset to it | [-1,1]; 0 if empty |
+| 103 | `object_3_kind_norm` | Its kind | ordinal / 6, [0,1] |
+| 104 | `object_3_visible` | This slot holds a real sighting | 0/1 |
+| 105 | `visible_object_count_norm` | How many objects are visible right now | count / 8, clamped [0,1] |
 
 If no enemy is alive, the primary slot (indices 10–17) falls back to a fixed
 dead-enemy report (`enemy_alive = 0`, `enemy_health_norm = 0`) instead of
@@ -225,6 +266,40 @@ loadable: `python/sandboxai/dataset.py:action_to_multidiscrete()` pads them
 with `jump = 0`. A v1 **checkpoint**, however, has a 5-head action net and a
 33-input observation head, so it cannot be loaded into a v2 policy — that
 break is real and intentional.
+
+## What changed in contract v4 (visible objects)
+
+- Observation grew from 84 to 106 floats. **Indices 0–83 are unchanged in
+  index and meaning.** Everything new is appended (84–105).
+- New: the arena's *objects* — cover boxes, crates, pillars, low/high cover,
+  platforms — are reported as three ranked slots (nearest visible first)
+  plus a visible total. Their bearings follow the one convention above. This is the first time the policy can reason about
+  the geometry it is standing next to instead of just "an obstacle is that
+  way, 4 m off" (`nearest_obstacle_*`, indices 60–61, which stay exactly as
+  they are).
+- In the simulation the query runs with the perception system's own cone and
+  reach (`AgentPerception.fov_deg` / `vision_range`, passed as the
+  `fov_deg`/`vision_range` context keys); a context that names neither falls
+  back to `AGENT_FOV_DEG` and `VISION_RANGE`.
+- A slot is only ever filled by an object the agent **could actually see**
+  from where it stands: inside the FOV cone, within `VISION_RANGE`, and not
+  hidden behind other geometry. The arena fence (`Obstacle.Kind.BOUNDARY`)
+  is never reported. Empty slots keep the neutral encoding (zero position,
+  distance 1.0, bearing 0.0, kind 0.0, `visible = 0`), so "no object
+  visible" is not spelled as a real reading at the origin.
+- The object kind is normalized by its cardinality
+  (`SandboxConfig.OBJECT_KIND_COUNT`), exactly like the sound category —
+  the raw enum value never reaches the vector.
+- The action space is **unchanged**: `MultiDiscrete([3,3,3,3,2,2])`.
+- A v3 checkpoint has an 84-input observation head and cannot be loaded
+  into a v4 policy; `BC` datasets that store full observations are likewise
+  rejected by the version check, while action-only datasets stay loadable.
+  Replay files stamped with `contract version 3` are readable for
+  inspection but are not treated as v4-compatible.
+- Deliberately *not* exposed: anything about objects the agent has never
+  looked at, object identities/IDs, the full geometry list, other agents'
+  positions, or the arena layout as data. Three slots is what a player can
+  hold in mind at once.
 
 ## What changed in contract v3 (maps, lighting, hearing, map knowledge)
 

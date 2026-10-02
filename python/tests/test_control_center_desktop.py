@@ -22,11 +22,13 @@ from optional_deps import HAS_TKINTER, TKINTER_REASON
 
 from sandboxai.adapter import SandboxAIAdapter
 from sandboxai.config import TrainingConfig
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 
 if HAS_TKINTER:
     import tkinter as tk
 
     from sandboxai.control_center_desktop import PAGE_CLASSES, ControlCenter
+    from sandboxai.control_center_ui import RoundedPanel
 
 
 def _make_app(project_root: Path) -> "ControlCenter":
@@ -46,6 +48,191 @@ def _drain_background(app: "ControlCenter", attempts: int = 20, delay: float = 0
         app.background._pump()
         app.update()
         time.sleep(delay)
+
+
+def _pump_events(app: "ControlCenter", seconds: float) -> None:
+    """Runs the Tk event loop for a bounded wall-clock window.
+
+    ``update()`` and ``dooneevent(DONT_WAIT)`` both drain the event queue and
+    only return once it is empty, so a window that feeds itself events keeps
+    them busy for good - that is the bug these probes exist for, and it is why
+    neither of them can be used to observe it. ``vwait`` runs the *loop*
+    instead: Tcl serves timers and window events in due order, so the callback
+    scheduled below ends the window no matter how many events arrive, and the
+    test gets to report what it saw instead of timing out.
+    """
+    variable = f"sandboxai_pump_{id(app)}"
+    app.setvar(variable, "0")
+    handle = app.after(int(seconds * 1000), lambda: app.setvar(variable, "1"))
+    try:
+        app.tk.call("vwait", variable)
+    finally:
+        with contextlib.suppress(tk.TclError):
+            app.after_cancel(handle)
+
+
+def _rounded_panels(widget: "tk.Misc") -> list["RoundedPanel"]:
+    """Every card surface in the window, however deep it is nested."""
+    found = [widget] if isinstance(widget, RoundedPanel) else []
+    for child in widget.winfo_children():
+        found.extend(_rounded_panels(child))
+    return found
+
+
+def _geometry_snapshot(root: "tk.Misc") -> dict[str, tuple[int, int, int, int]]:
+    """Size and position of every widget, keyed by class and Tk path.
+
+    A window that has finished laying out must not change these on its own.
+    Something that does is feeding its own resize back into Tk, which is how
+    ``update()`` - it returns only when the event queue drains - hangs.
+    """
+    snapshot: dict[str, tuple[int, int, int, int]] = {}
+    pending = [root]
+    while pending:
+        widget = pending.pop()
+        try:
+            snapshot[f"{type(widget).__name__} {widget}"] = (
+                widget.winfo_width(),
+                widget.winfo_height(),
+                widget.winfo_x(),
+                widget.winfo_y(),
+            )
+        except tk.TclError:  # destroyed mid-walk
+            continue
+        pending.extend(widget.winfo_children())
+    return snapshot
+
+
+def _stub_benchmark_report() -> tuple[dict, dict]:
+    """The report a finished benchmark run returns, as the pipeline mock.
+
+    Kept in one place so the settle probe and the workflow test drive the
+    page with exactly the same payload.
+    """
+    recommendation = {
+        "environment_count": 8,
+        "env_workers": 2,
+        "device": "cpu",
+        "inference_device": "cpu",
+        "expected_steps_per_second": 100.0,
+        "basis": "validated_training_slice",
+        "rationale": ["measured"],
+        "warnings": [],
+    }
+    report = {
+        "status": "completed",
+        "elapsed_seconds": 1.0,
+        "stages": [
+            {"name": "discovery", "status": "completed"},
+            {"name": "screening", "status": "completed", "configurations": []},
+        ],
+        "recommendation": recommendation,
+    }
+    return recommendation, report
+
+
+@unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+class ControlCenterSettlingTests(unittest.TestCase):
+    """A laid-out window must reach a steady state, with no event stream.
+
+    Regression guard for a real CI failure: the desktop suite hung on its
+    180 s timeout inside ``app.update()``. ``update()`` returns only when the
+    event queue drains, so the window was feeding itself events forever. This
+    test pumps Tk one event at a time (``dooneevent(DONT_WAIT)`` can never
+    block), watches the geometry of every widget for a while, and names the
+    widgets that keep changing - a hang becomes a two-second assertion.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project_root = Path(self._tmp.name)
+        try:
+            self.app = _make_app(self.project_root)
+        except tk.TclError as exc:
+            self.skipTest(f"no display available for Tk: {exc}")
+        self.addCleanup(self._safe_destroy)
+
+    def _safe_destroy(self):
+        with contextlib.suppress(tk.TclError):
+            self.app._on_close()
+
+    def test_no_page_feeds_itself_geometry_events(self):
+        for title in ("Dashboard", "Training", "Benchmarks", "Stats"):
+            with self.subTest(page=title):
+                self.app.show_page(title)
+                self.app.update_idletasks()
+                # Let the first layout and the pending poll tick finish.
+                _pump_events(self.app, 0.4)
+                samples: list[dict[str, tuple[int, int, int, int]]] = []
+                for _ in range(6):
+                    _pump_events(self.app, 0.05)
+                    samples.append(_geometry_snapshot(self.app))
+                moving = {}
+                for name in samples[0]:
+                    values = {snapshot.get(name) for snapshot in samples}
+                    if len(values) > 1:
+                        moving[name] = values
+                self.assertEqual(
+                    moving,
+                    {},
+                    f"{title}: widgets keep changing geometry while idle: "
+                    + ", ".join(
+                        f"{name} -> {sorted(values)}" for name, values in list(moving.items())[:6]
+                    ),
+                )
+
+    def test_the_benchmark_workflow_settles_after_it_finishes(self):
+        """The workflow that used to hang must not stream events afterwards.
+
+        This is the path the desktop suite died on: the benchmark run updates
+        phases, log lines and its result table, and something in that update
+        kept the window busy for good. The probe drives the same workflow as
+        the real test but watches through the non-blocking pump, so a
+        regression is reported (with the widgets and counts that explain it)
+        instead of turning into a three-minute timeout.
+        """
+        from unittest import mock
+
+        self.app.show_page("Training")
+        self.app.show_page("Benchmarks")
+        page = self.app.pages["Benchmarks"]
+        _, report = _stub_benchmark_report()
+        applied = dict(report["recommendation"], applied_utc="2026-01-01T00:00:00Z")
+
+        configure_counts: dict[str, int] = {}
+
+        def count_configure(event, _counts=configure_counts):
+            key = f"{type(event.widget).__name__} {event.widget}"
+            _counts[key] = _counts.get(key, 0) + 1
+
+        self.app.bind_all("<Configure>", count_configure, add="+")
+        self.addCleanup(lambda: self.app.unbind_all("<Configure>"))
+        with (
+            mock.patch.object(page.adapter, "run_benchmark_pipeline", return_value=report),
+            mock.patch.object(
+                page.adapter, "apply_recommended_configuration", return_value=applied
+            ),
+        ):
+            page._start()
+            for _ in range(10):
+                _pump_events(self.app, 0.05)
+        timers = len(str(self.app.tk.eval("after info")).split())
+        total_configure = sum(configure_counts.values())
+        worst = sorted(configure_counts.items(), key=lambda item: item[1], reverse=True)[:5]
+        detail = f"pending_after={timers} configure={total_configure} worst={worst}"
+        self.assertLess(
+            total_configure,
+            200,
+            f"the finished benchmark workflow keeps resizing itself: {detail}",
+        )
+        self.assertEqual(
+            configure_counts,
+            {},
+            f"the finished benchmark workflow resizes widgets: {detail}",
+        )
 
 
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
@@ -74,6 +261,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
             "Benchmarks",
             "Evaluations",
             "Runs / Checkpoints",
+            "Stats",
             "System / Telemetry",
             "Settings",
         }
@@ -86,6 +274,66 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # No exception means every page's build()/refresh() survived an
         # empty (no runs yet) project directory - the most common state a
         # fresh user will actually see.
+
+    def test_every_page_attaches_the_cards_it_declares(self):
+        """A built board that is not managed shows an empty page.
+
+        Dashboard, Training and Benchmarks built their layout board, filled
+        it with cards, and never gave it a geometry manager - the pages
+        rendered their heading and nothing else. This asserts on the real
+        window that the board is attached and that its cards carry grid
+        information, which holds even before the window is mapped.
+        """
+        for page_class in PAGE_CLASSES:
+            title = page_class.title
+            self.app.show_page(title)
+            self.app.update_idletasks()
+            page = self.app.pages[title]
+            board = getattr(page, "_board", None)
+            if board is None:
+                continue
+            self.assertTrue(board.pack_info(), f"{title}: the layout board is not attached")
+            attached = [child for child in board.winfo_children() if child.grid_info()]
+            self.assertTrue(attached, f"{title}: no card on the board is attached")
+
+    def test_stats_page_renders_the_contract_and_a_recorded_tick(self):
+        """The Stats page must decode a real replay on the real window.
+
+        It is the one page whose whole purpose is showing the policy's input,
+        so this drives it with a replay-shaped payload and asserts that both
+        halves appear: the contract table (which exists without a recording)
+        and the decoded contacts of the selected tick.
+        """
+        self.app.show_page("Stats")
+        self.app.update_idletasks()
+        page = self.app.pages["Stats"]
+        rows = page.vector_tree.get_children()
+        self.assertTrue(rows, "the observation contract must render without a replay")
+
+        observation = [0.0] * OBSERVATION_FIELD_COUNT
+        observation[9] = 0.5  # agent_health_norm
+        observation[16] = 1.0  # in_combat
+        page._on_replay_stats(
+            {
+                "path": "/tmp/replays/episode_0001.jsonl",
+                "name": "episode_0001.jsonl",
+                "run": "run-a",
+                "header": {"seed": 7, "map_id": "blind_corner", "curriculum_level": 6},
+                "tick_count": 3,
+                "detailed": True,
+                "tick_index": 1,
+                "action": [2, 1, 1, 1, 1, 0],
+                "reward": 0.25,
+                "done": False,
+                "observation": observation,
+                "events": [{"kind": "combat", "tick": 1, "data": {}}],
+            },
+            None,
+        )
+        self.assertIn("health", page.summary_label.cget("text"))
+        self.assertEqual(len(page.contact_tree.get_children()), 3)
+        self.assertTrue(page.action_tree.get_children())
+        self.assertIn("tick 2 / 3", page.tick_label.cget("text"))
 
     def test_dense_tables_keep_every_column_reachable_without_permanent_scrollbars(self):
         """Tables keep right-hand data reachable through *overlay* bars.

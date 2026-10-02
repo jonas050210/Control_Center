@@ -25,6 +25,7 @@ const LightingProfile = preload("res://scripts/perception/lighting_profile.gd")
 const MapLibrary = preload("res://scripts/world/map_library.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const ScenarioLibrary = preload("res://scripts/scenario/scenario_library.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
 
 
@@ -156,9 +157,7 @@ static func reset_enemy(env, enemy: EnemyState, index: int, spawn: Vector3, stra
 		enemy.strafe_direction = 1.0
 		enemy.strafe_phase = 0.0
 	# Face the agent's spawn so the FOV cone starts somewhere sensible.
-	enemy.yaw_deg = rad_to_deg(
-		atan2(env.agent.position.x - spawn.x, -(env.agent.position.z - spawn.z))
-	)
+	enemy.yaw_deg = VectorMath.yaw_deg_from_direction(env.agent.position - spawn)
 
 
 ## Resolves the episode's lighting profile: an explicit override wins, then

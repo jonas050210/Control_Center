@@ -128,8 +128,16 @@ class Page(ttk.Frame):
         return self.app.palette
 
     def tag_style(self, tree: Any, tag: str, role: str) -> None:
-        """Colour a Treeview tag from the live palette and keep it themed."""
-        self._tag_roles.append((tree, tag, role))
+        """Colour a Treeview tag from the live palette and keep it themed.
+
+        Idempotent: a page may call this from a poll handler (the Evaluations
+        table does, once per tick), and recording the same triple twice would
+        grow ``_tag_roles`` without bound - a slow leak that a theme switch
+        then replays entry by entry onto the same tree.
+        """
+        record = (tree, tag, role)
+        if record not in self._tag_roles:
+            self._tag_roles.append(record)
         self._apply_tag_style(tree, tag, role)
 
     def _apply_tag_style(self, tree: Any, tag: str, role: str) -> None:
@@ -178,7 +186,14 @@ class Page(ttk.Frame):
             pill.configure(text=text, style=style)
 
     def board(self, parent: tk.Misc, specs: tuple[WidgetSpec, ...] | None = None) -> LayoutBoard:
-        """Create this page's layout board (cards the operator can rearrange)."""
+        """Create this page's layout board (cards the operator can rearrange).
+
+        The board is attached *here*, not by the caller. A page used to build
+        and fill its board and then never hand it to a geometry manager, so
+        the page rendered its heading and stopped: the cards were laid out
+        inside an unmapped frame, which is why Dashboard/Training/Benchmarks
+        looked empty under every heading.
+        """
         board = LayoutBoard(
             parent,
             self.app.layout_bus,
@@ -189,6 +204,7 @@ class Page(ttk.Frame):
             min_column_width=self.app.px(320, minimum=260),
         )
         self._board = board
+        board.pack(fill="both", expand=True)
         return board
 
     def card(self, parent: tk.Misc, title: str, subtitle: str = "", *, accent: bool = True) -> Any:
@@ -510,7 +526,10 @@ class DashboardPage(Page):
             scale_px=self.app.px,
         )
         area.pack(fill="both", expand=True)
-        board = self.board(area.body)
+        # The warning banner is packed before the board on purpose: both share
+        # ``area.body``, and ``Page.board()`` attaches the board immediately,
+        # so a banner built afterwards would sit *under* every card instead of
+        # above them where a run warning belongs.
         self._warning_banner = ttk.Label(
             area.body,
             text="",
@@ -520,6 +539,7 @@ class DashboardPage(Page):
         )
         self._warning_banner.pack(fill="x", pady=(self.app.px(6, minimum=3), 0))
         self.warning_banner = self._warning_banner
+        board = self.board(area.body)
         board.add("kpis", self._build_kpis)
         board.add("workflow", self._build_workflow)
         board.add("run_insight", self._build_run_insight)
@@ -2569,12 +2589,25 @@ class EvaluationPage(Page):
         self.detail_text.pack(fill="both", expand=True)
 
         self._checkpoint_paths: dict[str, str] = {}
+        self._checkpoint_signature: tuple[tuple[Any, ...], ...] | None = None
         self._eval_paths: dict[str, str] = {}
+        self._evaluation_signature: tuple[tuple[Any, ...], ...] | None = None
         self._selected_evaluation_paths: tuple[str, ...] = ()
         self._evaluation_detail_generation = 0
         self.selected_checkpoint: str | None = None
         self.checkpoint_tree.bind("<<TreeviewSelect>>", self._on_checkpoint_select)
         self.process_id: str | None = None
+
+    #: The keys both inventories render; also their table identity.
+    CHECKPOINT_KEYS = ("run_id", "kind", "path", "modified_utc")
+    EVALUATION_KEYS = (
+        "path",
+        "timesteps",
+        "episodes",
+        "mean_episode_reward",
+        "win_rate",
+        "loss_rate",
+    )
 
     def select_checkpoint(self, path: str) -> None:
         self.selected_checkpoint = path
@@ -2597,6 +2630,14 @@ class EvaluationPage(Page):
         if error is not None or entries is None:
             self.report_error("Checkpoint list refresh failed", error or RuntimeError("unknown"))
             return
+        # Same rule as the runs table: an unchanged list is left alone, which
+        # is the only way the operator's row selection survives a poll tick
+        # (deleting the rows clears the highlight, even when the very same
+        # rows are re-inserted).
+        signature = vm.table_signature(entries, self.CHECKPOINT_KEYS)
+        if signature == self._checkpoint_signature:
+            return
+        self._checkpoint_signature = signature
         self.checkpoint_tree.delete(*self.checkpoint_tree.get_children())
         self._checkpoint_paths.clear()
         for entry in entries:
@@ -2674,6 +2715,10 @@ class EvaluationPage(Page):
         if error is not None or entries is None:
             self.report_error("Evaluation list refresh failed", error or RuntimeError("unknown"))
             return
+        signature = vm.table_signature(entries, self.EVALUATION_KEYS)
+        if signature == self._evaluation_signature:
+            return
+        self._evaluation_signature = signature
         selected = set(self._selected_evaluation_paths)
         restored_paths: list[str] = []
         self.eval_tree.delete(*self.eval_tree.get_children())
@@ -2945,6 +2990,21 @@ class RunsPage(Page):
         self._selected_run_report: dict[str, Any] | None = None
         self._run_detail_generation = 0
         self._pending_run_selection: str | None = None
+        self._rows_signature: tuple[tuple[Any, ...], ...] | None = None
+
+    #: The row keys whose values are rendered; also the identity of the table.
+    COLUMN_KEYS = (
+        "run_id",
+        "state",
+        "progress_percent",
+        "device",
+        "environment_count",
+        "env_workers",
+        "checkpoints",
+        "reward",
+        "win_rate",
+        "modified_utc",
+    )
 
     def select_run(self, run_dir: str) -> None:
         """Selects ``run_dir`` in the table once it is populated.
@@ -2976,6 +3036,19 @@ class RunsPage(Page):
             self.report_error("Run list refresh failed", error or RuntimeError("unknown"))
             return
         rows = vm.runs_table_rows(result)
+        # Rebuilding the table costs a delete plus one insert per run, and it
+        # also drops the selection (and the scroll position) the operator is
+        # looking at. A run list that did not change is left alone; the
+        # pending-selection path below still runs, because navigating here
+        # while a scan is in flight must work even when the table is current.
+        signature = vm.table_signature(rows, self.COLUMN_KEYS)
+        if signature == self._rows_signature and self._row_to_dir:
+            if self._pending_run_selection is not None and self._select_existing_row(
+                self._pending_run_selection
+            ):
+                self._pending_run_selection = None
+            return
+        self._rows_signature = signature
         selected = self._selected_run_dir
         selected_still_present = False
         self.tree.delete(*self.tree.get_children())
@@ -4361,12 +4434,647 @@ class SettingsPage(Page):
             self.refresh()
 
 
+class StatsPage(Page):
+    """What the trained policy receives, decoded from a real recording.
+
+    This page answers the operator's actual question - "where are the
+    enemies, what objects are around the agent, and why did the policy do
+    that?" - with the *same* numbers the network gets. Two honest sources:
+
+    * ``contract.OBSERVATION_SPEC`` is the contract itself (all 106 fields,
+      their meaning and their normalisation), so the table is complete even
+      before a single replay exists;
+    * a recorded replay is the only thing that can show real values. Only
+      ``replay_detail=detailed`` stores the observation vector per tick, and
+      a light replay is reported as such instead of being rendered with
+      zeros that would look like data.
+
+    The TTK Testing evidence manifest sits next to it, because the
+    calibration boundary ("what is verified about the real game, what still
+    needs a manual measurement") is part of the same picture.
+    """
+
+    title = "Stats"
+    subtitle = (
+        "Every value the policy receives: contacts, objects, hearing, memory, raw vector, action."
+    )
+
+    REPLAY_COLUMNS = (
+        ("name", "Replay", 200),
+        ("run", "Run", 140),
+        ("detail", "Detail", 70),
+        ("ticks", "Ticks", 60),
+        ("seed", "Seed", 70),
+        ("map", "Map", 120),
+        ("scenario", "Scenario", 120),
+        ("curriculum", "Level", 55),
+        ("enemies", "Enemies", 65),
+        ("observations", "Observations", 95),
+        ("size", "Size", 80),
+    )
+
+    CONTACT_COLUMNS = (
+        ("slot", "Contact", 110),
+        ("state", "State", 150),
+        ("relative_position", "Relative position", 150),
+        ("distance", "Distance", 75),
+        ("bearing", "Bearing", 75),
+        ("elevation", "Elevation", 75),
+        ("health", "Health", 70),
+        ("visible", "Visible", 60),
+        ("in_fov", "In FOV", 60),
+        ("los", "LOS", 55),
+        ("info_age", "Age", 60),
+        ("confidence", "Confidence", 85),
+        ("source", "Source", 70),
+    )
+
+    WORLD_COLUMNS = (
+        ("field", "Object / memory", 190),
+        ("distance", "Value", 80),
+        ("bearing", "Bearing", 80),
+        ("note", "What it is", 260),
+    )
+
+    AUDIO_COLUMNS = (
+        ("field", "Hearing", 190),
+        ("value", "Value", 120),
+        ("note", "What it is", 260),
+    )
+
+    ACTION_COLUMNS = (
+        ("component", "Action component", 130),
+        ("value", "Value", 60),
+        ("meaning", "Meaning", 420),
+    )
+
+    VECTOR_COLUMNS = (
+        ("index", "#", 60),
+        ("field", "Field", 260),
+        ("value", "Value this tick", 150),
+        ("meaning", "Meaning", 380),
+        ("normalization", "Normalisation", 260),
+    )
+
+    EVIDENCE_COLUMNS = (
+        ("mechanic", "Mechanic", 220),
+        ("status", "Evidence status", 150),
+        ("measured_value", "Measured / notes", 240),
+        ("rule", "Allowed project behaviour", 420),
+        ("source", "Source", 200),
+    )
+
+    #: How many poll ticks between two automatic replay-list rescans. The
+    #: list only changes when a run writes a replay, so polling it every
+    #: tick would re-read every replay header for nothing.
+    RESCAN_EVERY = 20
+
+    widgets = (
+        WidgetSpec(
+            "source",
+            "Replay source",
+            "Which recording the page decodes: run, seed, map, level.",
+            default_span=3,
+            max_span=3,
+            removable=False,
+        ),
+        WidgetSpec(
+            "summary",
+            "Policy input at a glance",
+            "Tick navigation plus the headline values of one observation.",
+            default_span=3,
+            max_span=3,
+        ),
+        WidgetSpec(
+            "vector",
+            "Observation vector (raw)",
+            "All 106 fields, grouped, exactly as the contract defines them.",
+            default_span=3,
+            max_span=3,
+        ),
+        WidgetSpec(
+            "contacts",
+            "Contacts / enemies",
+            "The three tracked enemies: position, distance, bearing, perception.",
+            default_span=2,
+        ),
+        WidgetSpec(
+            "world",
+            "Objects, cover and memory",
+            "World geometry, corpses, remembered cover/danger and exploration.",
+        ),
+        WidgetSpec(
+            "hearing",
+            "Hearing",
+            "What the policy perceives through sound.",
+        ),
+        WidgetSpec(
+            "action",
+            "Action the policy took",
+            "The six action components emitted for the selected tick.",
+            default_span=2,
+        ),
+        WidgetSpec(
+            "evidence",
+            "TTK Testing evidence",
+            "Verified mechanics versus measurements that are still required.",
+            default_span=3,
+            max_span=3,
+        ),
+    )
+
+    def build(self) -> None:
+        area = ScrollArea(self, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
+        area.pack(fill="both", expand=True)
+        board = self.board(area.body)
+        board.add("source", self._build_source_card)
+        board.add("summary", self._build_summary_card)
+        board.add("vector", self._build_vector_card)
+        board.add("contacts", self._build_contacts_card)
+        board.add("world", self._build_world_card)
+        board.add("hearing", self._build_hearing_card)
+        board.add("action", self._build_action_card)
+        board.add("evidence", self._build_evidence_card)
+        board.rebuild()
+
+        self._replays: list[dict[str, Any]] = []
+        self._replay: dict[str, Any] | None = None
+        self._replay_signature: tuple[Any, ...] | None = None
+        self._evidence_loaded = False
+        self._tick = 0
+        self._poll_count = 0
+        self._scan_requested = True
+        # The contract tables are complete before any recording exists: the
+        # field list is part of the contract, only the values need a replay.
+        # An empty page used to imply "the policy receives nothing".
+        self._fill_vector(None)
+        self._fill_contacts(None)
+        self._fill_world(None)
+        self._fill_audio(None)
+        self._fill_action(None)
+
+    # -- cards -------------------------------------------------------------
+
+    def _build_source_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent,
+            "Replay source",
+            "Replays live in <output root>/<run>/replays; only detailed ones store the vector",
+        )
+        row = ttk.Frame(card.body, style="CardInner.TFrame")
+        row.pack(fill="x")
+        self.replay_info_label = ttk.Label(
+            row,
+            text="Scanning for recorded replays…",
+            style="CardLabel.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        )
+        self.replay_info_label.pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Rescan", style="Ghost.TButton", command=self._rescan_replays).pack(
+            side="right"
+        )
+        self.contract_label = ttk.Label(
+            card.body,
+            text="",
+            style="CardLabel.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        )
+        self.contract_label.pack(anchor="w", pady=(0, self.app.px(6, minimum=2)))
+        self.replay_tree = _scrollable_table(
+            card.body, self.REPLAY_COLUMNS, expand=False, bus=self.app.bus
+        )
+        self.replay_tree.bind("<<TreeviewSelect>>", self._on_replay_selected)
+        self.tag_style(self.replay_tree, "detailed", "ok")
+        self.tag_style(self.replay_tree, "light", "text_dim")
+        return card
+
+    def _build_summary_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(parent, "Policy input at a glance", "One recorded tick at a time")
+        controls = ttk.Frame(card.body, style="CardInner.TFrame")
+        controls.pack(fill="x")
+        ttk.Button(
+            controls, text="◀ Prev", style="Ghost.TButton", command=lambda: self._step_tick(-1)
+        ).pack(side="left")
+        ttk.Button(
+            controls, text="Next ▶", style="Ghost.TButton", command=lambda: self._step_tick(1)
+        ).pack(side="left", padx=(4, 8))
+        self.tick_var = tk.StringVar(value="0")
+        ttk.Label(controls, text="Tick").pack(side="left")
+        tick_entry = ttk.Entry(controls, textvariable=self.tick_var, width=8)
+        tick_entry.pack(side="left", padx=(4, 4))
+        tick_entry.bind("<Return>", lambda _e: self._jump_to_tick())
+        ttk.Button(controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick).pack(
+            side="left"
+        )
+        self.tick_label = ttk.Label(controls, text="no replay selected", style="CardLabel.TLabel")
+        self.tick_label.pack(side="left", padx=(12, 0))
+        self.summary_label = ttk.Label(
+            card.body,
+            text="Select a detailed replay to decode what the policy received.",
+            style="CardLabel.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        )
+        self.summary_label.pack(anchor="w", pady=(self.app.px(8, minimum=4), 0))
+        self.event_label = ttk.Label(
+            card.body,
+            text="",
+            style="PageSubtitle.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        )
+        self.event_label.pack(anchor="w", pady=(self.app.px(4, minimum=2), 0))
+        return card
+
+    def _build_vector_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent,
+            "Observation vector (raw)",
+            "Grouped by contract section; the value column is the recorded tick",
+        )
+        self.vector_tree = _scrollable_table(card.body, self.VECTOR_COLUMNS, bus=self.app.bus)
+        self.tag_style(self.vector_tree, "section", "accent")
+        return card
+
+    def _build_contacts_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent,
+            "Contacts / enemies",
+            "Relative position of each tracked enemy — never a world coordinate",
+        )
+        self.contact_tree = _scrollable_table(
+            card.body, self.CONTACT_COLUMNS, expand=False, bus=self.app.bus
+        )
+        return card
+
+    def _build_world_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent,
+            "Objects, cover and memory",
+            "Geometry the agent can see or remembers",
+        )
+        self.world_tree = _scrollable_table(
+            card.body, self.WORLD_COLUMNS, expand=False, bus=self.app.bus
+        )
+        return card
+
+    def _build_hearing_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(parent, "Hearing", "Directional perception, not ground truth")
+        self.audio_tree = _scrollable_table(
+            card.body, self.AUDIO_COLUMNS, expand=False, bus=self.app.bus
+        )
+        return card
+
+    def _build_action_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(parent, "Action the policy took", "One row per action component")
+        self.action_tree = _scrollable_table(
+            card.body, self.ACTION_COLUMNS, expand=False, bus=self.app.bus
+        )
+        return card
+
+    def _build_evidence_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent,
+            "TTK Testing evidence",
+            "Verified / calibration-required / excluded, from sandboxai.ttk_testing",
+        )
+        self.evidence_label = ttk.Label(
+            card.body, text="Loading evidence manifest…", style="CardLabel.TLabel", justify="left"
+        )
+        self.evidence_label.pack(anchor="w", pady=(0, self.app.px(6, minimum=3)))
+        self.evidence_tree = _scrollable_table(
+            card.body, self.EVIDENCE_COLUMNS, expand=False, bus=self.app.bus
+        )
+        # Registered once: ``tag_style`` records the (tree, tag, role) triple so
+        # a theme switch replays it, and re-registering per row would grow that
+        # list every poll.
+        self.tag_style(self.evidence_tree, "ttk-verified", "ok")
+        self.tag_style(self.evidence_tree, "ttk-pending", "warn")
+        self.tag_style(self.evidence_tree, "ttk-excluded", "text_dim")
+        return card
+
+    # -- polling -----------------------------------------------------------
+
+    def refresh(self) -> None:
+        self._poll_count += 1
+        # The replay list is re-read on a timer, not on every 600 ms tick: it
+        # only changes when a run writes a recording, and this scan is the
+        # only disk work the page does. The scan keeps running while a replay
+        # is selected - otherwise a replay written during the session would
+        # never appear without pressing Rescan - and an unchanged listing is
+        # left alone in ``_on_replays``, so the operator's selection and
+        # scroll position survive it.
+        if self._scan_requested or self._poll_count % self.RESCAN_EVERY == 1:
+            self._scan_requested = False
+            self.submit_poll("replays", self.adapter.list_replays, self._on_replays)
+        if not self._evidence_loaded:
+            self.submit_poll("ttk-evidence", self.adapter.ttk_evidence, self._on_evidence)
+
+    def _rescan_replays(self) -> None:
+        self._scan_requested = True
+        self.submit_poll("replays", self.adapter.list_replays, self._on_replays)
+
+    def _on_replays(
+        self, replays: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or replays is None:
+            self.report_error("Replay scan failed", error or RuntimeError("unknown error"))
+            return
+        signature = tuple(
+            (entry.get("path"), entry.get("size_bytes"), entry.get("modified")) for entry in replays
+        )
+        self._replays = list(replays)
+        if signature == self._replay_signature and self._replay is not None:
+            # Nothing on disk changed since the last scan. Rebuilding the
+            # table would drop and re-add every row for no reason, and with it
+            # the operator's selection and scroll position.
+            return
+        self._replay_signature = signature
+        previous = str((self._replay or {}).get("path") or "")
+        rows = vm.replay_table_rows(self._replays)
+        selected = ""
+        self.replay_tree.delete(*self.replay_tree.get_children())
+        for index, row in enumerate(rows):
+            item = self.replay_tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(
+                    row["name"],
+                    row["run"],
+                    row["detail"],
+                    row["ticks"],
+                    row["seed"],
+                    row["map"],
+                    row["scenario"],
+                    row["curriculum"],
+                    row["enemies"],
+                    row["observations"],
+                    row["size"],
+                ),
+            )
+            self.replay_tree.item(
+                item, tags=("detailed" if row["observations"] == "yes" else "light",)
+            )
+            if str(self._replays[index].get("path")) == previous:
+                selected = item
+        if not rows:
+            # A scan that finds nothing must also clear what the last scan
+            # decoded: the values on screen belong to files that are gone, and
+            # leaving them up would present stale evidence as current.
+            self._clear_decode()
+            self.replay_info_label.configure(
+                text=(
+                    "No replay found under "
+                    f"{self.adapter.output_root}. Train a run with replay_detail=detailed "
+                    "(Control Center → Training → Advanced, or --replay-detail detailed) "
+                    "and this page will decode it."
+                )
+            )
+            return
+        detailed = sum(1 for row in rows if row["observations"] == "yes")
+        self.replay_info_label.configure(
+            text=(
+                f"{len(rows)} replay(s) found — {detailed} store the observation vector. "
+                "Only a detailed replay can show what the policy received."
+            )
+        )
+        if selected:
+            self.replay_tree.selection_set(selected)
+        self._select_row(selected or "0")
+
+    def _select_row(self, item: str) -> None:
+        try:
+            index = int(item)
+        except ValueError:
+            return
+        if not 0 <= index < len(self._replays):
+            return
+        self.replay_tree.selection_set(item)
+        self._load_replay(self._replays[index], 0)
+
+    def _on_replay_selected(self, _event: object = None) -> None:
+        selection = self.replay_tree.selection()
+        if not selection:
+            return
+        try:
+            index = int(selection[0])
+        except ValueError:
+            return
+        if not 0 <= index < len(self._replays):
+            return
+        self._load_replay(self._replays[index], 0)
+
+    def _load_replay(self, replay: dict[str, Any], tick: int) -> None:
+        path = str(replay.get("path") or "")
+        if not path:
+            return
+        self.submit_poll(
+            "replay-tick",
+            partial(self.adapter.replay_stats, path, tick),
+            self._on_replay_stats,
+        )
+
+    def _on_replay_stats(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
+        if error is not None or not result:
+            self.report_error(
+                "Replay decode failed", error or RuntimeError("no replay data returned")
+            )
+            # Clear first, then say why: a failed decode must not leave the
+            # previous replay's values (or its contract warning) on screen.
+            self._clear_decode()
+            self.summary_label.configure(
+                text="This replay could not be decoded. Rescan after the run finishes writing it."
+            )
+            return
+        self._replay = result
+        self._tick = int(result.get("tick_index") or 0)
+        self.tick_var.set(str(self._tick))
+        view = vm.stats_source_view(result)
+        self.replay_info_label.configure(text=f"{view['headline']}\n{view['detail']}")
+        contract = vm.replay_contract_view(result)
+        # A theme style, never a raw colour: the label must repaint with the
+        # rest of the window when the operator switches theme.
+        self.contract_label.configure(
+            text=contract["text"],
+            style="CardLabel.TLabel" if contract["matches"] else "Warning.TLabel",
+        )
+        summary = vm.observation_summary_view(result.get("observation"))
+        self.summary_label.configure(text=summary["summary"])
+        count = int(result.get("tick_count") or 0)
+        self.tick_label.configure(
+            text=f"tick {self._tick + 1} / {count}" if count else "this replay has no ticks"
+        )
+        parts: list[str] = []
+        events = result.get("events") or []
+        if events:
+            parts.append(
+                "Events at this tick: " + ", ".join(str(event.get("kind")) for event in events)
+            )
+        reward = result.get("reward")
+        if isinstance(reward, (int, float)):
+            parts.append(f"reward {vm.format_number(reward, 3)}")
+        self.event_label.configure(text="   ·   ".join(parts))
+        self._fill_vector(result.get("observation"))
+        self._fill_contacts(result.get("observation"))
+        self._fill_world(result.get("observation"))
+        self._fill_audio(result.get("observation"))
+        self._fill_action(result.get("action"))
+
+    def _clear_decode(self) -> None:
+        """Show the contract without a recording again.
+
+        Used when a scan finds no replay and when a decode fails: the page
+        must not keep presenting values (or a contract warning) from a file
+        that is no longer there. Everything returns to the same
+        "no recording yet" state the page starts in, with the contract table
+        still complete - the contract does not need a replay, only the values
+        do.
+        """
+        self._replay = None
+        self._tick = 0
+        self.tick_var.set("0")
+        self.tick_label.configure(text="no replay selected")
+        self.summary_label.configure(
+            text="Select a detailed replay to decode what the policy received."
+        )
+        self.event_label.configure(text="")
+        self.contract_label.configure(text="", style="CardLabel.TLabel")
+        self._fill_vector(None)
+        self._fill_contacts(None)
+        self._fill_world(None)
+        self._fill_audio(None)
+        self._fill_action(None)
+
+    def _step_tick(self, delta: int) -> None:
+        if self._replay is None:
+            return
+        count = int(self._replay.get("tick_count") or 0)
+        if count <= 0:
+            return
+        target = max(0, min(count - 1, self._tick + delta))
+        if target == self._tick:
+            return
+        path = str(self._replay.get("path") or "")
+        self.submit_poll(
+            "replay-tick",
+            partial(self.adapter.replay_stats, path, target),
+            self._on_replay_stats,
+        )
+
+    def _jump_to_tick(self) -> None:
+        if self._replay is None:
+            return
+        count = max(1, int(self._replay.get("tick_count") or 1))
+        try:
+            wanted = int(self.tick_var.get().strip())
+        except ValueError:
+            self.tick_var.set(str(self._tick))
+            return
+        target = max(0, min(count - 1, wanted))
+        if target == self._tick:
+            return
+        path = str(self._replay.get("path") or "")
+        self.submit_poll(
+            "replay-tick",
+            partial(self.adapter.replay_stats, path, target),
+            self._on_replay_stats,
+        )
+
+    def _on_evidence(self, summary: dict[str, Any] | None, error: BaseException | None) -> None:
+        # One result is enough: the manifest is a static local table, so it
+        # either loaded or the page says it could not. Polling forever would
+        # just repeat a failure every 600 ms.
+        self._evidence_loaded = True
+        if error is not None or summary is None:
+            self.evidence_label.configure(text="Evidence manifest unavailable.")
+            return
+        view = vm.ttk_evidence_view(summary)
+        self.evidence_label.configure(text=f"{view['headline']}   ·   checked {view['checked_on']}")
+        self.evidence_tree.delete(*self.evidence_tree.get_children())
+        for row in vm.ttk_evidence_rows(summary):
+            item = self.evidence_tree.insert(
+                "",
+                "end",
+                values=(
+                    row["mechanic"],
+                    row["status"],
+                    row["measured_value"],
+                    row["rule"],
+                    row["source"],
+                ),
+            )
+            tag = {
+                "verified": "ttk-verified",
+                "calibration required": "ttk-pending",
+                "excluded": "ttk-excluded",
+            }.get(str(row["status"]))
+            if tag:
+                self.evidence_tree.item(item, tags=(tag,))
+
+    # -- tables ------------------------------------------------------------
+
+    def _fill_vector(self, observation: Any) -> None:
+        self.vector_tree.delete(*self.vector_tree.get_children())
+        rows = vm.observation_field_rows(observation)
+        for section, fields in vm.observation_section_rows(rows):
+            parent = self.vector_tree.insert("", "end", text=section, open=True, tags=("section",))
+            for row in fields:
+                self.vector_tree.insert(
+                    parent,
+                    "end",
+                    values=(
+                        row["index"],
+                        row["field"],
+                        row["value"],
+                        row["meaning"],
+                        row["normalization"],
+                    ),
+                )
+
+    def _fill_table(self, tree: Any, rows: list[dict[str, Any]], columns: tuple[str, ...]) -> None:
+        tree.delete(*tree.get_children())
+        for row in rows:
+            tree.insert("", "end", values=tuple(row.get(column, "") for column in columns))
+
+    def _fill_contacts(self, observation: Any) -> None:
+        self._fill_table(
+            self.contact_tree,
+            vm.contact_rows(observation),
+            tuple(key for key, _title, _width in self.CONTACT_COLUMNS),
+        )
+
+    def _fill_world(self, observation: Any) -> None:
+        self._fill_table(
+            self.world_tree,
+            vm.world_rows(observation),
+            tuple(key for key, _title, _width in self.WORLD_COLUMNS),
+        )
+
+    def _fill_audio(self, observation: Any) -> None:
+        self._fill_table(
+            self.audio_tree,
+            vm.audio_rows(observation),
+            tuple(key for key, _title, _width in self.AUDIO_COLUMNS),
+        )
+
+    def _fill_action(self, action: Any) -> None:
+        self._fill_table(
+            self.action_tree,
+            vm.action_rows(action),
+            tuple(key for key, _title, _width in self.ACTION_COLUMNS),
+        )
+
+
 PAGE_CLASSES: tuple[type[Page], ...] = (
     DashboardPage,
     TrainingPage,
     BenchmarkPage,
     EvaluationPage,
     RunsPage,
+    StatsPage,
     SystemPage,
     SettingsPage,
 )

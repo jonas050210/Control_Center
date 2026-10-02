@@ -109,6 +109,12 @@ jobs:
       # A commit comment is a push notification, so it is reserved for
       # failures. Green runs used to post a 55 KB comment on every single
       # push, which buried the real ones.
+      #
+      # The tail alone was not enough to debug a failure: the first engine
+      # error appears at the START of the output, and the summary at the end,
+      # so the comment now carries a filtered extract (every line that names
+      # an error, capped) followed by the tail. The raw log is still
+      # downloadable from the run page when it is available.
       - name: Comment on the commit when the suite fails
         if: failure() && github.event_name == 'push'
         shell: bash
@@ -118,6 +124,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import re
 
           path = "godot_output.txt"
           raw = (
@@ -125,11 +132,30 @@ jobs:
               if os.path.exists(path)
               else "(no output captured)"
           )
-          if len(raw) > 50000:
-              raw = raw[-50000:]
+          interesting = re.compile(
+              r"SCRIPT ERROR|Parse Error|Compile error|Invalid|Nonexistent|"
+              r"ERROR|WARNING|at: |->|SANDBOXAI TEST SUMMARY"
+          )
+          extract = []
+          for line in raw.splitlines():
+              if not interesting.search(line):
+                  continue
+              if len(line) > 400:
+                  line = line[:400] + " ..."
+              extract.append(line)
+              if len(extract) >= 600:
+                  break
+          # Keep the START of the extract: the first engine error is the root
+          # cause, and everything after it is usually a consequence of it.
+          extract_text = "\n".join(extract)[:35000]
+          tail_text = raw[-15000:]
           body = (
-              f"### :x: Godot suite failed on {os.environ.get('RUNNER_OS', '?')} (tail)\n"
-              f"```text\n{raw}\n```"
+              f"### :x: Godot suite failed on {os.environ.get('RUNNER_OS', '?')}\n\n"
+              "**Error extract** (first 600 lines naming an error, each capped at "
+              "400 chars):\n"
+              f"```text\n{extract_text}\n```\n\n"
+              "**Tail** (last 15000 chars, holds the failure list):\n"
+              f"```text\n{tail_text}\n```\n"
           )
           with open("payload.json", "w", encoding="utf-8") as handle:
               json.dump({"body": body}, handle)

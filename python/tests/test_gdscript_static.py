@@ -27,6 +27,7 @@ from optional_deps import GDTOOLKIT_REASON, HAS_GDTOOLKIT
 from sandboxai.gdscript_analysis import (
     ProjectIndex,
     analyze,
+    check_class_cache_references,
     check_enum_members,
     check_local_method_calls,
     check_static_calls,
@@ -438,6 +439,79 @@ class EnumMemberTests(unittest.TestCase):
 
     def test_repository_has_no_enum_member_findings(self):
         self.assertEqual(check_enum_members(ProjectIndex(REPO_ROOT)), [])
+
+
+class ClassCacheReferenceTests(unittest.TestCase):
+    """A `class_name` is an editor artifact; headless runs need a preload.
+
+    Regression guard for a real CI failure: `environment_reset.gd`,
+    `world_generator.gd` and `scenario_library.gd` called
+    `VectorMath.yaw_deg_from_direction(...)` after the helper was extracted,
+    but only one of them received the `const VectorMath = preload(...)` line.
+    Every static check stayed green because `class_name VectorMath` makes the
+    bare name resolve project-wide, while the engine - which has no class
+    cache in a `--script` run on a fresh checkout - refused to compile the
+    three files. The result was 38 engine test failures whose messages talk
+    about completely different things ("Nonexistent function 'reset_legacy'
+    in base 'GDScript'", "env0 should be back at spawn", a weapon handling
+    level that never armed) because every caller of those scripts fails.
+    """
+
+    def _project(self, usage: str) -> Path:
+        root = Path(tempfile.mkdtemp())
+        (root / "scripts").mkdir()
+        (root / "scripts" / "helper.gd").write_text(
+            "class_name Helper\nextends RefCounted\n\n"
+            "static func yaw(direction: Vector3) -> float:\n\treturn 0.0\n",
+            encoding="utf-8",
+        )
+        (root / "scripts" / "user.gd").write_text(
+            "class_name User\nextends RefCounted\n\n" + usage, encoding="utf-8"
+        )
+        return root
+
+    def test_bare_class_name_reference_is_flagged(self):
+        root = self._project("func run() -> float:\n\treturn Helper.yaw(Vector3.ZERO)\n")
+        findings = check_class_cache_references(ProjectIndex(root))
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0].kind, "class-name-without-preload")
+        self.assertIn("Helper.yaw", findings[0].message)
+        self.assertIn('const Helper = preload("res://scripts/helper.gd")', findings[0].message)
+
+    def test_a_preload_const_makes_the_reference_safe(self):
+        root = self._project(
+            'const Helper = preload("res://scripts/helper.gd")\n\n'
+            "func run() -> float:\n\treturn Helper.yaw(Vector3.ZERO)\n"
+        )
+        self.assertEqual(check_class_cache_references(ProjectIndex(root)), [])
+
+    def test_a_const_inherited_from_the_base_script_is_safe(self):
+        # A subclass may use a base script's const by name, which is how
+        # `ai_stub_controller.gd` reaches `Action.idle()` through its base.
+        root = self._project(
+            'const Base = preload("res://scripts/base.gd")\n\nfunc run() -> float:\n'
+            "\treturn Helper.yaw(Vector3.ZERO)\n"
+        )
+        (root / "scripts" / "base.gd").write_text(
+            "class_name Base\nextends RefCounted\n\n"
+            'const Helper = preload("res://scripts/helper.gd")\n',
+            encoding="utf-8",
+        )
+        (root / "scripts" / "user.gd").write_text(
+            "extends Base\n\nfunc run() -> float:\n\treturn Helper.yaw(Vector3.ZERO)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(check_class_cache_references(ProjectIndex(root)), [])
+
+    def test_type_annotations_and_own_class_name_are_not_flagged(self):
+        root = self._project(
+            "func run(helper: Helper) -> void:\n\tpass\n"
+            "\nstatic func make() -> User:\n\treturn User.new()\n"
+        )
+        self.assertEqual(check_class_cache_references(ProjectIndex(root)), [])
+
+    def test_repository_has_no_class_cache_findings(self):
+        self.assertEqual(check_class_cache_references(ProjectIndex(REPO_ROOT)), [])
 
 
 if __name__ == "__main__":

@@ -25,8 +25,8 @@ from sandboxai.manifest import (
 class ProvenanceSectionTests(unittest.TestCase):
     def test_contract_fingerprint_is_the_frozen_contract(self):
         fingerprint = contract_fingerprint()
-        self.assertEqual(fingerprint["version"], 3)
-        self.assertEqual(fingerprint["observation_dim"], 84)
+        self.assertEqual(fingerprint["version"], 4)
+        self.assertEqual(fingerprint["observation_dim"], 106)
         self.assertEqual(fingerprint["action_nvec"], [3, 3, 3, 3, 2, 2])
 
     def test_package_versions_report_every_tracked_dependency(self):

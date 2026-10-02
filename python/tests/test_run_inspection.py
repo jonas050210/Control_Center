@@ -58,7 +58,7 @@ def _make_run(
                 "run_id": name,
                 "experiment_id": "exp",
                 "seed": 1234,
-                "contract": {"observation_dim": 84, "action_nvec": [3, 3, 3, 3, 2, 2]},
+                "contract": {"observation_dim": 106, "action_nvec": [3, 3, 3, 3, 2, 2]},
                 "code": {"commit": "abc123def456", "branch": "main", "dirty": dirty},
                 "host": {"python": "3.11.2", "system": "Linux", "logical_cpus": 12},
                 "godot": {"version": "4.7.2.stable"},
@@ -236,6 +236,102 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(index["runs"][-1]["run_id"], "20260103-000000")
 
 
+class LineCountTests(unittest.TestCase):
+    """Log line counts are memoised, and only extended for grown files."""
+
+    def setUp(self):
+        from sandboxai import run_inspection
+
+        run_inspection._LINE_COUNTS.clear()
+
+    def test_a_full_count_is_the_reference(self):
+        from sandboxai.run_inspection import _count_lines, _count_lines_cached
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "training.jsonl"
+            path.write_text("a\nb\nc\n", encoding="utf-8")
+            self.assertEqual(_count_lines(path), 3)
+            self.assertEqual(_count_lines_cached(path), 3)
+            # A second call must agree with the first, cache or not.
+            self.assertEqual(_count_lines_cached(path), 3)
+
+    def test_an_unchanged_file_is_not_read_again(self):
+        from sandboxai.run_inspection import _count_lines_cached
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "training.jsonl"
+            path.write_text("a\nb\n", encoding="utf-8")
+            self.assertEqual(_count_lines_cached(path), 2)
+
+            reads = {"count": 0}
+            real_open = Path.open
+
+            def counting_open(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                reads["count"] += 1
+                return real_open(self, *args, **kwargs)
+
+            Path.open = counting_open  # type: ignore[method-assign]
+            try:
+                self.assertEqual(_count_lines_cached(path), 2)
+                self.assertGreaterEqual(_count_lines_cached(path), 2)
+            finally:
+                Path.open = real_open  # type: ignore[method-assign]
+        self.assertEqual(reads["count"], 0, "an unchanged log was read again")
+
+    def test_an_appended_file_is_extended_not_recounted(self):
+        from sandboxai import run_inspection
+        from sandboxai.run_inspection import _count_lines, _count_lines_cached
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "training.jsonl"
+            path.write_text("a\nb\n", encoding="utf-8")
+            self.assertEqual(_count_lines_cached(path), 2)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("c\nd\n")
+            self.assertEqual(_count_lines_cached(path), 4)
+            self.assertEqual(_count_lines_cached(path), _count_lines(path))
+            # A trailing partial line is counted once, not twice.
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("e")
+            self.assertEqual(_count_lines_cached(path), 5)
+            self.assertEqual(_count_lines_cached(path), _count_lines(path))
+            # Completing that partial line does not add another line.
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("\n")
+            self.assertEqual(_count_lines_cached(path), 5)
+            self.assertEqual(_count_lines_cached(path), _count_lines(path))
+            self.assertIsNotNone(run_inspection._LINE_COUNTS)
+
+    def test_a_shrunk_file_is_recounted_from_zero(self):
+        from sandboxai.run_inspection import _count_lines, _count_lines_cached
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "training.jsonl"
+            path.write_text("a\nb\nc\nd\n", encoding="utf-8")
+            self.assertEqual(_count_lines_cached(path), 4)
+            # A new run reusing the path: the old offset is not a safe place
+            # to resume from, so the count starts over (the same rule
+            # IncrementalJsonlTailer uses).
+            path.write_text("x\n", encoding="utf-8")
+            self.assertEqual(_count_lines_cached(path), 1)
+            self.assertEqual(_count_lines_cached(path), _count_lines(path))
+
+    def test_the_count_is_bounded(self):
+        from sandboxai import run_inspection
+
+        original = run_inspection._LINE_COUNTS_LIMIT
+        run_inspection._LINE_COUNTS_LIMIT = 3
+        try:
+            with TemporaryDirectory() as tmp:
+                for index in range(5):
+                    path = Path(tmp) / f"log-{index}.jsonl"
+                    path.write_text("a\n", encoding="utf-8")
+                    run_inspection._count_lines_cached(path)
+            self.assertLessEqual(len(run_inspection._LINE_COUNTS), 3)
+        finally:
+            run_inspection._LINE_COUNTS_LIMIT = original
+
+
 class TailTests(unittest.TestCase):
     def test_tail_returns_the_last_objects(self):
         with TemporaryDirectory() as tmp:
@@ -266,6 +362,40 @@ class TailTests(unittest.TestCase):
             self.assertGreater(path.stat().st_size, 1 << 20)
             rows = tail_jsonl(path, 2)
         self.assertEqual([row["event"] for row in rows], [59_998, 59_999])
+
+    def test_tail_parses_only_the_rows_it_returns(self):
+        """A megabyte window must not be decoded row by row to return five.
+
+        The Dashboard tails the newest run's log on every poll tick; parsing
+        every line in the trailing window made that the page's most expensive
+        operation, so the window is walked from its end and stops as soon as
+        the requested rows are in hand.
+        """
+        from sandboxai import run_inspection
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "training.jsonl"
+            with path.open("w", encoding="utf-8") as handle:
+                for index in range(20_000):
+                    handle.write(json.dumps({"step": index, "reward": 0.5}) + "\n")
+
+            parses = {"count": 0}
+            real_loads = run_inspection.json.loads
+
+            def counting_loads(payload, *args, **kwargs):
+                parses["count"] += 1
+                return real_loads(payload, *args, **kwargs)
+
+            run_inspection.json.loads = counting_loads
+            try:
+                rows = tail_jsonl(path, 5)
+            finally:
+                run_inspection.json.loads = real_loads
+
+        self.assertEqual([row["step"] for row in rows], [19_995, 19_996, 19_997, 19_998, 19_999])
+        # Five rows plus the tolerance for blank/partial trailing lines; the
+        # point is that it is not the ~20,000 lines of the window.
+        self.assertLess(parses["count"], 20)
 
     def test_read_json_distinguishes_absent_from_broken(self):
         with TemporaryDirectory() as tmp:

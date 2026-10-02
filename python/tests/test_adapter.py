@@ -1,9 +1,11 @@
 import json
 import sys
 import time
+from pathlib import Path
 
 from sandboxai.adapter import ProcessManager, SandboxAIAdapter
 from sandboxai.config import TrainingConfig
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 from sandboxai.telemetry import JsonlTelemetry
 
 
@@ -607,3 +609,215 @@ def test_configure_godot_executable_only_persists_a_verified_executable(tmp_path
     assert settings_path.is_file()
     assert adapter.godot_executable_setting() == str(fake)
     adapter.close()
+
+
+# ---------------------------------------------------------------------------
+# Stats page source: real replays on disk
+# ---------------------------------------------------------------------------
+
+
+def _write_replay(root, name="episode_0001.jsonl", *, detail="detailed", ticks=3, seed=4242):
+    """Write a real (recorder-produced) replay under ``<root>/<run>/replays``."""
+    from sandboxai.replay import ReplayHeader, ReplayRecorder
+
+    run_dir = root / "runs" / "run-a" / "replays"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    recorder = ReplayRecorder(
+        header=ReplayHeader(
+            seed=seed,
+            map_id="blind_corner",
+            scenario="corner_fight",
+            lighting="low_light",
+            enemy_count=2,
+            curriculum_level=6,
+            policy_id="unit-brain",
+        ),
+        detail=detail,
+    )
+    recorder.start(seed=seed)
+    for index in range(ticks):
+        observation = [0.0] * OBSERVATION_FIELD_COUNT
+        observation[16] = 1.0  # in_combat
+        observation[9] = 0.5  # agent_health_norm
+        recorder.record_step(
+            [index % 3, 1, 1, 1, index % 2, 0],
+            0.25,
+            observation if detail == "detailed" else None,
+            done=index == ticks - 1,
+        )
+    recorder.save(run_dir / name)
+    return run_dir / name
+
+
+def test_list_replays_reads_headers_without_parsing_the_whole_file(tmp_path):
+    path = _write_replay(tmp_path / "training")
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    replays = adapter.list_replays()
+    assert len(replays) == 1
+    entry = replays[0]
+    assert entry["path"] == str(path)
+    assert entry["run"] == "run-a"
+    assert entry["header"]["seed"] == 4242
+    assert entry["header"]["detail"] == "detailed"
+    assert entry["header"]["curriculum_level"] == 6
+    assert entry["ticks"] == 3
+    assert entry["size_bytes"] > 0
+    assert "error" not in entry
+
+
+def test_list_replays_reports_a_broken_header_instead_of_hiding_the_file(tmp_path):
+    run_dir = tmp_path / "training" / "runs" / "run-b" / "replays"
+    run_dir.mkdir(parents=True)
+    (run_dir / "broken.jsonl").write_text("{not json}\n", encoding="utf-8")
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    entries = {entry["name"]: entry for entry in adapter.list_replays()}
+    assert "broken.jsonl" in entries
+    assert entries["broken.jsonl"]["error"]
+    assert "header" not in entries["broken.jsonl"]
+
+
+def test_list_replays_without_an_output_root_is_empty_not_an_error(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "missing")
+    assert adapter.list_replays() == []
+
+
+def test_list_replays_does_not_re_read_an_unchanged_replay(tmp_path, monkeypatch):
+    """A warm rescan must not open replay files again.
+
+    The Stats page lists replays on a timer; opening every (or even the most
+    recent 64) recording on every tick is the difference between a window
+    that idles and one that keeps re-reading the disk. The cache is keyed by
+    ``(mtime_ns, size)``, so an unchanged file is served from memory."""
+    path = _write_replay(tmp_path / "training")
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    assert adapter.list_replays()[0]["ticks"] == 3
+
+    opened: list[Path] = []
+    original_open = Path.open
+
+    def counting_open(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        opened.append(self)
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    entries = adapter.list_replays()
+    assert entries[0]["ticks"] == 3
+    assert path not in opened, "a warm rescan re-read a replay that cannot have changed"
+
+
+def test_list_replays_notices_a_replay_that_changed(tmp_path):
+    """The stamp is (mtime_ns, size): an edited recording must not stay cached."""
+    _write_replay(tmp_path / "training", ticks=3)
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    assert adapter.list_replays()[0]["ticks"] == 3
+
+    _write_replay(tmp_path / "training", ticks=5)
+    assert adapter.list_replays()[0]["ticks"] == 5
+
+
+def _rewrite_as_older_contract(path, observation_dim=84):
+    """Turn a freshly recorded replay into one recorded under an older contract.
+
+    The file format is unchanged - only the header's ``observation_dim`` and
+    the stored observations shrink, exactly like a replay written before the
+    vector grew. This is what ``--allow-contract-mismatch`` exists for.
+    """
+    lines = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        payload = json.loads(raw)
+        if "header" in payload:
+            payload["header"]["observation_dim"] = observation_dim
+        if "tick" in payload:
+            observation = payload["tick"].get("o")
+            if observation is not None:
+                payload["tick"]["o"] = observation[:observation_dim]
+        lines.append(json.dumps(payload))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_replay_stats_still_reads_an_older_contract_replay(tmp_path):
+    """A recording is evidence: growing the vector must not hide old files."""
+    path = _write_replay(tmp_path / "training", ticks=2)
+    _rewrite_as_older_contract(path)
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    result = adapter.replay_stats(path, tick=1)
+    assert result["contract_match"] is False
+    assert result["recorded_observation_dim"] == 84
+    assert result["current_observation_dim"] == OBSERVATION_FIELD_COUNT
+    assert len(result["observation"]) == 84, "the values are read as recorded, not padded"
+    assert result["tick_index"] == 1
+    # It stays a *readable* file, not a broken one.
+    assert adapter.list_replays()[0].get("error") is None
+
+
+def test_replay_stats_reports_a_current_contract_replay_as_matching(tmp_path):
+    path = _write_replay(tmp_path / "training", ticks=2)
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    result = adapter.replay_stats(path)
+    assert result["contract_match"] is True
+    assert result["recorded_observation_dim"] == OBSERVATION_FIELD_COUNT
+
+
+def test_replay_stats_decodes_a_detailed_tick(tmp_path):
+    from sandboxai.contract import OBSERVATION_FIELD_COUNT
+
+    path = _write_replay(tmp_path / "training", ticks=4)
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    result = adapter.replay_stats(path, tick=2)
+    assert result["tick_count"] == 4
+    assert result["detailed"] is True
+    assert result["tick_index"] == 2
+    assert result["action"] == [2, 1, 1, 1, 0, 0]
+    assert result["reward"] == 0.25
+    assert len(result["observation"]) == OBSERVATION_FIELD_COUNT
+    assert result["observation"][9] == 0.5
+    assert result["header"]["map_id"] == "blind_corner"
+    # A tick beyond the end is clamped to the last one, never an exception.
+    assert adapter.replay_stats(path, tick=99)["tick_index"] == 3
+    assert adapter.replay_stats(path)["tick_index"] == 0
+
+
+def test_replay_stats_reports_a_light_replay_without_inventing_a_vector(tmp_path):
+    path = _write_replay(tmp_path / "training", detail="light")
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+
+    result = adapter.replay_stats(path)
+    assert result["detailed"] is False
+    assert result["observation"] is None
+    assert result["action"] == [0, 1, 1, 1, 0, 0]
+
+
+def test_replay_stats_reparses_when_the_file_changes(tmp_path):
+    """The decode cache is keyed by (size, mtime), so a rewrite is seen."""
+    root = tmp_path / "training"
+    path = _write_replay(root, ticks=2)
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=root)
+    assert adapter.replay_stats(path)["tick_count"] == 2
+
+    _write_replay(root, ticks=5)
+    assert adapter.replay_stats(path)["tick_count"] == 5
+
+
+def test_replay_stats_rejects_a_missing_file(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    try:
+        adapter.replay_stats(tmp_path / "nope.jsonl")
+    except FileNotFoundError:
+        return
+    raise AssertionError("a missing replay must raise FileNotFoundError")
+
+
+def test_ttk_evidence_is_the_static_manifest(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    summary = adapter.ttk_evidence()
+    assert summary["target"] == "Roblox TTK Testing"
+    assert summary["mechanics"]["verified"]
+    # No Roblox probing happens for the Stats page: an empty project has no
+    # calibration file and the call still succeeds.
+    assert adapter.ttk_calibration_notes() == {}

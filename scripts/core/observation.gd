@@ -1,3 +1,12 @@
+# gdlint:disable=max-file-lines
+# Over the 1000-line budget on purpose. This file is the contract: one flat
+# FIELD_SPEC table, the matching variables, the matching arr[i] assignments
+# and the matching to_dict() keys have to be readable side by side, and the
+# drift tests in python/tests/test_contract.py compare exactly those four
+# lists in order. Splitting the v4 object slots (or any other version's
+# fields) into a helper script would keep the checks passing while making
+# the one thing a reviewer must verify - "does the vector still mean what
+# the table says" - impossible to see without jumping between files.
 ## Observation
 ##
 ## Builds the structured, numeric, (mostly) normalized observation vector
@@ -22,9 +31,22 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const AgentState = preload("res://scripts/agent/agent_state.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
+## Contract v4 = 84 (v3, unchanged) + 22 fields for the world OBJECTS the
+## agent can see: three ranked slots (relative position, distance, bearing,
+## kind, visible) plus how many objects are visible in total. Objects are
+## the cover boxes, crates, pillars and platforms of the arena - the fence
+## (Obstacle.Kind.BOUNDARY) is excluded, and a slot is only filled by an
+## object the agent could actually see (inside the FOV cone, within vision
+## range, not hidden behind other geometry). Nothing here is a hidden
+## object, a whole map or a box the agent has never looked at; the policy
+## gets the same three nearest visible pieces of cover a player would
+## notice, which is what makes "duck behind this crate" a decision it can
+## learn instead of guess.
+##
 ## Contract v3 = 65 (v2, unchanged) + 19 fields for conditions, contact
 ## overflow, target selection, richer hearing and map knowledge. Indices
 ## [0-32] keep their exact v1 meaning and [0-64] their exact v2 meaning;
@@ -35,7 +57,7 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ## what it perceived. There is no map id, no lighting mode, no enemy count,
 ## no hidden geometry: "it is dark HERE", "two more contacts I am not
 ## tracking individually", "I have seen 40% of this place".
-const FIELD_COUNT: int = 84
+const FIELD_COUNT: int = 106
 ## The v2 prefix length, for the same reason as LEGACY_FIELD_COUNT.
 const V2_FIELD_COUNT: int = 65
 ## The v1 prefix length, kept as a named constant because several tests and
@@ -43,6 +65,8 @@ const V2_FIELD_COUNT: int = 65
 const LEGACY_FIELD_COUNT: int = 33
 ## Total number of enemies individually reported (primary + tracked extras).
 const MAX_TRACKED_ENEMIES: int = SandboxConfig.OBSERVATION_MAX_TRACKED_ENEMIES
+## Objects reported individually, nearest visible first (contract v4).
+const MAX_TRACKED_OBJECTS: int = SandboxConfig.OBSERVATION_MAX_TRACKED_OBJECTS
 ## Saturation point for the count-style fields (visible/remembered enemies,
 ## corpses, audible events). Counts above this clamp to 1.0.
 const COUNT_NORMALIZER: int = 8
@@ -154,6 +178,22 @@ const FIELD_SPEC: Array = [
 	{"index": 81, "width": 1, "name": "remembered_danger_distance_norm", "group": "exploration"},
 	{"index": 82, "width": 1, "name": "remembered_danger_bearing_norm", "group": "exploration"},
 	{"index": 83, "width": 1, "name": "contact_uncertainty_norm", "group": "memory"},
+	{"index": 84, "width": 3, "name": "object_1_relative_position_norm", "group": "objects"},
+	{"index": 87, "width": 1, "name": "object_1_distance_norm", "group": "objects"},
+	{"index": 88, "width": 1, "name": "object_1_bearing_norm", "group": "objects"},
+	{"index": 89, "width": 1, "name": "object_1_kind_norm", "group": "objects"},
+	{"index": 90, "width": 1, "name": "object_1_visible", "group": "objects"},
+	{"index": 91, "width": 3, "name": "object_2_relative_position_norm", "group": "objects"},
+	{"index": 94, "width": 1, "name": "object_2_distance_norm", "group": "objects"},
+	{"index": 95, "width": 1, "name": "object_2_bearing_norm", "group": "objects"},
+	{"index": 96, "width": 1, "name": "object_2_kind_norm", "group": "objects"},
+	{"index": 97, "width": 1, "name": "object_2_visible", "group": "objects"},
+	{"index": 98, "width": 3, "name": "object_3_relative_position_norm", "group": "objects"},
+	{"index": 101, "width": 1, "name": "object_3_distance_norm", "group": "objects"},
+	{"index": 102, "width": 1, "name": "object_3_bearing_norm", "group": "objects"},
+	{"index": 103, "width": 1, "name": "object_3_kind_norm", "group": "objects"},
+	{"index": 104, "width": 1, "name": "object_3_visible", "group": "objects"},
+	{"index": 105, "width": 1, "name": "visible_object_count_norm", "group": "objects"},
 ]
 
 ## Per-component suffixes appended to a multi-value field's name (a width-3
@@ -252,6 +292,39 @@ var nearest_obstacle_bearing_norm: float = 0.0
 var visible_enemy_count_norm: float = 0.0
 var remembered_enemy_count_norm: float = 0.0
 var corpse_count_norm: float = 0.0
+
+# ---------------------------------------------------------------------------
+# Contract v4: the world OBJECTS the agent can see.
+#
+# Three ranked slots (nearest visible first) plus the total visible count.
+# A slot is only filled by geometry the agent could actually see from where
+# it stands — inside its FOV cone, within its vision range and not hidden
+# behind another box — so this block never leaks a hidden object, an unseen
+# part of the layout, or the arena fence (Obstacle.Kind.BOUNDARY is skipped
+# by the world query).
+#
+# An empty slot keeps the neutral "nothing there" encoding: zero position,
+# distance 1.0 (the same value the absent enemy slots use), bearing 0.0 and
+# kind 0.0. `object_k_visible` is the authoritative flag for "this slot
+# holds a real sighting"; the count is how many objects are visible in
+# total, capped by COUNT_NORMALIZER like every other count field.
+# ---------------------------------------------------------------------------
+var object_1_relative_position_norm: Vector3 = Vector3.ZERO
+var object_1_distance_norm: float = 1.0
+var object_1_bearing_norm: float = 0.0
+var object_1_kind_norm: float = 0.0
+var object_1_visible: float = 0.0
+var object_2_relative_position_norm: Vector3 = Vector3.ZERO
+var object_2_distance_norm: float = 1.0
+var object_2_bearing_norm: float = 0.0
+var object_2_kind_norm: float = 0.0
+var object_2_visible: float = 0.0
+var object_3_relative_position_norm: Vector3 = Vector3.ZERO
+var object_3_distance_norm: float = 1.0
+var object_3_bearing_norm: float = 0.0
+var object_3_kind_norm: float = 0.0
+var object_3_visible: float = 0.0
+var visible_object_count_norm: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Contract v3: conditions, contact overflow, target selection, hearing
@@ -495,6 +568,67 @@ static func _apply_world_context(obs: Observation, agent: AgentState, context: D
 		float(info["distance"]) / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), 0.0, 1.0
 	)
 	obs.nearest_obstacle_bearing_norm = clampf(float(info["bearing_deg"]) / 180.0, -1.0, 1.0)
+	_apply_object_context(obs, agent, world, context)
+
+
+## Fills the contract-v4 object slots from the world's own visibility query.
+##
+## The query is asked for COUNT_NORMALIZER entries rather than
+## MAX_TRACKED_OBJECTS: the visible total is a real field, so the list must
+## not be truncated at the slot budget before it is counted. Only the first
+## MAX_TRACKED_OBJECTS entries become slots.
+static func _apply_object_context(
+	obs: Observation, agent: AgentState, world, context: Dictionary
+) -> void:
+	var objects: Array = world.visible_object_infos(
+		agent.get_eye_position(),
+		agent.get_forward_horizontal(),
+		float(context.get("fov_deg", SandboxConfig.AGENT_FOV_DEG)),
+		float(context.get("vision_range", SandboxConfig.VISION_RANGE)),
+		COUNT_NORMALIZER
+	)
+	obs.visible_object_count_norm = _count_norm(objects.size())
+	for offset in range(mini(objects.size(), MAX_TRACKED_OBJECTS)):
+		_apply_object_entry(obs, objects[offset], offset)
+
+
+## Writes one visible object into its ranked slot.
+static func _apply_object_entry(obs: Observation, entry: Dictionary, offset: int) -> void:
+	var delta: Vector3 = entry.get("relative_position", Vector3.ZERO)
+	var position_norm := Vector3(
+		clampf(delta.x / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), -1.0, 1.0),
+		clampf(delta.y / maxf(SandboxConfig.ARENA_WALL_HEIGHT, 0.0001), -1.0, 1.0),
+		clampf(delta.z / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), -1.0, 1.0)
+	)
+	var distance_norm: float = clampf(
+		float(entry.get("distance", 0.0)) / maxf(SandboxConfig.ARENA_MAX_DISTANCE, 0.0001), 0.0, 1.0
+	)
+	var bearing_norm: float = clampf(float(entry.get("bearing_deg", 0.0)) / 180.0, -1.0, 1.0)
+	# Kind is an ordinal, normalized by its cardinality exactly like the
+	# sound category - never a raw enum value leaking into the vector.
+	var kind_norm: float = clampf(
+		float(int(entry.get("kind", 0))) / float(maxi(1, SandboxConfig.OBJECT_KIND_COUNT - 1)),
+		0.0,
+		1.0
+	)
+	if offset == 0:
+		obs.object_1_relative_position_norm = position_norm
+		obs.object_1_distance_norm = distance_norm
+		obs.object_1_bearing_norm = bearing_norm
+		obs.object_1_kind_norm = kind_norm
+		obs.object_1_visible = 1.0
+	elif offset == 1:
+		obs.object_2_relative_position_norm = position_norm
+		obs.object_2_distance_norm = distance_norm
+		obs.object_2_bearing_norm = bearing_norm
+		obs.object_2_kind_norm = kind_norm
+		obs.object_2_visible = 1.0
+	elif offset == 2:
+		obs.object_3_relative_position_norm = position_norm
+		obs.object_3_distance_norm = distance_norm
+		obs.object_3_bearing_norm = bearing_norm
+		obs.object_3_kind_norm = kind_norm
+		obs.object_3_visible = 1.0
 
 
 static func _apply_sound_context(obs: Observation, context: Dictionary) -> void:
@@ -700,12 +834,12 @@ static func _count_norm(value: int) -> float:
 
 ## Signed vertical angle from an eye position to a point, normalized by 90
 ## degrees into [-1, 1].
+## Vertical offset normalized onto [-1, 1]: positive above the eye. The
+## angle comes from `VectorMath.elevation_deg`, the one home of the
+## convention, so this field cannot drift away from the perception system's
+## `elevation_deg` again.
 static func _elevation_norm(from_eye: Vector3, to_position: Vector3) -> float:
-	var delta: Vector3 = to_position - from_eye
-	var horizontal: float = Vector2(delta.x, delta.z).length()
-	if horizontal < 0.000001:
-		return 1.0 if delta.y >= 0.0 else -1.0
-	return clampf(rad_to_deg(atan2(delta.y, horizontal)) / 90.0, -1.0, 1.0)
+	return clampf(VectorMath.elevation_deg(from_eye, to_position) / 90.0, -1.0, 1.0)
 
 
 ## Returns every alive enemy, nearest-to-agent first. Deterministic given a
@@ -749,19 +883,20 @@ static func _fallback_enemy(enemies: Array) -> EnemyState:
 	return enemies[0] if enemies.size() > 0 else null
 
 
-## Signed horizontal angle from the agent's forward direction to
-## `target_position`, normalized to [-1, 1] by dividing by 180 degrees.
-## Matches the atan2(x, -z) convention already used by AIStubController and
-## AgentState.get_forward_horizontal() (yaw=0 -> forward=(0,0,-1)).
+## Bearing to a target, normalized onto [-1, 1]: positive is to the agent's
+## right, the way a positive `look_yaw_axis` turns (contract index 17), and
+## measured against `AgentState.get_forward_horizontal()` (yaw = 0, i.e.
+## forward = (0, 0, -1)).
+##
+## The sign convention lives in `VectorMath`, which is the one implementation
+## of it - the world, sound and memory queries used to compute their own with
+## the opposite sign, which put a contact and a crate on the same side of the
+## agent on opposite sides of the vector.
 static func _horizontal_bearing_norm(agent: AgentState, target_position: Vector3) -> float:
-	var to_target: Vector3 = target_position - agent.position
-	to_target.y = 0.0
-	if to_target.length_squared() < 0.000001:
-		return 0.0
-	var desired_yaw_rad: float = atan2(to_target.x, -to_target.z)
-	var current_yaw_rad: float = deg_to_rad(agent.yaw_deg)
-	var diff_rad: float = wrapf(desired_yaw_rad - current_yaw_rad, -PI, PI)
-	return clampf(diff_rad / PI, -1.0, 1.0)
+	var bearing_deg: float = VectorMath.signed_bearing_deg(
+		agent.get_forward_horizontal(), agent.position, target_position
+	)
+	return clampf(bearing_deg / 180.0, -1.0, 1.0)
 
 
 ## Flat float array in a fixed, documented order — the shape an RL policy
@@ -880,6 +1015,28 @@ func to_array() -> PackedFloat32Array:
 	arr[81] = remembered_danger_distance_norm
 	arr[82] = remembered_danger_bearing_norm
 	arr[83] = contact_uncertainty_norm
+	arr[84] = object_1_relative_position_norm.x
+	arr[85] = object_1_relative_position_norm.y
+	arr[86] = object_1_relative_position_norm.z
+	arr[87] = object_1_distance_norm
+	arr[88] = object_1_bearing_norm
+	arr[89] = object_1_kind_norm
+	arr[90] = object_1_visible
+	arr[91] = object_2_relative_position_norm.x
+	arr[92] = object_2_relative_position_norm.y
+	arr[93] = object_2_relative_position_norm.z
+	arr[94] = object_2_distance_norm
+	arr[95] = object_2_bearing_norm
+	arr[96] = object_2_kind_norm
+	arr[97] = object_2_visible
+	arr[98] = object_3_relative_position_norm.x
+	arr[99] = object_3_relative_position_norm.y
+	arr[100] = object_3_relative_position_norm.z
+	arr[101] = object_3_distance_norm
+	arr[102] = object_3_bearing_norm
+	arr[103] = object_3_kind_norm
+	arr[104] = object_3_visible
+	arr[105] = visible_object_count_norm
 	return arr
 
 
@@ -957,6 +1114,22 @@ func to_dict() -> Dictionary:
 		"remembered_danger_distance_norm": remembered_danger_distance_norm,
 		"remembered_danger_bearing_norm": remembered_danger_bearing_norm,
 		"contact_uncertainty_norm": contact_uncertainty_norm,
+		"object_1_relative_position_norm": object_1_relative_position_norm,
+		"object_1_distance_norm": object_1_distance_norm,
+		"object_1_bearing_norm": object_1_bearing_norm,
+		"object_1_kind_norm": object_1_kind_norm,
+		"object_1_visible": object_1_visible,
+		"object_2_relative_position_norm": object_2_relative_position_norm,
+		"object_2_distance_norm": object_2_distance_norm,
+		"object_2_bearing_norm": object_2_bearing_norm,
+		"object_2_kind_norm": object_2_kind_norm,
+		"object_2_visible": object_2_visible,
+		"object_3_relative_position_norm": object_3_relative_position_norm,
+		"object_3_distance_norm": object_3_distance_norm,
+		"object_3_bearing_norm": object_3_bearing_norm,
+		"object_3_kind_norm": object_3_kind_norm,
+		"object_3_visible": object_3_visible,
+		"visible_object_count_norm": visible_object_count_norm,
 	}
 
 

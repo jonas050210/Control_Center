@@ -23,8 +23,13 @@ extends RefCounted
 
 const Obstacle = preload("res://scripts/world/obstacle.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 
 const SELF_PATH: String = "res://scripts/world/arena_world.gd"
+
+## How far short of an object's surface an occlusion probe stops, so the
+## object being tested cannot occlude itself (meters).
+const OCCLUSION_EPSILON: float = 0.05
 
 ## Vertical tolerance for "this surface is close enough below my feet to
 ## stand on / step up onto" (meters).
@@ -448,16 +453,83 @@ func nearest_obstacle_info(point: Vector3, forward: Vector3, max_distance: float
 			best_kind = obstacle.kind
 	var bearing: float = 0.0
 	if best_kind >= 0 and best_delta.length_squared() > 0.000001:
-		var flat_forward := Vector3(forward.x, 0.0, forward.z)
-		if not flat_forward.is_zero_approx():
-			flat_forward = flat_forward.normalized()
-			var direction: Vector3 = best_delta.normalized()
-			var dot: float = clampf(flat_forward.dot(direction), -1.0, 1.0)
-			var sign_value: float = signf(flat_forward.cross(direction).y)
-			if sign_value == 0.0:
-				sign_value = 1.0
-			bearing = rad_to_deg(acos(dot)) * sign_value
+		# Positive = to the agent's right, the same convention every bearing
+		# field of the observation vector uses (see VectorMath).
+		bearing = VectorMath.signed_bearing_between(forward, best_delta)
 	return {"distance": best_distance, "bearing_deg": bearing, "kind": best_kind}
+
+
+## Up to `count` nearest interior objects the agent can actually SEE from
+## `point` while looking along `forward`: inside the horizontal FOV cone,
+## within `max_distance`, and not hidden behind other geometry.
+##
+## "Objects" here are the usable geometry the simulation has - walls,
+## crates, pillars, low/high cover and platforms. The arena boundary is
+## skipped on purpose: it is the fence around the arena, not something a
+## player uses, and it would otherwise occupy every outward-looking slot.
+##
+## Each entry is {"distance": float, "bearing_deg": float, "kind": int,
+## "relative_position": Vector3}, where the position points at the closest
+## surface point - the part of the box the agent is looking at, never a
+## hidden centre behind a wall - and `bearing_deg` is positive to the
+## agent's right, like every bearing field of the observation vector.
+##
+## Cost is O(obstacles), the same as every other query here, with one
+## occlusion test per candidate that survives the range/FOV filter.
+func visible_object_infos(
+	point: Vector3, forward: Vector3, fov_deg: float, max_distance: float, count: int
+) -> Array:
+	var ordered: Array = []
+	if count <= 0 or max_distance <= 0.0:
+		return ordered
+	var flat_forward := Vector3(forward.x, 0.0, forward.z)
+	if flat_forward.is_zero_approx():
+		return ordered
+	flat_forward = flat_forward.normalized()
+	var half_fov: float = maxf(0.0, fov_deg) * 0.5
+	for obstacle_value in obstacles:
+		var obstacle: Obstacle = obstacle_value
+		if obstacle.kind == Obstacle.Kind.BOUNDARY:
+			continue
+		if not obstacle.blocks_sight and not obstacle.blocks_movement:
+			continue
+		var closest := Vector3(
+			clampf(point.x, obstacle.min_corner().x, obstacle.max_corner().x),
+			clampf(point.y, obstacle.min_corner().y, obstacle.max_corner().y),
+			clampf(point.z, obstacle.min_corner().z, obstacle.max_corner().z)
+		)
+		var delta: Vector3 = closest - point
+		var flat_delta := Vector3(delta.x, 0.0, delta.z)
+		var distance: float = flat_delta.length()
+		if distance > max_distance:
+			continue
+		var bearing: float = VectorMath.signed_bearing_between(flat_forward, flat_delta)
+		if absf(bearing) > half_fov:
+			continue
+		var full_distance: float = delta.length()
+		if full_distance > OCCLUSION_EPSILON:
+			# Stop just short of the surface: a probe that reaches the face
+			# itself would count this box as its own occluder.
+			var probe: Vector3 = (
+				point + delta * ((full_distance - OCCLUSION_EPSILON) / full_distance)
+			)
+			if segment_blocked(point, probe):
+				continue
+		var candidate := {
+			"distance": distance,
+			"bearing_deg": bearing,
+			"kind": obstacle.kind,
+			"relative_position": delta,
+		}
+		var insert_at: int = ordered.size()
+		for index in range(ordered.size()):
+			if distance < float((ordered[index] as Dictionary)["distance"]):
+				insert_at = index
+				break
+		ordered.insert(insert_at, candidate)
+		if ordered.size() > count:
+			ordered.resize(count)
+	return ordered
 
 
 func to_dict() -> Dictionary:

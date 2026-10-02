@@ -640,6 +640,86 @@ class ProjectIndex:
         return statics | parent_statics
 
 
+def _inherited_const_names(
+    index: ProjectIndex, info: ScriptInfo, _seen: set[str] | None = None
+) -> set[str] | None:
+    """Const names reachable by bare identifier in ``info``.
+
+    Own consts plus the ones inherited from project-local base scripts (a
+    subclass may use a base script's `const Alias = preload(...)` by name).
+    Returns ``None`` when the inheritance chain leaves the project, i.e. when
+    what is in scope cannot be decided - the conservative answer.
+    """
+    seen = _seen or set()
+    if info.res_path in seen:
+        return set(info.preloads)
+    seen.add(info.res_path)
+    consts = set(info.preloads)
+    base = info.extends
+    if not base or base in ("RefCounted", "Object"):
+        return consts
+    if base in BUILTIN_TYPES or "." in base:
+        return consts
+    base_info = index.by_class.get(base) or index.by_res.get(base)
+    if base_info is None:
+        base_res = info.preloads.get(base)
+        base_info = index.by_res.get(base_res) if base_res else None
+    if base_info is None:
+        return None
+    parent = _inherited_const_names(index, base_info, seen)
+    if parent is None:
+        return None
+    return consts | parent
+
+
+def check_class_cache_references(index: ProjectIndex) -> list[Finding]:
+    """`Name.member` where `Name` is a project `class_name` and not imported.
+
+    A `class_name` is registered in the editor's global class cache. A
+    headless `--script` run on a fresh checkout has no such cache, so a bare
+    reference to it is a COMPILE error there: the referencing script does not
+    load at all, and every call into it fails with "Nonexistent function ...
+    in base 'GDScript'". That is how `environment_reset.gd`,
+    `world_generator.gd` and `scenario_library.gd` broke every environment,
+    map, scenario, navigation and self-play test at once while this analyzer
+    stayed green - `class_name` made the bare name look project-wide.
+
+    A reference is fine, and not reported, when the script preloads the class
+    into a const itself, when a project-local base script does (consts are
+    inherited), or when it is the script's own `class_name`.
+    """
+    findings: list[Finding] = []
+    for info in index.by_res.values():
+        consts = _inherited_const_names(index, info)
+        if consts is None:
+            continue
+        for line_number, raw in enumerate(info.lines, start=1):
+            cleaned = _strip_strings_and_comments(raw)
+            if not cleaned.strip() or cleaned.lstrip().startswith("#"):
+                continue
+            for match in _MEMBER_ACCESS_RE.finditer(cleaned):
+                alias = match.group(1)
+                if alias not in index.by_class:
+                    continue
+                # A const or a member of the same name shadows the class; the
+                # script's own class_name is resolvable inside its own body.
+                if alias in consts or alias in info.members or alias == info.class_name_:
+                    continue
+                target = index.by_class[alias]
+                findings.append(
+                    Finding(
+                        info.res_path,
+                        line_number,
+                        "class-name-without-preload",
+                        f"{alias}.{match.group(2)} needs an explicit preload - a `class_name` "
+                        f"is not available in a headless run; add "
+                        f'`const {alias} = preload("{target.res_path}")`',
+                    )
+                )
+                break
+    return findings
+
+
 def check_resource_paths(index: ProjectIndex) -> list[Finding]:
     findings: list[Finding] = []
     for info in index.by_res.values():
@@ -1251,12 +1331,14 @@ def lint_all(root: Path | str | None = None) -> list[Finding]:
 
 
 def analyze(root: Path | str | None = None) -> list[Finding]:
-    """Full static analysis: syntax + resources + symbols + call arity +
-    static calls + undefined local-method calls + typed-local calls."""
+    """Full static analysis: syntax + resources + class-cache references +
+    symbols + call arity + static calls + undefined local-method calls +
+    typed-local calls."""
     root = Path(root) if root else project_root()
     index = ProjectIndex(root)
     findings = parse_all(root)
     findings.extend(check_resource_paths(index))
+    findings.extend(check_class_cache_references(index))
     findings.extend(check_symbols(index))
     findings.extend(check_call_arity(index))
     findings.extend(check_static_calls(index))

@@ -116,7 +116,7 @@ over the bare canvas background, while a widget that scrolls itself (a log
 the page still.
 
 **Movable cards.** Pages that declare widgets (Dashboard, Training,
-Benchmarks) are arranged by a layout board. On **Settings -> Layout
+Benchmarks, Stats) are arranged by a layout board. On **Settings -> Layout
 studio** every card can be moved up/down, given a 1x/2x/3x span and
 hidden (cards marked `removable=False`, such as the launch deck, stay
 visible). The result applies to the running window immediately.
@@ -303,6 +303,31 @@ A browser over the on-disk run artifacts (state with evidence, progress,
 checkpoint and evaluation inventory, log sizes, manifest provenance),
 read through `run_inspection.py`.
 
+### Stats
+
+What the policy actually receives, decoded from a recording. The contract
+table (`contract.OBSERVATION_SPEC`) is complete without any recording; a
+replay is the only thing that can show real values, and only
+`--replay-detail detailed` stores the observation vector per tick - a light
+replay is reported as such rather than rendered with zeros that would read
+like data. A replay recorded under an **older observation contract** still
+loads (the same allowance the CLI's `--allow-contract-mismatch` makes) and is
+labelled: the values are readable evidence, but they are not comparable with
+a current policy's input, and the page says exactly that instead of painting
+them into the current contract's table. The page shows the three tracked contacts (relative position,
+distance, bearing, elevation, health, visibility, in-FOV/LOS, information
+age, confidence and whether the belief came from vision or hearing), the
+world objects and memory rows around the agent, the hearing summary, the
+recorded action per component, the raw 106-value observation vector, and
+the TTK Testing evidence manifest (what is verified about the real game and
+what still needs a manual measurement). Listing a large folder is bounded
+work: a replay's header and tick count are read in one pass and cached behind
+the file's `(mtime_ns, size)` stamp, so a warm rescan does not re-read an
+unchanged recording. `tools/replay_scan_probe.py` measures it - synthetic
+corpus, not a game benchmark: 1200 recordings / 200 ticks / 144.7 MB, warm
+rescan median 18-21 ms after the change (38.8 ms before), cold scan
+~41-43 ms.
+
 ### System / Telemetry
 
 Real dependency and device status (Python, torch, Godot binary/version,
@@ -366,6 +391,27 @@ constructor crashes, no failing completion callback" and nothing about
 pixels, geometry or event dispatch — the `desktop-ui-tests` CI job runs it
 next to the real-Tk pytest file, and it is a development aid, not a
 substitute for that suite.
+
+**Polling.** One timer drives the window (600 ms). Each tick refreshes the
+**visible page only** - every page's `refresh()` submits background reads
+(run directories, benchmark history, the replay list), so running all eight
+would keep reading artifacts for a window nobody is looking at. The headless
+smoke harness pins that behaviour by counting `refresh()` calls per page and
+fails if a hidden page is polled; the adapter's Godot-runtime probe is cached
+(30 s) because it spawns a subprocess.
+
+What a tick costs is measured, not assumed: `tools/control_center_poll_probe.py`
+builds a synthetic run tree (including the large logs a real run leaves
+behind) and times every call a page's `refresh()` submits. That probe found
+the two costs that mattered: line-counting every log on every poll, and
+parsing a trailing megabyte of log to return the last few rows. Both are
+fixed where they were introduced (`run_inspection`), so every caller
+benefits. Measured warm on a 60-run corpus whose three newest runs carry a
+64 MB log: `dashboard_snapshot` 68.1 ms -> 4.3 ms, `discover_checkpoints`
+144.8 ms -> 16.0 ms, `list_runs` 140.3 ms -> 14.5 ms. Tables fed from a poll
+also compare a signature of their rendered values and leave an unchanged
+table alone, which keeps the operator's row selection instead of dropping it
+every tick.
 
 Three source-level checks in `test_control_center_pages_static.py` are
 worth knowing about: every `ttk` style a widget asks for must be one the

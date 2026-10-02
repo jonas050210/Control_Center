@@ -15,6 +15,7 @@ extends RefCounted
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
 const Obstacle = preload("res://scripts/world/obstacle.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 
 ## Every layout this generator can produce, in curriculum-ish order.
 const LAYOUT_IDS: Array = [
@@ -450,7 +451,7 @@ static func _yaw_towards(from_position: Vector3, target: Vector3) -> float:
 	var delta := Vector3(target.x - from_position.x, 0.0, target.z - from_position.z)
 	if delta.is_zero_approx():
 		return 0.0
-	return rad_to_deg(atan2(delta.x, -delta.z))
+	return VectorMath.yaw_deg_from_direction(delta)
 
 
 ## Picks one of the concrete layouts at random and then perturbs it with a

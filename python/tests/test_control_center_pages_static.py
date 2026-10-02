@@ -156,6 +156,30 @@ def _registered_widget_ids(node: ast.ClassDef) -> set[str]:
     return ids
 
 
+def _board_is_attached(node: ast.ClassDef) -> bool:
+    """True when the board ``Page.board()`` builds is handed to a manager.
+
+    A board that is created and filled but never packed/gridded renders
+    nothing: every card ends up inside an unmapped frame, which is exactly
+    how the Dashboard/Training/Benchmarks pages shipped - heading, then a
+    blank page.
+    """
+    method = _find_method(node, "board")
+    if method is None:
+        return False
+    for sub in ast.walk(method):
+        if not isinstance(sub, ast.Call) or not isinstance(sub.func, ast.Attribute):
+            continue
+        target = sub.func.value
+        if (
+            sub.func.attr in {"pack", "grid", "place"}
+            and isinstance(target, ast.Name)
+            and target.id == "board"
+        ):
+            return True
+    return False
+
+
 def _uses_a_board(node: ast.ClassDef) -> bool:
     build = _find_method(node, "build")
     if build is None:
@@ -232,6 +256,19 @@ class PageContractTests(unittest.TestCase):
                 )
                 self.assertTrue(_uses_a_board(node), f"{name} declares widgets but builds no board")
         self.assertGreaterEqual(checked, 3, "the movable-widget pages disappeared")
+
+    def test_the_shared_board_is_attached_to_its_page(self) -> None:
+        """``Page.board()`` must give the board a geometry manager.
+
+        The pages built and filled their board but never attached it, so the
+        three movable pages (Dashboard, Training, Benchmarks) rendered their
+        heading and then nothing. This is the one regression the real-Tk
+        suite could not report on a machine without Tk, so it is pinned here.
+        """
+        self.assertTrue(
+            _board_is_attached(self.classes["Page"]),
+            "Page.board() must pack/grid/place the board it creates",
+        )
 
     def test_page_titles_are_unique(self) -> None:
         titles = [

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 # Semantic compatibility boundary shared by training, datasets, checkpoints,
 # evaluation, and replay provenance. Shape checks alone cannot detect reordered
 # or reinterpreted fields.
-CONTRACT_VERSION: int = 3
+CONTRACT_VERSION: int = 4
 
 
 @dataclass(frozen=True)
@@ -520,6 +520,135 @@ OBSERVATION_SPEC: tuple[ObservationField, ...] = (
         "Mean staleness of the contacts held from memory only",
         "1 - confidence, averaged, in [0, 1]",
     ),
+    # Every bearing field (17, 23, 30, 55, 61, 72, 80, 82, 88, 95, 102) uses
+    # ONE sign convention: positive is to the agent's right, the direction a
+    # positive `Action.look_yaw_axis` turns ("+ = turn right to face it" for
+    # index 17). The GDScript side implements it exactly once, in
+    # `scripts/core/vector_math.gd` (`VectorMath.signed_bearing_*`), because
+    # the enemy field once used a yaw difference while the world/sound/memory
+    # queries took the opposite sign of `forward.cross(direction).y` - which
+    # put an enemy and the crate next to it on opposite sides of the vector.
+    # `python/tests/test_contract.py` fails if a second implementation appears.
+    # --- contract v4: world objects the agent can see ---------------------
+    # Three ranked slots (nearest visible first) plus the visible total. A
+    # slot is only filled by geometry the agent could see from where it
+    # stands (inside its FOV cone, within vision range, not hidden behind
+    # another box); the fence around the arena is excluded. Empty slots
+    # keep the neutral encoding: zero position, distance 1.0, bearing 0.0,
+    # kind 0.0, visible 0.0. The slots never contain a hidden object, an
+    # unseen layout or any part of the map the agent has not looked at.
+    ObservationField(
+        84,
+        3,
+        "object_1_relative_position_norm",
+        "Nearest visible object's closest surface point, relative to the agent",
+        "x/z divided by max arena diagonal distance, y by wall height, each in [-1, 1]",
+    ),
+    ObservationField(
+        87,
+        1,
+        "object_1_distance_norm",
+        "Distance to that object",
+        "divided by max arena diagonal distance, in [0, 1]; 1 if no object is visible",
+    ),
+    ObservationField(
+        88,
+        1,
+        "object_1_bearing_norm",
+        "Signed horizontal offset to that object",
+        "angle / 180 degrees, in [-1, 1]; 0 if no object is visible",
+    ),
+    ObservationField(
+        89,
+        1,
+        "object_1_kind_norm",
+        "Object kind as a normalized ordinal (crate, pillar, wall, ...)",
+        "kind / (OBJECT_KIND_COUNT - 1), in [0, 1]; 0 if no object is visible",
+    ),
+    ObservationField(
+        90,
+        1,
+        "object_1_visible",
+        "1 when this slot holds a real sighting, 0 when it is empty",
+        "0/1",
+    ),
+    ObservationField(
+        91,
+        3,
+        "object_2_relative_position_norm",
+        "Second-nearest visible object's closest surface point, relative to the agent",
+        "x/z divided by max arena diagonal distance, y by wall height, each in [-1, 1]",
+    ),
+    ObservationField(
+        94,
+        1,
+        "object_2_distance_norm",
+        "Distance to that object",
+        "divided by max arena diagonal distance, in [0, 1]; 1 if the slot is empty",
+    ),
+    ObservationField(
+        95,
+        1,
+        "object_2_bearing_norm",
+        "Signed horizontal offset to that object",
+        "angle / 180 degrees, in [-1, 1]; 0 if the slot is empty",
+    ),
+    ObservationField(
+        96,
+        1,
+        "object_2_kind_norm",
+        "Object kind as a normalized ordinal",
+        "kind / (OBJECT_KIND_COUNT - 1), in [0, 1]; 0 if the slot is empty",
+    ),
+    ObservationField(
+        97,
+        1,
+        "object_2_visible",
+        "1 when this slot holds a real sighting, 0 when it is empty",
+        "0/1",
+    ),
+    ObservationField(
+        98,
+        3,
+        "object_3_relative_position_norm",
+        "Third-nearest visible object's closest surface point, relative to the agent",
+        "x/z divided by max arena diagonal distance, y by wall height, each in [-1, 1]",
+    ),
+    ObservationField(
+        101,
+        1,
+        "object_3_distance_norm",
+        "Distance to that object",
+        "divided by max arena diagonal distance, in [0, 1]; 1 if the slot is empty",
+    ),
+    ObservationField(
+        102,
+        1,
+        "object_3_bearing_norm",
+        "Signed horizontal offset to that object",
+        "angle / 180 degrees, in [-1, 1]; 0 if the slot is empty",
+    ),
+    ObservationField(
+        103,
+        1,
+        "object_3_kind_norm",
+        "Object kind as a normalized ordinal",
+        "kind / (OBJECT_KIND_COUNT - 1), in [0, 1]; 0 if the slot is empty",
+    ),
+    ObservationField(
+        104,
+        1,
+        "object_3_visible",
+        "1 when this slot holds a real sighting, 0 when it is empty",
+        "0/1",
+    ),
+    ObservationField(
+        105,
+        1,
+        "visible_object_count_norm",
+        "How many objects are currently visible (capped like every count field)",
+        "count / COUNT_NORMALIZER, saturated at 1.0",
+    ),
 )
 
 ## The engine build this contract is implemented and tested against.
@@ -541,6 +670,30 @@ OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
 OBSERVATION_LEGACY_FIELD_COUNT: int = 33
 ## Length of the v2 prefix (everything before the conditions/exploration block).
 OBSERVATION_V2_FIELD_COUNT: int = 65
+## Length of the v3 prefix (everything before the object block of contract v4).
+OBSERVATION_V3_FIELD_COUNT: int = 84
+## Objects reported individually, nearest visible first (contract v4). Mirrors
+## SandboxConfig.OBSERVATION_MAX_TRACKED_OBJECTS.
+OBSERVATION_MAX_TRACKED_OBJECTS: int = 3
+## Count fields (visible enemies, corpses, audible events, visible objects)
+## are divided by this and clamped, so the vector never carries a raw count.
+## Mirrors ``Observation.COUNT_NORMALIZER``; a drift test parses the GDScript
+## constant, and the Control Center's Stats page converts back with it.
+OBSERVATION_COUNT_NORMALIZER: int = 8
+## ``Obstacle.Kind`` (``scripts/world/obstacle.gd``) in declaration order.
+## ``object_k_kind_norm`` is this ordinal divided by ``len(...) - 1``; the order
+## is a wire detail, so ``test_contract.py`` parses the GDScript enum and fails
+## if the two drift apart. The fence (``BOUNDARY``) is never reported by the
+## visibility query, but stays in the list because the ordinal must not shift.
+OBJECT_KIND_NAMES: tuple[str, ...] = (
+    "wall",
+    "crate",
+    "pillar",
+    "low_cover",
+    "high_cover",
+    "platform",
+    "boundary",
+)
 
 
 # Semantic channels of the local observation vector. Each channel has a
@@ -605,6 +758,24 @@ OBSERVATION_GROUPS: dict[str, tuple[str, ...]] = {
         "tertiary_enemy_info_age_norm",
         "remembered_enemy_count_norm",
         "contact_uncertainty_norm",
+    ),
+    "objects": (
+        "object_1_relative_position_norm",
+        "object_1_distance_norm",
+        "object_1_bearing_norm",
+        "object_1_kind_norm",
+        "object_1_visible",
+        "object_2_relative_position_norm",
+        "object_2_distance_norm",
+        "object_2_bearing_norm",
+        "object_2_kind_norm",
+        "object_2_visible",
+        "object_3_relative_position_norm",
+        "object_3_distance_norm",
+        "object_3_bearing_norm",
+        "object_3_kind_norm",
+        "object_3_visible",
+        "visible_object_count_norm",
     ),
     "sound": (
         "second_sound_bearing_norm",

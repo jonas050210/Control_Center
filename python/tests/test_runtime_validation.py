@@ -4,7 +4,7 @@ Ensures that:
 1. When Godot is unavailable, the validator safely refuses to invent numbers
    and returns an honest unavailable report.
 2. The report formatter outputs clear, diagnostic summaries.
-3. Contract checks enforce the 84-float observation and 6-field MultiDiscrete action.
+3. Contract checks enforce the 106-float observation and 6-field MultiDiscrete action.
 """
 
 from __future__ import annotations

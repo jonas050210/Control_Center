@@ -52,7 +52,7 @@ def contract_fingerprint() -> dict[str, Any]:
         "version": CONTRACT_VERSION,
         "observation_dim": OBSERVATION_FIELD_COUNT,
         "action_nvec": list(ACTION_NVEC),
-        "observation_fields": "v3 (additive since v1; see docs/OBSERVATION_ACTION_CONTRACT.md)",
+        "observation_fields": "v4 (additive since v1; see docs/OBSERVATION_ACTION_CONTRACT.md)",
     }
 
 

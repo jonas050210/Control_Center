@@ -20,7 +20,7 @@ from pathlib import Path
 
 from sandboxai.conditions import Condition
 from sandboxai.config import TrainingConfig
-from sandboxai.contract import observation_index
+from sandboxai.contract import OBSERVATION_FIELD_COUNT, observation_index
 from sandboxai.curriculum_stages import (
     MULTI_ENEMY_MAX_LEVEL,
     MULTI_ENEMY_MIN,
@@ -426,7 +426,7 @@ class SkillMetricsSinkTest(unittest.TestCase):
     def test_disabled_sink_is_a_noop(self):
         sink = SkillMetricsSink(2, enabled=False)
         sink.begin(0, _plan(seed=1))
-        sink.record_step(0, [0.0] * 84, [0] * 6, {})
+        sink.record_step(0, [0.0] * OBSERVATION_FIELD_COUNT, [0] * 6, {})
         self.assertIsNone(sink.finish(0, {"win": True}))
         aggregate = sink.flush_aggregate()
         self.assertEqual(aggregate.get("aggregate", {}).get("episodes", 0), 0)
@@ -434,7 +434,7 @@ class SkillMetricsSinkTest(unittest.TestCase):
     def test_labels_carry_condition_and_environment(self):
         sink = SkillMetricsSink(2, enabled=True, policy_id="pol")
         sink.begin(1, _plan(seed=5, level=6, map_id="pillar_hall"))
-        sink.record_step(1, [0.0] * 84, [1, 1, 1, 1, 0, 0], {})
+        sink.record_step(1, [0.0] * OBSERVATION_FIELD_COUNT, [1, 1, 1, 1, 0, 0], {})
         summary = sink.finish(1, {"win": True})
         self.assertIsNotNone(summary)
         labels = summary.get("labels", {})
@@ -538,7 +538,11 @@ class TrainingPipelineTest(unittest.TestCase):
             ]
             pipe.timesteps = 1234
             pipe.on_step(
-                [[0] * 6, [0] * 6], [[0.0] * 84, [0.0] * 84], [1.0, 0.0], [True, False], infos
+                [[0] * 6, [0] * 6],
+                [[0.0] * OBSERVATION_FIELD_COUNT, [0.0] * OBSERVATION_FIELD_COUNT],
+                [1.0, 0.0],
+                [True, False],
+                infos,
             )
             row_path = config.run_directory() / "logs" / "episodes.jsonl"
             rows = [json.loads(line) for line in row_path.read_text(encoding="utf-8").splitlines()]
@@ -566,8 +570,8 @@ class TrainingPipelineTest(unittest.TestCase):
             pipe.attach(env)
             pipe.on_reset(None)
 
-            reset_observation = [0.0] * 84
-            terminal_observation = [0.0] * 84
+            reset_observation = [0.0] * OBSERVATION_FIELD_COUNT
+            terminal_observation = [0.0] * OBSERVATION_FIELD_COUNT
             terminal_observation[observation_index("primary_enemy_visible")] = 1.0
             infos = [
                 {
@@ -613,7 +617,11 @@ class TrainingPipelineTest(unittest.TestCase):
                     {"events": {}},
                 ]
                 pipe.on_step(
-                    [[0] * 6, [0] * 6], [[0.0] * 84, [0.0] * 84], [0.0, 0.0], [True, False], infos
+                    [[0] * 6, [0] * 6],
+                    [[0.0] * OBSERVATION_FIELD_COUNT, [0.0] * OBSERVATION_FIELD_COUNT],
+                    [0.0, 0.0],
+                    [True, False],
+                    infos,
                 )
             pipe.timesteps = 400
             state_path = pipe.save_state()
@@ -639,7 +647,8 @@ class TrainingPipelineTest(unittest.TestCase):
             manifest = pipe.manifest()
             self.assertEqual(manifest.get("format"), MANIFEST_FORMAT)
             fingerprint = manifest.get("contract", {})
-            self.assertEqual(fingerprint.get("observation_dim"), 84)
+            self.assertEqual(fingerprint.get("observation_dim"), 106)
+            self.assertEqual(fingerprint.get("version"), 4)
             self.assertEqual(fingerprint.get("action_nvec"), [3, 3, 3, 3, 2, 2])
             self.assertEqual(manifest.get("contract"), contract_fingerprint())
             curriculum = manifest.get("curriculum", {})

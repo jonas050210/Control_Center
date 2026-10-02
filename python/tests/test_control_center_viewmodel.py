@@ -959,3 +959,253 @@ def test_training_form_carries_the_trainers_own_time_budget():
         vm.parse_training_form({"max_train_minutes": "soon"})
     with pytest.raises(ValueError):
         vm.parse_training_form({"max_train_minutes": "-5"})
+
+
+# ---------------------------------------------------------------------------
+# Stats page: the policy's own input
+# ---------------------------------------------------------------------------
+
+
+def _observation(**fields) -> list[float]:
+    """A contract-length observation with named fields overwritten."""
+    from sandboxai.contract import OBSERVATION_FIELD_COUNT, observation_index
+
+    values = [0.0] * OBSERVATION_FIELD_COUNT
+    for name, value in fields.items():
+        values[observation_index(name)] = value
+    return values
+
+
+def test_observation_field_rows_come_from_the_contract():
+    """The table is complete without a recording: it *is* the contract."""
+    from sandboxai.contract import OBSERVATION_FIELD_COUNT, OBSERVATION_SPEC
+
+    rows = vm.observation_field_rows()
+    assert len(rows) == len(OBSERVATION_SPEC)
+    assert all(row["value"] == "n/a" for row in rows)
+    assert rows[0]["field"] == OBSERVATION_SPEC[0].name
+    assert rows[0]["index"].startswith(str(OBSERVATION_SPEC[0].index))
+    # A multi-value field reports its index range, not just its start.
+    ranged = [row for row in rows if "\u2013" in row["index"]]
+    assert ranged, "vector fields must show their index range"
+    assert sum(1 for row in rows) and OBSERVATION_FIELD_COUNT == 106
+
+
+def test_observation_field_rows_decode_a_recorded_vector():
+    observation = _observation(in_combat=1.0, agent_health_norm=0.5)
+    rows = {row["field"]: row for row in vm.observation_field_rows(observation)}
+    assert rows["in_combat"]["value"] == "1.000"
+    assert rows["agent_health_norm"]["value"] == "0.500"
+    assert rows["agent_health_norm"]["section"] == "Agent"
+    sections = [section for section, _rows in vm.observation_section_rows(list(rows.values()))]
+    assert "Agent" in sections and "Hearing" in sections
+
+
+def test_contact_rows_report_perception_not_world_state():
+    """A remembered contact must not read like a live sighting."""
+    observation = _observation(
+        alive_enemy_count_norm=0.5,
+        primary_enemy_health_norm=0.4,
+        primary_enemy_distance_norm=0.2,
+        primary_enemy_bearing_norm=-0.25,
+        primary_enemy_visible=0.0,
+        primary_enemy_in_fov=0.0,
+        primary_enemy_los_clear=0.0,
+        primary_enemy_confidence=0.3,
+        primary_enemy_source_sound=1.0,
+        primary_enemy_info_age_norm=0.5,
+        secondary_enemy_alive=0.0,
+        tertiary_enemy_alive=0.0,
+    )
+    rows = vm.contact_rows(observation)
+    assert len(rows) == 3
+    primary = rows[0]
+    assert primary["state"] == "remembered (no sighting)"
+    assert primary["source"] == "sound"
+    assert primary["health"] == "0.400"
+    assert primary["distance"] == "0.200"
+    assert rows[1]["state"] == "dead / absent"
+    assert rows[2]["state"] == "dead / absent"
+    assert all(row["state"] == "not tracked" for row in vm.contact_rows(None))
+
+
+def test_world_and_audio_rows_name_the_documented_fields():
+    observation = _observation(
+        nearest_obstacle_distance_norm=0.15,
+        nearest_obstacle_bearing_norm=0.5,
+        corpse_count_norm=0.25,
+        local_illumination=0.8,
+        object_1_visible=1.0,
+        object_1_kind_norm=1.0 / 6.0,  # CRATE: ordinal 1 of 7 kinds
+        object_1_distance_norm=0.1,
+        object_1_bearing_norm=0.2,
+        visible_object_count_norm=0.125,
+    )
+    world = {row["field"]: row for row in vm.world_rows(observation)}
+    assert world["nearest object (cover / wall)"]["distance"] == "0.150"
+    assert world["corpses in the arena"]["distance"] == "0.250"
+    assert world["objects visible now"]["distance"] == "0.125"
+    assert "1" in world["objects visible now"]["note"]
+
+    # Contract v4: the three visible-object slots read as live sightings,
+    # and an empty slot says so instead of showing the 1.0 padding value.
+    slots = {
+        row["field"]: row for row in world.values() if row["field"].startswith("visible object")
+    }
+    assert set(slots) == {"visible object 1", "visible object 2", "visible object 3"}
+    assert slots["visible object 1"]["distance"] == "0.100"
+    assert slots["visible object 1"]["note"].startswith("crate")
+    assert slots["visible object 2"]["distance"] == "n/a"
+    assert "no object in this slot" in slots["visible object 2"]["note"]
+    # Without a recording the slots keep their shape and read n/a.
+    empty = {row["field"]: row for row in vm.world_rows(None)}
+    assert empty["visible object 3"]["distance"] == "n/a"
+    assert "no recording" in empty["visible object 3"]["note"]
+
+    audio = vm.audio_rows(_observation(last_sound_loudness=0.7))
+    assert {row["field"] for row in audio} >= {"loudest event loudness"}
+    assert [row for row in audio if row["field"] == "loudest event loudness"][0]["value"] == "0.700"
+    # Without a recording the rows keep their shape and read n/a: the field
+    # set is the contract, the values are the recording.
+    assert vm.world_rows(None) and all(row["distance"] == "n/a" for row in vm.world_rows(None))
+    assert vm.audio_rows(None) and all(row["value"] == "n/a" for row in vm.audio_rows(None))
+
+
+def test_action_rows_use_the_action_contract():
+    from sandboxai.contract import ACTION_SPEC
+
+    rows = vm.action_rows([2, 1, 0, 1, 1, 0])
+    assert [row["component"] for row in rows] == [field.name for field in ACTION_SPEC]
+    assert rows[0]["value"] == "2"
+    assert rows[4]["value"] == "1"
+    # A tick without a recorded action shows n/a, never a zero-action guess.
+    assert all(row["value"] == "n/a" for row in vm.action_rows(None))
+
+
+def test_replay_table_rows_expose_detail_and_observations():
+    rows = vm.replay_table_rows(
+        [
+            {
+                "path": "/root/run-a/replays/episode_0001.jsonl",
+                "name": "episode_0001.jsonl",
+                "run": "run-a",
+                "ticks": 480,
+                "size_bytes": 1024,
+                "header": {"detail": "detailed", "seed": 42, "map_id": "blind_corner"},
+            },
+            {"path": "/root/run-b/replays/episode_0002.jsonl", "name": "episode_0002.jsonl"},
+        ]
+    )
+    assert rows[0]["observations"] == "yes"
+    assert rows[0]["ticks"] == "480"
+    assert rows[0]["seed"] == "42"
+    assert rows[1]["observations"] == "no"
+    # A header that could not be read is reported, not filled with defaults.
+    assert rows[1]["seed"] == "n/a"
+
+
+def test_stats_source_view_says_what_a_light_replay_cannot_show():
+    light = vm.stats_source_view({"header": {"detail": "light"}, "tick_count": 12})
+    assert light["detailed"] is False
+    assert "light replay" in light["detail"]
+    detailed = vm.stats_source_view(
+        {
+            "name": "episode_0001.jsonl",
+            "header": {"detail": "detailed", "seed": 7, "curriculum_level": 6},
+            "tick_count": 480,
+        }
+    )
+    assert detailed["detailed"] is True
+    assert "seed 7" in detailed["headline"]
+    assert vm.stats_source_view(None)["available"] is False
+
+
+def test_table_signature_sees_only_what_a_table_renders():
+    """A poll tick must be able to tell "same rows" from "a rebuild is due".
+
+    The pages compare this signature and leave an unchanged table alone, so
+    the signature has to change exactly when something visible changed - and
+    not when a field nobody renders did.
+    """
+    rows = [
+        {"path": "a.zip", "bytes": 1, "hidden": "x"},
+        {"path": "b.zip", "bytes": 2, "hidden": "y"},
+    ]
+    keys = ("path", "bytes")
+    assert vm.table_signature(rows, keys) == vm.table_signature([dict(row) for row in rows], keys)
+    # A field that is not rendered does not force a rebuild.
+    assert vm.table_signature([dict(rows[0], hidden="z"), rows[1]], keys) == vm.table_signature(
+        rows, keys
+    )
+    # A rendered field does.
+    assert vm.table_signature([dict(rows[0], bytes=9), rows[1]], keys) != vm.table_signature(
+        rows, keys
+    )
+    # A missing key is part of the signature, not a crash.
+    assert vm.table_signature([{"path": "a.zip"}], keys) == (("a.zip", None),)
+    # Order is what the operator sees, so it is part of the identity.
+    assert vm.table_signature(list(reversed(rows)), keys) != vm.table_signature(rows, keys)
+    assert vm.table_signature([], keys) == ()
+
+
+def test_replay_contract_view_labels_a_foreign_recording():
+    """A replay from an older contract stays readable and says so."""
+    current = vm.replay_contract_view(
+        {"contract_match": True, "recorded_observation_dim": 106, "current_observation_dim": 106}
+    )
+    assert current["matches"] is True
+    assert "106 floats" in current["text"]
+
+    older = vm.replay_contract_view(
+        {"contract_match": False, "recorded_observation_dim": 84, "current_observation_dim": 106}
+    )
+    assert older["matches"] is False
+    assert "older contract" in older["text"]
+    assert "84 floats" in older["text"] and "current 106" in older["text"]
+    assert "not comparable" in older["text"]
+
+    # A result without the keys (older adapter payload) must not read as a
+    # mismatch warning that the operator cannot act on.
+    assert vm.replay_contract_view({})["matches"] is True
+
+
+def test_observation_summary_view_reports_the_headline_values():
+    observation = _observation(in_combat=1.0, weapon_ready=1.0, agent_health_norm=1.0)
+    view = vm.observation_summary_view(observation)
+    assert view["in_combat"] is True
+    assert view["headline"] == "in combat"
+    assert "health 100.0%" in view["summary"]
+    assert "weapon ready" in view["summary"]
+    # The object block is part of the headline: count plus the nearest kind,
+    # so the operator sees "there is cover next to me" without opening a table.
+    assert "objects 0" in view["summary"]
+    assert vm.observation_summary_view(None)["available"] is False
+
+    with_cover = vm.observation_summary_view(
+        _observation(
+            object_1_visible=1.0,
+            object_1_kind_norm=2.0 / 6.0,  # PILLAR
+            visible_object_count_norm=2.0 / 8.0,
+        )
+    )
+    assert "objects 2 (pillar)" in with_cover["summary"]
+
+    # The count field saturates: the last bucket is "8 or more", never "8".
+    saturated = vm.observation_summary_view(
+        _observation(object_1_visible=1.0, visible_object_count_norm=1.0)
+    )
+    assert "objects 8+" in saturated["summary"]
+
+
+def test_ttk_evidence_view_and_rows_mirror_the_manifest():
+    from sandboxai.ttk_testing import status_summary
+
+    summary = status_summary()
+    view = vm.ttk_evidence_view(summary)
+    assert view["verified"] >= 1 and view["calibration_required"] >= 1
+    assert "verified" in view["headline"]
+    rows = vm.ttk_evidence_rows(summary)
+    assert len(rows) == view["verified"] + view["calibration_required"] + view["excluded"]
+    assert {"mechanic", "status", "rule", "source"} <= set(rows[0])
+    assert vm.ttk_evidence_rows(None) == []
+    assert vm.ttk_evidence_view(None)["available"] is False

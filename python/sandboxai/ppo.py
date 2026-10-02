@@ -67,7 +67,7 @@ def _env_kwargs(
 class InferenceDeviceScheduler:
     """Phase-device placement for PPO when inference and updates diverge.
 
-    For this workload (an 84 -> 128 -> 128 MLP, batches of 1-8) a CUDA
+    For this workload (a 106 -> 128 -> 128 MLP, batches of 1-8) a CUDA
     forward pass is slower than CPU: each step pays a host->device copy,
     ~20 kernel launches and a blocking device->host readback, which
     dominates the actual matmuls. Moving only the *inference* phases

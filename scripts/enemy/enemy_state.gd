@@ -39,6 +39,7 @@ enum AIState {
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const CharacterMotor = preload("res://scripts/world/character_motor.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const EnemyMemory = preload("res://scripts/perception/enemy_memory.gd")
 const NavigationAgent = preload("res://scripts/world/navigation_agent.gd")
 const ReactionProfile = preload("res://scripts/perception/reaction_profile.gd")
@@ -207,7 +208,7 @@ func face_towards(target_position: Vector3, dt: float, turn_speed: float) -> voi
 	var delta := Vector3(target_position.x - position.x, 0.0, target_position.z - position.z)
 	if delta.is_zero_approx():
 		return
-	var desired: float = rad_to_deg(atan2(delta.x, -delta.z))
+	var desired: float = VectorMath.yaw_deg_from_direction(delta)
 	var difference: float = wrapf(desired - yaw_deg, -180.0, 180.0)
 	var step: float = clampf(difference, -turn_speed * dt, turn_speed * dt)
 	yaw_deg = wrapf(yaw_deg + step, 0.0, 360.0)

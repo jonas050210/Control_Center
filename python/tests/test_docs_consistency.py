@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 from sandboxai import __version__
-from sandboxai.contract import GODOT_VERSION
+from sandboxai.contract import GODOT_VERSION, OBSERVATION_FIELD_COUNT
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DOCS = REPOSITORY_ROOT / "docs"
@@ -42,6 +42,33 @@ ENGINE_VERSION_DOCUMENTS = (
 )
 
 _GODOT_MENTION = re.compile(r"Godot[\s_v]+(\d+\.\d+\.\d+)")
+
+# Living documents and comments that restate the observation width in
+# prose. Historical reports (AUDIT_REPORT.md, RESEARCH_SANDBOX_REPORT.md) are
+# deliberately absent: they describe the state of a past revision.
+OBSERVATION_DIMENSION_DOCUMENTS = (
+    "README.md",
+    "PROJECT.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CURRICULUM_AND_COMBAT.md",
+    "docs/DEBUG_GUI_AND_BENCHMARKING.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    # Code comments that quote the width; a stale one is just as misleading
+    # as a stale README line.
+    "scripts/core/simulation_manager.gd",
+    "scripts/weapon/weapon_state.gd",
+    "tools/control_center_smoke.py",
+)
+
+#: Every way the width is spelled in those files.
+_OBSERVATION_WIDTH_MENTIONS = (
+    re.compile(r"(\d+)-float"),
+    re.compile(r"(\d+)\s+\**float"),
+    re.compile(r"(\d+)-field"),
+    re.compile(r"(\d+)\s*(?:->|\u2192)\s*128\s*(?:->|\u2192)\s*128"),
+)
 
 
 def _read(relative: str) -> str:
@@ -95,6 +122,44 @@ class EngineVersionTests(unittest.TestCase):
         for name in _EXACT_VERSION_CANDIDATES:
             with self.subTest(executable=name):
                 self.assertIn(GODOT_VERSION, name)
+
+
+class ObservationDimensionTests(unittest.TestCase):
+    """Prose must repeat the observation width, not invent its own.
+
+    The v4 object block changed the width from 84 to 106 and nine living
+    documents still claimed 84. ``AGENTS.md`` asks that a number written
+    into prose be checkable, so this test is the check: every
+    "<N>-float" / "<N> float" / "<N>-field" / "<N> to 128 to 128" mention
+    in a living document must use ``contract.OBSERVATION_FIELD_COUNT``.
+    """
+
+    def test_living_documents_use_the_contract_width(self) -> None:
+        for relative in OBSERVATION_DIMENSION_DOCUMENTS:
+            with self.subTest(document=relative):
+                text = _read(relative)
+                for pattern in _OBSERVATION_WIDTH_MENTIONS:
+                    for match in pattern.finditer(text):
+                        self.assertEqual(
+                            int(match.group(1)),
+                            OBSERVATION_FIELD_COUNT,
+                            f"{relative} claims a {match.group(1)}-wide observation, "
+                            f"the contract is {OBSERVATION_FIELD_COUNT}",
+                        )
+
+    def test_the_contract_document_leads_with_the_current_width(self) -> None:
+        """``docs/OBSERVATION_ACTION_CONTRACT.md`` keeps its own history.
+
+        The version sections at the bottom deliberately quote the old
+        widths (33, 65, 84), so only the first mention - the one in the
+        current-state header and data-flow diagram - is checked.
+        """
+        text = _read("docs/OBSERVATION_ACTION_CONTRACT.md")
+        first = min(
+            (match for pattern in _OBSERVATION_WIDTH_MENTIONS for match in pattern.finditer(text)),
+            key=lambda match: match.start(),
+        )
+        self.assertEqual(int(first.group(1)), OBSERVATION_FIELD_COUNT)
 
 
 class PackageVersionTests(unittest.TestCase):

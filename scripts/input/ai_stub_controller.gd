@@ -14,6 +14,7 @@ extends ControllerBase
 const AgentState = preload("res://scripts/agent/agent_state.gd")
 const ControllerBase = preload("res://scripts/input/controller_base.gd")
 const EnemyState = preload("res://scripts/enemy/enemy_state.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 
 const AIM_TOLERANCE_DEG: float = 5.0
 const APPROACH_DISTANCE_FACTOR: float = 0.6
@@ -34,7 +35,7 @@ func get_action(env: EnvironmentCore) -> Action:
 	if distance < 0.0001:
 		return Action.idle()
 
-	var desired_yaw_deg: float = rad_to_deg(atan2(to_enemy.x, -to_enemy.z))
+	var desired_yaw_deg: float = VectorMath.yaw_deg_from_direction(to_enemy)
 	var yaw_diff: float = wrapf(desired_yaw_deg - agent.yaw_deg, -180.0, 180.0)
 
 	var look_yaw_axis: int = 0
