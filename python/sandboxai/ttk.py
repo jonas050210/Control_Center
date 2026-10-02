@@ -32,7 +32,7 @@ Hard boundaries (enforced, not just documented)
 
 Calibration evidence, not training data
 ---------------------------------------
-A TTK trial is **not** a behavior-cloning transition: it has no 84-float
+A TTK trial is **not** a behavior-cloning transition: it has no 106-float
 observation. :class:`TTKDataset` deliberately offers no ``arrays()``.
 Demonstrations for BC come from the local Godot recorder
 (:mod:`sandboxai.dataset`), which logs the real contract.

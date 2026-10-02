@@ -23,6 +23,7 @@ carry a ``format`` field and new fields are additive.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -84,6 +85,11 @@ def tail_jsonl(path: Path, limit: int = 20) -> list[dict[str, Any]]:
     telemetry log costs the same as tailing a small one. Unparsable lines
     are skipped rather than failing the tail: a live run's last line is
     routinely half-written.
+
+    The window is walked from its end and parsing stops once ``limit`` rows
+    are in hand. A megabyte of a training log holds thousands of lines, and
+    decoding and parsing all of them to return the last five made this the
+    most expensive thing the Dashboard did on every poll tick.
     """
     if limit <= 0 or not path.is_file():
         return []
@@ -97,7 +103,7 @@ def tail_jsonl(path: Path, limit: int = 20) -> list[dict[str, Any]]:
     except OSError:
         return []
     rows: list[dict[str, Any]] = []
-    for line in blob.decode("utf-8", errors="replace").splitlines():
+    for line in reversed(blob.decode("utf-8", errors="replace").splitlines()):
         line = line.strip()
         if not line:
             continue
@@ -107,7 +113,10 @@ def tail_jsonl(path: Path, limit: int = 20) -> list[dict[str, Any]]:
             continue
         if isinstance(value, dict):
             rows.append(value)
-    return rows[-limit:]
+            if len(rows) >= limit:
+                break
+    rows.reverse()
+    return rows
 
 
 def _file_stat(path: Path) -> dict[str, Any] | None:
@@ -124,6 +133,78 @@ def _count_lines(path: Path) -> int | None:
             return sum(1 for _ in handle)
     except OSError:
         return None
+
+
+#: Remembered log line counts, ``path -> (bytes, lines)``. The Control Center
+#: asks for a run report on a poll timer, and a run's log is the largest file
+#: it owns: without this, a finished run's 100 MB ``training.jsonl`` was read
+#: from the first byte to the last, twice a second, forever. Bounded, and only
+#: ever used for files that grew - see ``_count_lines_cached``.
+_LINE_COUNTS: dict[str, tuple[int, int]] = {}
+_LINE_COUNTS_LIMIT = 512
+_line_counts_lock = threading.Lock()
+
+
+def _count_lines_cached(path: Path) -> int | None:
+    """Line count of a log, counting only what was appended since last time.
+
+    ``sum(1 for _ in handle)`` reads every byte, which is the wrong cost model
+    for a value a GUI polls: a live run's log grows by a few hundred kilobytes
+    per second and a finished run's log never changes at all. The count is
+    remembered as ``(bytes, lines)`` and extended from the previous offset -
+    the same append-only assumption :class:`~sandboxai.telemetry.
+    IncrementalJsonlTailer` already makes for these files, and a file that
+    shrank is recounted from zero rather than resumed from a stale offset.
+
+    The previous count may have ended mid-line (a live writer's last line is
+    routinely half-written). That fragment was already counted once, so it is
+    subtracted before the appended bytes are counted, keeping the result
+    identical to a full count.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    key = str(path)
+    with _line_counts_lock:
+        cached = _LINE_COUNTS.get(key)
+    if cached is not None and cached[0] == size:
+        return cached[1]
+    lines: int | None = None
+    if cached is not None and size > cached[0] > 0:
+        known_size, known_lines = cached
+        appended = _count_lines_from(path, known_size)
+        if appended is not None:
+            # Was the known prefix cut off mid-line? Then that fragment is
+            # part of ``known_lines`` already and must not be counted twice.
+            ends_on_newline = _byte_at(path, known_size - 1) == b"\n"
+            lines = known_lines - (0 if ends_on_newline else 1) + appended
+    if lines is None:
+        lines = _count_lines(path)
+    if lines is not None:
+        with _line_counts_lock:
+            _LINE_COUNTS[key] = (size, lines)
+            while len(_LINE_COUNTS) > _LINE_COUNTS_LIMIT:
+                _LINE_COUNTS.pop(next(iter(_LINE_COUNTS)))
+    return lines
+
+
+def _count_lines_from(path: Path, offset: int) -> int | None:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            return sum(1 for _ in handle)
+    except OSError:
+        return None
+
+
+def _byte_at(path: Path, offset: int) -> bytes:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            return handle.read(1)
+    except OSError:
+        return b""
 
 
 def is_run_directory(path: Path) -> bool:
@@ -354,7 +435,7 @@ def _log_inventory(path: Path) -> dict[str, Any]:
         if stat is None:
             continue
         if relative.endswith(".jsonl"):
-            stat["lines"] = _count_lines(path / relative)
+            stat["lines"] = _count_lines_cached(path / relative)
         logs[relative] = stat
     return logs
 

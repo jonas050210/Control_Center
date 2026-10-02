@@ -27,7 +27,12 @@ from sandboxai.checkpoint_eval import (
 )
 from sandboxai.conditions import MAP_IDS, Condition
 from sandboxai.config import TrainingConfig
-from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT, observation_index
+from sandboxai.contract import (
+    ACTION_NVEC,
+    CONTRACT_VERSION,
+    OBSERVATION_FIELD_COUNT,
+    observation_index,
+)
 from sandboxai.curriculum_stages import applied_condition
 from sandboxai.generalization import GeneralizationSuite
 from sandboxai.pipeline import TrainingPipeline
@@ -291,7 +296,7 @@ class CheckpointEvaluationTest(unittest.TestCase):
         self.assertEqual(roundtrip["evaluation_id"], "eval_test@step50000")
         self.assertEqual(roundtrip["checkpoint"], roundtrip["policy"])
         self.assertEqual(roundtrip["status"], "completed")
-        self.assertEqual(roundtrip["contract"]["version"], 3)
+        self.assertEqual(roundtrip["contract"]["version"], CONTRACT_VERSION)
         self.assertTrue(roundtrip["evaluation_config"]["deterministic_policy"])
 
     def test_condition_evaluation_uses_frozen_eval_set(self):

@@ -22,6 +22,7 @@ from optional_deps import HAS_TKINTER, TKINTER_REASON
 
 from sandboxai.adapter import SandboxAIAdapter
 from sandboxai.config import TrainingConfig
+from sandboxai.contract import OBSERVATION_FIELD_COUNT
 
 if HAS_TKINTER:
     import tkinter as tk
@@ -74,6 +75,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
             "Benchmarks",
             "Evaluations",
             "Runs / Checkpoints",
+            "Stats",
             "System / Telemetry",
             "Settings",
         }
@@ -86,6 +88,66 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # No exception means every page's build()/refresh() survived an
         # empty (no runs yet) project directory - the most common state a
         # fresh user will actually see.
+
+    def test_every_page_attaches_the_cards_it_declares(self):
+        """A built board that is not managed shows an empty page.
+
+        Dashboard, Training and Benchmarks built their layout board, filled
+        it with cards, and never gave it a geometry manager - the pages
+        rendered their heading and nothing else. This asserts on the real
+        window that the board is attached and that its cards carry grid
+        information, which holds even before the window is mapped.
+        """
+        for page_class in PAGE_CLASSES:
+            title = page_class.title
+            self.app.show_page(title)
+            self.app.update_idletasks()
+            page = self.app.pages[title]
+            board = getattr(page, "_board", None)
+            if board is None:
+                continue
+            self.assertTrue(board.pack_info(), f"{title}: the layout board is not attached")
+            attached = [child for child in board.winfo_children() if child.grid_info()]
+            self.assertTrue(attached, f"{title}: no card on the board is attached")
+
+    def test_stats_page_renders_the_contract_and_a_recorded_tick(self):
+        """The Stats page must decode a real replay on the real window.
+
+        It is the one page whose whole purpose is showing the policy's input,
+        so this drives it with a replay-shaped payload and asserts that both
+        halves appear: the contract table (which exists without a recording)
+        and the decoded contacts of the selected tick.
+        """
+        self.app.show_page("Stats")
+        self.app.update_idletasks()
+        page = self.app.pages["Stats"]
+        rows = page.vector_tree.get_children()
+        self.assertTrue(rows, "the observation contract must render without a replay")
+
+        observation = [0.0] * OBSERVATION_FIELD_COUNT
+        observation[9] = 0.5  # agent_health_norm
+        observation[16] = 1.0  # in_combat
+        page._on_replay_stats(
+            {
+                "path": "/tmp/replays/episode_0001.jsonl",
+                "name": "episode_0001.jsonl",
+                "run": "run-a",
+                "header": {"seed": 7, "map_id": "blind_corner", "curriculum_level": 6},
+                "tick_count": 3,
+                "detailed": True,
+                "tick_index": 1,
+                "action": [2, 1, 1, 1, 1, 0],
+                "reward": 0.25,
+                "done": False,
+                "observation": observation,
+                "events": [{"kind": "combat", "tick": 1, "data": {}}],
+            },
+            None,
+        )
+        self.assertIn("health", page.summary_label.cget("text"))
+        self.assertEqual(len(page.contact_tree.get_children()), 3)
+        self.assertTrue(page.action_tree.get_children())
+        self.assertIn("tick 2 / 3", page.tick_label.cget("text"))
 
     def test_dense_tables_keep_every_column_reachable_without_permanent_scrollbars(self):
         """Tables keep right-hand data reachable through *overlay* bars.

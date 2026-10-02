@@ -1574,6 +1574,73 @@ def _assert_every_widget_uses_the_app_bus(app: object) -> None:
         raise AssertionError("; ".join(sorted(set(offenders))))
 
 
+def _assert_every_page_attaches_its_cards(app: object) -> None:
+    """No page may lay its cards out inside an unattached board.
+
+    The harness runs without a display, so it cannot ask Tk whether a widget
+    is *mapped*. It can ask which geometry manager owns it, and that is the
+    exact regression: a board that ``Page.board()`` builds and fills but
+    never packs, or cards the board never grids, render as a page with a
+    heading and nothing under it.
+    """
+
+    problems: list[str] = []
+    for title, page in app.pages.items():  # type: ignore[attr-defined]
+        board = getattr(page, "_board", None)
+        if board is None:
+            continue
+        if not board.winfo_manager():
+            problems.append(f"{title}: the layout board has no geometry manager")
+            continue
+        attached = [child for child in board.winfo_children() if child.winfo_manager() == "grid"]
+        if not attached:
+            problems.append(f"{title}: no card on the board is attached")
+    if problems:
+        raise AssertionError("; ".join(problems))
+
+
+def _assert_only_the_visible_page_polls(app: object) -> None:
+    """One poll tick refreshes the visible page and nothing else.
+
+    Every ``Page.refresh()`` submits background reads - run directories,
+    benchmark history, the replay list. Running all eight on every 600 ms tick
+    would keep reading artifacts for a window the operator is not looking at,
+    which is the difference between a GUI that idles and one that keeps a
+    laptop fan busy. The harness counts the calls instead of timing them, so
+    the check is deterministic on any machine.
+    """
+
+    counters: dict[str, int] = {}
+    originals: dict[str, object] = {}
+    for title, page in app.pages.items():  # type: ignore[attr-defined]
+        counters[title] = 0
+        originals[title] = page.refresh
+
+        def counting(_title: str = title, _original: object = originals[title]) -> None:
+            counters[_title] += 1
+            _original()  # type: ignore[operator]
+
+        page.refresh = counting  # type: ignore[method-assign]
+    try:
+        app.show_page("System / Telemetry")  # type: ignore[attr-defined]
+        for title in counters:
+            counters[title] = 0
+        app._tick()  # type: ignore[attr-defined]
+        if counters["System / Telemetry"] != 1:
+            raise AssertionError(
+                "the visible page must refresh exactly once per poll tick, "
+                f"got {counters['System / Telemetry']}"
+            )
+        offscreen = sorted(
+            title for title, count in counters.items() if title != "System / Telemetry" and count
+        )
+        if offscreen:
+            raise AssertionError(f"the poll tick refreshed hidden pages: {offscreen}")
+    finally:
+        for title, page in app.pages.items():  # type: ignore[attr-defined]
+            page.refresh = originals[title]  # type: ignore[method-assign]
+
+
 def _exercise_command_palette(app: object, window: object) -> None:
     """Drive the palette keys on the fake widgets.
 
@@ -1664,6 +1731,7 @@ def _exercise_page_handlers(app: object) -> None:
     app.pages["Benchmarks"]._on_finished(None, RuntimeError("smoke"))
     app.show_page("Dashboard")
     app.pages["Dashboard"]._on_agents_summary(None, None)
+    _exercise_stats(app)
     app.open_command_palette()
     first = app._palette_window
     if first is None or not first.winfo_exists():
@@ -1681,6 +1749,226 @@ def _exercise_page_handlers(app: object) -> None:
         pass
     else:
         raise AssertionError("show_page must reject an unknown page name")
+
+
+def _count_table_writes(tree: object) -> dict[str, int]:
+    """Wrap a Treeview's delete/insert so a check can see rebuilds."""
+    counts = {"delete": 0, "insert": 0}
+    original_delete = tree.delete  # type: ignore[attr-defined]
+    original_insert = tree.insert  # type: ignore[attr-defined]
+
+    def delete(*items):  # type: ignore[no-untyped-def]
+        counts["delete"] += 1
+        return original_delete(*items)
+
+    def insert(*args, **kwargs):  # type: ignore[no-untyped-def]
+        counts["insert"] += 1
+        return original_insert(*args, **kwargs)
+
+    tree.delete = delete  # type: ignore[method-assign]
+    tree.insert = insert  # type: ignore[method-assign]
+    return counts
+
+
+def _assert_unchanged_tables_are_not_rebuilt(app: object) -> None:
+    """A poll result identical to the last one must not rebuild the table.
+
+    Rebuilding costs a delete plus one insert per row, and in real Tk it also
+    drops the row the operator had selected. Every table that is fed from a
+    poll now compares a signature of the rendered values and leaves an
+    unchanged table alone; this drives the two inventories (and the runs
+    table) with the same result twice and then with a real change.
+    """
+
+    evaluations = app.pages["Evaluations"]  # type: ignore[attr-defined]
+    checkpoints = [
+        {
+            "run_id": "run-a",
+            "kind": "latest",
+            "path": "/tmp/run-a/checkpoints/latest.zip",
+            "bytes": 1024,
+            "modified_utc": "2026-10-01T00:00:00Z",
+        }
+    ]
+    summaries = [
+        {
+            "path": "/tmp/run-a/evaluations/latest.json",
+            "timesteps": 1000,
+            "episodes": 10,
+            "mean_episode_reward": 1.0,
+            "win_rate": 0.5,
+            "loss_rate": 0.25,
+            "modified_utc": "2026-10-01T00:00:00Z",
+        }
+    ]
+    evaluations._on_checkpoints(checkpoints, None)
+    evaluations._on_evaluations(summaries, None)
+    checkpoint_writes = _count_table_writes(evaluations.checkpoint_tree)
+    evaluation_writes = _count_table_writes(evaluations.eval_tree)
+
+    evaluations._on_checkpoints([dict(entry) for entry in checkpoints], None)
+    evaluations._on_evaluations([dict(entry) for entry in summaries], None)
+    if checkpoint_writes["delete"] or checkpoint_writes["insert"]:
+        raise AssertionError("an unchanged checkpoint table was rebuilt")
+    if evaluation_writes["delete"] or evaluation_writes["insert"]:
+        raise AssertionError("an unchanged evaluation table was rebuilt")
+
+    evaluations._on_evaluations([dict(summaries[0], mean_episode_reward=2.0)], None)
+    if not evaluation_writes["insert"]:
+        raise AssertionError("a changed evaluation must rebuild its table")
+    if evaluation_writes["delete"] != 1:
+        raise AssertionError("a rebuild must clear the table exactly once")
+
+    runs = app.pages["Runs / Checkpoints"]  # type: ignore[attr-defined]
+    report = {
+        "run_id": "run-a",
+        "status": {"state": "running"},
+        "progress": {"fraction": 0.5},
+        "checkpoints": {"count": 1},
+        "config": {"device": "cpu", "environment_count": 8, "env_workers": 1},
+        "evaluation": {"latest": {"mean_episode_reward": 1.0, "win_rate": 0.5}},
+        "modified_utc": "2026-10-01T00:00:00Z",
+        "run_dir": "/tmp/run-a",
+    }
+    runs._on_runs({"runs": [report], "run_count": 1}, None)
+    run_writes = _count_table_writes(runs.tree)
+    runs._on_runs({"runs": [dict(report)], "run_count": 1}, None)
+    if run_writes["delete"] or run_writes["insert"]:
+        raise AssertionError("an unchanged run table was rebuilt")
+    runs._on_runs({"runs": [dict(report, status={"state": "finished"})], "run_count": 1}, None)
+    if not run_writes["insert"]:
+        raise AssertionError("a changed run state must rebuild the runs table")
+
+    # Registering the same Treeview tag on every rebuild (the Evaluations
+    # table does exactly that) must not grow the theme bookkeeping: the list
+    # is replayed entry by entry on every theme switch, so it is a leak and a
+    # slowdown in one.
+    before = len(evaluations._tag_roles)
+    for reward in (0.1, 0.2, 0.3, 0.4, 0.5):
+        evaluations._on_evaluations([dict(summaries[0], mean_episode_reward=reward)], None)
+    if len(evaluations._tag_roles) != before:
+        raise AssertionError(
+            f"re-registering a tag grew the theme list ({before} -> {len(evaluations._tag_roles)})"
+        )
+
+
+def _exercise_stats(app: object) -> None:
+    """Drive the Stats page with a synthetic detailed replay.
+
+    The page is the one place that decodes a recording end to end (header ->
+    tick -> the 106-float vector -> contacts/objects/hearing/action), so the
+    smoke run feeds it a replay shaped exactly like ``adapter.replay_stats``
+    returns instead of only checking that the page exists.
+    """
+
+    app.show_page("Stats")  # type: ignore[attr-defined]
+    stats = app.pages["Stats"]  # type: ignore[attr-defined]
+    stats._on_replays([], None)
+    stats._on_replay_stats(None, RuntimeError("smoke"))
+    stats._on_evidence(None, None)
+    stats._step_tick(1)
+    stats._jump_to_tick()
+    stats._on_replay_selected(Event())
+
+    header = {
+        "seed": 7,
+        "map_id": "blind_corner",
+        "scenario": "corner_fight",
+        "lighting": "low_light",
+        "curriculum_level": 6,
+        "enemy_count": 2,
+        "detail": "detailed",
+        "policy_id": "smoke-brain",
+    }
+    replay = {
+        "path": "/tmp/smoke/replays/episode_0001.jsonl",
+        "name": "episode_0001.jsonl",
+        "run": "run-smoke",
+        "header": header,
+        "tick_count": 3,
+        "detailed": True,
+        "tick_index": 1,
+        "action": [2, 1, 0, 1, 1, 0],
+        "reward": 0.25,
+        "done": False,
+        "observation": [0.5] * 106,
+        "events": [{"kind": "combat", "tick": 1, "data": {"damage_taken": 5.0}}],
+    }
+    stats._on_replay_stats(replay, None)
+    if "health" not in str(stats.summary_label.cget("text")):
+        raise AssertionError("the Stats page must decode an observation into a summary")
+    if not stats.vector_tree.get_children():
+        raise AssertionError("the Stats page must render the observation vector table")
+    if len(stats.vector_tree.get_children()) < 5:
+        raise AssertionError("the vector table must group the fields into sections")
+    stats._on_replays(
+        [
+            {
+                "path": replay["path"],
+                "name": replay["name"],
+                "run": replay["run"],
+                "header": header,
+                "ticks": 3,
+            }
+        ],
+        None,
+    )
+    stats._on_evidence(
+        {
+            "target": "Roblox TTK Testing",
+            "evidence_checked_on": "2026-10-01",
+            "mechanics": {
+                "verified": [
+                    {
+                        "mechanic": "fire",
+                        "status": "verified",
+                        "implementation_rule": "keep",
+                        "source_label": "official",
+                    }
+                ],
+                "calibration_required": [],
+                "excluded": [],
+            },
+        },
+        None,
+    )
+    if "verified" not in str(stats.evidence_label.cget("text")):
+        raise AssertionError("the Stats page must show the TTK evidence counts")
+
+    # The rescan timer must keep running while a replay is selected: a
+    # recording written during the session has to appear without the operator
+    # pressing Rescan. The old code only scanned while no replay was loaded,
+    # so a list that was already populated could never grow. Counting the
+    # submissions (not the thread results) keeps the check deterministic.
+    submissions = {"replays": 0, "ttk-evidence": 0}
+    original_submit_poll = stats.submit_poll
+
+    def counting_submit_poll(operation, fn, callback):  # type: ignore[no-untyped-def]
+        if operation in submissions:
+            submissions[operation] += 1
+        original_submit_poll(operation, fn, callback)
+
+    stats.submit_poll = counting_submit_poll  # type: ignore[method-assign]
+    stats._poll_count = 0
+    stats.refresh()
+    if submissions["replays"] != 1:
+        raise AssertionError("a tick with a selected replay must still rescan the folder")
+    stats._poll_count = stats.RESCAN_EVERY
+    stats.refresh()
+    if submissions["replays"] != 2:
+        raise AssertionError("the rescan timer must keep running on later ticks")
+    if submissions["ttk-evidence"] != 0:
+        raise AssertionError("the evidence manifest must not be re-polled once it has loaded")
+
+    # A scan that finds nothing must clear the decoded replay instead of
+    # leaving its values on screen as if they were still backed by a file.
+    stats._on_replays([], None)
+    if stats._replay is not None:
+        raise AssertionError("an empty rescan must clear the decoded replay")
+    if "health" in str(stats.summary_label.cget("text")):
+        raise AssertionError("an empty rescan must clear the decoded summary")
+    if not stats._evidence_loaded:
+        raise AssertionError("the evidence card must stop polling once it has a result")
 
 
 def _callback_failures() -> list[str]:
@@ -1772,12 +2060,22 @@ def run_smoke() -> int:
             _assert_every_widget_uses_the_app_bus(app)
 
     _step(failures, "show and refresh every page", sweep_pages)
+    _step(
+        failures,
+        "every page attaches its cards",
+        lambda: _assert_every_page_attaches_its_cards(app),
+    )
     _step(failures, "themes, densities, motion levels", sweep_styles)
     _step(failures, "settings, training, benchmark, telemetry", settings_and_pages)
     _step(
         failures,
         "theme listeners are pruned with their widgets",
         lambda: _assert_theme_listeners_do_not_leak(app),
+    )
+    _step(
+        failures,
+        "only the visible page polls",
+        lambda: _assert_only_the_visible_page_polls(app),
     )
     _step(
         failures,
@@ -1790,6 +2088,11 @@ def run_smoke() -> int:
         lambda: _assert_animations_release_the_ticker(app),
     )
     _step(failures, "reusable widgets", lambda: _exercise_widgets(app))
+    _step(
+        failures,
+        "an unchanged table is not rebuilt",
+        lambda: _assert_unchanged_tables_are_not_rebuilt(app),
+    )
     _step(failures, "page handlers", lambda: _exercise_page_handlers(app))
     _step(failures, "close", app._on_close)
 

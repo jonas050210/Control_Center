@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from tkinter import ttk
 from typing import Any
 
-from .control_center_layout import LayoutState, WidgetSpec
+from .control_center_layout import LayoutState, WidgetSpec, reset_page
 from .control_center_theme import DENSITIES, MOTION_SPEED, Density, Theme, UiScale
 
 __all__ = [
@@ -913,6 +913,11 @@ class RoundedPanel(tk.Canvas):
             padding, padding, window=self.body, anchor="nw", width=1, height=1
         )
         self._hover = False
+        #: Geometry the last painted frame was drawn for. ``<Configure>``
+        #: fires for every pixel of a resize, and repainting the rounded
+        #: surface, the accent bar and the two header texts each time made a
+        #: window drag noticeably heavy for no visible gain.
+        self._last_draw: tuple[int, int, int, bool] | None = None
         self.bind("<Configure>", lambda _e: self._redraw(), add="+")
         self.body.bind("<Configure>", lambda _e: self._on_body_configure(), add="+")
         self.bind("<Enter>", lambda _e: self._set_hover(True), add="+")
@@ -926,25 +931,36 @@ class RoundedPanel(tk.Canvas):
         with contextlib.suppress(tk.TclError):
             self._outer = theme.color(self._background_role)
             self.configure(background=self._outer)
-            self._redraw()
+            self._redraw(force=True)
 
     def _set_hover(self, hovering: bool) -> None:
         if hovering == self._hover:
             return
         self._hover = hovering
-        self._redraw()
+        self._redraw(force=True)
 
     def _on_body_configure(self) -> None:
         header = self._header_height()
-        self.configure(height=self.body.winfo_reqheight() + 2 * self._padding + header)
+        needed = self.body.winfo_reqheight() + 2 * self._padding + header
+        if int(self.winfo_reqheight()) != needed:
+            self.configure(height=needed)
+        self._redraw()
 
     def _header_height(self) -> int:
         return self._bus.px(34, minimum=26) if self._title else 0
 
-    def _redraw(self) -> None:
-        self.delete("surface")
+    def _redraw(self, *, force: bool = False) -> None:
         width = max(1, self.winfo_width())
         height = max(1, self.winfo_height())
+        # The body frame's own request is part of the key: a re-wrapped label
+        # changes it without changing the canvas geometry, and that case must
+        # still reach the body-window resize below.
+        needed = self.body.winfo_reqheight()
+        state = (width, height, needed, self._hover)
+        if not force and state == self._last_draw:
+            return
+        self._last_draw = state
+        self.delete("surface")
         radius = self._radius
         fill = self._theme.card_hover if self._hover else self._theme.card
         border = self._theme.border_strong if self._hover else self._theme.border
@@ -995,10 +1011,14 @@ class RoundedPanel(tk.Canvas):
         self.tag_lower("surface")
         header = self._header_height()
         self.coords(self._body_window, self._padding, self._padding + header)
+        # Never squeeze the content frame below what its children need. A grid
+        # row that is shorter than a card used to clip its body (labels
+        # overlapping the next card), because the window item height was
+        # forced to the canvas height instead of the larger of the two.
         self.itemconfigure(
             self._body_window,
             width=max(1, width - 2 * self._padding),
-            height=max(1, height - 2 * self._padding - header),
+            height=max(1, height - 2 * self._padding - header, needed),
         )
 
 
@@ -1414,6 +1434,8 @@ class LayoutBoard(ttk.Frame):
         self._columns = self._max_columns
         self._gap = gap
         self._min_column_width = min_column_width
+        #: Built on first use: the "everything is hidden" placeholder.
+        self._empty: ttk.Frame | None = None
         for index in range(self._max_columns):
             self.columnconfigure(index, weight=1, uniform="board")
         self._unsubscribe = layout_bus.subscribe(lambda _state: self.rebuild(), owner=self)
@@ -1448,6 +1470,7 @@ class LayoutBoard(ttk.Frame):
                 widget.grid_forget()
         row = 0
         column = 0
+        placed = 0
         for placement in placements:
             card = self._widgets.get(placement.widget_id)
             if card is None:
@@ -1464,10 +1487,61 @@ class LayoutBoard(ttk.Frame):
                 padx=(0 if column == 0 else self._gap, 0),
                 pady=(0 if row == 0 else self._gap, 0),
             )
+            placed += 1
             column += span
             if column >= self._columns:
                 row += 1
                 column = 0
+        # A preset can hide every card on a page. Without a placeholder that
+        # page is indistinguishable from a broken one, so the board offers the
+        # one action that fixes it instead of leaving a blank tab.
+        self._toggle_empty_state(placed == 0 and bool(self._specs))
+
+    def _toggle_empty_state(self, show: bool) -> None:
+        """Show/hide the "every card is hidden" placeholder."""
+        empty = self._empty
+        if show and empty is None:
+            empty = self._empty_state()
+        if empty is None:
+            return
+        if show:
+            empty.grid(row=0, column=0, columnspan=self._max_columns, sticky="ew")
+        else:
+            empty.grid_forget()
+
+    def _empty_state(self) -> ttk.Frame:
+        """The placeholder a fully hidden page shows (built on first use)."""
+        frame = ttk.Frame(self)
+        ttk.Label(frame, text="Every card on this page is hidden.", style="FieldTitle.TLabel").pack(
+            anchor="w"
+        )
+        ttk.Label(
+            frame,
+            text=(
+                "Use Settings → Layout studio to bring them back, or restore this "
+                "page's default layout here."
+            ),
+            style="PageSubtitle.TLabel",
+            wraplength=self._min_column_width,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 6))
+        ttk.Button(
+            frame,
+            text="Restore default layout",
+            style="Ghost.TButton",
+            command=self.reset_layout,
+        ).pack(anchor="w")
+        self._empty = frame
+        return frame
+
+    def reset_layout(self) -> None:
+        """Restore this page's declared default layout.
+
+        The board already holds the page's own specs (that is what it lays
+        out), so it can rebuild the registry entry without asking the page.
+        """
+        registry = {self._page_key: tuple(self._specs.values())}
+        self._layout_bus.set_state(reset_page(self._layout_bus.state, self._page_key, registry))
 
     def _ensure_widget(self, widget_id: str) -> tk.Widget | None:
         existing = self._widgets.get(widget_id)
