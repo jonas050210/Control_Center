@@ -25,9 +25,12 @@ from sandboxai.control_center_layout import (
     PresetError,
     PresetStore,
     WidgetSpec,
+    columns_for_width,
     deserialize,
+    fit_window_geometry,
     move,
     normalize,
+    placement_slots,
     reset_all,
     reset_page,
     safe_preset_name,
@@ -513,6 +516,174 @@ class PresetStoreTests(unittest.TestCase):
             store.save("atomic", layout=normalize(LayoutState(pages={}), PAGES), appearance={})
             leftovers = [p.name for p in store._path("atomic").parent.glob("*.tmp")]
             self.assertEqual(leftovers, [])
+
+
+class BoardSizingTests(unittest.TestCase):
+    """The card board's resize decision, pinned without a display.
+
+    The desktop suite used to hang inside ``update()`` because the board
+    re-decided its column count from inside the ``<Configure>`` event of the
+    layout that decision had just produced. The decision itself lives in
+    :func:`columns_for_width` so the two properties that break that loop -
+    a hysteresis band and no guessing while the board is unlaid-out - are
+    testable here, on every machine, instead of only under Xvfb.
+    """
+
+    def test_the_count_follows_the_width_when_it_clearly_changes(self) -> None:
+        self.assertEqual(columns_for_width(1400, max_columns=3, min_column_width=320, current=3), 3)
+        self.assertEqual(columns_for_width(700, max_columns=3, min_column_width=320, current=3), 2)
+        self.assertEqual(columns_for_width(340, max_columns=3, min_column_width=320, current=3), 1)
+        # A big resize still takes the full step, not one column per event.
+        self.assertEqual(columns_for_width(1400, max_columns=3, min_column_width=320, current=1), 3)
+
+    def test_a_width_inside_the_band_leaves_the_count_alone(self) -> None:
+        """A window parked on a threshold must not oscillate between counts."""
+        for width in (639, 640, 641, 650, 670):
+            self.assertEqual(
+                columns_for_width(width, max_columns=3, min_column_width=320, current=2),
+                2,
+                f"width {width} is within the hysteresis band of two columns",
+            )
+        # Clearing the band by enough does move it: the third column needs
+        # 3 x 320 px plus the 25 px margin, the first needs to fall below
+        # 2 x 320 px minus the margin.
+        self.assertEqual(columns_for_width(984, max_columns=3, min_column_width=320, current=2), 2)
+        self.assertEqual(columns_for_width(985, max_columns=3, min_column_width=320, current=2), 3)
+        self.assertEqual(columns_for_width(615, max_columns=3, min_column_width=320, current=2), 2)
+        self.assertEqual(columns_for_width(614, max_columns=3, min_column_width=320, current=2), 1)
+
+    def test_an_unlaid_out_board_keeps_its_column_count(self) -> None:
+        """``winfo_width()`` is 1 before the first layout; that is not a resize."""
+        self.assertEqual(columns_for_width(1, max_columns=3, min_column_width=320, current=3), 3)
+        self.assertEqual(columns_for_width(0, max_columns=3, min_column_width=320, current=2), 2)
+
+    def test_the_band_is_symmetric_for_every_supported_width(self) -> None:
+        """No width may produce two different counts for one current value."""
+        for current in (1, 2, 3):
+            for width in range(2, 2600, 1):
+                first = columns_for_width(
+                    width, max_columns=3, min_column_width=320, current=current
+                )
+                second = columns_for_width(
+                    width, max_columns=3, min_column_width=320, current=first
+                )
+                self.assertEqual(
+                    first,
+                    second,
+                    f"width {width} flips from {current} to {first} and back",
+                )
+
+
+class PlacementSlotTests(unittest.TestCase):
+    """The board's card placement as a pure value (its ``rebuild`` cache)."""
+
+    def _slots(self, **kwargs):
+        state = normalize(LayoutState(pages={}), PAGES)
+        return placement_slots(state.visible("Dashboard"), **kwargs)
+
+    def test_slots_flow_left_to_right_and_wrap_at_the_column_count(self) -> None:
+        slots = self._slots(columns=2)
+        self.assertEqual(slots, (("kpis", 0, 0, 1), ("charts", 0, 1, 1), ("log", 1, 0, 1)))
+
+    def test_a_span_wider_than_the_row_moves_to_the_next_row(self) -> None:
+        state = normalize(LayoutState(pages={}), PAGES)
+        state = set_span(state, "Dashboard", "kpis", 3)
+        slots = placement_slots(state.visible("Dashboard"), columns=2)
+        # The 3-wide card cannot share a two-column row, so it starts row 0
+        # alone and the rest follow on the next row.
+        self.assertEqual(slots[0], ("kpis", 0, 0, 2))
+        self.assertEqual([slot[1] for slot in slots[1:]], [1, 1])
+
+    def test_identical_layouts_produce_identical_slots(self) -> None:
+        """The identity ``LayoutBoard.rebuild`` uses to skip the re-grid."""
+        self.assertEqual(self._slots(columns=3), self._slots(columns=3))
+        self.assertNotEqual(self._slots(columns=3), self._slots(columns=2))
+
+
+class WindowGeometryTests(unittest.TestCase):
+    """Where the window opens, and how big.
+
+    A remembered geometry is only a suggestion: the screen it was captured on
+    may have been bigger, or gone (a monitor change, a different WSLg/RDP
+    session, a laptop undocked from a 4K display). These pin the three rules -
+    fit the screen, stay reachable, centre what has no position - so a stale
+    preference file can never open a window the operator cannot get back.
+    """
+
+    def _parts(self, geometry: str) -> tuple[int, int, int, int]:
+        import re
+
+        match = re.fullmatch(r"(\d+)x(\d+)\+(\d+)\+(\d+)", geometry)
+        self.assertIsNotNone(match, f"{geometry!r} is not a Tk geometry string")
+        assert match is not None
+        return tuple(int(group) for group in match.groups())  # type: ignore[return-value]
+
+    def test_a_fresh_window_is_sized_for_a_1920x1080_screen(self) -> None:
+        width, height, x, y = self._parts(
+            fit_window_geometry(None, screen_width=1920, screen_height=1080)
+        )
+        self.assertEqual((width, height), (1800, 980))
+        self.assertEqual((x, y), ((1920 - 1800) // 2, (1080 - 980) // 2))
+
+    def test_a_saved_geometry_that_no_longer_fits_is_clamped_onto_the_screen(self) -> None:
+        """The 4K-to-1080p case: keep the intent, drop what cannot be shown."""
+        width, height, x, y = self._parts(
+            fit_window_geometry("3200x2000+5000+5000", screen_width=1920, screen_height=1080)
+        )
+        self.assertLessEqual(width, 1920)
+        self.assertLessEqual(height, 1080)
+        self.assertLessEqual(x + width, 1920)
+        self.assertLessEqual(y + height, 1080)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+
+    def test_a_window_restored_off_the_left_edge_comes_back(self) -> None:
+        _width, _height, x, y = self._parts(
+            fit_window_geometry("1500x900-300-200", screen_width=1920, screen_height=1080)
+        )
+        self.assertEqual((x, y), (0, 0))
+
+    def test_a_usable_saved_size_and_position_are_kept(self) -> None:
+        self.assertEqual(
+            fit_window_geometry("1500x900+120+80", screen_width=1920, screen_height=1080),
+            "1500x900+120+80",
+        )
+
+    def test_a_saved_size_below_the_minimum_is_raised_to_it(self) -> None:
+        width, height, _x, _y = self._parts(
+            fit_window_geometry("900x500+10+10", screen_width=1920, screen_height=1080)
+        )
+        self.assertEqual((width, height), (1280, 800))
+
+    def test_an_unreadable_geometry_is_treated_as_no_geometry(self) -> None:
+        self.assertEqual(
+            fit_window_geometry("nonsense", screen_width=1920, screen_height=1080),
+            fit_window_geometry(None, screen_width=1920, screen_height=1080),
+        )
+        self.assertEqual(
+            fit_window_geometry("", screen_width=1920, screen_height=1080),
+            fit_window_geometry(None, screen_width=1920, screen_height=1080),
+        )
+
+    def test_a_small_screen_gets_a_window_that_still_fits(self) -> None:
+        width, height, x, y = self._parts(
+            fit_window_geometry("1720x1000+0+0", screen_width=1366, screen_height=768)
+        )
+        self.assertLessEqual(width, 1366)
+        self.assertLessEqual(height, 768)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
+        self.assertLessEqual(x + width, 1366)
+        self.assertLessEqual(y + height, 768)
+
+    def test_a_tiny_screen_never_produces_an_offscreen_window(self) -> None:
+        width, height, x, y = self._parts(
+            fit_window_geometry(None, screen_width=1024, screen_height=600)
+        )
+        self.assertLessEqual(width, 1024)
+        self.assertLessEqual(height, 600)
+        self.assertGreaterEqual(x, 0)
+        self.assertGreaterEqual(y, 0)
 
 
 if __name__ == "__main__":

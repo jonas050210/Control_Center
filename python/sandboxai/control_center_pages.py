@@ -50,6 +50,7 @@ from .control_center_widgets import (
     ToolTip,
     _open_in_file_manager,
     _scrollable_table,
+    refresh_table_empty,
 )
 
 
@@ -157,22 +158,71 @@ class Page(ttk.Frame):
         self.refresh()
 
     def _heading(self) -> None:
+        """The page header: title, status pill, subtitle and a hint slot.
+
+        The subtitle sits on its own wrapped line instead of trailing the
+        title on the same row: a long one used to be clipped as soon as the
+        window was narrow, which is exactly when an operator needs to read
+        what a page is for.
+        """
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, self.app.px(14, minimum=8)))
+        self._heading_frame = header
         row = ttk.Frame(header)
         row.pack(fill="x")
         ttk.Label(row, text=self.title, style="PageTitle.TLabel").pack(side="left")
         self._heading_pill = ttk.Label(row, text="", style="Pill.TLabel")
         self._heading_pill.pack(side="right")
         if self.subtitle:
-            ttk.Label(row, text=self.subtitle, style="PageSubtitle.TLabel").pack(
-                side="left",
-                padx=(self.app.px(14, minimum=8), 0),
-                pady=(self.app.px(6, minimum=3), 0),
-            )
+            ttk.Label(
+                header,
+                text=self.subtitle,
+                style="PageSubtitle.TLabel",
+                justify="left",
+                wraplength=self.app.px(1180, minimum=420),
+            ).pack(anchor="w", fill="x", pady=(self.app.px(4, minimum=2), 0))
         tk.Frame(header, height=1, background=self.palette.border, borderwidth=0).pack(
             fill="x", pady=(self.app.px(10, minimum=6), 0)
         )
+        # The hint is created here (so it always packs *below* the heading)
+        # and stays hidden until a page has something to explain - an empty
+        # page reads like a broken one, and a page that says "no runs yet,
+        # start one here" does not.
+        self._hint = ttk.Label(
+            self,
+            text="",
+            style="Hint.TLabel",
+            justify="left",
+            anchor="w",
+            wraplength=self.app.px(1180, minimum=420),
+        )
+
+    def set_hint(self, text: str) -> None:
+        """Explain an empty page in one line (``""`` hides the hint)."""
+        hint = getattr(self, "_hint", None)
+        if hint is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            hint.configure(text=text)
+            if not text:
+                hint.pack_forget()
+                return
+            if hint.winfo_manager():
+                return
+            body = next(
+                (
+                    child
+                    for child in self.winfo_children()
+                    if child is not getattr(self, "_heading_frame", None)
+                ),
+                None,
+            )
+            if body is not None:
+                hint.pack(
+                    fill="x",
+                    before=body,
+                    pady=(0, self.app.px(10, minimum=5)),
+                )
 
     def set_heading_pill(self, text: str, kind: str = "") -> None:
         """Update the small status pill next to the page title."""
@@ -207,8 +257,22 @@ class Page(ttk.Frame):
         board.pack(fill="both", expand=True)
         return board
 
-    def card(self, parent: tk.Misc, title: str, subtitle: str = "", *, accent: bool = True) -> Any:
-        """A themed rounded card whose ``.body`` frame hosts content."""
+    def card(
+        self,
+        parent: tk.Misc,
+        title: str,
+        subtitle: str = "",
+        *,
+        accent: bool = True,
+        nested: bool = False,
+    ) -> Any:
+        """A themed rounded card whose ``.body`` frame hosts content.
+
+        ``nested=True`` is for a card that lives *inside* another card: its
+        rounded corners have to be painted in the surface it actually sits
+        on (the parent card), not in the page background, or every corner
+        shows a small square of a different colour.
+        """
         from .control_center_ui import RoundedPanel
 
         return RoundedPanel(
@@ -219,7 +283,7 @@ class Page(ttk.Frame):
             title=title,
             subtitle=subtitle,
             accent=accent,
-            background_role="bg",
+            background_role="card" if nested else "bg",
         )
 
     def on_theme(self, theme: Theme) -> None:
@@ -750,6 +814,14 @@ class DashboardPage(Page):
             self.report_error("Dashboard refresh failed", error or RuntimeError("unknown error"))
             return
         view = vm.dashboard_view(snapshot)
+        self.set_hint(
+            ""
+            if view["run_id"]
+            else (
+                "No runs yet. The workflow card starts the TTK bridge, a benchmark "
+                "and a training run - in that order."
+            )
+        )
         previous_run_dir = self._last_run_dir
         self._last_run_dir = view.get("run_dir")
         if self._last_run_dir != previous_run_dir:
@@ -1146,7 +1218,14 @@ class TrainingPage(Page):
         card = self.card(parent, "Training runs", "Real backend states only")
         table_frame = ttk.Frame(card.body, style="CardInner.TFrame")
         table_frame.pack(fill="both", expand=True)
-        self.tree = _scrollable_table(table_frame, self.COLUMNS, bus=self.app.bus)
+        self.tree = _scrollable_table(
+            table_frame,
+            self.COLUMNS,
+            bus=self.app.bus,
+            empty_text=(
+                "No training agents yet.\nSet the topology above and press Launch training."
+            ),
+        )
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self._apply_lifecycle_tags()
         actions = ttk.Frame(card.body, style="CardInner.TFrame")
@@ -1606,7 +1685,7 @@ class TrainingPage(Page):
                     else "n/a",
                     vm.format_number(row["steps_per_second"], 1),
                     vm.format_number(row["mean_episode_reward"], 3),
-                    self._budget_label_by_agent.get(str(row["agent_id"]), "—"),
+                    self._budget_label_by_agent.get(str(row["agent_id"]), ""),
                     vm.format_timestamp(row["started_at"]),
                     row["error"] or "",
                 ),
@@ -1615,6 +1694,15 @@ class TrainingPage(Page):
             if row["agent_id"] == selected:
                 selected_still_present = True
                 self.tree.selection_set(item_id)
+        refresh_table_empty(self.tree)
+        self.set_hint(
+            ""
+            if rows
+            else (
+                "No training agents yet. Check the topology and budget above, "
+                "then press Launch training."
+            )
+        )
         if selected is not None and not selected_still_present:
             self._clear_selection()
         self.stop_all_button.configure(
@@ -1884,7 +1972,14 @@ class BenchmarkPage(Page):
         WidgetSpec(
             "results",
             "Measurements",
-            "Live measurement table and the throughput scaling chart.",
+            "Every tested configuration, live: one row per screened topology.",
+            default_span=3,
+            max_span=3,
+        ),
+        WidgetSpec(
+            "scaling",
+            "Throughput scaling",
+            "Steps per second across the configurations that were measured.",
             default_span=3,
             max_span=3,
         ),
@@ -1929,6 +2024,7 @@ class BenchmarkPage(Page):
         board.add("plan", self._build_plan_card)
         board.add("live", self._build_live_card)
         board.add("results", self._build_results_card)
+        board.add("scaling", self._build_scaling_card)
         board.rebuild()
 
         self._cancel_event: threading.Event | None = None
@@ -2059,6 +2155,7 @@ class BenchmarkPage(Page):
             card.body,
             "Best configuration",
             "Selected and applied automatically when a run finishes",
+            nested=True,
         )
         best_card.pack(fill="x", pady=(self.app.px(10, minimum=5), 0))
         self.leader_banner = ttk.Label(
@@ -2079,24 +2176,33 @@ class BenchmarkPage(Page):
         return card
 
     def _build_results_card(self, parent: tk.Misc) -> tk.Widget:
-        card = self.card(parent, "Measurements & scaling", "Every tested configuration, live")
-        bottom = ttk.Panedwindow(card.body, orient="horizontal")
-        bottom.pack(fill="both", expand=True)
+        """The measurement table, as a full-width card.
 
-        results_card = self.card(
-            bottom, "Measurements", "Live stream of every tested configuration"
+        It used to share one card with the chart in a 3:2 split. The table
+        declares 1125 px of columns (14 of them) and the 3:2 left half of a
+        1920x1080 window is only about 900 px, so the project's marquee table
+        opened with a horizontal scrollbar on the very screens that have room
+        to spare. Full width gives it ~1450 px and the overlay bar disappears;
+        the chart gets its own full-width card right below instead of a
+        squeezed 600 px column.
+        """
+        card = self.card(parent, "Measurements", "Every tested configuration, live")
+        self.tree = _scrollable_table(
+            card.body,
+            self.RESULT_COLUMNS,
+            bus=self.app.bus,
+            empty_text=("No measurements yet.\nPress Start benchmark to measure this machine."),
         )
-        bottom.add(results_card, weight=3)
-        self.tree = _scrollable_table(results_card.body, self.RESULT_COLUMNS, bus=self.app.bus)
         self.tag_style(self.tree, "failed", "error")
         self.tag_style(self.tree, "leader", "ok")
+        return card
 
-        chart_card = self.card(
-            bottom, "Throughput scaling", "Steps per second across configurations"
+    def _build_scaling_card(self, parent: tk.Misc) -> tk.Widget:
+        card = self.card(
+            parent, "Throughput scaling", "Steps per second across the measured configurations"
         )
-        bottom.add(chart_card, weight=2)
         self.throughput_chart = LineChart(
-            chart_card.body,
+            card.body,
             "Measured throughput (steps/s)",
             color=self.palette.accent,
             bus=self.app.bus,
@@ -2392,6 +2498,14 @@ class BenchmarkPage(Page):
         if error is not None or history is None:
             self.report_error("Benchmark history refresh failed", error or RuntimeError("unknown"))
             return
+        self.set_hint(
+            ""
+            if (history or self._running or self._latest_report)
+            else (
+                "No benchmark recorded yet. Start measures this machine end to end, "
+                "picks the fastest stable topology and applies it to the launch deck."
+            )
+        )
         if self._latest_report is None and not self._running and history:
             report = history[0].get("report")
             self._latest_report = report
@@ -2447,6 +2561,7 @@ class BenchmarkPage(Page):
                 ),
                 tags=tags,
             )
+        refresh_table_empty(self.tree)
 
     # -- best configuration --------------------------------------------------
 
@@ -2503,17 +2618,29 @@ class EvaluationPage(Page):
     )
 
     def build(self) -> None:
-        split = ttk.Panedwindow(self, orient="horizontal")
+        # Two columns of cards over a plain grid. A panedwindow here would
+        # re-arrange both halves whenever a table (or a chart) reports a new
+        # requested size, which is a feedback loop with content that sizes
+        # itself - the layout has exactly two sensible columns and does not
+        # need a movable sash to express that.
+        split = ttk.Frame(self)
         split.pack(fill="both", expand=True)
+        split.columnconfigure(0, weight=1, uniform="eval")
+        split.columnconfigure(1, weight=1, uniform="eval")
+        split.rowconfigure(0, weight=1)
 
         left_area = ScrollArea(split, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
-        split.add(left_area, weight=1)
+        left_area.grid(row=0, column=0, sticky="nsew")
         left = left_area.body
 
         checkpoint_card = self.card(left, "Checkpoints", "Pick the checkpoint to evaluate")
         checkpoint_card.pack(fill="both", expand=True)
         self.checkpoint_tree = _scrollable_table(
-            checkpoint_card.body, self.CHECKPOINT_COLUMNS, bus=self.app.bus, expand=False
+            checkpoint_card.body,
+            self.CHECKPOINT_COLUMNS,
+            bus=self.app.bus,
+            expand=False,
+            empty_text="No checkpoints yet.\nTrain a run, then evaluate its checkpoints here.",
         )
 
         form = self.card(left, "Run evaluation on the selected checkpoint")
@@ -2558,13 +2685,17 @@ class EvaluationPage(Page):
         self.state_label.pack(anchor="w")
 
         right_area = ScrollArea(split, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
-        split.add(right_area, weight=1)
+        right_area.grid(row=0, column=1, sticky="nsew", padx=(self.app.px(12, minimum=6), 0))
         right = right_area.body
 
         results_card = self.card(right, "Evaluation results", "Select multiple rows to compare")
         results_card.pack(fill="both", expand=True)
         self.eval_tree = _scrollable_table(
-            results_card.body, self.EVAL_COLUMNS, bus=self.app.bus, expand=False
+            results_card.body,
+            self.EVAL_COLUMNS,
+            bus=self.app.bus,
+            expand=False,
+            empty_text="No evaluations recorded yet.\nPick a checkpoint on the left and press Start evaluation.",
         )
         self.eval_tree.configure(selectmode="extended")
         self.eval_tree.bind("<<TreeviewSelect>>", self._on_eval_select)
@@ -2652,6 +2783,15 @@ class EvaluationPage(Page):
                 ),
             )
             self._checkpoint_paths[item_id] = entry["path"]
+        refresh_table_empty(self.checkpoint_tree)
+        self.set_hint(
+            ""
+            if (entries or self.selected_checkpoint)
+            else (
+                "Nothing to evaluate yet. Training writes checkpoints into its run "
+                "directory; they appear here as soon as one exists."
+            )
+        )
 
     def _on_checkpoint_select(self, _event: object) -> None:
         selection = self.checkpoint_tree.selection()
@@ -2757,6 +2897,7 @@ class EvaluationPage(Page):
             if path in selected:
                 self.eval_tree.selection_add(item_id)
                 restored_paths.append(path)
+        refresh_table_empty(self.eval_tree)
         restored = tuple(restored_paths)
         if restored != self._selected_evaluation_paths:
             self._selected_evaluation_paths = restored
@@ -2920,23 +3061,43 @@ class RunsPage(Page):
     )
 
     def build(self) -> None:
-        paned = ttk.Panedwindow(self, orient="vertical")
-        paned.pack(fill="both", expand=True)
+        # One scroll context per page: the inventory on top, the detail and
+        # the telemetry under it, all inside a single ScrollArea. The two
+        # panedwindows this used to be built from re-arranged their panes on
+        # every requested-size change of a child (a table fits its columns to
+        # the width it gets, a chart repaints on Configure), which is a
+        # feedback loop - and their native sashes were the "window is mostly
+        # chrome" complaint the single scroll area replaced.
+        area = ScrollArea(self, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
+        area.pack(fill="both", expand=True)
+        paned = area.body
+
         top = self.card(paned, "Runs & checkpoints", "Real directories on disk, newest first")
-        paned.add(top, weight=1)
-        self.tree = _scrollable_table(top.body, self.COLUMNS, bus=self.app.bus)
+        top.pack(fill="x")
+        self.tree = _scrollable_table(
+            top.body,
+            self.COLUMNS,
+            bus=self.app.bus,
+            empty_text=(
+                "No runs found under the output root yet.\n"
+                "Launch a training run and it appears here while it trains."
+            ),
+        )
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tag_style(self.tree, "run-running", "ok")
         self.tag_style(self.tree, "run-failed", "error")
         self.tag_style(self.tree, "run-warn", "warn")
 
         bottom = ttk.Frame(paned)
-        paned.add(bottom, weight=1)
-        bottom_split = ttk.Panedwindow(bottom, orient="horizontal")
-        bottom_split.pack(fill="both", expand=True)
+        bottom.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
+        bottom_split = ttk.Frame(bottom)
+        bottom_split.pack(fill="x")
+        bottom_split.columnconfigure(0, weight=3, uniform="rundetail")
+        bottom_split.columnconfigure(1, weight=2, uniform="rundetail")
+        bottom_split.rowconfigure(0, weight=1)
 
         detail_card = self.card(bottom_split, "Run detail & diagnostics")
-        bottom_split.add(detail_card, weight=3)
+        detail_card.grid(row=0, column=0, sticky="nsew")
         self.detail_text = tk.Text(
             detail_card.body,
             wrap="word",
@@ -2956,7 +3117,7 @@ class RunsPage(Page):
         chart_card = self.card(
             bottom_split, "Selected run telemetry", "Reward and throughput against timesteps"
         )
-        bottom_split.add(chart_card, weight=2)
+        chart_card.grid(row=0, column=1, sticky="nsew", padx=(self.app.px(12, minimum=6), 0))
         self.run_reward_chart = LineChart(
             chart_card.body, "Mean episode reward", color=self.palette.ok, bus=self.app.bus
         )
@@ -3086,6 +3247,15 @@ class RunsPage(Page):
             if row["run_dir"] == selected:
                 selected_still_present = True
                 self.tree.selection_set(item_id)
+        refresh_table_empty(self.tree)
+        self.set_hint(
+            ""
+            if rows
+            else (
+                "No run directories under the output root yet - a training run "
+                "creates one and shows up here while it trains."
+            )
+        )
         if selected is not None and not selected_still_present:
             self._clear_run_selection()
         if self._pending_run_selection is not None and self._select_existing_row(
@@ -3617,6 +3787,21 @@ class SettingsPage(Page):
             style="Ghost.TButton",
             command=self._reset_appearance,
         ).pack(side="right")
+        # The recovery for a window that is off-screen or taller than the
+        # display it is on now (closed on a bigger monitor, RDP/WSLg session
+        # changed): pull it back and centre it without editing preferences.
+        fit = ttk.Button(
+            toggles,
+            text="Fit window to screen",
+            style="Ghost.TButton",
+            command=self.app.fit_window_to_screen,
+        )
+        fit.pack(side="right", padx=(0, self.app.px(8, minimum=4)))
+        ToolTip(
+            fit,
+            "Clamp the window to this display and center it (F11 maximizes)",
+            bus=self.app.bus,
+        )
 
     def _build_accent_row(self, parent: tk.Misc) -> None:
         """Accent colour: quick swatches plus a hex field for anything else."""
@@ -4114,7 +4299,13 @@ class SettingsPage(Page):
             ("rule", "Implementation Rule", 360),
             ("source", "Evidence Source", 200),
         )
-        self.ttk_tree = _scrollable_table(roblox_box, ttk_columns, expand=False, bus=self.app.bus)
+        self.ttk_tree = _scrollable_table(
+            roblox_box,
+            ttk_columns,
+            expand=False,
+            bus=self.app.bus,
+            empty_text="No mechanics manifest recorded yet.",
+        )
         self.tag_style(self.ttk_tree, "ttk-verified", "ok")
         self.tag_style(self.ttk_tree, "ttk-pending", "warn")
         self.tag_style(self.ttk_tree, "ttk-excluded", "text_dim")
@@ -4279,8 +4470,7 @@ class SettingsPage(Page):
             return
         self._selected_mechanic = str(row["mechanic"])
         self.mechanic_label.configure(text=f"Mechanic: {self._selected_mechanic}")
-        val = str(row.get("measured_value") or "")
-        self.mechanic_value_var.set("" if val == "—" else val)
+        self.mechanic_value_var.set(str(row.get("measured_value") or ""))
         self.mechanic_notes_var.set(str(row.get("notes") or ""))
 
     def _save_ttk_mechanic(self) -> None:
@@ -4489,23 +4679,28 @@ class StatsPage(Page):
         ("source", "Source", 70),
     )
 
+    # The declared widths are *minimums*: Tk's own column stretching fills
+    # whatever spare width the card gets, so these are chosen to fit the slot
+    # a one-column card really has on a 1920x1080 window (about 450 px inside
+    # the card padding) instead of forcing the overlay scrollbar on a screen
+    # that has room to spare. They still scroll on a narrow window.
     WORLD_COLUMNS = (
-        ("field", "Object / memory", 190),
-        ("distance", "Value", 80),
-        ("bearing", "Bearing", 80),
-        ("note", "What it is", 260),
+        ("field", "Object / memory", 140),
+        ("distance", "Value", 60),
+        ("bearing", "Bearing", 65),
+        ("note", "What it is", 180),
     )
 
     AUDIO_COLUMNS = (
-        ("field", "Hearing", 190),
-        ("value", "Value", 120),
-        ("note", "What it is", 260),
+        ("field", "Hearing", 150),
+        ("value", "Value", 90),
+        ("note", "What it is", 200),
     )
 
     ACTION_COLUMNS = (
-        ("component", "Action component", 130),
-        ("value", "Value", 60),
-        ("meaning", "Meaning", 420),
+        ("component", "Action component", 120),
+        ("value", "Value", 55),
+        ("meaning", "Meaning", 270),
     )
 
     VECTOR_COLUMNS = (
@@ -4556,7 +4751,8 @@ class StatsPage(Page):
             "contacts",
             "Contacts / enemies",
             "The three tracked enemies: position, distance, bearing, perception.",
-            default_span=2,
+            default_span=3,
+            max_span=3,
         ),
         WidgetSpec(
             "world",
@@ -4572,7 +4768,6 @@ class StatsPage(Page):
             "action",
             "Action the policy took",
             "The six action components emitted for the selected tick.",
-            default_span=2,
         ),
         WidgetSpec(
             "evidence",
@@ -4643,7 +4838,11 @@ class StatsPage(Page):
         )
         self.contract_label.pack(anchor="w", pady=(0, self.app.px(6, minimum=2)))
         self.replay_tree = _scrollable_table(
-            card.body, self.REPLAY_COLUMNS, expand=False, bus=self.app.bus
+            card.body,
+            self.REPLAY_COLUMNS,
+            expand=False,
+            bus=self.app.bus,
+            empty_text=("No recordings yet.\nA run writes them when replay recording is enabled."),
         )
         self.replay_tree.bind("<<TreeviewSelect>>", self._on_replay_selected)
         self.tag_style(self.replay_tree, "detailed", "ok")
@@ -4694,7 +4893,12 @@ class StatsPage(Page):
             "Observation vector (raw)",
             "Grouped by contract section; the value column is the recorded tick",
         )
-        self.vector_tree = _scrollable_table(card.body, self.VECTOR_COLUMNS, bus=self.app.bus)
+        self.vector_tree = _scrollable_table(
+            card.body,
+            self.VECTOR_COLUMNS,
+            bus=self.app.bus,
+            empty_text="Select a detailed replay to see the values the policy received.",
+        )
         self.tag_style(self.vector_tree, "section", "accent")
         return card
 
@@ -4705,7 +4909,11 @@ class StatsPage(Page):
             "Relative position of each tracked enemy — never a world coordinate",
         )
         self.contact_tree = _scrollable_table(
-            card.body, self.CONTACT_COLUMNS, expand=False, bus=self.app.bus
+            card.body,
+            self.CONTACT_COLUMNS,
+            expand=False,
+            bus=self.app.bus,
+            empty_text="Select a detailed replay to see the tracked contacts.",
         )
         return card
 
@@ -4716,21 +4924,33 @@ class StatsPage(Page):
             "Geometry the agent can see or remembers",
         )
         self.world_tree = _scrollable_table(
-            card.body, self.WORLD_COLUMNS, expand=False, bus=self.app.bus
+            card.body,
+            self.WORLD_COLUMNS,
+            expand=False,
+            bus=self.app.bus,
+            empty_text="Select a detailed replay to see visible objects and memory.",
         )
         return card
 
     def _build_hearing_card(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(parent, "Hearing", "Directional perception, not ground truth")
         self.audio_tree = _scrollable_table(
-            card.body, self.AUDIO_COLUMNS, expand=False, bus=self.app.bus
+            card.body,
+            self.AUDIO_COLUMNS,
+            expand=False,
+            bus=self.app.bus,
+            empty_text="Select a detailed replay to see what was heard.",
         )
         return card
 
     def _build_action_card(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(parent, "Action the policy took", "One row per action component")
         self.action_tree = _scrollable_table(
-            card.body, self.ACTION_COLUMNS, expand=False, bus=self.app.bus
+            card.body,
+            self.ACTION_COLUMNS,
+            expand=False,
+            bus=self.app.bus,
+            empty_text="Select a detailed replay to see the recorded action.",
         )
         return card
 
@@ -4745,7 +4965,11 @@ class StatsPage(Page):
         )
         self.evidence_label.pack(anchor="w", pady=(0, self.app.px(6, minimum=3)))
         self.evidence_tree = _scrollable_table(
-            card.body, self.EVIDENCE_COLUMNS, expand=False, bus=self.app.bus
+            card.body,
+            self.EVIDENCE_COLUMNS,
+            expand=False,
+            bus=self.app.bus,
+            empty_text="No TTK Testing evidence manifest available yet.",
         )
         # Registered once: ``tag_style`` records the (tree, tag, role) triple so
         # a theme switch replays it, and re-registering per row would grow that

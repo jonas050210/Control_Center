@@ -571,5 +571,92 @@ class TkInternalsShadowTests(unittest.TestCase):
         )
 
 
+class GeometryFeedbackTests(unittest.TestCase):
+    """Source-level guards against the geometry loop that froze the desktop suite.
+
+    The real-Tk suite caught the *symptom* (the window resizing itself inside
+    ``update()``, which only returns when the event queue drains). These
+    checks pin the two structures that caused it, so a future edit cannot
+    quietly reintroduce one on a machine where the Tk suite only skips:
+
+    * a ``ttk.Panedwindow`` re-arranges its panes whenever a child reports a
+      new requested size - with a table that fits its columns to the width it
+      was given, that is a feedback loop. The Control Center has no use for a
+      movable sash: it lays its split cards out with ``grid`` weights.
+    * the card surface must be a *decoration*. ``RoundedPanel`` paints its
+      rounded surface on a placed canvas behind a content-sized frame; the
+      earlier version hosted the content as a canvas window item and derived
+      its own height from the body on every ``<Configure>``, which is the
+      loop itself.
+    """
+
+    def test_no_page_builds_a_panedwindow(self) -> None:
+        offenders: list[str] = []
+        for path in GUI_MODULES:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute) or node.attr != "Panedwindow":
+                    continue
+                if isinstance(node.value, ast.Name) and node.value.id in {"tk", "ttk"}:
+                    offenders.append(f"{path.name}:{node.lineno}")
+        self.assertEqual(
+            offenders,
+            [],
+            "a ttk.Panedwindow re-arranges its panes on every requested-size change "
+            "of a child and loops with self-sizing content; use grid weights instead: "
+            + ", ".join(offenders),
+        )
+
+    def test_the_card_surface_is_a_decoration_not_the_container(self) -> None:
+        source = (PACKAGE / "control_center_ui.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        panel = next(
+            (
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ClassDef) and node.name == "RoundedPanel"
+            ),
+            None,
+        )
+        self.assertIsNotNone(panel, "RoundedPanel is gone")
+        assert panel is not None
+        bases = _base_names(panel)
+        self.assertIn(
+            "tk.Frame",
+            bases,
+            "RoundedPanel must stay a frame whose size comes from its content",
+        )
+        self.assertNotIn("tk.Canvas", bases, "a canvas card re-derives its own size")
+        body = ast.get_source_segment(source, panel) or ""
+        self.assertNotIn(
+            "itemconfigure",
+            body,
+            "the card must not resize a hosted window item from its own geometry",
+        )
+        self.assertNotIn(
+            "winfo_reqheight",
+            body,
+            "the card must not derive a requested height from its body's request",
+        )
+
+    def test_every_table_explains_its_empty_state(self) -> None:
+        """A table with only headings reads like a broken one."""
+        tree = _module_tree()
+        offenders: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id != "_scrollable_table":
+                continue
+            if not any(keyword.arg == "empty_text" for keyword in node.keywords):
+                offenders.append(f"line {node.lineno}")
+        self.assertEqual(
+            offenders,
+            [],
+            "every _scrollable_table(...) call must pass empty_text= (a page with no "
+            "data has to say why the table is empty): " + ", ".join(offenders),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

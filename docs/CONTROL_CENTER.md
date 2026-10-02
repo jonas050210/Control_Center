@@ -136,6 +136,52 @@ rather than overwriting the other preset. A preset from an older build is
 repaired on load: unknown cards are dropped and new cards appear with
 their defaults, so a stale preset can never break the window.
 
+**The window on the screen.** The window opens sized for the display it is
+actually on: 1800x980 is the preferred size (a 1920x1080 screen uses its
+width for the wide tables and keeps the title bar plus taskbar visible), a
+smaller screen shrinks it down to the 1280x800 minimum, and a window with no
+remembered position is centred. A *remembered* position is only a suggestion
+- the screen it was captured on may have been bigger or gone entirely (a
+monitor change, a different WSLg/RDP session), and restoring it blindly is
+how a window opens with its title bar off the top of the screen, which reads
+as "the GUI shows nothing". Anything that no longer fits is clamped back
+onto the display, and **Settings -> Appearance -> Fit window to screen**
+does the same on demand (it also un-maximizes first), so recovering a
+window never means finding and deleting `preferences.json`. `F11`
+maximizes and restores.
+
+**How the window stays still.** Tk re-lays out everything whose requested
+size changed, so a window built from cards that measure themselves can feed
+its own layout back into Tk forever. That is what used to happen: the
+benchmark workflow never settled (396 489 `<Configure>` events in half a
+second, and the desktop suite hung inside `update()`, which only returns
+when the event queue drains). The loop is pinned shut in four places.
+
+* A **card** (a frame whose content decides its size) paints its rounded
+  surface, accent rail and header on a canvas that is *placed* to fill it.
+  `place` never contributes to a requested size, so painting cannot resize
+  a card, and no card derives its own height from its geometry.
+* The **layout board** reacts to a *width* change only, and only when the
+  width clears a hysteresis band; the decision is debounced to one idle
+  tick, runs under a re-entrancy guard, and returns without touching a
+  single widget when the placement it computes is already on screen.
+* **Tables** keep their declared column widths and let Tk's own column
+  stretching fill spare width; nothing in Python rewrites a column width
+  after the table is built (a table that re-fits its columns to the width
+  it was just given produces the next Configure by itself).
+* **Split cards use grids.** `ttk.Panedwindow` re-arranges its panes
+  whenever a child reports a new requested size, and a table or a chart
+  reports exactly that; the two never settle. The static page suite fails
+  if a panedwindow comes back, and the smoke harness fails if a refresh
+  writes a table column.
+
+A table with no rows says why it is empty ("No runs found under the output
+root yet — launch a training run and it appears here while it trains"):
+headings over nothing read like a broken page. A page whose data is
+entirely absent prints one line under its heading telling the operator what
+to do next, and no table cell carries a bare "—" placeholder that could be
+mistaken for data.
+
 The layout state is also persisted without a preset, so closing and
 reopening the window keeps the arrangement. If `tkinter` is missing
 entirely, `main.py` still starts, prints the exact fix (`python3-tk`, or
@@ -144,8 +190,9 @@ trace.
 
 ## Keyboard
 
-`Ctrl+K` opens the command palette, `Ctrl+1..7` jump straight to a page,
-`Escape` closes the palette, and `Up`/`Down` move its selection. The palette
+`Ctrl+K` opens the command palette, `Ctrl+1..8` jump straight to a page
+(the window has eight), `F11` maximizes and restores, `Escape` closes the
+palette, and `Up`/`Down` move its selection. The palette
 carries those bindings itself in addition to the shell's, because Tk gives a
 second toplevel its own bindtags - and pressing `Ctrl+K` twice reuses the
 open palette instead of stacking a second window. The arrows are bound on
@@ -244,7 +291,11 @@ Custom exist to measure the saturation point directly instead of guessing.
 
 Start runs the complete staged pipeline. The tab shows the live phase strip
 (discover → screen → devices → validate → pick → apply), the current
-measurement, every tested configuration, and the winning configuration;
+measurement, every tested configuration, and the winning configuration. The
+measurements table and the throughput chart are separate full-width cards:
+the table declares 14 columns, and the 3:2 split it used to share with the
+chart left it about 900 px on a 1920x1080 window - a horizontal overlay bar
+on the one screen that has room to spare.
 when the pipeline completes, the recommendation is persisted and
 **applied automatically** to the launch configuration.
 

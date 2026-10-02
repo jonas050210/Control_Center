@@ -390,7 +390,21 @@ class DoubleVar(Variable):
 
 
 class Misc:
-    pass
+    """The widget-level stacking calls of ``tkinter.Misc``.
+
+    ``Canvas`` overrides ``lift``/``lower`` with the *item* operations, so
+    product code reaches the widget-level call through ``tk.Misc`` (a canvas
+    ``lower()`` with no tag is a Tcl error on a real build). The fake has to
+    offer the same path, otherwise the smoke run fails where real Tk works.
+    """
+
+    @staticmethod
+    def lift(widget, aboveThis=None):
+        return _Base.lift(widget, aboveThis)
+
+    @staticmethod
+    def lower(widget, belowThis=None):
+        return _Base.lower(widget, belowThis)
 
 
 class Widget(_Base):
@@ -692,6 +706,9 @@ class _Treeview(Widget):
         self._columns = kw.get("columns", ())
         self._selection = ()
         self._children = {}
+        #: Every column write, so a check can prove a table is configured once
+        #: and never re-fitted from the geometry it was just given.
+        self._column_writes: list[tuple[tuple, dict]] = []
 
     def insert(self, parent, index, iid=None, **kw):
         iid = iid or f"row{len(self._rows)}"
@@ -720,6 +737,8 @@ class _Treeview(Widget):
         return None
 
     def column(self, *a, **kw):
+        if kw:
+            self._column_writes.append((a, kw))
         return None
 
     def set(self, item, column=None, value=None):
@@ -1329,6 +1348,79 @@ def _exercise_benchmarks(page: object) -> None:
         raise AssertionError("fixing the list must make the run button usable again")
 
 
+def _exercise_board_resize(app: object, host: object) -> None:
+    """The card board's resize decision must be debounced and hysteretic.
+
+    The desktop suite hung inside ``update()`` because a board re-decided its
+    column count from the ``<Configure>`` event of the layout that decision
+    had just produced. This drives the same handler the fake Tk never fires:
+    a width inside the hysteresis band must change nothing, a width that
+    clears it must schedule exactly one application, and a repeated width must
+    not schedule anything at all.
+    """
+    import tkinter as tk
+
+    from sandboxai.control_center_layout import WidgetSpec, default_layout
+    from sandboxai.control_center_ui import LayoutBoard, LayoutBus
+
+    specs = (
+        WidgetSpec("one", "One"),
+        WidgetSpec("two", "Two"),
+        WidgetSpec("three", "Three"),
+        WidgetSpec("four", "Four"),
+    )
+    board = LayoutBoard(
+        host,  # type: ignore[arg-type]
+        LayoutBus(default_layout({"Scratch": specs})),
+        page_key="Scratch",
+        specs=specs,
+        columns=3,
+        gap=4,
+        min_column_width=320,
+    )
+    board.pack(fill="both")
+    for spec in specs:
+        board.add(spec.widget_id, lambda parent, _spec=spec: tk.Frame(parent))
+    board.rebuild()
+    if board.columns() != 3:
+        raise AssertionError("a fresh board did not start with the page's columns")
+
+    # A width inside the shrink band (it wants 2 columns, but not by enough)
+    # must leave the current count and the pending count alone.
+    board._on_configure(Event(width=940))  # type: ignore[attr-defined]
+    if board._pending_columns is not None:  # type: ignore[attr-defined]
+        raise AssertionError("a width inside the hysteresis band scheduled a re-grid")
+
+    # A width that clears the band schedules the new count, but must not apply
+    # it before the debounce elapses.
+    board._on_configure(Event(width=700))  # type: ignore[attr-defined]
+    if board._pending_columns != 2:  # type: ignore[attr-defined]
+        raise AssertionError("a width that clears the band did not schedule a re-grid")
+    if board.columns() != 3:
+        raise AssertionError("the board re-gridded before the debounce elapsed")
+    if board._resize_job is None:  # type: ignore[attr-defined]
+        raise AssertionError("the board scheduled a re-grid without a debounce timer")
+
+    board._apply_columns()  # type: ignore[attr-defined]
+    if board.columns() != 2:
+        raise AssertionError("the board kept its column count on a narrower width")
+
+    # Same width, or a width that leads to the same count: nothing scheduled.
+    board._on_configure(Event(width=760))  # type: ignore[attr-defined]
+    if board._pending_columns is not None or board._resize_job is not None:  # type: ignore[attr-defined]
+        raise AssertionError("a width leading to the current count scheduled a re-grid")
+
+    # An unchanged rebuild must not touch a single widget.
+    slots = board._slots  # type: ignore[attr-defined]
+    board.rebuild()
+    if board._slots != slots:  # type: ignore[attr-defined]
+        raise AssertionError("an unchanged rebuild changed the board's placement")
+    if board._last_width != 760:  # type: ignore[attr-defined]
+        raise AssertionError("the board did not remember the last width it saw")
+
+    board.destroy()
+
+
 def _exercise_widgets(app: object) -> None:
     """Build and drive the reusable widgets on a scratch frame."""
     import tkinter as tk
@@ -1387,8 +1479,26 @@ def _exercise_widgets(app: object) -> None:
         panel.apply_log({"stdout": [f"line {index}"], "stderr": []})
     panel.clear()
 
-    table = _scrollable_table(host, (("a", "A", 80), ("b", "B", 120)), bus=app.bus)
+    table = _scrollable_table(
+        host,
+        (("a", "A", 80), ("b", "B", 120)),
+        bus=app.bus,
+        empty_text="Nothing here yet.",
+    )
+    # The empty state is an overlay, not a row: it appears while the table has
+    # no rows and disappears the moment one arrives.
+    table.empty_state.refresh()  # type: ignore[attr-defined]
+    if not table.empty_state.is_shown():  # type: ignore[attr-defined]
+        raise AssertionError("an empty table did not show its empty-state hint")
     table.insert("", "end", values=("1", "2"))
+    table.empty_state.refresh()  # type: ignore[attr-defined]
+    if table.empty_state.is_shown():  # type: ignore[attr-defined]
+        raise AssertionError("the empty-state hint stayed over a filled table")
+    table.empty_state.set_text("Changed hint")  # type: ignore[attr-defined]
+    if table.empty_state.text != "Changed hint":  # type: ignore[attr-defined]
+        raise AssertionError("the empty-state hint text was not updated")
+
+    _exercise_board_resize(app, host)
 
     segmented = SegmentedControl(
         host,
@@ -1770,6 +1880,47 @@ def _count_table_writes(tree: object) -> dict[str, int]:
     return counts
 
 
+def _all_tables(widget: object) -> list:
+    """Every Treeview in the window, however deep."""
+    found = [widget] if isinstance(widget, _Treeview) else []
+    for child in widget.winfo_children():  # type: ignore[attr-defined]
+        found.extend(_all_tables(child))
+    return found
+
+
+def _assert_tables_do_not_rewrite_their_columns(app: object) -> None:
+    """A table's columns are written once, when the table is built.
+
+    The desktop suite hung on the benchmark results table: a ``<Configure>``
+    handler re-fitted its columns to the width it had just been given, which
+    changed the width the table asked for and produced the next Configure -
+    396 489 of them inside the test's window. Tk's own ``stretch`` does the
+    fill-the-spare-width job inside the widget, so nothing in Python may write
+    a column width after the table exists. Showing and refreshing every page
+    must write none.
+    """
+
+    from sandboxai.control_center_desktop import PAGE_CLASSES
+
+    tables = _all_tables(app)
+    if not tables:
+        raise AssertionError("no table was found to check")
+    before = {id(table): len(table._column_writes) for table in tables}
+    for page_class in PAGE_CLASSES:
+        app.show_page(page_class.title)  # type: ignore[attr-defined]
+        app.pages[page_class.title].refresh()  # type: ignore[attr-defined]
+        _drain(app)  # type: ignore[arg-type]
+    offenders = [
+        f"{type(table).__name__}({table.cget('columns')})"  # type: ignore[attr-defined]
+        for table in tables
+        if len(table._column_writes) > before[id(table)]
+    ]
+    if offenders:
+        raise AssertionError(
+            "a page re-fitted table columns after the table was built: " + ", ".join(offenders)
+        )
+
+
 def _assert_unchanged_tables_are_not_rebuilt(app: object) -> None:
     """A poll result identical to the last one must not rebuild the table.
 
@@ -2092,6 +2243,11 @@ def run_smoke() -> int:
         failures,
         "an unchanged table is not rebuilt",
         lambda: _assert_unchanged_tables_are_not_rebuilt(app),
+    )
+    _step(
+        failures,
+        "tables do not re-fit their columns",
+        lambda: _assert_tables_do_not_rewrite_their_columns(app),
     )
     _step(failures, "page handlers", lambda: _exercise_page_handlers(app))
     _step(failures, "close", app._on_close)

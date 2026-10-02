@@ -47,6 +47,7 @@ from .control_center_layout import (
     PresetError,
     PresetStore,
     deserialize,
+    fit_window_geometry,
     normalize,
     safe_preset_name,
 )
@@ -167,6 +168,7 @@ class ControlCenter(tk.Tk):
         self._build_shell()
         self.bind("<Control-k>", lambda _event: self.open_command_palette())
         self.bind("<Control-K>", lambda _event: self.open_command_palette())
+        self.bind("<F11>", lambda _event: self.toggle_zoom())
         self.after(self.POLL_MS, self._tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -199,8 +201,36 @@ class ControlCenter(tk.Tk):
         loaded = self.preset_store.load_layout(self.prefs.active_preset, PAGE_WIDGETS)
         return loaded if loaded is not None else base
 
+    def screen_size(self) -> tuple[int, int]:
+        """The pixel size of the display this window opens on.
+
+        A missing or nonsensical answer (a stub Tk in a headless harness, a
+        display server that reports 0) falls back to a 1920x1080 desktop: the
+        window must open somewhere sane rather than divide by zero.
+        """
+
+        def probe(attribute: str, fallback: int) -> int:
+            with contextlib.suppress(tk.TclError, TypeError, ValueError):
+                value = int(getattr(self, attribute)())
+                if value > 1:
+                    return value
+            return fallback
+
+        return probe("winfo_screenwidth", 1920), probe("winfo_screenheight", 1080)
+
     def _apply_window_geometry(self) -> None:
-        self.geometry(self.prefs.geometry or "1720x1000")
+        screen_w, screen_h = self.screen_size()
+        self.geometry(
+            fit_window_geometry(
+                self.prefs.geometry,
+                screen_width=screen_w,
+                screen_height=screen_h,
+                preferred_width=self.px(1800, minimum=1400),
+                preferred_height=self.px(980, minimum=820),
+                min_width=self.px(1280, minimum=1000),
+                min_height=self.px(800, minimum=640),
+            )
+        )
         self.minsize(self.px(1280, minimum=1000), self.px(800, minimum=640))
         if self.prefs.zoomed:
             # Restore a maximized window as maximized; `state("zoomed")` is
@@ -222,6 +252,46 @@ class ControlCenter(tk.Tk):
         self.prefs.motion = self.motion.level
         self.prefs.last_page = self._current.title if self._current else self.prefs.last_page
         self.prefs_store.save(self.prefs)
+
+    def fit_window_to_screen(self) -> None:
+        """Pull the window back onto this screen and centre it.
+
+        The recovery for a window that was closed on a bigger display (or
+        maximized on one): unzoom, clamp the size to the screen, centre. It is
+        what the header's *Fit window to screen* button calls, so an operator
+        never has to find and delete ``preferences.json``.
+        """
+        with contextlib.suppress(tk.TclError):
+            if self.state() == "zoomed":
+                self.state("normal")
+        screen_w, screen_h = self.screen_size()
+        self.geometry(
+            fit_window_geometry(
+                None,
+                screen_width=screen_w,
+                screen_height=screen_h,
+                preferred_width=self.px(1800, minimum=1400),
+                preferred_height=self.px(980, minimum=820),
+                min_width=self.px(1280, minimum=1000),
+                min_height=self.px(800, minimum=640),
+            )
+        )
+        self.prefs.zoomed = False
+        self.notify("Window fitted to this screen", kind="ok", timeout_ms=1800)
+
+    def toggle_zoom(self) -> None:
+        """Maximize/restore the window (F11).
+
+        ``state("zoomed")`` is Tk's spelling on Windows and on X11 alike; a
+        window manager that does not support it must not break the action.
+        """
+        with contextlib.suppress(tk.TclError):
+            if self.state() == "zoomed":
+                self.state("normal")
+                self.prefs.zoomed = False
+            else:
+                self.state("zoomed")
+                self.prefs.zoomed = True
 
     def preferences_snapshot(self) -> dict[str, object]:
         """Preferences as a plain dict (diagnostics and tests)."""
@@ -649,6 +719,7 @@ class ControlCenter(tk.Tk):
                 text=(
                     "Ctrl+K  command palette\n"
                     f"Ctrl+1 .. Ctrl+{len(PAGE_CLASSES)}  pages\n"
+                    "F11  maximize / restore\n"
                     "Headless Godot Bridge v3"
                 ),
                 style="NavFootnote.TLabel",

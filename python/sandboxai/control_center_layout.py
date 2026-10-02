@@ -12,6 +12,15 @@ before it is a Tk problem, so it lives here, display-free and unit-tested:
   missing, clamp what is out of range.
 * :class:`PresetStore` - named presets under ``.sandboxai/ui/presets`` with
   atomic writes.
+* :func:`columns_for_width` / :func:`placement_slots` - the *decisions* the
+  card board makes when the window is resized and when it lays its cards
+  out. They are plain functions so they can be pinned by tests without a
+  display: a board that re-decides its column count from inside the
+  ``<Configure>`` event of the very layout it just produced can feed its own
+  resize back into Tk and never settle (the desktop suite hung inside
+  ``update()`` because of exactly that), and the hysteresis in
+  :func:`columns_for_width` is what stops a window parked on a threshold
+  from oscillating between two counts.
 
 Nothing here imports Tk, so the whole feature is testable in CI without a
 display, and a corrupt preset can never stop the window from opening.
@@ -24,6 +33,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,11 +46,18 @@ __all__ = [
     "PresetStore",
     "WidgetPlacement",
     "WidgetSpec",
+    "WINDOW_MIN_HEIGHT",
+    "WINDOW_MIN_WIDTH",
+    "WINDOW_PREFERRED_HEIGHT",
+    "WINDOW_PREFERRED_WIDTH",
+    "columns_for_width",
     "default_layout",
+    "fit_window_geometry",
     "deserialize",
     "layout_dir",
     "move",
     "normalize",
+    "placement_slots",
     "reset_all",
     "reset_page",
     "serialize",
@@ -300,6 +317,142 @@ def deserialize(data: Any, registry: SpecRegistry) -> LayoutState:
 # ---------------------------------------------------------------------------
 # Presets
 # ---------------------------------------------------------------------------
+
+
+def columns_for_width(
+    width: int,
+    *,
+    max_columns: int,
+    min_column_width: int,
+    current: int,
+    hysteresis: float = 0.08,
+) -> int:
+    """How many card columns fit into ``width`` without oscillating.
+
+    ``width // min_column_width`` alone is not enough: a window parked on a
+    threshold (or a layout whose columns are 1 px from the next step) makes
+    the board re-grid, which can change the width it re-measures, which
+    re-grids again - the loop that froze the desktop suite. Two rules keep it
+    monotone: a *width band* of ``hysteresis`` (8 % by default) that must be
+    cleared before the count moves at all, and a refusal to guess while the
+    board has not been laid out yet (``width <= 1`` keeps the current count).
+
+    A resize that clears the band by a lot still takes the full step: the
+    result is the count that fits the new width, never a single-step crawl.
+    """
+    if width <= 1:
+        return current
+    wanted = max(1, min(max_columns, max(1, int(width) // max(1, min_column_width))))
+    if wanted == current:
+        return current
+    margin = max(8, int(min_column_width * hysteresis))
+    if wanted < current:
+        # Shrinking: only give up a column once the width is clearly below it.
+        return wanted if width < current * min_column_width - margin else current
+    # Growing: only take a column once there is clearly room for it.
+    return wanted if width >= (current + 1) * min_column_width + margin else current
+
+
+def placement_slots(
+    placements: Iterable[WidgetPlacement],
+    *,
+    columns: int,
+    visible_ids: Iterable[str] | None = None,
+) -> tuple[tuple[str, int, int, int], ...]:
+    """Flatten placements into ``(widget_id, row, column, span)`` slots.
+
+    The board uses this both to lay its cards out and to decide whether a
+    ``rebuild`` has anything to do: an identical slot list means the cards
+    are already where they belong, and re-gridding them anyway is what turns
+    one stray ``<Configure>`` into an endless stream of them.
+    """
+    allowed = None if visible_ids is None else set(visible_ids)
+    slots: list[tuple[str, int, int, int]] = []
+    row = 0
+    column = 0
+    for placement in placements:
+        if allowed is not None and placement.widget_id not in allowed:
+            continue
+        span = max(1, min(max(1, columns), placement.span))
+        if column + span > columns:
+            row += 1
+            column = 0
+        slots.append((placement.widget_id, row, column, span))
+        column += span
+        if column >= columns:
+            row += 1
+            column = 0
+    return tuple(slots)
+
+
+#: Preferred window size. It targets a 1920x1080 display: wide enough that the
+#: widest tables (the benchmark measurements, the training registry) show all
+#: of their columns, and short enough to leave room for the title bar and the
+#: taskbar. A smaller screen shrinks it down to the minimum size.
+WINDOW_PREFERRED_WIDTH = 1800
+WINDOW_PREFERRED_HEIGHT = 980
+WINDOW_MIN_WIDTH = 1280
+WINDOW_MIN_HEIGHT = 800
+#: Screen space the window manager needs beside/below the window.
+_WINDOW_SCREEN_MARGIN_X = 80
+_WINDOW_SCREEN_MARGIN_Y = 100
+
+_GEOMETRY_PATTERN = re.compile(r"^(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?$")
+
+
+def fit_window_geometry(
+    saved: str | None,
+    *,
+    screen_width: int,
+    screen_height: int,
+    preferred_width: int = WINDOW_PREFERRED_WIDTH,
+    preferred_height: int = WINDOW_PREFERRED_HEIGHT,
+    min_width: int = WINDOW_MIN_WIDTH,
+    min_height: int = WINDOW_MIN_HEIGHT,
+) -> str:
+    """Place the window on the screen it will actually open on.
+
+    A remembered ``WxH+X+Y`` is only a suggestion: the screen it was captured
+    on may have been bigger, or gone entirely (a different monitor, a changed
+    RDP/WSLg session, a laptop undocked from a 4K display). Restoring it
+    blindly is how a window opens with its title bar off the top of the
+    screen or its content stretched past the bottom edge - the operator then
+    sees nothing and has no obvious way to get it back.
+
+    Three rules, in order:
+
+    * the *size* is clamped so the window plus the window manager's furniture
+      fits the screen (never smaller than ``min_width``/``min_height``, unless
+      the screen itself is smaller than that);
+    * the *position* is clamped so the whole window stays reachable, and a
+      window with no remembered position is centred;
+    * a saved string that does not parse is treated as "no saved geometry",
+      never as an error - a corrupt preference file must not stop the window
+      from opening.
+
+    Display-free on purpose: the decisions are pinned by unit tests, and the
+    Tk side only passes the screen's pixel size in and applies the result.
+    """
+    screen_w = max(1, int(screen_width))
+    screen_h = max(1, int(screen_height))
+    max_w = max(1, screen_w - _WINDOW_SCREEN_MARGIN_X)
+    max_h = max(1, screen_h - _WINDOW_SCREEN_MARGIN_Y)
+    floor_w = min(max(1, int(min_width)), max_w)
+    floor_h = min(max(1, int(min_height)), max_h)
+    match = _GEOMETRY_PATTERN.match(str(saved or "").strip())
+    if match is None:
+        width = min(max(int(preferred_width), floor_w), max_w)
+        height = min(max(int(preferred_height), floor_h), max_h)
+        x = (screen_w - width) // 2
+        y = (screen_h - height) // 2
+    else:
+        width = min(max(int(match.group(1)), floor_w), max_w)
+        height = min(max(int(match.group(2)), floor_h), max_h)
+        x = int(match.group(3)) if match.group(3) is not None else (screen_w - width) // 2
+        y = int(match.group(4)) if match.group(4) is not None else (screen_h - height) // 2
+        x = min(max(x, 0), max(0, screen_w - width))
+        y = min(max(y, 0), max(0, screen_h - height))
+    return f"{width}x{height}+{x}+{y}"
 
 
 def layout_dir(project_root: str | Path) -> Path:

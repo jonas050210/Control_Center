@@ -188,11 +188,19 @@ class ControlCenterSettlingTests(unittest.TestCase):
         """The workflow that used to hang must not stream events afterwards.
 
         This is the path the desktop suite died on: the benchmark run updates
-        phases, log lines and its result table, and something in that update
-        kept the window busy for good. The probe drives the same workflow as
-        the real test but watches through the non-blocking pump, so a
-        regression is reported (with the widgets and counts that explain it)
-        instead of turning into a three-minute timeout.
+        phases, telemetry and its result table, and something in that update
+        kept the window busy for good - CI counted 396 489 ``<Configure>``
+        events in under a second. The probe drives the same workflow as the
+        real test but watches through the non-blocking pump, so a regression
+        is reported, with the widgets and counts that explain it, instead of
+        turning into a three-minute timeout.
+
+        A finished workflow is allowed exactly one layout wave: the report
+        replaces placeholder text, and a label whose width follows its text
+        nudges its neighbours once. What must never happen is a *stream* - a
+        window that re-decides its geometry from the Configure events that
+        decision produced. So the probe measures both: the wave itself stays
+        small, and an equally long window after it is perfectly quiet.
         """
         from unittest import mock
 
@@ -219,19 +227,37 @@ class ControlCenterSettlingTests(unittest.TestCase):
             page._start()
             for _ in range(10):
                 _pump_events(self.app, 0.05)
+            # Let the report's first layout wave land before measuring idleness.
+            _pump_events(self.app, 0.3)
+        settled = dict(configure_counts)
+        for _ in range(10):
+            _pump_events(self.app, 0.05)
+
         timers = len(str(self.app.tk.eval("after info")).split())
         total_configure = sum(configure_counts.values())
         worst = sorted(configure_counts.items(), key=lambda item: item[1], reverse=True)[:5]
-        detail = f"pending_after={timers} configure={total_configure} worst={worst}"
+        detail = (
+            f"pending_after={timers} settled={sum(settled.values())} "
+            f"total={total_configure} worst={worst}"
+        )
+        # The loop this guards against produced ~4e5 events in the same
+        # window: a bound three orders of magnitude below that still fails a
+        # storm while leaving room for the workflow's own layout wave.
         self.assertLess(
-            total_configure,
-            200,
+            sum(settled.values()),
+            2000,
             f"the finished benchmark workflow keeps resizing itself: {detail}",
         )
+        leaked = {
+            key: (settled.get(key, 0), count)
+            for key, count in configure_counts.items()
+            if count > settled.get(key, 0)
+        }
         self.assertEqual(
-            configure_counts,
+            leaked,
             {},
-            f"the finished benchmark workflow resizes widgets: {detail}",
+            "the finished benchmark workflow never stops resizing widgets "
+            f"(key -> (before, after)): {detail}",
         )
 
 
@@ -296,6 +322,29 @@ class ControlCenterConstructionTests(unittest.TestCase):
             attached = [child for child in board.winfo_children() if child.grid_info()]
             self.assertTrue(attached, f"{title}: no card on the board is attached")
 
+    def test_every_card_asks_for_a_real_size(self):
+        """A card must not collapse into the one-pixel line the tabs showed.
+
+        The reported symptom was every tab opening without content. The board
+        can look perfectly healthy while that happens - the card *is* gridded
+        and *is* attached - so this asks each card for the size it requests
+        from its own geometry manager. A card that derives its size from a body
+        it has not measured yet asks for a 1 px sliver, which is exactly how a
+        page renders as a heading over a line.
+        """
+        for page_class in PAGE_CLASSES:
+            title = page_class.title
+            self.app.show_page(title)
+            _pump_events(self.app, 0.2)
+            cards = _rounded_panels(self.app.pages[title])
+            self.assertTrue(cards, f"{title}: the page renders no card at all")
+            slivers = [
+                f"{card.winfo_reqwidth()}x{card.winfo_reqheight()}"
+                for card in cards
+                if card.winfo_reqwidth() < 40 or card.winfo_reqheight() < 24
+            ]
+            self.assertEqual(slivers, [], f"{title}: cards request a sliver: {slivers}")
+
     def test_stats_page_renders_the_contract_and_a_recorded_tick(self):
         """The Stats page must decode a real replay on the real window.
 
@@ -344,6 +393,12 @@ class ControlCenterConstructionTests(unittest.TestCase):
         something is actually scrollable, and a wide window stretches the
         columns instead of leaving dead space.
         """
+        # Pin the window the check is about. The CI virtual display is smaller
+        # than a desktop monitor, and the assertions below are about what a
+        # wide window does - not about what the runner's screen happens to be.
+        self.app.geometry("1760x1000")
+        self.app.update_idletasks()
+        _pump_events(self.app, 0.2)
         for title, attribute in (
             ("Training", "tree"),
             ("Benchmarks", "tree"),
@@ -364,6 +419,34 @@ class ControlCenterConstructionTests(unittest.TestCase):
             # hides itself while everything fits.
             self.assertNotEqual(scrollbar.winfo_manager(), "grid")
             self.assertFalse(scrollbar._overflow() and scrollbar.winfo_manager() == "")
+
+    def test_the_widest_table_shows_every_column_on_a_1920x1080_window(self):
+        """The marquee table must not scroll horizontally on a wide screen.
+
+        The benchmark measurements table declares 14 columns (1125 px). It
+        used to share a 3:2 split with the throughput chart, which left it
+        about 900 px on a 1920x1080 window - a horizontal overlay bar on the
+        very screens that have room to spare. It is a full-width card now, and
+        the chart has its own card below it. This is the real-Tk check that
+        the layout really hands the table its full width.
+        """
+        self.app.geometry("1760x1000")
+        self.app.update_idletasks()
+        _pump_events(self.app, 0.2)
+        self.app.show_page("Benchmarks")
+        _pump_events(self.app, 0.3)
+        page = self.app.pages["Benchmarks"]
+        tree = page.tree
+        _first, last = tree.xview()
+        self.assertGreaterEqual(
+            last,
+            0.999,
+            "the measurements table hides its right-hand columns on a 1920x1080 window",
+        )
+        self.assertFalse(
+            tree._horizontal_scrollbar._overflow(),
+            "the measurements table needed its overlay bar on a wide window",
+        )
 
     def test_every_widget_follows_the_application_theme_bus(self):
         """A widget built without a bus keeps the default palette forever.

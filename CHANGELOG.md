@@ -236,6 +236,36 @@ records what changed and why.
   applied, its winning topology. Agent rows are colour-coded by
   lifecycle (failed red, running green, transitional amber).
 
+- **Every page shows its content, and an empty one says why.** The movable
+  cards were built, filled and then never handed to a geometry manager, so
+  Dashboard, Training and Benchmarks rendered a heading over a blank page;
+  `Page.board()` now attaches the board itself, and a page whose cards are
+  all hidden offers a *Restore default layout* button instead of a blank
+  tab. Every table explains an empty state in the table itself ("No
+  benchmark recorded yet", "No checkpoints yet - train a run, then evaluate
+  its checkpoints here"), pages whose data is entirely absent print one line
+  under the heading telling the operator what to do next, the header
+  subtitle gets its own wrapped line instead of being clipped when the
+  window is narrow, and no table cell carries a bare "—" placeholder that
+  reads like data. The nested cards inside the benchmark and layout studio
+  cards paint their corners in the surface they actually sit on.
+
+- **The window is sized for the display it opens on, and the wide tables use
+  the width.** The preferred size is 1800x980 with a 1280x800 floor: a
+  1920x1080 screen gets the full width for the benchmark measurements table
+  (which declares 14 columns) instead of the ~900 px its old 3:2 split with
+  the chart left it - the chart is a full-width card of its own now, and the
+  Stats page's headline contacts table spans the page while the three small
+  tables (objects/memory, hearing, action) sit in one row with widths that
+  fit a one-column card at that size. A remembered `WxH+X+Y` is clamped onto
+  the screen it is restored on and centred when it has no position, so a
+  geometry captured on a bigger monitor can no longer open a window with its
+  title bar off the top of the display (which reads as "the GUI shows
+  nothing"); *Settings -> Appearance -> Fit window to screen* recovers one on
+  demand and `F11` maximizes/restores. The placement rules are plain
+  functions (`fit_window_geometry`) with unit tests, so the Tk side only
+  passes the screen size in and applies the result.
+
 ### TTK Testing scope
 - **The bounded live-helper surface is documented, and the statements that
   contradicted it are corrected.** `sandboxai.ttk_testing` had grown the
@@ -273,19 +303,38 @@ records what changed and why.
   meet the TTK-only evidence boundary.
 
 ### Fixed
-- **A card's inner body fed its own resize back into the canvas.** The
-  Control Center's `RoundedPanel` sized the body window from the canvas height
-  while the canvas sized itself from the body's request, so a resize produced
-  the next `<Configure>` event forever. `Tk.update()` returns only when the
+- **The Control Center could keep the window resizing itself forever.** Four
+  separate mechanisms fed the same loop, and each one is now pinned shut. A
+  card (`RoundedPanel`) hosted its body as a canvas window item and re-derived
+  its own height from the body's request on every `<Configure>`, so content
+  height, canvas height and the grid row above it chased each other; the card
+  is now a frame whose content decides its size, with the rounded surface,
+  accent rail and header painted on a canvas that is *placed* to fill it
+  (`place` never contributes to a requested size, so painting cannot resize
+  the card). The layout board re-decided its column count from every
+  Configure - including height-only churn - and re-gridded all of its cards:
+  it now reacts to width only, only when the width clears a hysteresis band,
+  debounced to one idle tick under a re-entrancy guard, and a placement that
+  is already on screen is left completely alone. The tables re-fitted their
+  column widths to the width they had just been given, which changed the
+  width they asked for and produced the next event by itself; the fitter is
+  gone and Tk's own column stretching fills spare width. Two `ttk.Panedwindow`
+  splits re-arranged their panes whenever a table or chart reported a new
+  requested size and are plain grids now. `Tk.update()` only returns when the
   event queue drains, so the desktop suite hung on its 180 s timeout inside
-  `update()` with nothing but a thread dump to show for it, and a real window
-  would have burned a core while it was on screen. The body now keeps exactly
-  the size its content asks for - derived from nothing but that request - and
-  is resized only when the value changes, which makes the panel idempotent;
-  the canvas is sized from the same request, so content still cannot be
-  clipped. A new test watches every card surface through a non-blocking
-  `dooneevent(DONT_WAIT)` pump and fails with the event count if a settled
-  page keeps emitting, turning the slow timeout into a fast assertion.
+  `update()`; the benchmark workflow emitted 396 489 `<Configure>` events in
+  half a second. The desktop settle probe now measures the steady state after
+  the workflow - one small layout wave, then an equally long window with no
+  Configure event at all - and the display-free harness fails if a page
+  refresh writes a table column, if a panedwindow comes back, or if the board
+  re-grids on a width inside its band.
+- **A hidden `TclError` in every card would have taken the whole window
+  down.** `RoundedPanel` lowered its decoration canvas with
+  `self._surface.lower()`, but `Canvas.lower` is the *item* operation
+  (`lower <tag>`): with no argument it is a Tcl error on a real Tk build
+  while the fake-Tk smoke harness accepted it as the widget call. The widget
+  stacking call now goes through `tk.Misc.lower`, and the fake models both
+  paths so the smoke run fails where real Tk would.
 - **Three scripts called `VectorMath` without preloading it, and the engine
   refused to compile them.** `environment_reset.gd`, `world_generator.gd` and
   `scenario_library.gd` were given a `VectorMath.yaw_deg_from_direction(...)`
