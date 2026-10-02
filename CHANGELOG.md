@@ -30,7 +30,11 @@ records what changed and why.
   always picked the first entry), and neither `Escape` nor `Ctrl+K` closed
   the window from inside it - a second toplevel has its own bindtags, so it
   now carries its own bindings and the page accelerators `Ctrl+1..7` work
-  from it too.
+  from it too. Arrow keys work from the query field and from the list, the
+  highlight no longer snaps back to the first row on the key release that
+  follows every arrow press, and the palette takes the keyboard focus once
+  it is mapped (a window manager that keeps the focus on the parent window
+  would otherwise leave it open but deaf).
 - **One accent colour, free to choose.** Settings -> Appearance offers nine
   curated accents and a hex field; the colour is stored in the preferences
   and applied to *whichever* theme is active (`Theme.with_accent`), with

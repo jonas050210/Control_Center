@@ -191,21 +191,39 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.open_command_palette()
         self.assertIs(self.app._palette_window, window)
 
+        # Tk can only deliver generated key events once the toplevel is
+        # mapped and owns the keyboard focus; that is also what the <Map>
+        # handler guarantees in the real application.
+        self.app.update()
         entry = next(child for child in window.winfo_children() if child.winfo_class() == "TEntry")
         listing = next(
             child for child in window.winfo_children() if child.winfo_class() == "Listbox"
         )
         self.assertGreater(listing.size(), 1)
         self.assertEqual(listing.curselection(), (0,))
-        entry.event_generate("<Down>")
+        entry.focus_force()
         self.app.update()
+
+        def press(widget, sequence: str) -> None:
+            widget.event_generate(sequence, when="now")
+            self.app.update()
+
+        press(entry, "<Down>")
         self.assertEqual(listing.curselection(), (1,))
-        entry.event_generate("<Up>")
-        self.app.update()
+        # The key *release* must not undo the move: refresh() may only reset
+        # the highlight when the filtered page list actually changed.
+        press(entry, "<KeyRelease>")
+        self.assertEqual(listing.curselection(), (1,))
+        press(entry, "<Up>")
         self.assertEqual(listing.curselection(), (0,))
-        # Escape closes it; the next Ctrl+K opens a fresh one.
-        window.event_generate("<Escape>")
+        # The arrows also work while the list itself holds the focus, because
+        # the toplevel is part of every child's bindtags.
+        listing.focus_force()
         self.app.update()
+        press(listing, "<Down>")
+        self.assertEqual(listing.curselection(), (1,))
+        # Escape closes it; the next Ctrl+K opens a fresh one.
+        press(window, "<Escape>")
         self.assertFalse(window.winfo_exists())
 
     def test_window_state_is_remembered_without_breaking_startup(self):

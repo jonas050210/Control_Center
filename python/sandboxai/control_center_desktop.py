@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from tkinter import (  # messagebox re-export keeps the public test/embedding seam stable
     messagebox,
@@ -78,6 +78,53 @@ from .control_center_ui import (
 from .control_center_widgets import BackgroundRunner, ToolTip
 
 __all__ = ["ControlCenter", "PAGE_CLASSES", "PAGE_WIDGETS", "main", "messagebox"]
+
+
+def _palette_matches(pages: Iterable[str], query: str) -> list[str]:
+    """The page titles a palette query keeps, in page order."""
+    needle = query.strip().lower()
+    return [title for title in pages if needle in title.lower()]
+
+
+def _palette_highlight(listing: tk.Listbox, rows: list[str], index: int = 0) -> None:
+    """Replace the palette rows and highlight one of them.
+
+    An out-of-range index (the filter shrank the list) falls back to the
+    first row, and an empty result simply has nothing highlighted.
+    """
+    listing.delete(0, "end")
+    for row in rows:
+        listing.insert("end", row)
+    if not listing.size():
+        return
+    index = max(0, min(index, listing.size() - 1))
+    listing.selection_clear(0, "end")
+    listing.selection_set(index)
+    listing.activate(index)
+    listing.see(index)
+
+
+def _palette_move(listing: tk.Listbox, direction: int) -> str:
+    """Move the highlight one row, clamped to the list.
+
+    Returns ``"break"`` so Tk does not also move the listbox cursor itself.
+    """
+    count = listing.size()
+    if not count:
+        return "break"
+    current = listing.curselection()
+    index = max(0, min(count - 1, (current[0] if current else 0) + direction))
+    listing.selection_clear(0, "end")
+    listing.selection_set(index)
+    listing.activate(index)
+    listing.see(index)
+    return "break"
+
+
+def _palette_choice(listing: tk.Listbox) -> str:
+    """The highlighted page title, or an empty string when nothing is."""
+    selection = listing.curselection()
+    return str(listing.get(selection[0])) if selection else ""
 
 
 class ControlCenter(tk.Tk):
@@ -728,12 +775,15 @@ class ControlCenter(tk.Tk):
         main window. The palette itself is a separate toplevel with its own
         bindtags, so it carries its own bindings: Ctrl+K closes it again
         (pressing it twice must not stack a second palette), Escape closes
-        it, and the page accelerators Ctrl+1..7 switch straight from it.
+        it, Up/Down move the highlight from the entry and from the list, and
+        the page accelerators Ctrl+1..7 switch straight from it.
         """
         existing = getattr(self, "_palette_window", None)
         if existing is not None and existing.winfo_exists():
+            existing.deiconify()
             existing.lift()
-            existing.focus_force()
+            if existing.winfo_viewable():
+                existing.focus_force()
             return
         window = tk.Toplevel(self)
         window.title("Command palette")
@@ -756,37 +806,26 @@ class ControlCenter(tk.Tk):
         listing.pack(fill="both", expand=True, padx=self.px(14), pady=(0, self.px(14)))
 
         def refresh(_event: object = None) -> None:
-            query = entry.get().strip().lower()
-            listing.delete(0, "end")
-            for title in self.pages:
-                if query in title.lower():
-                    listing.insert("end", title)
-            if listing.size():
-                listing.selection_clear(0, "end")
-                listing.selection_set(0)
-                listing.activate(0)
+            """Filter the page list; keep the highlight while it is unchanged.
+
+            ``<KeyRelease>`` fires for every key, arrow keys included, so a
+            blind "select the first row" would undo the move the operator just
+            made with Up/Down. Rebuilding the listbox is therefore skipped
+            whenever the filtered titles are the same as the ones on screen.
+            """
+            rows = _palette_matches(self.pages, entry.get())
+            if list(listing.get(0, "end")) != rows:
+                current = listing.curselection()
+                _palette_highlight(listing, rows, current[0] if current else 0)
 
         def move(direction: int) -> str:
-            """Move the highlighted entry; returns "break" so Tk does not also
-            move the listbox cursor itself."""
-            count = listing.size()
-            if not count:
-                return "break"
-            current = listing.curselection()
-            index = (current[0] if current else 0) + direction
-            index = max(0, min(count - 1, index))
-            listing.selection_clear(0, "end")
-            listing.selection_set(index)
-            listing.activate(index)
-            listing.see(index)
-            return "break"
+            return _palette_move(listing, direction)
 
         def choose(_event: object = None) -> None:
-            selection = listing.curselection()
-            if not selection:
-                return
-            self.show_page(str(listing.get(selection[0])))
-            window.destroy()
+            title = _palette_choice(listing)
+            if title:
+                self.show_page(title)
+                window.destroy()
 
         def close(_event: object = None) -> None:
             window.destroy()
@@ -795,12 +834,30 @@ class ControlCenter(tk.Tk):
             self.show_page(name)
             window.destroy()
 
-        entry.bind("<KeyRelease>", refresh)
-        entry.bind("<Return>", choose)
+        def focus_entry(event: object = None) -> None:
+            """Once the palette is really on screen, make it take the keys.
+
+            ``focus_set`` alone can be ignored while the toplevel is still
+            being mapped (and by a window manager that hands the focus to the
+            parent window), which would leave the palette open but deaf.
+            """
+            if getattr(event, "widget", None) is window:
+                entry.focus_force()
+
+        # Arrows are bound on the toplevel as well as on the entry: Tk adds
+        # the toplevel to the bindtags of every child, so the keys keep
+        # working when the operator has clicked into the list. The entry
+        # binding still wins first (it returns "break") when the entry has
+        # the focus, so one keypress moves the highlight exactly once.
         entry.bind("<Down>", lambda _e: move(1))
         entry.bind("<Up>", lambda _e: move(-1))
+        window.bind("<Down>", lambda _e: move(1))
+        window.bind("<Up>", lambda _e: move(-1))
+        entry.bind("<KeyRelease>", refresh)
+        entry.bind("<Return>", choose)
         listing.bind("<Double-Button-1>", choose)
         listing.bind("<Return>", choose)
+        window.bind("<Map>", focus_entry)
         window.bind("<Escape>", close)
         window.bind("<Control-Key-k>", close)
 

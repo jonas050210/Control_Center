@@ -514,6 +514,10 @@ class Listbox(Widget):
         self._items.clear()
 
     def get(self, first, last=None):
+        # Tk reads a single item with ``get(index)`` and a range with
+        # ``get(first, "end")``; the palette does both.
+        if last is None and isinstance(first, int):
+            return self._items[first]
         return tuple(self._items)
 
     def size(self):
@@ -1374,6 +1378,44 @@ def _assert_every_widget_uses_the_app_bus(app: object) -> None:
         raise AssertionError("; ".join(sorted(set(offenders))))
 
 
+def _exercise_command_palette(app: object, window: object) -> None:
+    """Drive the palette keys on the fake widgets.
+
+    The fake ``event_generate`` only walks the bindings of the widget it is
+    called on, so this covers the entry bindings (Down/Up/Return), the
+    "highlight survives a key release" rule, and the toplevel bindings that
+    make the arrows work while the list itself has the focus.
+    """
+
+    def child(kind: str) -> object:
+        for candidate in window.winfo_children():  # type: ignore[attr-defined]
+            if type(candidate).__name__.lstrip("_").endswith(kind):
+                return candidate
+        raise AssertionError(f"the command palette has no {kind}")
+
+    entry = child("Entry")
+    listing = child("Listbox")
+    if listing.curselection() != (0,):
+        raise AssertionError("the palette must open with the first page highlighted")
+    entry.event_generate("<Down>")
+    if listing.curselection() != (1,):
+        raise AssertionError("Down in the palette entry must move the highlight")
+    # Every key release runs the filter refresh; it must not reset the row.
+    entry.event_generate("<KeyRelease>")
+    if listing.curselection() != (1,):
+        raise AssertionError("a key release must not undo the arrow-key move")
+    window.event_generate("<Up>")
+    if listing.curselection() != (0,):
+        raise AssertionError("Up on the palette window must move the highlight back")
+    window.event_generate("<Down>")
+    if listing.get(listing.curselection()[0]) != "Training":
+        raise AssertionError("the highlighted row must be the second page")
+    entry.event_generate("<Return>")
+    if window.winfo_exists():
+        raise AssertionError("Return must close the palette after choosing a page")
+    app.show_page("Dashboard")
+
+
 def _exercise_page_handlers(app: object) -> None:
     """Call the selection handlers the tests cannot reach without a display."""
 
@@ -1405,6 +1447,7 @@ def _exercise_page_handlers(app: object) -> None:
     app.open_command_palette()
     if app._palette_window is not first:
         raise AssertionError("a second Ctrl+K must reuse the open palette, not stack one")
+    _exercise_command_palette(app, first)
     app.set_status("smoke status", toast=True)
     app.notify("smoke notify", kind="info")
     try:

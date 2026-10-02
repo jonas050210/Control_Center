@@ -117,11 +117,15 @@ trace.
 ## Keyboard
 
 `Ctrl+K` opens the command palette, `Ctrl+1..7` jump straight to a page,
-`Escape` closes the palette, and `Up`/`Down` move its selection while the
-query field keeps the focus. The palette carries those bindings itself in
-addition to the shell's, because Tk gives a second toplevel its own
-bindtags - and pressing `Ctrl+K` twice reuses the open palette instead of
-stacking a second window.
+`Escape` closes the palette, and `Up`/`Down` move its selection. The palette
+carries those bindings itself in addition to the shell's, because Tk gives a
+second toplevel its own bindtags - and pressing `Ctrl+K` twice reuses the
+open palette instead of stacking a second window. The arrows are bound on
+the toplevel as well as on the query field, so they also work after a click
+into the list; the highlight only resets to the first row when the filtered
+page list actually changes (a key *release* must not undo an arrow press),
+and the palette forces the keyboard focus onto the query field once it is
+mapped.
 
 ## Pages
 
