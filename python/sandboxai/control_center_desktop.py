@@ -49,6 +49,7 @@ from .control_center_widgets import (
     COLOR_ERROR,
     COLOR_HOVER,
     COLOR_MUTED,
+    COLOR_OK,
     COLOR_SURFACE,
     COLOR_SURFACE_RAISED,
     COLOR_TEXT,
@@ -65,13 +66,13 @@ __all__ = ["ControlCenter", "PAGE_CLASSES", "main", "messagebox"]
 
 
 class ControlCenter(tk.Tk):
-    POLL_MS = 1500
+    POLL_MS = 600
 
     def __init__(self, adapter: SandboxAIAdapter | None = None) -> None:
         super().__init__()
-        self.title("SandboxAI Control Center")
-        self.geometry("1360x860")
-        self.minsize(1080, 680)
+        self.title("SandboxAI // Tactical AI Command Center")
+        self.geometry("1420x900")
+        self.minsize(1100, 700)
         self.adapter = adapter or SandboxAIAdapter()
         self.background = BackgroundRunner(self)
         self._configure_style()
@@ -89,8 +90,8 @@ class ControlCenter(tk.Tk):
         self.configure(background=COLOR_BG)
         self.option_add("*TCombobox*Listbox.background", COLOR_SURFACE_RAISED)
         self.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT)
-        self.option_add("*TCombobox*Listbox.selectBackground", "#164e63")
-        self.option_add("*TCombobox*Listbox.selectForeground", COLOR_TEXT)
+        self.option_add("*TCombobox*Listbox.selectBackground", "#084c61")
+        self.option_add("*TCombobox*Listbox.selectForeground", COLOR_ACCENT)
         style.configure(
             ".",
             background=COLOR_BG,
@@ -106,43 +107,57 @@ class ControlCenter(tk.Tk):
         style.configure("Header.TFrame", background=COLOR_SURFACE)
         style.configure("Nav.TFrame", background=COLOR_SURFACE)
         style.configure("Content.TFrame", background=COLOR_BG)
+        style.configure("Surface.TFrame", background=COLOR_SURFACE)
+        style.configure("Raised.TFrame", background=COLOR_SURFACE_RAISED)
         style.configure("TLabel", background=COLOR_BG, foreground=COLOR_TEXT)
         style.configure(
             "BrandEyebrow.TLabel",
             background=COLOR_SURFACE,
             foreground=COLOR_ACCENT,
-            font=(_FONT_FAMILY, 9, "bold"),
+            font=("Consolas", 9, "bold"),
         )
         style.configure(
             "BrandTitle.TLabel",
             background=COLOR_SURFACE,
             foreground=COLOR_TEXT,
-            font=(_FONT_FAMILY, 17, "bold"),
+            font=(_FONT_FAMILY, 16, "bold"),
         )
         style.configure(
             "OperatorStatus.TLabel",
-            background=COLOR_SURFACE,
-            foreground=COLOR_MUTED,
-            font=(_FONT_FAMILY, 9, "bold"),
-            padding=(10, 6),
+            background=COLOR_SURFACE_RAISED,
+            foreground=COLOR_OK,
+            font=("Consolas", 9, "bold"),
+            padding=(12, 6),
         )
         style.configure(
             "PageTitle.TLabel",
             background=COLOR_BG,
             foreground=COLOR_TEXT,
-            font=(_FONT_FAMILY, 20, "bold"),
+            font=(_FONT_FAMILY, 19, "bold"),
         )
         style.configure(
             "PageSubtitle.TLabel",
             background=COLOR_BG,
-            foreground=COLOR_ACCENT_SECONDARY,
-            font=(_FONT_FAMILY, 10),
+            foreground=COLOR_ACCENT,
+            font=("Consolas", 9),
         )
         style.configure(
             "Section.TLabel",
             background=COLOR_BG,
-            foreground=COLOR_TEXT,
-            font=(_FONT_FAMILY, 12, "bold"),
+            foreground=COLOR_ACCENT,
+            font=(_FONT_FAMILY, 11, "bold"),
+        )
+        style.configure(
+            "FieldTitle.TLabel",
+            background=COLOR_SURFACE,
+            foreground=COLOR_ACCENT,
+            font=("Consolas", 9, "bold"),
+        )
+        style.configure(
+            "FieldHelp.TLabel",
+            background=COLOR_SURFACE,
+            foreground=COLOR_MUTED,
+            font=(_FONT_FAMILY, 8),
         )
         style.configure(
             "Card.TFrame",
@@ -152,71 +167,99 @@ class ControlCenter(tk.Tk):
             borderwidth=1,
         )
         style.configure(
+            "CardInner.TFrame",
+            background=COLOR_SURFACE_RAISED,
+        )
+        style.configure(
             "CardLabel.TLabel",
             background=COLOR_SURFACE_RAISED,
             foreground=COLOR_MUTED,
-            font=(_FONT_FAMILY, 9),
+            font=("Consolas", 8, "bold"),
         )
         style.configure(
             "CardValue.TLabel",
             background=COLOR_SURFACE_RAISED,
             foreground=COLOR_TEXT,
-            font=(_FONT_FAMILY, 15, "bold"),
+            font=("Consolas", 13, "bold"),
         )
         style.configure(
-            "TLabelframe", background=COLOR_BG, bordercolor=COLOR_BORDER, relief="solid"
+            "Leader.TLabel",
+            background="#052338",
+            foreground=COLOR_ACCENT,
+            padding=(12, 8),
+            font=("Consolas", 10, "bold"),
+        )
+        style.configure(
+            "TLabelframe",
+            background=COLOR_SURFACE,
+            bordercolor=COLOR_BORDER,
+            relief="solid",
+            borderwidth=1,
         )
         style.configure(
             "TLabelframe.Label",
             background=COLOR_BG,
-            foreground=COLOR_MUTED,
-            font=(_FONT_FAMILY, 10, "bold"),
+            foreground=COLOR_ACCENT,
+            font=("Consolas", 9, "bold"),
         )
         style.configure(
             "TButton",
             background=COLOR_SURFACE_RAISED,
             foreground=COLOR_TEXT,
-            borderwidth=0,
-            padding=(12, 8),
+            bordercolor=COLOR_BORDER,
+            borderwidth=1,
+            padding=(12, 7),
+            font=(_FONT_FAMILY, 9, "bold"),
         )
         style.map(
             "TButton",
-            background=[("active", COLOR_HOVER), ("pressed", "#243b53")],
+            background=[("active", COLOR_HOVER), ("pressed", "#1c3b66")],
             foreground=[("disabled", COLOR_MUTED)],
         )
         style.configure(
             "Primary.TButton",
             background=COLOR_ACCENT,
-            foreground="#06131d",
+            foreground="#020a14",
             borderwidth=0,
-            padding=(14, 9),
+            padding=(16, 9),
             font=(_FONT_FAMILY, 10, "bold"),
         )
         style.map(
             "Primary.TButton",
-            background=[("active", "#75e8ff"), ("pressed", "#179dc1"), ("disabled", COLOR_BORDER)],
+            background=[("active", "#66f7ff"), ("pressed", "#00b8cc"), ("disabled", COLOR_BORDER)],
+            foreground=[("disabled", COLOR_MUTED)],
         )
         style.configure(
             "Danger.TButton",
-            background=COLOR_SURFACE_RAISED,
+            background="#260b17",
             foreground=COLOR_ERROR,
-            borderwidth=0,
-            padding=(12, 8),
+            bordercolor=COLOR_ERROR,
+            borderwidth=1,
+            padding=(12, 7),
+            font=(_FONT_FAMILY, 9, "bold"),
         )
-        style.map("Danger.TButton", background=[("active", "#4c1d2a"), ("pressed", "#881337")])
+        style.map("Danger.TButton", background=[("active", "#4c1127"), ("pressed", "#7a163b")])
         style.configure(
             "NavGroup.TLabel",
             background=COLOR_SURFACE,
-            foreground=COLOR_MUTED,
-            font=(_FONT_FAMILY, 9, "bold"),
+            foreground=COLOR_ACCENT_SECONDARY,
+            font=("Consolas", 8, "bold"),
         )
         style.configure(
             "NavFootnote.TLabel",
             background=COLOR_SURFACE,
             foreground=COLOR_MUTED,
-            font=(_FONT_FAMILY, 9),
+            font=("Consolas", 8),
         )
-        style.configure("Nav.TButton", anchor="w", padding=(14, 10), background=COLOR_SURFACE)
+        style.configure(
+            "Nav.TButton",
+            anchor="w",
+            padding=(14, 10),
+            background=COLOR_SURFACE,
+            foreground=COLOR_MUTED,
+            borderwidth=0,
+            font=(_FONT_FAMILY, 10),
+        )
         style.map(
             "Nav.TButton",
             background=[("active", COLOR_HOVER), ("pressed", "#193a55")],
@@ -226,56 +269,66 @@ class ControlCenter(tk.Tk):
             "NavSelected.TButton",
             anchor="w",
             padding=(14, 10),
-            background=COLOR_HOVER,
+            background=COLOR_SURFACE_RAISED,
             foreground=COLOR_ACCENT,
+            borderwidth=0,
             font=(_FONT_FAMILY, 10, "bold"),
         )
         style.map(
             "NavSelected.TButton",
-            background=[("active", "#193a55"), ("pressed", "#193a55")],
+            background=[("active", COLOR_HOVER), ("pressed", "#193a55")],
             foreground=[("active", COLOR_ACCENT)],
         )
         style.configure(
             "Warning.TLabel",
-            background="#302711",
+            background="#2c2008",
             foreground=COLOR_WARN,
-            padding=(12, 9),
-            font=(_FONT_FAMILY, 10, "bold"),
+            padding=(12, 8),
+            font=("Consolas", 9, "bold"),
         )
         style.configure(
             "Error.TLabel",
-            background="#351923",
+            background="#330d1d",
             foreground=COLOR_ERROR,
-            padding=(12, 9),
-            font=(_FONT_FAMILY, 10, "bold"),
+            padding=(12, 8),
+            font=("Consolas", 9, "bold"),
         )
         style.configure(
             "Treeview",
             background=COLOR_SURFACE,
             fieldbackground=COLOR_SURFACE,
             foreground=COLOR_TEXT,
-            rowheight=30,
+            rowheight=28,
             borderwidth=0,
+            font=("Consolas", 9),
         )
         style.configure(
             "Treeview.Heading",
             background=COLOR_SURFACE_RAISED,
-            foreground=COLOR_MUTED,
+            foreground=COLOR_ACCENT,
             relief="flat",
-            padding=(8, 8),
+            padding=(8, 7),
+            font=("Consolas", 9, "bold"),
         )
         style.map(
-            "Treeview", background=[("selected", "#164e63")], foreground=[("selected", COLOR_TEXT)]
+            "Treeview",
+            background=[("selected", "#0b3b54")],
+            foreground=[("selected", COLOR_ACCENT)],
         )
         style.configure(
             "TEntry",
             fieldbackground=COLOR_SURFACE_RAISED,
             foreground=COLOR_TEXT,
-            insertcolor=COLOR_TEXT,
-            padding=7,
+            insertcolor=COLOR_ACCENT,
+            bordercolor=COLOR_BORDER,
+            padding=6,
         )
         style.configure(
-            "TCombobox", fieldbackground=COLOR_SURFACE_RAISED, foreground=COLOR_TEXT, padding=6
+            "TCombobox",
+            fieldbackground=COLOR_SURFACE_RAISED,
+            foreground=COLOR_TEXT,
+            bordercolor=COLOR_BORDER,
+            padding=5,
         )
         style.configure("TSeparator", background=COLOR_BORDER)
         style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
@@ -292,25 +345,47 @@ class ControlCenter(tk.Tk):
         outer = ttk.Frame(self, style="Shell.TFrame", padding=0)
         outer.pack(fill="both", expand=True)
 
-        header = ttk.Frame(outer, style="Header.TFrame", padding=(18, 11))
+        # Top neon accent hairline
+        tk.Frame(outer, height=2, background=COLOR_ACCENT, borderwidth=0).pack(fill="x")
+
+        header = ttk.Frame(outer, style="Header.TFrame", padding=(20, 10))
         header.pack(fill="x")
         brand = ttk.Frame(header, style="Header.TFrame")
         brand.pack(side="left")
-        ttk.Label(brand, text="SANDBOXAI // TTK", style="BrandEyebrow.TLabel").pack(anchor="w")
-        ttk.Label(brand, text="CONTROL CENTER", style="BrandTitle.TLabel").pack(anchor="w")
-        self.status_label = ttk.Label(header, text="SYSTEM // READY", style="OperatorStatus.TLabel")
+        ttk.Label(
+            brand, text="SANDBOXAI // NEURAL TELEMETRY & TTK LAB", style="BrandEyebrow.TLabel"
+        ).pack(anchor="w")
+        ttk.Label(brand, text="COMMAND CENTER", style="BrandTitle.TLabel").pack(anchor="w")
+        self.status_label = ttk.Label(
+            header, text="● SYSTEM // ONLINE", style="OperatorStatus.TLabel"
+        )
         self.status_label.pack(side="right", pady=4)
+        self.telemetry_badge = ttk.Label(
+            header,
+            text="BRIDGE v3 // 84-OBS · 6-HEAD",
+            style="BrandEyebrow.TLabel",
+            padding=(12, 6),
+        )
+        self.telemetry_badge.pack(side="right", padx=(0, 8), pady=4)
         ttk.Separator(outer).pack(fill="x")
 
         body = ttk.Frame(outer, style="Shell.TFrame")
         body.pack(fill="both", expand=True)
-        nav = ttk.Frame(body, style="Nav.TFrame", width=224, padding=(14, 18))
+        nav = ttk.Frame(body, style="Nav.TFrame", width=230, padding=(14, 16))
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
-        self.content = ttk.Frame(body, style="Content.TFrame", padding=(12, 14, 20, 18))
+        tk.Frame(body, width=1, background=COLOR_BORDER, borderwidth=0).pack(
+            side="left", fill="y"
+        )
+        self.content = ttk.Frame(body, style="Content.TFrame", padding=(14, 14, 20, 16))
         self.content.pack(side="left", fill="both", expand=True)
 
-        nav_groups = {0: "OVERVIEW", 1: "OPERATIONS", 4: "ANALYSIS", 5: "SYSTEM"}
+        nav_groups = {
+            0: "// TELEMETRY",
+            1: "// OPERATIONS",
+            4: "// ARTIFACTS",
+            5: "// CORE SYSTEM",
+        }
         for index, page_class in enumerate(PAGE_CLASSES):
             if index in nav_groups:
                 if index:
@@ -320,23 +395,27 @@ class ControlCenter(tk.Tk):
                 )
             button = ttk.Button(
                 nav,
-                text=page_class.title,
+                text=f"  {page_class.title}",
                 style="Nav.TButton",
                 command=lambda name=page_class.title: self.show_page(name),  # type: ignore[misc]
             )
             button.pack(fill="x", pady=2)
-            ToolTip(button, f"Open {page_class.title}")
+            ToolTip(button, f"Open {page_class.title} (Ctrl+{index + 1})")
             self._nav_buttons[page_class.title] = button
             page = page_class(self.content, self)
             self.pages[page_class.title] = page
+            self.bind(
+                f"<Control-Key-{index + 1}>",
+                lambda _evt, name=page_class.title: self.show_page(name),  # type: ignore[misc]
+            )
 
-        ttk.Separator(nav).pack(fill="x", pady=10)
+        ttk.Separator(nav).pack(fill="x", pady=12)
         ttk.Label(
             nav,
-            text="HEADLESS CONTROL\nMeasured backend data only.",
+            text="HEADLESS BRIDGE v3\n84-FLOAT // 6-HEAD CONTRACT\nZERO-ESTIMATE TELEMETRY",
             style="NavFootnote.TLabel",
             justify="left",
-        ).pack(anchor="w")
+        ).pack(anchor="w", padx=6)
 
         self.show_page(PAGE_CLASSES[0].title)
 
@@ -347,11 +426,19 @@ class ControlCenter(tk.Tk):
         page.pack(fill="both", expand=True)
         self._current = page
         for title, button in self._nav_buttons.items():
-            button.configure(style="NavSelected.TButton" if title == name else "Nav.TButton")
+            selected = title == name
+            button.configure(
+                style="NavSelected.TButton" if selected else "Nav.TButton",
+                text=f"▌ {title}" if selected else f"  {title}",
+            )
         page.show()
 
     def set_status(self, message: str, error: bool = False) -> None:
-        self.status_label.configure(text=message, foreground=COLOR_ERROR if error else COLOR_MUTED)
+        prefix = "▲ ALERT // " if error else "● STATUS // "
+        self.status_label.configure(
+            text=f"{prefix}{message}",
+            foreground=COLOR_ERROR if error else COLOR_OK,
+        )
 
     def set_output_root(self, output_root: str) -> None:
         self.background.close()

@@ -533,6 +533,63 @@ def _row_is_measured(row: dict[str, Any]) -> bool:
     )
 
 
+def _baseline_steps_per_second(rows: list[dict[str, Any]]) -> float | None:
+    """Throughput of the 1x1 baseline (or smallest measured topology)."""
+    measured = [
+        row
+        for row in rows
+        if _row_is_measured(row) and float(row.get("steps_per_second") or 0.0) > 0.0
+    ]
+    if not measured:
+        return None
+    smallest = min(
+        measured,
+        key=lambda r: (int(r.get("environments", 1)), int(r.get("workers", 1))),
+    )
+    return float(smallest["steps_per_second"])
+
+
+def _classify_row_bottleneck(row: dict[str, Any], peak_fps: float | None) -> str:
+    """Classify the primary performance regime of one benchmarked row."""
+    status = str(row.get("status", "ok"))
+    if status not in ("ok", "measured"):
+        return status
+    fps = row.get("steps_per_second")
+    if not isinstance(fps, (int, float)) or float(fps) <= 0.0:
+        return "unmeasured"
+    jitter = _row_jitter(row)
+    if jitter is not None and jitter > JITTER_THRESHOLD:
+        return "jitter-bound"
+    if (
+        peak_fps is not None
+        and peak_fps > 0.0
+        and float(fps) >= peak_fps * (1.0 - NEAR_BEST_FRACTION)
+    ):
+        return "optimal"
+    cpu = row.get("host_cpu_percent_mean")
+    if isinstance(cpu, (int, float)) and float(cpu) >= 88.0:
+        return "cpu-saturated"
+    p50 = row.get("vector_step_latency_p50_ms")
+    if isinstance(p50, (int, float)) and float(p50) >= 25.0 and int(row.get("workers", 1)) > 1:
+        return "ipc-overhead"
+    if int(row.get("environments", 0)) == 1 and int(row.get("workers", 1)) == 1:
+        return "baseline"
+    return "scaling"
+
+
+def _annotate_screening_rows(rows: list[dict[str, Any]]) -> None:
+    """Enrich measured screening rows in-place with speedup_vs_baseline and bottleneck."""
+    baseline = _baseline_steps_per_second(rows)
+    peak = max(
+        (float(r["steps_per_second"]) for r in rows if _row_is_measured(r)),
+        default=None,
+    )
+    for row in rows:
+        if _row_is_measured(row) and baseline and baseline > 0.0:
+            row["speedup_vs_baseline"] = round(float(row["steps_per_second"]) / baseline, 2)
+        row["bottleneck"] = _classify_row_bottleneck(row, peak)
+
+
 def select_finalists(
     screen_rows: list[dict[str, Any]], count: int = DEFAULT_FINALISTS
 ) -> list[dict[str, Any]]:
@@ -625,6 +682,13 @@ def recommend(
 
     chosen_row, chosen_score = min(near_best, key=stability_key)
     jitter = _row_jitter(chosen_row)
+    baseline_sps = _baseline_steps_per_second(screen_rows)
+    chosen_bridge_sps = float(chosen_row["steps_per_second"])
+    speedup = (
+        round(chosen_bridge_sps / baseline_sps, 2)
+        if baseline_sps and baseline_sps > 0.0
+        else None
+    )
     warnings = _recommendation_warnings(
         screen_rows, _row_key(chosen_row), jitter_threshold=jitter_threshold
     )
@@ -642,6 +706,10 @@ def recommend(
         f"best measured throughput in the sweep was {best_score:.1f} steps/s; "
         f"the recommendation stays within {near_best_fraction:.0%} of it",
     ]
+    if speedup is not None and speedup > 1.01:
+        rationale.append(
+            f"scaling gain: {speedup:.2f}x bridge speedup over the smallest measured baseline"
+        )
     if jitter is not None:
         rationale.append(
             f"stable stepping: p95/p50 latency ratio {jitter:.2f} "
@@ -666,7 +734,8 @@ def recommend(
         "device": device,
         "inference_device": inference_device,
         "expected_steps_per_second": chosen_score,
-        "screened_steps_per_second": float(chosen_row["steps_per_second"]),
+        "screened_steps_per_second": chosen_bridge_sps,
+        "speedup_vs_baseline": speedup,
         "validated_steps_per_second": (
             chosen_score if basis == "validated_training_slice" else None
         ),
@@ -853,6 +922,7 @@ def _measure_screen_row(
     compact_infos: bool,
     warmup_steps: int,
     screen: Callable[..., list[dict[str, Any]]] | None,
+    on_step_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Measure one ``(environments, workers)`` configuration. Never raises."""
     environment_count = int(candidate["environments"])
@@ -873,6 +943,7 @@ def _measure_screen_row(
                 ),
                 compact_infos=compact_infos,
                 warmup_steps=warmup_steps,
+                on_step_progress=on_step_progress,
             )
         else:
             measured = screen(environments=environment_count, workers=worker_count)
@@ -915,7 +986,15 @@ def _run_screening(
     started = time.monotonic()
     cancelled = False
     budget_exhausted = False
-    _emit(on_progress, stage="screening", status="started", total=len(candidates), index=0)
+    _emit(
+        on_progress,
+        stage="screening",
+        status="started",
+        total=len(candidates),
+        index=0,
+        completed_rows=[],
+        stage_elapsed_seconds=0.0,
+    )
     for index, candidate in enumerate(candidates):
         if cancel is not None and cancel():
             cancelled = True
@@ -927,7 +1006,28 @@ def _run_screening(
             index=index,
             total=len(candidates),
             configuration=dict(candidate),
+            completed_rows=[dict(r, stage="screening") for r in rows],
+            stage_elapsed_seconds=time.monotonic() - started,
         )
+
+        def _on_live_step(
+            live_payload: dict[str, Any],
+            _idx: int = index,
+            _cand: dict[str, Any] = candidate,
+        ) -> None:
+            _emit(
+                on_progress,
+                stage="screening",
+                status="running",
+                index=_idx,
+                total=len(candidates),
+                configuration=dict(_cand),
+                live=dict(live_payload),
+                steps_per_second=live_payload.get("steps_per_second"),
+                completed_rows=[dict(r, stage="screening") for r in rows],
+                stage_elapsed_seconds=time.monotonic() - started,
+            )
+
         rows.append(
             _measure_screen_row(
                 candidate,
@@ -941,8 +1041,10 @@ def _run_screening(
                 compact_infos=compact_infos,
                 warmup_steps=warmup_steps,
                 screen=screen,
+                on_step_progress=_on_live_step if on_progress is not None else None,
             )
         )
+        _annotate_screening_rows(rows)
         row = rows[-1]
         _emit(
             on_progress,
@@ -951,7 +1053,10 @@ def _run_screening(
             index=index,
             total=len(candidates),
             configuration=dict(candidate),
+            row=dict(row),
             steps_per_second=row.get("steps_per_second"),
+            completed_rows=[dict(r, stage="screening") for r in rows],
+            stage_elapsed_seconds=time.monotonic() - started,
         )
         if budget.mode == "time" and time.monotonic() - started > (
             screen_cap * len(candidates) * 1.5
@@ -1121,19 +1226,23 @@ def _run_validation(
     validate_training: Callable[..., Any] | None,
     cancel: CancelFn | None,
     on_progress: ProgressFn | None,
+    screen_rows: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], bool]:
     """One real training slice per finalist. Returns (rows, stage, cancelled)."""
     rows: list[dict[str, Any]] = []
+    prior_rows = [dict(r, stage="screening") for r in (screen_rows or [])]
     stage = _stage_record("validation", configurations=[])
     cancelled = False
+    started = time.monotonic()
     _emit(
         on_progress,
         stage="validation",
         status="started",
         total=len(chosen_finalists),
         index=0,
+        completed_rows=list(prior_rows),
+        stage_elapsed_seconds=0.0,
     )
-    started = time.monotonic()
     for index, row in enumerate(chosen_finalists):
         if cancel is not None and cancel():
             cancelled = True
@@ -1157,6 +1266,8 @@ def _run_validation(
                 "device": device,
                 "steps": steps,
             },
+            completed_rows=prior_rows + [dict(r, stage="validation") for r in rows],
+            stage_elapsed_seconds=time.monotonic() - started,
         )
         validation_row: dict[str, Any] = {
             "environments": environment_count,
@@ -1206,6 +1317,10 @@ def _run_validation(
             index=index,
             total=len(chosen_finalists),
             configuration=dict(validation_row),
+            row=dict(validation_row),
+            steps_per_second=validation_row.get("steps_per_second"),
+            completed_rows=prior_rows + [dict(r, stage="validation") for r in rows],
+            stage_elapsed_seconds=time.monotonic() - started,
         )
     stage["configurations"] = rows
     stage["elapsed_seconds"] = time.monotonic() - started
@@ -1441,6 +1556,7 @@ def run_benchmark_pipeline(
             validate_training=validate_training,
             cancel=cancel,
             on_progress=on_progress,
+            screen_rows=screening.rows,
         )
         if validation_cancelled:
             report["stages"].append(validation_stage)

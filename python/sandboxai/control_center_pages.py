@@ -6,6 +6,7 @@ remain in the independently tested viewmodel.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import tkinter as tk
 from collections.abc import Callable
@@ -15,6 +16,8 @@ from typing import Any
 
 from . import control_center_viewmodel as vm
 from .control_center_widgets import (
+    COLOR_ACCENT,
+    COLOR_BORDER,
     COLOR_ERROR,
     COLOR_MUTED,
     COLOR_OK,
@@ -23,6 +26,7 @@ from .control_center_widgets import (
     COLOR_WARN,
     LineChart,
     LogPanel,
+    PhaseStepper,
     StatRow,
     ToolTip,
     _open_in_file_manager,
@@ -79,9 +83,16 @@ class Page(ttk.Frame):
     def _heading(self) -> None:
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 10))
-        ttk.Label(header, text=self.title, style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(header, text=f"// {self.title.upper()}", style="PageTitle.TLabel").pack(
+            anchor="w"
+        )
         if self.subtitle:
-            ttk.Label(header, text=self.subtitle, style="PageSubtitle.TLabel").pack(anchor="w")
+            ttk.Label(header, text=self.subtitle, style="PageSubtitle.TLabel").pack(
+                anchor="w", pady=(2, 4)
+            )
+        tk.Frame(header, height=1, background=COLOR_BORDER, borderwidth=0).pack(
+            fill="x", pady=(4, 0)
+        )
 
     def build(self) -> None:
         raise NotImplementedError
@@ -156,6 +167,61 @@ class DashboardPage(Page):
     )
 
     def build(self) -> None:
+        # ---- 1-2-3 Operator Workflow & Live Roblox TTK Testing Bridge ----
+        workflow_bar = ttk.LabelFrame(
+            self,
+            text="Quick Workflow // 1. Roblox TTK Testing Bridge  ▸  2. Hardware Benchmark  ▸  3. Launch Agent",
+            padding=10,
+        )
+        workflow_bar.pack(fill="x", pady=(0, 10))
+        wf_top = ttk.Frame(workflow_bar, style="Surface.TFrame")
+        wf_top.pack(fill="x")
+        self.roblox_bridge_label = ttk.Label(
+            wf_top,
+            text="ROBLOX BRIDGE // probing local Roblox Player & TTK Testing logs...",
+            style="Leader.TLabel",
+        )
+        self.roblox_bridge_label.pack(side="left", fill="x", expand=True)
+
+        wf_buttons = ttk.Frame(workflow_bar, style="Surface.TFrame")
+        wf_buttons.pack(fill="x", pady=(8, 0))
+        ttk.Button(
+            wf_buttons,
+            text="▶ 1. Launch Roblox TTK Testing",
+            command=self._launch_roblox_ttk,
+            style="Primary.TButton",
+        ).pack(side="left")
+        ttk.Button(
+            wf_buttons,
+            text="🪟 Focus Roblox",
+            command=self._focus_roblox_window,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            wf_buttons,
+            text="📸 Capture Window",
+            command=self._capture_roblox_window,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            wf_buttons,
+            text="🎯 TTK Calibration Lab",
+            command=lambda: self.app.show_page("Settings"),
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            wf_buttons,
+            text="⚡ Ubuntu CPU Turbo",
+            command=self._enable_ubuntu_cpu_turbo,
+        ).pack(side="left", padx=(12, 0))
+        ttk.Button(
+            wf_buttons,
+            text="⚡ 2. Run Benchmark",
+            command=lambda: self.app.show_page("Benchmarks"),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            wf_buttons,
+            text="🚀 3. Deploy Agent",
+            command=lambda: self.app.show_page("Agents"),
+        ).pack(side="left", padx=(6, 0))
+
         self.warning_banner = ttk.Label(
             self, text="", style="Warning.TLabel", wraplength=900, justify="left"
         )
@@ -194,6 +260,78 @@ class DashboardPage(Page):
     def refresh(self) -> None:
         self.submit_poll("dashboard", self.adapter.dashboard_snapshot, self._on_snapshot)
         self.submit_poll("agents-summary", self.adapter.agents.views, self._on_agents_summary)
+        if hasattr(self.adapter, "ttk_testing_status"):
+            self.submit_poll("roblox-bridge", self.adapter.ttk_testing_status, self._on_roblox_status)
+
+    def _on_roblox_status(
+        self, status: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or status is None:
+            return
+        tview = vm.ttk_testing_view(status)
+        summary = (
+            f"▸ {tview['status_badge']}   │   Window: {tview['window_text']}   │   "
+            f"Place: {tview['place_text']}   │   "
+            f"Calibration: {tview['calibration_progress_text']}"
+        )
+        self.roblox_bridge_label.configure(
+            text=summary,
+            foreground=COLOR_OK if tview["connected"] else (COLOR_WARN if tview["roblox_running"] else COLOR_ACCENT),
+        )
+
+    def _launch_roblox_ttk(self) -> None:
+        if not hasattr(self.adapter, "launch_roblox_ttk_testing"):
+            return
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result or not result.get("ok"):
+                self.app.set_status(f"Roblox launch failed: {error or (result or {}).get('error')}", error=True)
+            else:
+                self.app.set_status(str(result.get("message") or "Launched Roblox TTK Testing"))
+                self.refresh()
+
+        self.app.background.submit(self.adapter.launch_roblox_ttk_testing, _done)
+
+    def _focus_roblox_window(self) -> None:
+        if not hasattr(self.adapter, "focus_roblox_window"):
+            return
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result or not result.get("ok"):
+                self.app.set_status(
+                    f"Focus Roblox window: {error or (result or {}).get('message')}", error=True
+                )
+            else:
+                self.app.set_status(str(result.get("message") or "Roblox window focused"))
+
+        self.app.background.submit(self.adapter.focus_roblox_window, _done)
+
+    def _enable_ubuntu_cpu_turbo(self) -> None:
+        if not hasattr(self.adapter, "enable_ubuntu_cpu_turbo"):
+            return
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result:
+                self.app.set_status(f"CPU Turbo failed: {error}", error=True)
+                return
+            uview = vm.ubuntu_cpu_turbo_view(result)
+            self.app.set_status(f"Activated {uview['badge']} — {uview['summary']}")
+
+        self.app.background.submit(self.adapter.enable_ubuntu_cpu_turbo, _done)
+
+    def _capture_roblox_window(self) -> None:
+        if not hasattr(self.adapter, "capture_roblox_screenshot"):
+            return
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result or not result.get("ok"):
+                self.app.set_status(
+                    f"Screenshot failed: {error or (result or {}).get('error')}", error=True
+                )
+            else:
+                self.app.set_status(f"Captured Roblox screenshot: {result.get('path')}")
+
+        self.app.background.submit(self.adapter.capture_roblox_screenshot, _done)
 
     def _on_agents_summary(
         self, views: list[dict[str, Any]] | None, error: BaseException | None
@@ -271,8 +409,9 @@ class DashboardPage(Page):
             checkpoint_lines.append("best evaluation: n/a")
         if view["ppo_diagnostics"]:
             diag = view["ppo_diagnostics"]
+            health = vm.ppo_health_view(diag)
             checkpoint_lines.append(
-                "PPO diagnostics: approx_kl="
+                f"PPO diagnostics [{health['status']}]: approx_kl="
                 + vm.format_number(diag.get("approx_kl"), 4)
                 + f", clip_fraction={vm.format_number(diag.get('clip_fraction'), 3)}"
                 + f", explained_variance={vm.format_number(diag.get('explained_variance'), 3)}"
@@ -352,8 +491,8 @@ class AgentsPage(Page):
     )
 
     def build(self) -> None:
-        # ---- Launch configuration (the former Training page) ----------
-        form_frame = ttk.LabelFrame(self, text="Launch configuration", padding=10)
+        # ---- Launch configuration (streamlined 5-parameter deployment deck) ---
+        form_frame = ttk.LabelFrame(self, text="Launch configuration", padding=12)
         form_frame.pack(fill="x")
         self.field_vars: dict[str, tk.StringVar] = {}
         # Real measured defaults: the hardware wizard's device choice and -
@@ -377,19 +516,66 @@ class AgentsPage(Page):
                 value = recommendation.get(key)
                 if value is not None and str(value):
                     defaults[field] = str(value)
-        groups = vm.training_field_groups()
-        basic_frame = ttk.Frame(form_frame)
+
+        # Keep StringVars for all training fields so programmatic overrides
+        # (such as inference_device from a hybrid benchmark recommendation)
+        # remain preserved even though the GUI exposes only the 5 core controls.
+        self._measured_sps: float | None = None
+        if recommendation and isinstance(
+            recommendation.get("expected_steps_per_second"), (int, float)
+        ):
+            self._measured_sps = float(recommendation["expected_steps_per_second"])
+        for spec in vm.TRAINING_FIELDS:
+            self.field_vars[spec.name] = tk.StringVar(value=defaults.get(spec.name, ""))
+
+        basic_frame = ttk.Frame(form_frame, style="Surface.TFrame")
         basic_frame.pack(fill="x")
-        self._build_fields(basic_frame, groups["basic"], defaults)
-        self._advanced_visible = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            form_frame,
-            text="Show advanced options",
-            variable=self._advanced_visible,
-            command=self._toggle_advanced,
-        ).pack(anchor="w", pady=(8, 0))
-        self.advanced_frame = ttk.Frame(form_frame)
-        self._build_fields(self.advanced_frame, groups["advanced"], defaults)
+        self._build_fields(basic_frame, vm.launch_field_specs(), defaults)
+
+        presets_bar = ttk.Frame(form_frame, style="Surface.TFrame")
+        presets_bar.pack(fill="x", pady=(6, 0))
+        ttk.Label(presets_bar, text="QUICK TARGETS:", style="FieldTitle.TLabel").pack(
+            side="left", padx=(0, 8)
+        )
+        for label, steps_val in (
+            ("⚡ 25k Smoke", "25000"),
+            ("🎯 100k Standard", "100000"),
+            ("🔥 500k Deep", "500000"),
+        ):
+            ttk.Button(
+                presets_bar,
+                text=label,
+                command=lambda s=steps_val: self.field_vars["total_training_steps"].set(s),  # type: ignore[misc]
+            ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            presets_bar,
+            text="♻ Sync Optimal Benchmark",
+            command=self._sync_optimal_benchmark,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            presets_bar,
+            text="⚡ Ubuntu CPU Turbo",
+            command=self._apply_ubuntu_cpu_turbo,
+        ).pack(side="left", padx=(6, 0))
+
+        resume_bar = ttk.Frame(form_frame, style="Surface.TFrame")
+        resume_bar.pack(fill="x", pady=(6, 0))
+        ttk.Label(resume_bar, text="RESUME CHECKPOINT (OPTIONAL):", style="FieldTitle.TLabel").pack(
+            side="left", padx=(0, 8)
+        )
+        self.resume_checkpoint_var = tk.StringVar(value="")
+        self.resume_combo = ttk.Combobox(
+            resume_bar,
+            textvariable=self.resume_checkpoint_var,
+            values=("",),
+            width=64,
+        )
+        self.resume_combo.pack(side="left")
+        ttk.Button(
+            resume_bar,
+            text="Clear (Fresh Run)",
+            command=lambda: self.resume_checkpoint_var.set(""),
+        ).pack(side="left", padx=(6, 0))
 
         launch_bar = ttk.Frame(self)
         launch_bar.pack(fill="x", pady=(8, 0))
@@ -477,47 +663,36 @@ class AgentsPage(Page):
     def _build_fields(
         self, parent: tk.Misc, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]
     ) -> None:
-        parent.columnconfigure(1, weight=1)
-        parent.columnconfigure(2, weight=2)
-        for row_index, spec in enumerate(specs):
-            ttk.Label(parent, text=spec.label, width=26).grid(
-                row=row_index, column=0, sticky="w", pady=2
-            )
-            var = tk.StringVar(value=defaults.get(spec.name, ""))
-            self.field_vars[spec.name] = var
+        for col_index, spec in enumerate(specs):
+            parent.columnconfigure(col_index, weight=1)
+            cell = ttk.Frame(parent, style="Surface.TFrame", padding=(0, 2, 12, 2))
+            cell.grid(row=0, column=col_index, sticky="nsew")
+            ttk.Label(cell, text=spec.label.upper(), style="FieldTitle.TLabel").pack(anchor="w")
+            var = self.field_vars.get(spec.name)
+            if var is None:
+                var = tk.StringVar(value=defaults.get(spec.name, ""))
+                self.field_vars[spec.name] = var
+            else:
+                var.set(defaults.get(spec.name, ""))
             if spec.kind == "choice" and spec.choices:
                 widget: tk.Widget = ttk.Combobox(
-                    parent, textvariable=var, values=spec.choices, state="readonly", width=28
+                    cell, textvariable=var, values=spec.choices, state="readonly", width=18
                 )
             elif spec.kind == "bool":
-                widget = ttk.Checkbutton(parent, variable=var, onvalue="true", offvalue="false")
-            elif spec.name in ("bc_checkpoint", "godot_executable"):
-                widget = ttk.Frame(parent)
-                ttk.Entry(widget, textvariable=var, width=30).pack(side="left")
-                ttk.Button(
-                    widget,
-                    text="Browse",
-                    width=8,
-                    command=lambda v=var: self._browse_file(v),  # type: ignore[misc]
-                ).pack(side="left", padx=(4, 0))
+                widget = ttk.Checkbutton(cell, variable=var, onvalue="true", offvalue="false")
             else:
-                widget = ttk.Entry(parent, textvariable=var, width=30)
-            widget.grid(row=row_index, column=1, sticky="ew", pady=4, padx=(8, 16))
+                widget = ttk.Entry(cell, textvariable=var, width=18)
+            widget.pack(fill="x", pady=(4, 2))
             if spec.help:
-                ttk.Label(parent, text=spec.help, foreground=COLOR_MUTED, wraplength=360).grid(
-                    row=row_index, column=2, sticky="ew"
-                )
+                ToolTip(widget, spec.help)
+                ttk.Label(
+                    cell, text=spec.help, style="FieldHelp.TLabel", wraplength=210, justify="left"
+                ).pack(anchor="w")
 
     def _browse_file(self, var: tk.StringVar) -> None:
         path = filedialog.askopenfilename()
         if path:
             var.set(path)
-
-    def _toggle_advanced(self) -> None:
-        if self._advanced_visible.get():
-            self.advanced_frame.pack(fill="x", pady=(8, 0))
-        else:
-            self.advanced_frame.pack_forget()
 
     # -- launch slot -----------------------------------------------------
 
@@ -538,8 +713,55 @@ class AgentsPage(Page):
                 applied.append(name)
         return applied
 
+    def _sync_optimal_benchmark(self) -> None:
+        """Apply the persisted benchmark recommendation directly to the launch form."""
+        try:
+            recommendation = self.adapter.recommended_configuration()
+        except OSError:
+            recommendation = None
+        if not recommendation or not isinstance(recommendation.get("environment_count"), int):
+            self.app.set_status("No benchmark recommendation persisted yet", error=True)
+            return
+        if isinstance(recommendation.get("expected_steps_per_second"), (int, float)):
+            self._measured_sps = float(recommendation["expected_steps_per_second"])
+        self.apply_launch_values(
+            {
+                "environment_count": str(recommendation["environment_count"]),
+                "env_workers": str(recommendation.get("env_workers", 1)),
+                "device": str(recommendation.get("device") or "auto"),
+                "inference_device": str(recommendation.get("inference_device") or "auto"),
+            }
+        )
+        self.app.set_status("Synced optimal benchmark topology to launch form")
+
+    def _apply_ubuntu_cpu_turbo(self) -> None:
+        """Activate Ubuntu CPU Turbo mode and populate optimal CPU shard topology."""
+        if not hasattr(self.adapter, "enable_ubuntu_cpu_turbo"):
+            return
+        try:
+            profile = self.adapter.enable_ubuntu_cpu_turbo()
+        except Exception as exc:
+            self.app.set_status(f"Ubuntu CPU Turbo failed: {exc}", error=True)
+            return
+        uview = vm.ubuntu_cpu_turbo_view(profile)
+        self.apply_launch_values(
+            {
+                "environment_count": str(uview["recommended_envs"]),
+                "env_workers": str(uview["recommended_workers"]),
+                "device": "cpu",
+                "inference_device": "cpu",
+            }
+        )
+        self.app.set_status(
+            f"Ubuntu CPU Turbo active: {uview['recommended_envs']} Envs x {uview['recommended_workers']} Workers on CPU (OMP/MKL=1)"
+        )
+
     def refresh(self) -> None:
         self.submit_poll("agents", self.adapter.agents.views, self._on_agents)
+        if hasattr(self.adapter, "discover_checkpoints"):
+            self.submit_poll(
+                "agents-checkpoints", self.adapter.discover_checkpoints, self._on_resume_checkpoints
+            )
         values = self.current_values()
         if values != self._last_slot_values or self._compatibility is None:
             self._last_slot_values = dict(values)
@@ -547,6 +769,14 @@ class AgentsPage(Page):
         process_id = self._selected_agent_process_id()
         if process_id:
             self._request_log(process_id)
+
+    def _on_resume_checkpoints(
+        self, entries: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or entries is None:
+            return
+        paths = [""] + [str(e.get("path")) for e in entries if e.get("path")]
+        self.resume_combo.configure(values=tuple(paths))
 
     def _update_launch_slot(self, values: dict[str, str]) -> None:
         slot = vm.launch_slot_view(values, self._compatibility)
@@ -557,10 +787,14 @@ class AgentsPage(Page):
                 str(row["environments"])
                 for row in vm.topology_rows(summary["environment_count"], summary["env_workers"])
             )
+            eta = vm.estimate_training_duration(
+                summary["total_training_steps"], getattr(self, "_measured_sps", None)
+            )
+            eta_suffix = f" (est. ~{eta} @ {vm.format_number(self._measured_sps, 1)} steps/s)" if eta else ""
             text = (
                 f"AVAILABLE — {summary['environment_count']} environments / "
                 f"{summary['env_workers']} workers ({topology}) on {summary['device']}, "
-                f"{vm.format_number(summary['total_training_steps'])} steps"
+                f"{vm.format_number(summary['total_training_steps'])} steps{eta_suffix}"
             )
             for warning in slot["warnings"]:
                 text += f"\nwarning: {warning}"
@@ -616,10 +850,19 @@ class AgentsPage(Page):
         except ValueError as exc:
             messagebox.showerror("Invalid launch configuration", str(exc))
             return
+        resume_ckpt = (
+            self.resume_checkpoint_var.get().strip()
+            if hasattr(self, "resume_checkpoint_var")
+            else ""
+        )
         self._launching = True
         self.launch_button.configure(state="disabled")
         self.app.background.submit(
-            lambda: self.adapter.agents.launch_training(config),
+            (
+                (lambda: self.adapter.agents.launch_training(config, checkpoint=resume_ckpt))
+                if resume_ckpt
+                else (lambda: self.adapter.agents.launch_training(config))
+            ),
             self._on_launched,
         )
 
@@ -715,15 +958,30 @@ class AgentsPage(Page):
                 text=f"{row['name']}: no topology published by this agent kind"
             )
             return
+        max_envs = max((int(s["environments"]) for s in shards), default=1)
         lines = [
             f"{row['name']} — {environment_count} environments across {env_workers} worker(s):"
         ]
         for shard in shards:
+            bar = vm.format_ascii_bar(float(shard["environments"]) / max(max_envs, 1), width=8)
             lines.append(
-                f"  worker {shard['worker']}: environments "
+                f"  worker {shard['worker']}: {bar} environments "
                 f"{shard['first_environment']}-{shard['last_environment']} "
                 f"({shard['environments']} envs)"
             )
+        sps = row.get("steps_per_second")
+        steps = row.get("timesteps")
+        target = row.get("target_timesteps")
+        if (
+            isinstance(sps, (int, float))
+            and float(sps) > 0.0
+            and isinstance(steps, (int, float))
+            and isinstance(target, (int, float))
+            and float(target) > float(steps)
+        ):
+            eta = vm.estimate_training_duration(float(target) - float(steps), sps)
+            if eta:
+                lines.append(f"  live ETA: ~{eta} remaining @ {vm.format_number(sps, 1)} steps/s")
         self.topology_label.configure(text="\n".join(lines))
 
     def _on_select(self, _event: object) -> None:
@@ -911,40 +1169,52 @@ class AgentsPage(Page):
 
 
 class BenchmarkPage(Page):
-    """The one-button automatic benchmark: measure, pick best, apply it.
+    """The one-button automatic benchmark with live hardware & bridge telemetry.
 
     There is deliberately nothing to configure here. Start runs the staged
     pipeline (runtime discovery, env/worker screening, device comparison,
     real PPO validation slices) with the project's host-scaled defaults,
-    the recommendation is chosen by the pipeline's own criteria (validated
-    throughput, stability over an unstable peak) and the winning
-    configuration is persisted and applied to the launch configuration
-    automatically. Every number shown was measured; failures stay visible.
+    streams live step/FPS/latency/resource telemetry while every candidate
+    is running, chooses the fastest stable configuration, and persists and
+    applies it to the launch configuration automatically.
     """
 
     title = "Benchmarks"
     subtitle = (
-        "Fully automatic - one click measures this machine, picks the best stable "
-        "configuration and applies it to every new agent launch. No parameters, no estimates."
+        "Autonomous real-time calibration — streams live FPS, step counters, latency "
+        "& stability, then applies the fastest stable topology automatically."
     )
 
     RESULT_COLUMNS = (
-        ("stage", "Stage", 90),
-        ("status", "Status", 80),
-        ("environments", "Envs", 55),
-        ("workers", "Workers", 65),
-        ("device", "Device", 60),
-        ("steps", "Steps", 90),
-        ("steps_per_second", "Steps/s", 90),
-        ("p50_ms", "p50 ms", 70),
-        ("p95_ms", "p95 ms", 70),
-        ("jitter", "p95/p50", 70),
-        ("startup_seconds", "Startup s", 80),
-        ("error", "Error", 240),
+        ("stage", "Stage", 85),
+        ("status", "Status", 75),
+        ("environments", "Envs", 50),
+        ("workers", "Workers", 60),
+        ("device", "Device", 55),
+        ("steps", "Steps", 80),
+        ("steps_per_second", "Steps/s", 85),
+        ("speedup", "Speedup", 70),
+        ("p50_ms", "p50 ms", 65),
+        ("p95_ms", "p95 ms", 65),
+        ("jitter", "p95/p50", 65),
+        ("startup_seconds", "Startup s", 75),
+        ("bottleneck", "Regime", 95),
+        ("error", "Error", 200),
+    )
+
+    LIVE_CARD_NAMES = (
+        "stage / progress",
+        "active config",
+        "live fps (steps/s)",
+        "peak fps",
+        "live steps",
+        "latency (p50 / p95)",
+        "stability (jitter)",
+        "elapsed / host",
     )
 
     def build(self) -> None:
-        intro = ttk.LabelFrame(self, text="Automatic benchmark", padding=10)
+        intro = ttk.LabelFrame(self, text="Automatic benchmark & live telemetry", padding=10)
         intro.pack(fill="x")
         ttk.Label(
             intro,
@@ -953,16 +1223,15 @@ class BenchmarkPage(Page):
                 "grid of environment/worker topologies through the actual bridge, compares "
                 "devices where more than one exists, validates the best candidates with "
                 "short real PPO training slices, then picks the fastest stable "
-                "configuration and applies it automatically. Results and the winning "
-                "configuration are persisted and reused across restarts."
+                "configuration and applies it automatically."
             ),
             wraplength=980,
             justify="left",
             foreground=COLOR_MUTED,
         ).pack(anchor="w")
 
-        run_bar = ttk.Frame(intro)
-        run_bar.pack(fill="x", pady=(10, 0))
+        run_bar = ttk.Frame(intro, style="Surface.TFrame")
+        run_bar.pack(fill="x", pady=(8, 0))
         self.run_button = ttk.Button(
             run_bar, text="Start benchmark", command=self._start, style="Primary.TButton"
         )
@@ -973,26 +1242,53 @@ class BenchmarkPage(Page):
         )
         self.cancel_button.pack(side="left", padx=(8, 0))
         self.progress_label = ttk.Label(
-            run_bar, text="idle", foreground=COLOR_MUTED, wraplength=620, justify="left"
+            run_bar, text="idle", foreground=COLOR_MUTED, wraplength=680, justify="left"
         )
         self.progress_label.pack(side="left", padx=(14, 0))
-        self.phase_label = ttk.Label(intro, text="", foreground=COLOR_MUTED, justify="left")
-        self.phase_label.pack(anchor="w", pady=(8, 0))
 
+        self.phase_stepper = PhaseStepper(intro)
+        self.phase_stepper.pack(fill="x", pady=(8, 2))
+        self.phase_label = ttk.Label(intro, text="", foreground=COLOR_MUTED, justify="left")
+        self.phase_label.pack(anchor="w", pady=(2, 0))
+
+        # ---- 8 Live Real-Time Telemetry Cards -------------------------
+        self.live_cards = StatRow(self, self.LIVE_CARD_NAMES, max_columns=4)
+        self.live_cards.pack(fill="x", pady=(8, 0))
+
+        # ---- Best Configuration & Live Leader Banner ------------------
         best = ttk.LabelFrame(
             self, text="Best configuration (selected and applied automatically)", padding=10
         )
-        best.pack(fill="x", pady=(10, 0))
+        best.pack(fill="x", pady=(8, 0))
+        self.leader_banner = ttk.Label(
+            best, text="LEADING SO FAR: awaiting benchmark telemetry", style="Leader.TLabel"
+        )
+        self.leader_banner.pack(fill="x", pady=(0, 6))
         self.recommendation_label = ttk.Label(best, text="n/a", justify="left")
         self.recommendation_label.pack(anchor="nw")
         self.applied_label = ttk.Label(best, text="", justify="left", foreground=COLOR_MUTED)
         self.applied_label.pack(anchor="w", pady=(4, 0))
 
+        # ---- Split Live Results Table + Throughput Chart --------------
+        bottom = ttk.Panedwindow(self, orient="horizontal")
+        bottom.pack(fill="both", expand=True, pady=(8, 0))
+
         results_frame = ttk.LabelFrame(
-            self, text="Measurements (every configuration actually tested)", padding=8
+            bottom, text="Measurements (live stream of every tested configuration)", padding=8
         )
-        results_frame.pack(fill="both", expand=True, pady=(10, 0))
+        bottom.add(results_frame, weight=3)
         self.tree = _scrollable_table(results_frame, self.RESULT_COLUMNS)
+        self.tree.tag_configure("failed", foreground=COLOR_ERROR)
+        self.tree.tag_configure("leader", foreground=COLOR_OK)
+
+        chart_frame = ttk.LabelFrame(
+            bottom, text="Throughput scaling (steps/s across configurations)", padding=8
+        )
+        bottom.add(chart_frame, weight=2)
+        self.throughput_chart = LineChart(
+            chart_frame, "Measured throughput (steps/s)", color=COLOR_ACCENT
+        )
+        self.throughput_chart.pack(fill="both", expand=True)
 
         self._cancel_event: threading.Event | None = None
         self._latest_progress: dict[str, Any] | None = None
@@ -1001,6 +1297,7 @@ class BenchmarkPage(Page):
         self._applied: bool | None = None
         self._failure_text: str | None = None
         self._running = False
+        self._rendered_row_count = -1
 
     # -- workflow ----------------------------------------------------------
 
@@ -1032,6 +1329,87 @@ class BenchmarkPage(Page):
             text=self._failure_text or view["detail"],
             foreground=COLOR_ERROR if self._failure_text else COLOR_MUTED,
         )
+        live_view = vm.benchmark_live_telemetry_view(
+            running=self._running,
+            event=progress,
+            report=self._latest_report,
+        )
+        self.phase_stepper.set_phases(view["phases"], fraction=live_view["progress_fraction"])
+        self._update_live_telemetry_cards(live_view)
+        if self._running and progress is not None:
+            completed_rows = progress.get("completed_rows")
+            if isinstance(completed_rows, list) and len(completed_rows) != self._rendered_row_count:
+                self._rendered_row_count = len(completed_rows)
+                self._render_report(None, live_rows=completed_rows)
+
+    def _update_live_telemetry_cards(self, live_view: dict[str, Any]) -> None:
+        stage_text = live_view["stage_label"]
+        if live_view["index"] and live_view["total"]:
+            stage_text = f"{stage_text} ({live_view['index']}/{live_view['total']})"
+        fps_text = (
+            f"{vm.format_number(live_view['live_fps'], 1)} ({live_view['live_phase']})"
+            if live_view["live_fps"] is not None and live_view["live_phase"]
+            else vm.format_number(live_view["live_fps"], 1)
+        )
+        peak_text = vm.format_number(live_view["peak_fps"], 1)
+        if live_view.get("peak_speedup") is not None:
+            peak_text += f" ({vm.format_number(live_view['peak_speedup'], 2)}x)"
+        if live_view["live_steps"] is not None:
+            steps_text = vm.format_number(live_view["live_steps"])
+            if live_view["steps_per_env"] is not None:
+                steps_text += f" ({vm.format_number(live_view['steps_per_env'])}/env)"
+        else:
+            steps_text = "n/a"
+        latency_text = (
+            f"{vm.format_number(live_view['p50_ms'], 2)} / "
+            f"{vm.format_number(live_view['p95_ms'], 2)} ms"
+            if live_view["p50_ms"] is not None or live_view["p95_ms"] is not None
+            else "n/a"
+        )
+        jitter = live_view["jitter"]
+        jitter_text = f"{vm.format_number(jitter, 2)}x" if jitter is not None else "n/a"
+        jitter_color = (
+            COLOR_WARN
+            if isinstance(jitter, (int, float)) and jitter > 4.0
+            else (COLOR_OK if isinstance(jitter, (int, float)) else None)
+        )
+        elapsed = live_view["elapsed_seconds"]
+        elapsed_str = f"{vm.format_number(elapsed, 1)}s" if elapsed is not None else "0.0s"
+        if live_view["cpu_percent"] is not None:
+            elapsed_str += f" | CPU {vm.format_number(live_view['cpu_percent'], 0)}%"
+        self.live_cards.update_values(
+            {
+                "stage / progress": (
+                    stage_text,
+                    COLOR_ACCENT if self._running else None,
+                ),
+                "active config": (live_view["active_config"], None),
+                "live fps (steps/s)": (
+                    fps_text,
+                    COLOR_OK if live_view["live_fps"] is not None else None,
+                ),
+                "peak fps": (
+                    peak_text,
+                    COLOR_ACCENT if live_view["peak_fps"] is not None else None,
+                ),
+                "live steps": (steps_text, None),
+                "latency (p50 / p95)": (latency_text, None),
+                "stability (jitter)": (jitter_text, jitter_color),
+                "elapsed / host": (elapsed_str, None),
+            }
+        )
+        self.leader_banner.configure(
+            text=f"▸ LEADING CONFIGURATION: {live_view['leader_summary']}"
+        )
+        chart_points = list(live_view["chart_points"])
+        if (
+            self._running
+            and live_view["live_fps"] is not None
+            and isinstance(live_view["live_fps"], (int, float))
+        ):
+            next_idx = len(chart_points) + 1
+            chart_points.append((next_idx, float(live_view["live_fps"])))
+        self.throughput_chart.set_points(chart_points)
 
     def _start(self) -> None:
         """Run the complete workflow - no form, no parameters to validate."""
@@ -1041,9 +1419,12 @@ class BenchmarkPage(Page):
         self._latest_report = None
         self._applied = None
         self._failure_text = None
+        self._rendered_row_count = -1
         self._cancel_event = threading.Event()
         with self._progress_lock:
             self._latest_progress = None
+        self.tree.delete(*self.tree.get_children())
+        self.throughput_chart.set_points([])
         self._update_buttons()
         self.progress_label.configure(text="starting...", foreground=COLOR_MUTED)
         self.app.set_status("Benchmark started - measuring this machine")
@@ -1148,32 +1529,60 @@ class BenchmarkPage(Page):
             self.report_error("Benchmark history refresh failed", error or RuntimeError("unknown"))
             return
         if self._latest_report is None and not self._running and history:
-            self._render_report(history[0].get("report"))
+            report = history[0].get("report")
+            self._latest_report = report
+            self._render_report(report)
+            self._refresh_workflow_labels()
 
-    def _render_report(self, report: dict[str, Any] | None) -> None:
-        rows = vm.benchmark_pipeline_rows(report)
+    def _render_report(
+        self,
+        report: dict[str, Any] | None,
+        *,
+        live_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
+        rows = vm.benchmark_pipeline_rows(report, live_rows=live_rows)
         self.tree.delete(*self.tree.get_children())
+        best_fps = max(
+            (
+                float(r["steps_per_second"])
+                for r in rows
+                if (r.get("status") or "ok") in ("ok", "measured")
+                and isinstance(r.get("steps_per_second"), (int, float))
+            ),
+            default=None,
+        )
         for row in rows:
+            status = row["status"] or "ok"
+            fps = row.get("steps_per_second")
+            if status not in ("ok", "measured"):
+                tags: tuple[str, ...] = ("failed",)
+            elif best_fps is not None and isinstance(fps, (int, float)) and float(fps) >= best_fps:
+                tags = ("leader",)
+            else:
+                tags = ()
+            speedup = row.get("speedup")
+            speedup_str = f"{vm.format_number(speedup, 2)}x" if speedup is not None else "n/a"
             self.tree.insert(
                 "",
                 "end",
                 values=(
                     row["stage"] or "n/a",
-                    row["status"] or "ok",
+                    status,
                     vm.format_number(row["environments"]),
                     vm.format_number(row["workers"]),
                     row["device"] or "-",
                     vm.format_number(row["steps"]),
-                    vm.format_number(row["steps_per_second"], 1),
+                    vm.format_number(fps, 1),
+                    speedup_str,
                     vm.format_number(row["p50_ms"], 2),
                     vm.format_number(row["p95_ms"], 2),
                     vm.format_number(row["jitter"], 2),
                     vm.format_number(row["startup_seconds"], 2),
+                    row.get("bottleneck") or "-",
                     row["error"] or "",
                 ),
-                tags=("failed",) if (row["status"] or "ok") not in ("ok", "measured") else (),
+                tags=tags,
             )
-        self.tree.tag_configure("failed", foreground=COLOR_ERROR)
 
     # -- best configuration --------------------------------------------------
 
@@ -1409,19 +1818,35 @@ class EvaluationPage(Page):
         selected = set(self._selected_evaluation_paths)
         restored_paths: list[str] = []
         self.eval_tree.delete(*self.eval_tree.get_children())
+        self.eval_tree.tag_configure("best-eval", foreground=COLOR_OK)
         self._eval_paths.clear()
+        best_reward = max(
+            (
+                float(e["mean_episode_reward"])
+                for e in entries
+                if isinstance(e.get("mean_episode_reward"), (int, float))
+            ),
+            default=None,
+        )
         for entry in entries:
             path = str(entry["path"])
+            reward_val = entry.get("mean_episode_reward")
+            is_best = (
+                best_reward is not None
+                and isinstance(reward_val, (int, float))
+                and float(reward_val) >= best_reward
+            )
             item_id = self.eval_tree.insert(
                 "",
                 "end",
+                tags=("best-eval",) if is_best else (),
                 values=(
                     path,
                     vm.format_number(entry.get("timesteps")),
                     vm.format_number(entry.get("episodes")),
                     vm.format_fraction_as_percent(entry.get("win_rate")),
                     vm.format_fraction_as_percent(entry.get("loss_rate")),
-                    vm.format_number(entry.get("mean_episode_reward"), 3),
+                    vm.format_number(reward_val, 3),
                 ),
             )
             self._eval_paths[item_id] = path
@@ -1478,8 +1903,9 @@ class EvaluationPage(Page):
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")
         if len(details) == 1:
+            tactical = vm.tactical_combat_profile_view(details[0])
             self.detail_text.insert(
-                "end", _render_evaluation_detail(vm.evaluation_view(details[0]))
+                "end", _render_evaluation_detail(vm.evaluation_view(details[0]), tactical)
             )
         else:
             rows = vm.evaluation_comparison_rows(details)
@@ -1487,54 +1913,104 @@ class EvaluationPage(Page):
         self.detail_text.configure(state="disabled")
 
 
-def _render_evaluation_detail(view: dict[str, Any]) -> str:
+def _render_evaluation_detail(
+    view: dict[str, Any], tactical: dict[str, Any] | None = None
+) -> str:
     if not view.get("available"):
         return f"Evaluation summary unavailable: {view.get('error')}"
+    win_bar = vm.format_ascii_bar(view["outcomes"]["win_rate"], 10)
+    acc_bar = vm.format_ascii_bar(view["accuracy"]["mean_accuracy"], 10)
+    shoot_rate = view["action_head_diagnostics"]["policy_shoot_request_rate"]
+    discharge_rate = view["action_head_diagnostics"]["discharge_rate"]
+    shoot_bar = vm.format_ascii_bar(shoot_rate, 10)
+    discharge_bar = vm.format_ascii_bar(discharge_rate, 10)
     lines = [
         f"path: {view['path']}",
         f"episodes: {vm.format_number(view['episodes'])}   timesteps: {vm.format_number(view['timesteps'])}",
-        "",
-        "Outcomes",
-        f"  win rate: {vm.format_fraction_as_percent(view['outcomes']['win_rate'])}"
-        f"   loss rate: {vm.format_fraction_as_percent(view['outcomes']['loss_rate'])}"
-        f"   timeout rate: {vm.format_fraction_as_percent(view['outcomes']['timeout_rate'])}",
-        "",
-        "Combat",
-        f"  kills: {vm.format_number(view['combat']['mean_kills'], 2)}"
-        f"   deaths: {vm.format_number(view['combat']['mean_deaths'], 2)}"
-        f"   damage dealt: {vm.format_number(view['combat']['mean_damage_dealt'], 1)}"
-        f"   damage received: {vm.format_number(view['combat']['mean_damage_received'], 1)}",
-        "",
-        "Accuracy",
-        f"  accuracy: {vm.format_fraction_as_percent(view['accuracy']['mean_accuracy'])}"
-        f"   shots fired: {vm.format_number(view['accuracy']['mean_shots_fired'], 1)}"
-        f"   shots hit: {vm.format_number(view['accuracy']['mean_shots_hit'], 1)}",
-        "",
-        "Action-head diagnostics (zero-shot / policy discharge behavior)",
-        f"  shoot request rate: {vm.format_fraction_as_percent(view['action_head_diagnostics']['policy_shoot_request_rate'])}",
-        f"  discharge rate: {vm.format_fraction_as_percent(view['action_head_diagnostics']['discharge_rate'])}",
-        f"  action-pipeline localization: {view['action_head_diagnostics']['localization'] or 'n/a'}",
     ]
+    if tactical and tactical.get("available"):
+        lines.extend(
+            [
+                "",
+                f"Tactical Combat Lab // Archetype: {tactical['archetype']}",
+                f"  K/D ratio: {tactical['kd_ratio']}   damage trade: {tactical['damage_trade']}"
+                f"   lethality: {tactical['lethality']}   survival: {tactical['survival_rate']}",
+                f"  assessment: {tactical['archetype_summary']}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Outcomes",
+            f"  win rate: {win_bar} {vm.format_fraction_as_percent(view['outcomes']['win_rate'])}"
+            f"   loss rate: {vm.format_fraction_as_percent(view['outcomes']['loss_rate'])}"
+            f"   timeout rate: {vm.format_fraction_as_percent(view['outcomes']['timeout_rate'])}",
+            "",
+            "Combat",
+            f"  kills: {vm.format_number(view['combat']['mean_kills'], 2)}"
+            f"   deaths: {vm.format_number(view['combat']['mean_deaths'], 2)}"
+            f"   damage dealt: {vm.format_number(view['combat']['mean_damage_dealt'], 1)}"
+            f"   damage received: {vm.format_number(view['combat']['mean_damage_received'], 1)}",
+            "",
+            "Accuracy",
+            f"  accuracy: {acc_bar} {vm.format_fraction_as_percent(view['accuracy']['mean_accuracy'])}"
+            f"   shots fired: {vm.format_number(view['accuracy']['mean_shots_fired'], 1)}"
+            f"   shots hit: {vm.format_number(view['accuracy']['mean_shots_hit'], 1)}",
+            "",
+            "Action-head diagnostics (zero-shot / policy discharge behavior)",
+            f"  shoot request rate: {shoot_bar} {vm.format_fraction_as_percent(shoot_rate)}",
+            f"  discharge rate:     {discharge_bar} {vm.format_fraction_as_percent(discharge_rate)}",
+            f"  action-pipeline localization: {view['action_head_diagnostics']['localization'] or 'n/a'}",
+        ]
+    )
     return "\n".join(lines)
 
 
 def _render_evaluation_comparison(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "No comparable evaluation summaries in this selection."
-    header = f"{'path':40} {'reward':>8} {'win%':>7} {'loss%':>7} {'acc%':>7} {'discharge%':>11}"
+    best_reward = max(
+        (
+            float(r["reward"])
+            for r in rows
+            if isinstance(r.get("reward"), (int, float))
+        ),
+        default=None,
+    )
+    base_reward = next(
+        (float(r["reward"]) for r in rows if isinstance(r.get("reward"), (int, float))),
+        None,
+    )
+    header = (
+        f"{'path':36} {'reward':>8} {'Δrew':>8} {'win%':>7} {'loss%':>7} {'acc%':>7} {'discharge%':>11}"
+    )
     lines = [header, "-" * len(header)]
     for row in rows:
+        rew = row.get("reward")
+        is_best = (
+            best_reward is not None
+            and isinstance(rew, (int, float))
+            and float(rew) >= best_reward
+        )
+        prefix = "★ " if is_best else "  "
+        delta_str = (
+            f"{float(rew) - base_reward:+.2f}"
+            if (isinstance(rew, (int, float)) and base_reward is not None)
+            else "n/a"
+        )
         lines.append(
-            f"{Path(row['path']).name:40} {vm.format_number(row['reward'], 2):>8} "
-            f"{vm.format_fraction_as_percent(row['win_rate']):>7} {vm.format_fraction_as_percent(row['loss_rate']):>7} "
-            f"{vm.format_fraction_as_percent(row['accuracy']):>7} {vm.format_fraction_as_percent(row['discharge_rate']):>11}"
+            f"{prefix + Path(row['path']).name:36} {vm.format_number(rew, 2):>8} "
+            f"{delta_str:>8} {vm.format_fraction_as_percent(row['win_rate']):>7} "
+            f"{vm.format_fraction_as_percent(row['loss_rate']):>7} "
+            f"{vm.format_fraction_as_percent(row['accuracy']):>7} "
+            f"{vm.format_fraction_as_percent(row['discharge_rate']):>11}"
         )
     return "\n".join(lines)
 
 
 class RunsPage(Page):
     title = "Runs / Checkpoints"
-    subtitle = "Read-only inventory from run_inspection.py - selecting a run shows its full detail."
+    subtitle = "Read-only inventory from run_inspection.py — inspect details, reward curves & evaluate checkpoints."
 
     COLUMNS = (
         ("run_id", "Run", 160),
@@ -1556,11 +2032,19 @@ class RunsPage(Page):
         paned.add(top, weight=1)
         self.tree = _scrollable_table(top, self.COLUMNS)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.tag_configure("run-running", foreground=COLOR_OK)
+        self.tree.tag_configure("run-failed", foreground=COLOR_ERROR)
+        self.tree.tag_configure("run-warn", foreground=COLOR_WARN)
 
-        bottom = ttk.LabelFrame(paned, text="Run detail", padding=8)
+        bottom = ttk.Frame(paned)
         paned.add(bottom, weight=1)
+        bottom_split = ttk.Panedwindow(bottom, orient="horizontal")
+        bottom_split.pack(fill="both", expand=True)
+
+        detail_frame = ttk.LabelFrame(bottom_split, text="Run detail & diagnostics", padding=8)
+        bottom_split.add(detail_frame, weight=3)
         self.detail_text = tk.Text(
-            bottom,
+            detail_frame,
             wrap="word",
             state="disabled",
             font=("Consolas", 9),
@@ -1574,15 +2058,36 @@ class RunsPage(Page):
             pady=10,
         )
         self.detail_text.pack(fill="both", expand=True)
+
+        chart_frame = ttk.LabelFrame(
+            bottom_split, text="Selected run telemetry (reward vs. timesteps)", padding=8
+        )
+        bottom_split.add(chart_frame, weight=2)
+        self.run_reward_chart = LineChart(
+            chart_frame, "Mean episode reward", color=COLOR_OK
+        )
+        self.run_reward_chart.pack(fill="both", expand=True, pady=(0, 4))
+        self.run_fps_chart = LineChart(
+            chart_frame, "Throughput (steps/s)", color=COLOR_ACCENT
+        )
+        self.run_fps_chart.pack(fill="both", expand=True)
+
         actions = ttk.Frame(bottom)
         actions.pack(fill="x", pady=(6, 0))
         ttk.Button(actions, text="Open run folder", command=self._open_folder).pack(side="left")
         ttk.Button(actions, text="Evaluate latest checkpoint", command=self._evaluate).pack(
             side="left", padx=(8, 0)
         )
+        ttk.Button(actions, text="Evaluate best checkpoint", command=self._evaluate_best).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(
+            actions, text="Clone topology to Agents", command=self._clone_to_agents
+        ).pack(side="left", padx=(8, 0))
 
         self._row_to_dir: dict[str, str] = {}
         self._selected_run_dir: str | None = None
+        self._selected_run_report: dict[str, Any] | None = None
         self._run_detail_generation = 0
         self._pending_run_selection: str | None = None
 
@@ -1621,9 +2126,19 @@ class RunsPage(Page):
         self.tree.delete(*self.tree.get_children())
         self._row_to_dir.clear()
         for row in rows:
+            state_str = str(row["state"] or "").lower()
+            if state_str == "running":
+                tags: tuple[str, ...] = ("run-running",)
+            elif state_str in ("failed", "error"):
+                tags = ("run-failed",)
+            elif state_str in ("starting", "paused", "stopping"):
+                tags = ("run-warn",)
+            else:
+                tags = ()
             item_id = self.tree.insert(
                 "",
                 "end",
+                tags=tags,
                 values=(
                     row["run_id"],
                     row["state"] or "n/a",
@@ -1662,19 +2177,28 @@ class RunsPage(Page):
         if run_dir == self._selected_run_dir:
             return
         self._selected_run_dir = run_dir
+        self._selected_run_report = None
         self._run_detail_generation += 1
         generation = self._run_detail_generation
         self.app.background.submit(
             lambda: self.adapter.inspect_run(run_dir),
             lambda report, error: self._on_detail(run_dir, generation, report, error),
         )
+        if hasattr(self.adapter, "telemetry_series"):
+            self.app.background.submit(
+                lambda: self.adapter.telemetry_series(run_dir),
+                lambda series, error: self._on_run_telemetry(run_dir, generation, series, error),
+            )
 
     def _clear_run_selection(self) -> None:
         self._selected_run_dir = None
+        self._selected_run_report = None
         self._run_detail_generation += 1
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")
         self.detail_text.configure(state="disabled")
+        self.run_reward_chart.set_points([])
+        self.run_fps_chart.set_points([])
 
     def _on_detail(
         self,
@@ -1690,10 +2214,30 @@ class RunsPage(Page):
             or report is None
         ):
             return
+        self._selected_run_report = report
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")
         self.detail_text.insert("end", _render_run_detail(report))
         self.detail_text.configure(state="disabled")
+
+    def _on_run_telemetry(
+        self,
+        run_dir: str,
+        generation: int,
+        series: dict[str, Any] | None,
+        error: BaseException | None,
+    ) -> None:
+        if (
+            run_dir != self._selected_run_dir
+            or generation != self._run_detail_generation
+            or error is not None
+            or series is None
+            or not series.get("available")
+        ):
+            return
+        data = series.get("series") or {}
+        self.run_reward_chart.set_points(data.get("mean_episode_reward", []))
+        self.run_fps_chart.set_points(data.get("steps_per_second", []))
 
     def _open_folder(self) -> None:
         if self._selected_run_dir:
@@ -1709,17 +2253,57 @@ class RunsPage(Page):
         self.app.show_page("Evaluations")
         self.app.pages["Evaluations"].select_checkpoint(str(latest))
 
+    def _evaluate_best(self) -> None:
+        if not self._selected_run_dir:
+            return
+        best = Path(self._selected_run_dir) / "checkpoints" / "best.zip"
+        target = best if best.is_file() else (Path(self._selected_run_dir) / "checkpoints" / "latest.zip")
+        if not target.is_file():
+            messagebox.showinfo(
+                "No checkpoint yet", "This run has neither best.zip nor latest.zip yet."
+            )
+            return
+        self.app.show_page("Evaluations")
+        self.app.pages["Evaluations"].select_checkpoint(str(target))
+
+    def _clone_to_agents(self) -> None:
+        report = self._selected_run_report
+        if not report:
+            return
+        config = report.get("config") or {}
+        agents_page = self.app.pages.get("Agents")
+        if agents_page is None:
+            return
+        self.app.show_page("Agents")
+        agents_page.apply_launch_values(
+            {
+                "environment_count": str(config.get("environment_count", 1)),
+                "env_workers": str(config.get("env_workers", 1)),
+                "total_training_steps": str(config.get("total_training_steps", 100000)),
+                "device": str(config.get("device", "auto")),
+            }
+        )
+        self.app.set_status(f"Cloned topology from {report.get('run_id', 'run')} to Agents")
+
 
 def _render_run_detail(report: dict[str, Any]) -> str:
     manifest = report.get("manifest") or {}
     config = report.get("config") or {}
+    status = report.get("status") or {}
     checkpoints = report.get("checkpoints") or {}
     evaluation = report.get("evaluation") or {}
     warnings = report.get("warnings") or []
     problems = report.get("problems") or []
+    progress = status.get("progress_percent")
+    prog_bar = (
+        f"{vm.format_ascii_bar(float(progress) / 100.0, 12)} {vm.format_fraction_as_percent(float(progress) / 100.0)}"
+        if isinstance(progress, (int, float))
+        else "n/a"
+    )
     lines = [
         f"run_id: {report.get('run_id')}    experiment: {report.get('experiment_id') or 'n/a'}",
-        f"state: {(report.get('status') or {}).get('state')}    created: {manifest.get('created_utc', 'n/a')}",
+        f"state: {status.get('state')}    progress: {prog_bar}",
+        f"created: {manifest.get('created_utc', 'n/a')}",
         f"device: {config.get('device', 'n/a')}    seed: {manifest.get('seed', config.get('seed', 'n/a'))}",
         f"envs: {config.get('environment_count', 'n/a')}    workers: {config.get('env_workers', 'n/a')}",
         f"total timesteps: {config.get('total_training_steps', 'n/a')}    "
@@ -1735,6 +2319,10 @@ def _render_run_detail(report: dict[str, Any]) -> str:
             f"latest evaluation: reward={latest_eval.get('mean_episode_reward')} "
             f"win_rate={latest_eval.get('win_rate')}"
         )
+    ppo_diag = (report.get("summary") or {}).get("ppo_diagnostics")
+    if ppo_diag:
+        health = vm.ppo_health_view(ppo_diag)
+        lines.append(health["summary"])
     training_profile = report.get("summary", {}).get("training_profile")
     if training_profile:
         lines.append(f"profiling artifact: {training_profile}")
@@ -1753,12 +2341,20 @@ class SystemPage(Page):
     title = "System / Telemetry"
     subtitle = "Real, measured host/runtime status. Unavailable metrics are shown as such, never estimated."
 
-    STAT_LABELS = ("cpu", "process memory", "python", "godot", "torch", "cuda")
+    STAT_LABELS = (
+        "cpu",
+        "process memory",
+        "optimal topology",
+        "python",
+        "godot",
+        "torch",
+        "cuda",
+    )
 
     def build(self) -> None:
-        self.stats = StatRow(self, self.STAT_LABELS)
+        self.stats = StatRow(self, self.STAT_LABELS, max_columns=4)
         self.stats.pack(fill="x")
-        deps_frame = ttk.LabelFrame(self, text="Optional dependencies", padding=10)
+        deps_frame = ttk.LabelFrame(self, text="Optional dependencies & runtime capabilities", padding=10)
         deps_frame.pack(fill="x", pady=(12, 0))
         self.deps_label = ttk.Label(deps_frame, text="n/a", justify="left")
         self.deps_label.pack(anchor="w")
@@ -1769,10 +2365,19 @@ class SystemPage(Page):
             padding=10,
         )
         chart_frame.pack(fill="both", expand=True, pady=(12, 0))
-        self.cpu_chart = LineChart(chart_frame, "CPU percent (this process)")
-        self.cpu_chart.pack(fill="both", expand=True, pady=(0, 4))
-        self.rss_chart = LineChart(chart_frame, "process RSS (MB)")
-        self.rss_chart.pack(fill="both", expand=True)
+        charts_grid = ttk.Frame(chart_frame)
+        charts_grid.pack(fill="both", expand=True)
+        self.cpu_chart = LineChart(
+            charts_grid, "CPU percent (this process)", color=COLOR_ACCENT
+        )
+        self.cpu_chart.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        self.rss_chart = LineChart(
+            charts_grid, "Process RSS (MB)", color=COLOR_OK
+        )
+        self.rss_chart.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        charts_grid.columnconfigure(0, weight=1)
+        charts_grid.columnconfigure(1, weight=1)
+        charts_grid.rowconfigure(0, weight=1)
 
         from collections import deque
 
@@ -1791,11 +2396,36 @@ class SystemPage(Page):
         if status.get("godot_available"):
             version = status.get("godot_version")
             godot_text = f"available ({version})" if version else "available (version unknown)"
+        cpu_pct = status.get("cpu_percent")
+        cpu_color = (
+            COLOR_ERROR
+            if isinstance(cpu_pct, (int, float)) and cpu_pct >= 90.0
+            else (
+                COLOR_WARN
+                if isinstance(cpu_pct, (int, float)) and cpu_pct >= 75.0
+                else COLOR_OK
+            )
+        )
+        rec_text = "uncalibrated"
+        rec_color = COLOR_MUTED
+        if hasattr(self.adapter, "recommended_configuration"):
+            try:
+                rec = self.adapter.recommended_configuration()
+                if rec and isinstance(rec.get("environment_count"), int):
+                    rec_text = (
+                        f"{rec['environment_count']}e / {rec.get('env_workers', 1)}w "
+                        f"({rec.get('device', 'cpu')})"
+                    )
+                    rec_color = COLOR_OK
+            except OSError:
+                pass
         self.stats.update_values(
             {
                 "cpu": (
-                    vm.format_fraction_as_percent((status.get("cpu_percent") or 0) / 100.0),
-                    None,
+                    vm.format_fraction_as_percent((cpu_pct or 0) / 100.0)
+                    if cpu_pct is not None
+                    else "n/a",
+                    cpu_color if cpu_pct is not None else None,
                 ),
                 "process memory": (
                     vm.format_bytes((status.get("process_rss_mb") or 0) * 1024 * 1024)
@@ -1803,6 +2433,7 @@ class SystemPage(Page):
                     else "n/a",
                     None,
                 ),
+                "optimal topology": (rec_text, rec_color),
                 "python": (status.get("python_version", "n/a"), None),
                 "godot": (godot_text, COLOR_OK if status.get("godot_available") else COLOR_WARN),
                 "torch": (
@@ -1832,7 +2463,7 @@ class SystemPage(Page):
 
 class SettingsPage(Page):
     title = "Settings"
-    subtitle = "Project/output roots and the machine-local Godot executable every launch resolves."
+    subtitle = "Project/output roots, machine-local Godot executable & persisted calibration status."
 
     def build(self) -> None:
         roots = ttk.LabelFrame(self, text="Directories", padding=10)
@@ -1841,9 +2472,21 @@ class SettingsPage(Page):
         self.project_root_label.pack(anchor="w", pady=2)
         self.output_root_label = ttk.Label(roots, text="")
         self.output_root_label.pack(anchor="w", pady=2)
-        ttk.Button(roots, text="Change output root...", command=self._change_output_root).pack(
-            anchor="w", pady=(8, 0)
-        )
+        dir_buttons = ttk.Frame(roots, style="Surface.TFrame")
+        dir_buttons.pack(anchor="w", pady=(8, 0))
+        ttk.Button(
+            dir_buttons, text="Change output root...", command=self._change_output_root
+        ).pack(side="left")
+        ttk.Button(
+            dir_buttons,
+            text="Open project folder",
+            command=lambda: _open_in_file_manager(Path(self.adapter.project_root)),
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            dir_buttons,
+            text="Open output folder",
+            command=lambda: _open_in_file_manager(Path(self.adapter.output_root)),
+        ).pack(side="left", padx=(8, 0))
         ttk.Label(
             roots,
             text="Changing the output root points this session's Runs/Checkpoints/Evaluations/"
@@ -1880,10 +2523,370 @@ class SettingsPage(Page):
         self.godot_status_label = ttk.Label(godot, text="", justify="left", wraplength=700)
         self.godot_status_label.pack(anchor="w", pady=(6, 0))
 
+        # ---- Machine calibration & Ubuntu CPU Performance Turbo ---------
+        calib = ttk.LabelFrame(
+            self,
+            text="Persisted machine calibration & Ubuntu CPU Performance Turbo",
+            padding=10,
+        )
+        calib.pack(fill="x", pady=(10, 0))
+        self.calibration_label = ttk.Label(
+            calib, text="checking persisted calibration...", justify="left", wraplength=820
+        )
+        self.calibration_label.pack(anchor="w")
+        self.cpu_turbo_label = ttk.Label(
+            calib, text="Ubuntu CPU Turbo: probing host topology...", justify="left", wraplength=820
+        )
+        self.cpu_turbo_label.pack(anchor="w", pady=(4, 0))
+        calib_buttons = ttk.Frame(calib, style="Surface.TFrame")
+        calib_buttons.pack(anchor="w", pady=(6, 0))
+        ttk.Button(
+            calib_buttons,
+            text="Open Benchmarks calibration",
+            command=lambda: self.app.show_page("Benchmarks"),
+        ).pack(side="left")
+        ttk.Button(
+            calib_buttons,
+            text="⚡ Enable Ubuntu CPU Turbo (OMP/MKL=1 + Optimal Shards)",
+            command=self._activate_ubuntu_cpu_turbo,
+            style="Primary.TButton",
+        ).pack(side="left", padx=(8, 0))
+
+        # ---- Roblox TTK Testing Live Bridge & Calibration ---------------
+        self._build_roblox_ttk_section()
+
+    def _build_roblox_ttk_section(self) -> None:
+        roblox_box = ttk.LabelFrame(
+            self,
+            text="Roblox TTK Testing [MAP VOTING] // Sable Digital (PlaceId 120189115846709 | Universe 10090256806)",
+            padding=10,
+        )
+        roblox_box.pack(fill="both", expand=True, pady=(10, 0))
+        shortcut_row = ttk.Frame(roblox_box, style="Surface.TFrame")
+        shortcut_row.pack(fill="x")
+        ttk.Label(shortcut_row, text="Roblox shortcut / exe:", width=20).pack(side="left")
+        self.roblox_shortcut_var = tk.StringVar(
+            value=r"C:\Users\jonas\OneDrive\Desktop\Roblox Player.lnk"
+        )
+        ttk.Entry(shortcut_row, textvariable=self.roblox_shortcut_var, width=44).pack(side="left")
+        ttk.Button(
+            shortcut_row,
+            text="Launch Shortcut",
+            command=lambda: self._launch_roblox(direct_place=False),
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            shortcut_row,
+            text="▶ Join TTK Testing",
+            command=lambda: self._launch_roblox(direct_place=True),
+            style="Primary.TButton",
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            shortcut_row,
+            text="🪟 Focus Window",
+            command=self._focus_roblox_window,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            shortcut_row,
+            text="📸 Screenshot",
+            command=self._capture_ttk_screenshot,
+        ).pack(side="left", padx=(6, 0))
+
+        self.roblox_live_label = ttk.Label(
+            roblox_box, text="probing Roblox Player...", foreground=COLOR_ACCENT, justify="left"
+        )
+        self.roblox_live_label.pack(anchor="w", pady=(6, 4))
+
+        # ---- Interactive TTK & DPS Calculator + 1-Click Presets ---------
+        calc_row = ttk.Frame(roblox_box, style="Surface.TFrame")
+        calc_row.pack(fill="x", pady=(2, 6))
+        ttk.Label(calc_row, text="TTK/DPS LAB:", style="FieldTitle.TLabel").pack(side="left")
+        ttk.Label(calc_row, text="DMG:").pack(side="left", padx=(8, 2))
+        self.ttk_dmg_var = tk.StringVar(value="34")
+        ttk.Entry(calc_row, textvariable=self.ttk_dmg_var, width=6).pack(side="left")
+        ttk.Label(calc_row, text="RPM:").pack(side="left", padx=(8, 2))
+        self.ttk_rpm_var = tk.StringVar(value="750")
+        ttk.Entry(calc_row, textvariable=self.ttk_rpm_var, width=7).pack(side="left")
+        ttk.Label(calc_row, text="HP:").pack(side="left", padx=(8, 2))
+        self.ttk_hp_var = tk.StringVar(value="100")
+        ttk.Entry(calc_row, textvariable=self.ttk_hp_var, width=6).pack(side="left")
+        ttk.Button(
+            calc_row,
+            text="Calculate TTK",
+            command=self._recalc_ttk_lab,
+        ).pack(side="left", padx=(8, 6))
+        self.ttk_calc_result_label = ttk.Label(
+            calc_row,
+            text="3 STK │ 160.0 ms TTK │ 425.0 Burst DPS │ Instant-Lethal CQB (<170 ms)",
+            foreground=COLOR_OK,
+        )
+        self.ttk_calc_result_label.pack(side="left", padx=(4, 8))
+        ttk.Label(calc_row, text="PRESETS:", style="FieldTitle.TLabel").pack(
+            side="left", padx=(8, 4)
+        )
+        for preset_id, btn_label in (
+            ("sable_cqb_carbine", "⚡ Sable CQB (160ms)"),
+            ("tactical_rifle_ffa", "🎯 8P FFA Rifle (265ms)"),
+            ("precision_marksman", "🔭 Marksman (286ms)"),
+        ):
+            ttk.Button(
+                calc_row,
+                text=btn_label,
+                command=lambda pid=preset_id: self._apply_ttk_preset(pid),  # type: ignore[misc]
+            ).pack(side="left", padx=(2, 0))
+
+        ttk_columns = (
+            ("mechanic", "Mechanic", 180),
+            ("status", "Status", 145),
+            ("measured_value", "Measured / Calibrated Value", 190),
+            ("rule", "Implementation Rule", 360),
+            ("source", "Evidence Source", 200),
+        )
+        self.ttk_tree = _scrollable_table(roblox_box, ttk_columns)
+        self.ttk_tree.tag_configure("ttk-verified", foreground=COLOR_OK)
+        self.ttk_tree.tag_configure("ttk-pending", foreground=COLOR_WARN)
+        self.ttk_tree.tag_configure("ttk-excluded", foreground=COLOR_MUTED)
+        self.ttk_tree.bind("<<TreeviewSelect>>", self._on_select_ttk_mechanic)
+
+        edit_row = ttk.Frame(roblox_box, style="Surface.TFrame")
+        edit_row.pack(fill="x", pady=(6, 0))
+        self._selected_mechanic: str | None = None
+        self.mechanic_label = ttk.Label(
+            edit_row, text="Mechanic: (select row)", width=26, style="FieldTitle.TLabel"
+        )
+        self.mechanic_label.pack(side="left")
+        ttk.Label(edit_row, text="Measured value:").pack(side="left", padx=(6, 4))
+        self.mechanic_value_var = tk.StringVar(value="")
+        ttk.Entry(edit_row, textvariable=self.mechanic_value_var, width=28).pack(side="left")
+        ttk.Label(edit_row, text="Notes:").pack(side="left", padx=(8, 4))
+        self.mechanic_notes_var = tk.StringVar(value="")
+        ttk.Entry(edit_row, textvariable=self.mechanic_notes_var, width=28).pack(side="left")
+        ttk.Button(
+            edit_row,
+            text="Save calibration",
+            command=self._save_ttk_mechanic,
+            style="Primary.TButton",
+        ).pack(side="left", padx=(8, 0))
+        self._ttk_row_map: dict[str, dict[str, Any]] = {}
+
     def refresh(self) -> None:
         self.project_root_label.configure(text=f"project root: {self.adapter.project_root}")
         self.output_root_label.configure(text=f"output root: {self.adapter.output_root}")
+        self._refresh_calibration_summary()
         self.submit_poll("godot-status", self.adapter.system_status, self._on_system_status)
+        if hasattr(self.adapter, "ttk_testing_status"):
+            shortcut = self.roblox_shortcut_var.get().strip() or None
+            self.submit_poll(
+                "settings-ttk-status",
+                lambda: self.adapter.ttk_testing_status(shortcut),
+                self._on_ttk_status,
+            )
+
+    def _on_ttk_status(
+        self, status: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or status is None:
+            return
+        tview = vm.ttk_testing_view(status)
+        self.roblox_live_label.configure(
+            text=(
+                f"{tview['status_badge']}   │   Launcher: {tview['launcher_text']}   │   "
+                f"Window: {tview['window_text']}   │   Place: {tview['place_text']}   │   "
+                f"Progress: {tview['calibration_progress_text']}"
+            ),
+            foreground=COLOR_OK if tview["connected"] else (COLOR_WARN if tview["roblox_running"] else COLOR_MUTED),
+        )
+        selected_mech = self._selected_mechanic
+        self.ttk_tree.delete(*self.ttk_tree.get_children())
+        self._ttk_row_map.clear()
+        for row in tview["rows"]:
+            st = row["status"]
+            tag = (
+                "ttk-verified"
+                if "VERIFIED" in st or st == "CALIBRATED"
+                else ("ttk-pending" if "NEEDS" in st else "ttk-excluded")
+            )
+            item_id = self.ttk_tree.insert(
+                "",
+                "end",
+                tags=(tag,),
+                values=(
+                    row["mechanic"],
+                    row["status"],
+                    row["measured_value"],
+                    row["rule"],
+                    row["source"],
+                ),
+            )
+            self._ttk_row_map[item_id] = row
+            if row["mechanic"] == selected_mech:
+                self.ttk_tree.selection_set(item_id)
+
+    def _focus_roblox_window(self) -> None:
+        if not hasattr(self.adapter, "focus_roblox_window"):
+            return
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not res or not res.get("ok"):
+                self.app.set_status(
+                    f"Focus Roblox window: {error or (res or {}).get('message')}", error=True
+                )
+            else:
+                self.app.set_status(str(res.get("message") or "Roblox window focused"))
+                self.refresh()
+
+        self.app.background.submit(self.adapter.focus_roblox_window, _done)
+
+    def _recalc_ttk_lab(self) -> None:
+        try:
+            dmg = float(self.ttk_dmg_var.get())
+            rpm = float(self.ttk_rpm_var.get())
+            hp = float(self.ttk_hp_var.get())
+        except ValueError:
+            self.app.set_status("DMG, RPM and HP must be numeric", error=True)
+            return
+        from .ttk_testing import calculate_ttk_metrics
+
+        metrics = calculate_ttk_metrics(damage=dmg, rpm=rpm, target_hp=hp)
+        summary = (
+            f"{metrics['shots_to_kill']} STK ({metrics['headshots_to_kill']} HS) │ "
+            f"{metrics['ttk_ms']:.1f} ms TTK │ "
+            f"{metrics['burst_dps']:.1f} Burst DPS ({metrics['sustained_dps']:.1f} Sust.) │ "
+            f"{metrics['pace_label']}"
+        )
+        self.ttk_calc_result_label.configure(text=summary, foreground=COLOR_OK)
+        if self._selected_mechanic == "weapon_damage_and_rpm_ttk_curve":
+            self.mechanic_value_var.set(summary)
+
+    def _apply_ttk_preset(self, preset_id: str) -> None:
+        if not hasattr(self.adapter, "apply_ttk_preset"):
+            return
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not res or not res.get("ok"):
+                self.app.set_status(f"Preset failed: {error}", error=True)
+                return
+            metrics = res.get("metrics") or {}
+            if metrics:
+                self.ttk_dmg_var.set(str(metrics.get("damage", 34)))
+                self.ttk_rpm_var.set(str(metrics.get("rpm", 750)))
+                self._recalc_ttk_lab()
+            self.app.set_status(f"Applied TTK preset: {res.get('label')}")
+            self.refresh()
+
+        self.app.background.submit(lambda: self.adapter.apply_ttk_preset(preset_id), _done)
+
+    def _activate_ubuntu_cpu_turbo(self) -> None:
+        if not hasattr(self.adapter, "enable_ubuntu_cpu_turbo"):
+            return
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not res:
+                self.app.set_status(f"Ubuntu CPU Turbo failed: {error}", error=True)
+                return
+            uview = vm.ubuntu_cpu_turbo_view(res)
+            self.cpu_turbo_label.configure(
+                text=f"Ubuntu CPU Turbo: {uview['badge']} — {uview['summary']}",
+                foreground=COLOR_OK,
+            )
+            self.app.set_status(f"Activated {uview['badge']}")
+
+        self.app.background.submit(self.adapter.enable_ubuntu_cpu_turbo, _done)
+
+    def _on_select_ttk_mechanic(self, _event: object) -> None:
+        sel = self.ttk_tree.selection()
+        if not sel:
+            return
+        row = self._ttk_row_map.get(sel[0])
+        if not row:
+            return
+        self._selected_mechanic = str(row["mechanic"])
+        self.mechanic_label.configure(text=f"Mechanic: {self._selected_mechanic}")
+        val = str(row.get("measured_value") or "")
+        self.mechanic_value_var.set("" if val == "—" else val)
+        self.mechanic_notes_var.set(str(row.get("notes") or ""))
+
+    def _save_ttk_mechanic(self) -> None:
+        if not self._selected_mechanic or not hasattr(self.adapter, "save_ttk_calibration"):
+            return
+        mech = self._selected_mechanic
+        val = self.mechanic_value_var.get()
+        notes = self.mechanic_notes_var.get()
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or res is None:
+                self.app.set_status(f"Failed to save TTK calibration: {error}", error=True)
+            else:
+                self.app.set_status(f"Saved TTK calibration for '{mech}'")
+                self.refresh()
+
+        self.app.background.submit(
+            lambda: self.adapter.save_ttk_calibration(mech, val, notes=notes),
+            _done,
+        )
+
+    def _launch_roblox(self, *, direct_place: bool) -> None:
+        if not hasattr(self.adapter, "launch_roblox_ttk_testing"):
+            return
+        shortcut = self.roblox_shortcut_var.get().strip() or None
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not res or not res.get("ok"):
+                self.app.set_status(
+                    f"Roblox launch failed: {error or (res or {}).get('error')}", error=True
+                )
+            else:
+                self.app.set_status(str(res.get("message") or "Launched Roblox"))
+                self.refresh()
+
+        self.app.background.submit(
+            lambda: self.adapter.launch_roblox_ttk_testing(shortcut, direct_place=direct_place),
+            _done,
+        )
+
+    def _capture_ttk_screenshot(self) -> None:
+        if not hasattr(self.adapter, "capture_roblox_screenshot"):
+            return
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not res or not res.get("ok"):
+                self.app.set_status(
+                    f"Screenshot failed: {error or (res or {}).get('error')}", error=True
+                )
+            else:
+                self.app.set_status(f"Saved screenshot: {res.get('path')}")
+                if self._selected_mechanic:
+                    self.mechanic_notes_var.set(f"screenshot: {res.get('path')}")
+
+        self.app.background.submit(self.adapter.capture_roblox_screenshot, _done)
+
+    def _refresh_calibration_summary(self) -> None:
+        rec = None
+        if hasattr(self.adapter, "recommended_configuration"):
+            with contextlib.suppress(OSError):
+                rec = self.adapter.recommended_configuration()
+        rec_view = vm.benchmark_recommendation_view(rec)
+        if rec_view.get("available"):
+            applied_str = (
+                f"applied ({rec_view['applied_utc']})"
+                if rec_view.get("applied_utc")
+                else "not yet applied"
+            )
+            self.calibration_label.configure(
+                text=f"Optimal topology: {rec_view['summary']} — {applied_str}",
+                foreground=COLOR_OK,
+            )
+        else:
+            self.calibration_label.configure(
+                text="No benchmark recommendation persisted yet — run the automatic benchmark on the Benchmarks page.",
+                foreground=COLOR_MUTED,
+            )
+        if hasattr(self.adapter, "ubuntu_cpu_status") and hasattr(self, "cpu_turbo_label"):
+            with contextlib.suppress(Exception):
+                uview = vm.ubuntu_cpu_turbo_view(self.adapter.ubuntu_cpu_status())
+                self.cpu_turbo_label.configure(
+                    text=f"Ubuntu CPU Turbo: {uview['badge']} — {uview['summary']}",
+                    foreground=COLOR_OK if uview["anti_thrash_active"] else COLOR_ACCENT,
+                )
 
     def _on_system_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or status is None:

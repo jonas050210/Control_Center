@@ -253,21 +253,21 @@ class BackgroundRunner:
 # Small reusable widgets
 # ---------------------------------------------------------------------------
 
-# Shared desktop Control Center palette. This is an operator-facing local
-# calibration surface, not a reconstruction of a TTK Testing player HUD.
+# Shared desktop Control Center palette: Cyber-HUD tactical telemetry theme.
 _FONT_FAMILY = "Segoe UI"
-COLOR_BG = "#050a16"
-COLOR_SURFACE = "#0b1427"
-COLOR_SURFACE_RAISED = "#101d32"
-COLOR_HOVER = "#162943"
-COLOR_TEXT = "#e7f1ff"
-COLOR_ACCENT = "#35d7ff"
-COLOR_ACCENT_SECONDARY = "#9c8cff"
-COLOR_OK = "#4ee6a1"
-COLOR_WARN = "#ffc861"
-COLOR_ERROR = "#ff718d"
-COLOR_MUTED = "#91a7bf"
-COLOR_BORDER = "#29445f"
+COLOR_BG = "#030711"
+COLOR_SURFACE = "#081121"
+COLOR_SURFACE_RAISED = "#0d1b33"
+COLOR_HOVER = "#14294a"
+COLOR_TEXT = "#ecf6ff"
+COLOR_ACCENT = "#00f0ff"
+COLOR_ACCENT_SECONDARY = "#8b5cf6"
+COLOR_OK = "#00ff9d"
+COLOR_WARN = "#ffb800"
+COLOR_ERROR = "#ff2e63"
+COLOR_MUTED = "#7c96b8"
+COLOR_BORDER = "#1b355a"
+COLOR_GRID = "#10223d"
 
 
 class ToolTip:
@@ -334,25 +334,32 @@ class ToolTip:
 
 
 class StatCard(ttk.Frame):
-    """One labelled value in a Dashboard/System stat row."""
+    """One labelled value in a Dashboard/Benchmark/System HUD telemetry grid."""
 
     def __init__(self, parent: tk.Misc, label: str) -> None:
-        super().__init__(parent, style="Card.TFrame", padding=(10, 8))
-        ttk.Label(self, text=label, style="CardLabel.TLabel").pack(anchor="w")
-        self._value = ttk.Label(self, text="n/a", style="CardValue.TLabel")
-        self._value.pack(anchor="w")
+        super().__init__(parent, style="Card.TFrame", padding=(0, 0))
+        self._accent_bar = tk.Frame(self, height=2, background=COLOR_ACCENT, borderwidth=0)
+        self._accent_bar.pack(fill="x", side="top")
+        body = ttk.Frame(self, style="CardInner.TFrame", padding=(12, 8))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=label.upper(), style="CardLabel.TLabel").pack(anchor="w")
+        self._value = ttk.Label(body, text="n/a", style="CardValue.TLabel")
+        self._value.pack(anchor="w", pady=(2, 0))
 
     def set(self, text: str, color: str | None = None) -> None:
-        self._value.configure(text=text, foreground=color or "")
+        self._value.configure(text=text, foreground=color or COLOR_TEXT)
+        self._accent_bar.configure(background=color or COLOR_ACCENT)
 
 
 class StatRow(ttk.Frame):
-    """A horizontal row of :class:`StatCard` built from an ordered mapping."""
+    """A grid of :class:`StatCard` modules built from an ordered label tuple."""
 
-    def __init__(self, parent: tk.Misc, labels: tuple[str, ...]) -> None:
+    def __init__(
+        self, parent: tk.Misc, labels: tuple[str, ...], *, max_columns: int = 5
+    ) -> None:
         super().__init__(parent)
         self._cards: dict[str, StatCard] = {}
-        columns = min(5, max(1, len(labels)))
+        columns = min(max_columns, max(1, len(labels)))
         for index, label in enumerate(labels):
             card = StatCard(self, label)
             row, column = divmod(index, columns)
@@ -366,18 +373,105 @@ class StatRow(ttk.Frame):
                 self._cards[label].set(text, color)
 
 
+class PhaseStepper(tk.Canvas):
+    """Futuristic horizontal HUD pipeline stepper + integrated progress bar."""
+
+    _STATUS_PALETTE: dict[str, tuple[str, str, str]] = {
+        "pending": (COLOR_SURFACE, COLOR_BORDER, COLOR_MUTED),
+        "active": ("#062c43", COLOR_ACCENT, COLOR_ACCENT),
+        "done": ("#052e24", COLOR_OK, COLOR_OK),
+        "skipped": ("#2b2108", COLOR_WARN, COLOR_WARN),
+        "failed": ("#360b1b", COLOR_ERROR, COLOR_ERROR),
+    }
+
+    def __init__(self, parent: tk.Misc, height: int = 54) -> None:
+        super().__init__(
+            parent,
+            height=height,
+            background=COLOR_SURFACE,
+            highlightthickness=1,
+            highlightbackground=COLOR_BORDER,
+        )
+        self._phases: list[dict[str, str]] = []
+        self._fraction: float = 0.0
+        self.bind("<Configure>", lambda _event: self._redraw())
+
+    def set_state(self, phases: list[dict[str, str]], fraction: float = 0.0) -> None:
+        self._phases = list(phases)
+        self._fraction = max(0.0, min(1.0, float(fraction)))
+        self._redraw()
+
+    def set_phases(self, phases: list[dict[str, str]], fraction: float = 0.0) -> None:
+        self.set_state(phases, fraction)
+
+    def _redraw(self) -> None:
+        self.delete("all")
+        width = max(int(self.winfo_width()), 1)
+        height = max(int(self.winfo_height()), 1)
+        if not self._phases:
+            return
+        count = len(self._phases)
+        pad_x = 12
+        gap = 10
+        box_h = 30
+        box_y0 = 8
+        box_y1 = box_y0 + box_h
+        slot_w = max(40.0, (width - 2 * pad_x - (count - 1) * gap) / count)
+        for idx, phase in enumerate(self._phases):
+            status = phase.get("status", "pending")
+            bg, border, fg = self._STATUS_PALETTE.get(status, self._STATUS_PALETTE["pending"])
+            x0 = pad_x + idx * (slot_w + gap)
+            x1 = x0 + slot_w
+            if idx < count - 1:
+                conn_color = COLOR_OK if status == "done" else COLOR_BORDER
+                self.create_line(
+                    x1, (box_y0 + box_y1) / 2, x1 + gap, (box_y0 + box_y1) / 2, fill=conn_color, width=2
+                )
+            self.create_rectangle(x0, box_y0, x1, box_y1, fill=bg, outline=border, width=1)
+            self.create_rectangle(x0, box_y0, x0 + 4, box_y1, fill=border, outline="")
+            prefix = f"0{idx + 1}"
+            label = str(phase.get("label", "")).upper()
+            self.create_text(
+                x0 + 10,
+                (box_y0 + box_y1) / 2,
+                anchor="w",
+                text=f"{prefix} // {label}",
+                fill=fg,
+                font=(_FONT_FAMILY, 8, "bold"),
+            )
+        # Integrated bottom progress bar
+        bar_y0 = height - 8
+        bar_y1 = height - 3
+        self.create_rectangle(
+            pad_x, bar_y0, width - pad_x, bar_y1, fill=COLOR_BG, outline=COLOR_BORDER
+        )
+        if self._fraction > 0.0:
+            fill_w = (width - 2 * pad_x) * self._fraction
+            bar_color = COLOR_OK if self._fraction >= 0.999 else COLOR_ACCENT
+            self.create_rectangle(
+                pad_x, bar_y0, pad_x + fill_w, bar_y1, fill=bar_color, outline=""
+            )
+
+
 class LineChart(tk.Canvas):
-    """A minimal, dependency-free bounded line chart.
+    """A dependency-free bounded HUD oscilloscope chart with interactive crosshair.
 
     Draws one series of ``(x, y)`` points already bounded by the adapter
     (``deque(maxlen=...)``) and again decimated to the canvas width by
     :func:`control_center_viewmodel.downsample_series`, so render cost never
-    grows with run length. No animation, no decoration beyond axis labels
-    and a light grid - this is a measurement instrument, not a dashboard
-    graphic.
+    grows with run length. Moving the pointer over the chart snaps a
+    crosshair to the nearest measured point and displays its exact ``(x, y)``
+    coordinates in the header.
     """
 
-    def __init__(self, parent: tk.Misc, title: str, height: int = 140) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        title: str,
+        height: int = 148,
+        *,
+        color: str = COLOR_ACCENT,
+    ) -> None:
         super().__init__(
             parent,
             height=height,
@@ -386,49 +480,43 @@ class LineChart(tk.Canvas):
             highlightbackground=COLOR_BORDER,
         )
         self._title = title
+        self._color = color
         self._points: list[tuple[float, float]] = []
+        self._hover_x: int | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
 
     def set_points(self, points: list[tuple[float, float]]) -> None:
         self._points = points
         self._redraw()
 
-    def _redraw(self) -> None:
-        self.delete("all")
-        width = max(int(self.winfo_width()), 1)
-        height = max(int(self.winfo_height()), 1)
-        pad_left, pad_right, pad_top, pad_bottom = 46, 10, 16, 18
-        self.create_text(
-            8, 6, anchor="nw", text=self._title, font=(_FONT_FAMILY, 9, "bold"), fill=COLOR_MUTED
-        )
-        points = vm.downsample_series(
-            self._points, max_points=max(width - pad_left - pad_right, 10)
-        )
-        if len(points) < 2:
-            self.create_text(
-                width / 2,
-                height / 2,
-                text="not enough data yet",
-                fill=COLOR_MUTED,
-                font=(_FONT_FAMILY, 9),
-            )
-            return
-        xs = [p[0] for p in points]
-        ys = [p[1] for p in points]
-        x_min, x_max = min(xs), max(xs)
-        y_min, y_max = min(ys), max(ys)
-        if y_min == y_max:
-            y_min, y_max = y_min - 1.0, y_max + 1.0
-        if x_min == x_max:
-            x_min, x_max = x_min - 1.0, x_max + 1.0
+    def _on_motion(self, event: tk.Event[Any]) -> None:
+        self._hover_x = int(getattr(event, "x", 0))
+        if len(self._points) >= 2:
+            self._redraw()
+
+    def _on_leave(self, _event: tk.Event[Any]) -> None:
+        if self._hover_x is not None:
+            self._hover_x = None
+            self._redraw()
+
+    def _draw_grid(
+        self,
+        width: int,
+        height: int,
+        pad_left: int,
+        pad_right: int,
+        pad_top: int,
+        pad_bottom: int,
+        y_min: float,
+        y_max: float,
+    ) -> None:
         plot_w = width - pad_left - pad_right
         plot_h = height - pad_top - pad_bottom
-
-        def to_canvas(x: float, y: float) -> tuple[float, float]:
-            cx = pad_left + (x - x_min) / (x_max - x_min) * plot_w
-            cy = pad_top + (1.0 - (y - y_min) / (y_max - y_min)) * plot_h
-            return cx, cy
-
+        for v_frac in (0.25, 0.5, 0.75):
+            gx = pad_left + v_frac * plot_w
+            self.create_line(gx, pad_top, gx, height - pad_bottom, fill=COLOR_GRID)
         for fraction in (0.0, 0.5, 1.0):
             gy = pad_top + fraction * plot_h
             self.create_line(pad_left, gy, width - pad_right, gy, fill=COLOR_BORDER)
@@ -439,20 +527,105 @@ class LineChart(tk.Canvas):
                 anchor="e",
                 text=vm.format_number(value, 2),
                 fill=COLOR_MUTED,
-                font=(_FONT_FAMILY, 8),
+                font=("Consolas", 8),
             )
+
+    def _draw_hover(
+        self,
+        points: list[tuple[float, float]],
+        coords: list[float],
+        width: int,
+        height: int,
+        pad_left: int,
+        pad_right: int,
+        pad_top: int,
+        pad_bottom: int,
+    ) -> str | None:
+        hover_x = self._hover_x
+        if hover_x is None or not points:
+            return None
+        best_idx = min(
+            range(len(points)),
+            key=lambda i: abs(coords[2 * i] - hover_x),
+        )
+        hx, hy = coords[2 * best_idx], coords[2 * best_idx + 1]
+        px, py = points[best_idx]
+        self.create_line(hx, pad_top, hx, height - pad_bottom, fill=COLOR_ACCENT, dash=(2, 2))
+        self.create_line(pad_left, hy, width - pad_right, hy, fill=COLOR_BORDER, dash=(2, 2))
+        self.create_oval(
+            hx - 4, hy - 4, hx + 4, hy + 4, fill=COLOR_WARN, outline=COLOR_TEXT, width=1
+        )
+        return f"CURSOR [{vm.format_number(px, 0)} ▸ {vm.format_number(py, 3)}]  │  "
+
+    def _redraw(self) -> None:
+        self.delete("all")
+        width = max(int(self.winfo_width()), 1)
+        height = max(int(self.winfo_height()), 1)
+        pad_left, pad_right, pad_top, pad_bottom = 52, 12, 24, 18
+        self.create_rectangle(0, 0, width, 20, fill=COLOR_SURFACE, outline="")
+        self.create_text(
+            8,
+            4,
+            anchor="nw",
+            text=f"// {self._title.upper()}",
+            font=(_FONT_FAMILY, 8, "bold"),
+            fill=self._color,
+        )
+        points = vm.downsample_series(
+            self._points, max_points=max(width - pad_left - pad_right, 10)
+        )
+        if len(points) < 2:
+            self.create_text(
+                width / 2,
+                height / 2 + 6,
+                text="AWAITING LIVE TELEMETRY STREAM...",
+                fill=COLOR_MUTED,
+                font=("Consolas", 9),
+            )
+            return
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        raw_y_min, raw_y_max = min(ys), max(ys)
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = raw_y_min, raw_y_max
+        if y_min == y_max:
+            y_min, y_max = y_min - 1.0, y_max + 1.0
+        if x_min == x_max:
+            x_min, x_max = x_min - 1.0, x_max + 1.0
+        plot_w = width - pad_left - pad_right
+        plot_h = height - pad_top - pad_bottom
+        self._draw_grid(width, height, pad_left, pad_right, pad_top, pad_bottom, y_min, y_max)
+
         coords: list[float] = []
         for x, y in points:
-            cx, cy = to_canvas(x, y)
+            cx = pad_left + (x - x_min) / (x_max - x_min) * plot_w
+            cy = pad_top + (1.0 - (y - y_min) / (y_max - y_min)) * plot_h
             coords.extend((cx, cy))
-        self.create_line(*coords, fill=COLOR_ACCENT, width=2, smooth=False)
+        baseline_y = height - pad_bottom
+        poly_coords = [coords[0], baseline_y, *coords, coords[-2], baseline_y]
+        self.create_polygon(*poly_coords, fill="#07364d", stipple="gray25", outline="")
+        self.create_line(*coords, fill="#0a5c7d", width=4, smooth=False)
+        self.create_line(*coords, fill=self._color, width=2, smooth=False)
+        last_x, last_y = coords[-2], coords[-1]
+        self.create_oval(
+            last_x - 3, last_y - 3, last_x + 3, last_y + 3, fill=COLOR_OK, outline=COLOR_BG
+        )
+        cursor_prefix = (
+            self._draw_hover(points, coords, width, height, pad_left, pad_right, pad_top, pad_bottom)
+            or ""
+        )
+        summary = (
+            f"{cursor_prefix}MIN {vm.format_number(raw_y_min, 2)}  │  "
+            f"MAX {vm.format_number(raw_y_max, 2)}  │  "
+            f"NOW {vm.format_number(ys[-1], 3)}"
+        )
         self.create_text(
             width - pad_right,
-            height - 4,
-            anchor="se",
-            text=f"latest: {vm.format_number(ys[-1], 3)}",
-            fill=COLOR_MUTED,
-            font=(_FONT_FAMILY, 8),
+            4,
+            anchor="ne",
+            text=summary,
+            fill=COLOR_WARN if cursor_prefix else COLOR_TEXT,
+            font=("Consolas", 8, "bold"),
         )
 
 
@@ -664,18 +837,28 @@ def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) 
         parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended"
     )
     numeric_columns = {
+        "pid",
         "environments",
+        "environment_count",
         "workers",
+        "env_workers",
+        "steps",
         "total_steps",
         "steps_per_second",
+        "speedup",
         "episodes_per_second",
         "p50_ms",
         "p95_ms",
+        "jitter",
+        "startup_seconds",
         "elapsed_seconds",
         "timesteps",
+        "progress",
+        "progress_percent",
         "episodes",
         "win_rate",
         "loss_rate",
+        "reward",
         "mean_episode_reward",
     }
     for key, title, width in columns:
@@ -691,9 +874,12 @@ def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) 
 
 def _sort_tree(tree: ttk.Treeview, column: str, descending: bool) -> None:
     def sort_key(item_id: str) -> Any:
-        value = tree.set(item_id, column)
+        value = str(tree.set(item_id, column)).strip()
+        cleaned = value.replace(",", "")
+        if cleaned.endswith(("%", "x", "s")) and len(cleaned) > 1:
+            cleaned = cleaned[:-1].strip()
         try:
-            return (0, float(value))
+            return (0, float(cleaned))
         except ValueError:
             return (1, value)
 

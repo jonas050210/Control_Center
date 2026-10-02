@@ -279,8 +279,11 @@ func all_environments_planned() -> bool:
 func step_all(
 	actions: Array, dt: float = SandboxConfig.SIMULATION_DT, compact_info: bool = false
 ) -> Array:
+	var count: int = environments.size()
 	var results: Array = []
-	for i in range(environments.size()):
+	results.resize(count)
+	var has_recorders: bool = not recorders.is_empty()
+	for i in range(count):
 		var env: EnvironmentCore = environments[i]
 		var action: Action = (
 			actions[i] if i < actions.size() and actions[i] != null else Action.idle()
@@ -289,7 +292,7 @@ func step_all(
 		# Building the 84-float array for every environment on every step
 		# would be pure wasted work on the headless training path, where no
 		# recorder ever exists, so it is computed lazily here.
-		var recorder = recorders.get(i)
+		var recorder = recorders.get(i) if has_recorders else null
 		var pre_observation: PackedFloat32Array = (
 			env.get_observations().to_array()
 			if recorder != null and recorder.has_method("record_transition")
@@ -320,8 +323,8 @@ func step_all(
 				result["terminal_observation"] = terminal_observation
 				result["observation"] = env.get_observations()
 				result["auto_reset"] = true
-		results.append(result)
-	_steps_since_report += environments.size()
+		results[i] = result
+	_steps_since_report += count
 	return results
 
 
