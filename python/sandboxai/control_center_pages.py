@@ -244,12 +244,22 @@ class Page(ttk.Frame):
             present = [item for item in selection if tree.exists(item)]
             if present:
                 tree.selection_set(present)
-        for area, fraction in zip(self._scroll_areas(), state["scroll"], strict=False):
-            if fraction <= 0.0:
+        areas = self._scroll_areas()
+        for index, fraction in enumerate(state["scroll"]):
+            if fraction <= 0.0 or index >= len(areas):
                 continue
-            # The scroll region exists only after the next layout pass, so
+            # The scroll region only exists after the next layout pass, so
             # the offset is applied on idle rather than right now.
-            self.after(0, lambda area=area, fraction=fraction: area.canvas.yview_moveto(fraction))
+            self._restore_scroll_offset(areas[index], fraction)
+
+    def _restore_scroll_offset(self, area: ScrollArea, fraction: float) -> None:
+        """Apply a saved scroll fraction once the rebuilt page has laid out."""
+        self.after(0, self._apply_scroll_offset, area, fraction)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _apply_scroll_offset(area: ScrollArea, fraction: float) -> None:
+        with contextlib.suppress(tk.TclError):
+            area.canvas.yview_moveto(fraction)
 
     def _scroll_areas(self) -> list[ScrollArea]:
         """Every ScrollArea in this page, in build order (stable per page)."""
