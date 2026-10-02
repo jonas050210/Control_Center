@@ -1251,6 +1251,16 @@ TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
     ),
     # --- Internal / programmatic defaults (not shown in the GUI deck). ----
     TrainingFieldSpec(
+        "max_train_minutes",
+        "Max train minutes",
+        "float",
+        "advanced",
+        help=(
+            "Trainer-enforced wall-clock budget; the Budget row owns this value. "
+            "0 = run to the step count only."
+        ),
+    ),
+    TrainingFieldSpec(
         "run_id", "Run ID", "str", "advanced", help="Blank = timestamped automatically."
     ),
     TrainingFieldSpec(

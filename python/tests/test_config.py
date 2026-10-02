@@ -286,5 +286,24 @@ class GodotExecutableResolutionTests(unittest.TestCase):
             self.assertEqual(find_godot_executable("godot"), "godot")
 
 
+class TimeBudgetConfigTests(unittest.TestCase):
+    """`max_train_minutes` is the trainer's own wall-clock budget."""
+
+    def test_default_is_off_and_a_positive_value_round_trips(self) -> None:
+        self.assertEqual(TrainingConfig().max_train_minutes, 0.0)
+        config = TrainingConfig(max_train_minutes=90).validate()
+        self.assertEqual(config.max_train_minutes, 90.0)
+        self.assertEqual(config.to_dict()["max_train_minutes"], 90.0)
+        self.assertEqual(
+            TrainingConfig.from_dict(config.to_dict()).max_train_minutes,
+            90.0,
+        )
+
+    def test_budget_may_not_be_negative(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            TrainingConfig(max_train_minutes=-1).validate()
+        self.assertIn("max_train_minutes", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -128,9 +128,9 @@ It provides:
   and worker counts, agent lifecycle summary, device, reward
 - **Training** - the launch deck (validated against the same
   compatibility rules the benchmark uses) with environment count, worker
-  count, device and a **Steps or Time** budget: a time-boxed run asks the
-  trainer for a cooperative stop at its next safe boundary and still
-  saves the final checkpoint. Below it: every launched training run with
+  count, device and a **Steps or Time** budget: a time-boxed run carries
+  its minutes into the training config, so the trainer stops itself at its
+  next safe step boundary and still saves the final checkpoint. Below it: every launched training run with
   its lifecycle state (AVAILABLE -> LAUNCHING -> RUNNING ->
   PAUSED/STOPPING -> STOPPED/FINISHED/FAILED), its Environment -> Worker
   topology, backend metrics, and the full action set: Launch,
@@ -342,6 +342,13 @@ sandboxai train \
   --checkpoint-frequency 100000 --evaluation-frequency 50000 \
   --seed 1234 --device auto --curriculum-level 3
 ```
+
+`--max-train-minutes 30` time-boxes a run: the trainer stops itself at the
+first safe step boundary after those minutes and saves the final checkpoint
+anyway, so a 30-minute budget over a multi-hour plan is a supported
+combination rather than a kill. `0` (the default) makes the step count the
+only limit. The expiry is recorded in `run_summary.json` as
+`"stop_reason": "time_budget"`.
 
 `--rollout-length 0` is the default auto schedule: it keeps the aggregate
 rollout near 16,384 transitions as `--env-count` changes (while capping the

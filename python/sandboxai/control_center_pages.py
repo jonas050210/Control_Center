@@ -1093,7 +1093,11 @@ class TrainingPage(Page):
         self._last_slot_values = None
         if time_mode:
             self.budget_hint.configure(
-                text="The window requests a cooperative stop at the next safe boundary; the final checkpoint is saved."
+                text=(
+                    "The trainer stops itself at the next step boundary after this budget "
+                    "and still saves the final checkpoint; the window only steps in if a run "
+                    "can no longer reach a safe boundary."
+                )
             )
         else:
             self.budget_hint.configure(
@@ -1246,16 +1250,19 @@ class TrainingPage(Page):
         return minutes * 60.0 if minutes > 0 else None
 
     def _check_time_budget(self) -> None:
-        """Request the cooperative stop once the run reaches its time budget.
+        """Watchdog for a run that cannot reach its own budget stop.
 
-        The elapsed value is the trainer's own published number, not a
-        client-side clock, so a paused process does not burn budget. The stop
-        is sent exactly once; the trainer then saves its final checkpoint at
-        its next safe boundary.
+        The trainer enforces ``max_train_minutes`` itself and writes the
+        final checkpoint there, so this is the fallback path: only if the
+        run is still alive well past the budget (a wedged engine, a bridge
+        that never returns) does the window request a cooperative stop of
+        its own. The elapsed value is the trainer's own published number,
+        not a client-side clock, so a paused process does not burn budget.
         """
         seconds = self._budget_seconds()
         if seconds is None or self._budget_agent_id is None or self._budget_stop_sent:
             return
+        grace = max(60.0, seconds * 0.1)
         view = next(
             (item for item in self._last_views if item.get("agent_id") == self._budget_agent_id),
             None,
@@ -1263,13 +1270,13 @@ class TrainingPage(Page):
         if view is None or str(view.get("lifecycle")) not in ("RUNNING", "PAUSED"):
             return
         elapsed = view.get("elapsed_seconds")
-        if not isinstance(elapsed, (int, float)) or float(elapsed) < seconds:
+        if not isinstance(elapsed, (int, float)) or float(elapsed) < seconds + grace:
             return
         self._budget_stop_sent = True
         agent_id = self._budget_agent_id
         self.app.notify(
-            f"Time budget reached ({vm.format_duration(elapsed)}) — stopping at the next safe "
-            "boundary and saving the final checkpoint",
+            f"Time budget passed ({vm.format_duration(elapsed)}) and the run did not stop on "
+            "its own — requesting the stop now",
             kind="warn",
             timeout_ms=6000,
         )
@@ -1369,8 +1376,15 @@ class TrainingPage(Page):
         slot = getattr(self, "_launch_slot", None)
         if not slot or slot["state"] != "AVAILABLE":
             return
+        values = self.current_values()
+        # Time is a trainer-enforced budget, not just a window-side request:
+        # the launch config carries the minutes so the run stops itself at
+        # the next safe boundary even if this window is closed meanwhile.
+        budget_seconds = self._budget_seconds()
+        if budget_seconds is not None:
+            values["max_train_minutes"] = f"{budget_seconds / 60.0:g}"
         try:
-            config = vm.parse_training_form(self.current_values())
+            config = vm.parse_training_form(values)
         except ValueError as exc:
             messagebox.showerror("Invalid launch configuration", str(exc))
             return

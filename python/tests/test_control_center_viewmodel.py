@@ -940,3 +940,22 @@ def test_custom_benchmark_plan_skips_impossible_pairs():
         "custom", environment_text="", worker_text="", steps_raw="", minutes_raw="5"
     )
     assert broken["errors"]
+
+
+def test_training_form_carries_the_trainers_own_time_budget():
+    """Time mode must reach the trainer, not just the window's watchdog.
+
+    The Control Center used to enforce the budget itself by asking the
+    process to stop. The form now carries the same minutes into
+    ``TrainingConfig.max_train_minutes``, so the run stops itself at a safe
+    boundary even if nobody is watching the window.
+    """
+    config = vm.parse_training_form({"max_train_minutes": "45"})
+    assert config.max_train_minutes == 45.0
+    # Steps mode is the default and means "no wall-clock budget".
+    assert vm.default_training_values()["max_train_minutes"] == "0.0"
+
+    with pytest.raises(ValueError):
+        vm.parse_training_form({"max_train_minutes": "soon"})
+    with pytest.raises(ValueError):
+        vm.parse_training_form({"max_train_minutes": "-5"})

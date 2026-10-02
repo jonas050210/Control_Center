@@ -112,13 +112,20 @@ one place.
   the benchmark plan uses, so the launcher and the benchmark can never
   disagree.
 - **Budget: Steps or Time** — both modes are validated before launch.
-  *Steps* ends exactly at the configured step count. *Time* requests a
-  **cooperative stop**: the window notes the elapsed time and asks the
-  trainer to stop at its next safe boundary, where the final checkpoint
-  is written, so a time-boxed run still saves. The trainer's own
-  `elapsed_seconds` is used, so paused time does not count towards the
-  budget. A budget whose checkpoint interval is far longer than the
-  budget, or one above 1440 minutes, is refused with the reason.
+  *Steps* ends exactly at the configured step count. *Time* is a
+  **trainer-enforced** budget: the minutes travel into the run's
+  `config.json` as `max_train_minutes`, the training loop stops itself at
+  the first PPO step boundary after the budget is spent, and that normal
+  shutdown still writes the final checkpoint. It therefore holds for a
+  run started from the CLI, and for a run whose window has been closed.
+  The run summary records `stop_reason: time_budget` together with the
+  elapsed minutes. The window keeps a watchdog for the one case the
+  trainer cannot cover — a process that can no longer reach a safe
+  boundary — and only steps in after a grace period of
+  `max(1 min, 10 %)` past the budget; it uses the trainer's own
+  `elapsed_seconds`, so paused time does not burn budget. A budget whose
+  checkpoint interval is far longer than the budget, or one above 1440
+  minutes, is refused with the reason.
 - **Run table** — every training agent launched this session with name,
   lifecycle, PID, environment/worker topology, device, budget, progress,
   steps/s, reward and errors. All values are backend-published facts;

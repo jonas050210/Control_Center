@@ -468,6 +468,19 @@ class MissingTkinterTests(unittest.TestCase):
         self.assertIn("needs Tkinter", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
 
+    def test_max_train_minutes_flag_reaches_the_training_config(self) -> None:
+        from sandboxai.cli import _config_from_args, build_parser
+
+        args = build_parser().parse_args(
+            ["train", "--max-train-minutes", "12.5", "--steps", "2048"]
+        )
+        config = _config_from_args(args)
+        self.assertEqual(config.max_train_minutes, 12.5)
+        self.assertEqual(config.total_training_steps, 2048)
+
+        default = _config_from_args(build_parser().parse_args(["train", "--steps", "2048"]))
+        self.assertEqual(default.max_train_minutes, 0.0)
+
     def test_main_py_reports_missing_tk_without_a_traceback(self) -> None:
         result = self._run_with_a_tkinter_that_cannot_import_its_backend(
             [str(self.REPOSITORY_ROOT / "main.py")]

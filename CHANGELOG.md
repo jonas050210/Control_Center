@@ -27,10 +27,12 @@ records what changed and why.
 - **Training replaces Agents.** The page is now the training-only
   operational core: launch deck (environment count, workers, device,
   presets 25k/100k/500k steps, resume checkpoint, live verdict),
-  **Steps-or-Time budget** where a time-boxed run requests a cooperative
-  stop at the trainer's next safe boundary and still saves the final
-  checkpoint, plus the run table with its lifecycle actions, topology
-  and log. Benchmark and evaluation processes moved to their own pages.
+  **Steps-or-Time budget** where a time-boxed run carries its minutes into
+  the training config (`max_train_minutes`) and the trainer stops itself
+  at the next safe step boundary, still saving the final checkpoint, plus
+  the run table with its lifecycle actions, topology and log. The window's
+  own watchdog only steps in after a grace period if a run can no longer
+  reach a safe boundary. Benchmark and evaluation processes moved to their own pages.
   The Dashboard gained an *Active runs* strip that lists any live
   non-training process with a scoped Stop.
 - **Benchmarks: Auto, Push or Custom.** Auto plans a host-scaled ladder
@@ -98,6 +100,20 @@ records what changed and why.
   meet the TTK-only evidence boundary.
 
 ### Added
+- **Trainer-enforced wall-clock budget** (`TrainingConfig.max_train_minutes`,
+  `sandboxai train --max-train-minutes`). The budget used to be a
+  window-side request: the Control Center watched the elapsed time and
+  asked the process to stop, which only worked while that window was
+  open. It is now part of the training loop (`ppo._TimeBudget` +
+  `_should_continue_step`, checked in the same per-step path that honours
+  an operator stop), so the run ends at the first safe step boundary after
+  the budget regardless of who started it, and reports why:
+  `run_summary.json` gains `stop_reason`, `max_train_minutes` and
+  `elapsed_minutes`, and a run stopped by the budget is written to the
+  run manifest as `stopped` instead of `completed`. A resumed run gets a
+  fresh budget. Unit-tested without stable-baselines3
+  (`python/tests/test_ppo_time_budget.py`).
+
 - `sandboxai.hardware_profile`: the single device-comparison
   implementation behind the first-start hardware wizard. It compares CPU,
   Hybrid (GPU updates + CPU inference) and CUDA — offering the GPU
