@@ -450,7 +450,7 @@ static func _yaw_towards(from_position: Vector3, target: Vector3) -> float:
 	var delta := Vector3(target.x - from_position.x, 0.0, target.z - from_position.z)
 	if delta.is_zero_approx():
 		return 0.0
-	return rad_to_deg(atan2(delta.x, -delta.z))
+	return VectorMath.yaw_deg_from_direction(delta)
 
 
 ## Picks one of the concrete layouts at random and then perturbs it with a

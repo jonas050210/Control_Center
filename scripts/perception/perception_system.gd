@@ -13,6 +13,7 @@ class_name PerceptionSystem
 extends RefCounted
 
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 ## Extra sample points on the target used for the line-of-sight test, as
@@ -23,28 +24,19 @@ const LOS_SAMPLE_HEIGHTS: Array = [0.55, 0.95]
 
 
 ## Signed horizontal angle (degrees) from `forward` to the direction
-## observer -> target. Negative is left, positive is right, 0 dead ahead.
+## observer -> target, positive to the observer's right, 0 dead ahead.
+##
+## Delegates to `VectorMath`: this used to be a second implementation, and its
+## sign was the opposite of the one `Observation` uses for the same quantity.
 static func bearing_deg(forward: Vector3, from_position: Vector3, to_position: Vector3) -> float:
-	var flat_forward := Vector3(forward.x, 0.0, forward.z)
-	var delta := Vector3(to_position.x - from_position.x, 0.0, to_position.z - from_position.z)
-	if flat_forward.is_zero_approx() or delta.is_zero_approx():
-		return 0.0
-	flat_forward = flat_forward.normalized()
-	var direction: Vector3 = delta.normalized()
-	var dot: float = clampf(flat_forward.dot(direction), -1.0, 1.0)
-	var angle: float = rad_to_deg(acos(dot))
-	var side: float = flat_forward.cross(direction).y
-	return angle if side >= 0.0 else -angle
+	return VectorMath.signed_bearing_deg(forward, from_position, to_position)
 
 
-## Vertical angle (degrees) from the observer's eye to a point. Positive
-## means the point is above the eye.
+## Vertical angle (degrees) from the observer's eye to a point, positive
+## above the eye. Delegates to `VectorMath`, which owns the convention (this
+## used to be a second copy of the same formula, like the bearing below).
 static func elevation_deg(from_eye: Vector3, to_position: Vector3) -> float:
-	var delta: Vector3 = to_position - from_eye
-	var horizontal: float = Vector2(delta.x, delta.z).length()
-	if horizontal < 0.000001:
-		return 90.0 if delta.y >= 0.0 else -90.0
-	return rad_to_deg(atan2(delta.y, horizontal))
+	return VectorMath.elevation_deg(from_eye, to_position)
 
 
 ## Whether a point lies inside the horizontal FOV cone. `fov_deg` is the

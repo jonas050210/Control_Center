@@ -30,6 +30,7 @@ enum Category {
 }
 
 const ArenaWorld = preload("res://scripts/world/arena_world.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 const CATEGORY_COUNT: int = 7
@@ -173,10 +174,12 @@ func _tick_ambience(dt: float) -> void:
 ## `direction` is a unit vector carrying the PERCEIVED (error-perturbed)
 ## bearing, not the true one, and `direction_error_deg` is the listener's
 ## own estimate of how wrong that bearing may be: a muffled, distant sound
-## is placed far less precisely than a close, clear one. `confidence`
-## combines loudness, occlusion and that angular error into one [0, 1]
-## trust value, and `masked` marks an event that was partly drowned out by
-## a louder simultaneous one.
+## is placed far less precisely than a close, clear one. `bearing_deg` is
+## positive to the listener's right - the one convention of the observation
+## vector, so a heard shot and a seen enemy agree on which side is which.
+## `confidence` combines loudness, occlusion and that angular error into one
+## [0, 1] trust value, and `masked` marks an event that was partly drowned
+## out by a louder simultaneous one.
 ##
 ## Nothing here consumes random numbers: every perturbation is derived from
 ## the source position, so an episode replays identically.
@@ -367,16 +370,11 @@ func _perceived_direction(
 	return direction.rotated(Vector3.UP, deg_to_rad((pseudo * 2.0 - 1.0) * error_deg)).normalized()
 
 
+## Signed bearing to a heard event; see `VectorMath.signed_bearing_between`
+## for the sign convention (positive = right, the same convention index 55/72
+## of the observation vector documents).
 func _bearing(forward: Vector3, direction: Vector3) -> float:
-	var flat_forward := Vector3(forward.x, 0.0, forward.z)
-	var flat_direction := Vector3(direction.x, 0.0, direction.z)
-	if flat_forward.is_zero_approx() or flat_direction.is_zero_approx():
-		return 0.0
-	flat_forward = flat_forward.normalized()
-	flat_direction = flat_direction.normalized()
-	var dot: float = clampf(flat_forward.dot(flat_direction), -1.0, 1.0)
-	var angle: float = rad_to_deg(acos(dot))
-	return angle if flat_forward.cross(flat_direction).y >= 0.0 else -angle
+	return VectorMath.signed_bearing_between(forward, direction)
 
 
 func to_dict() -> Array:

@@ -460,4 +460,4 @@ static func _facing_yaw(from_position: Vector3, target: Vector3) -> float:
 	var delta := Vector3(target.x - from_position.x, 0.0, target.z - from_position.z)
 	if delta.is_zero_approx():
 		return SandboxConfig.AGENT_SPAWN_YAW_DEG
-	return rad_to_deg(atan2(delta.x, -delta.z))
+	return VectorMath.yaw_deg_from_direction(delta)

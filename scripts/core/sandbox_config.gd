@@ -101,6 +101,17 @@ const ENEMY_STRAFE_ANGULAR_SPEED: float = 1.6
 ## nearest few threats, matching what a human/Roblox player could plausibly
 ## track. Kept small deliberately to keep the observation cheap.
 const OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
+## Number of world-object slots the structured observation reports
+## individually (nearest-visible-first). Objects are the cover boxes, crates
+## and pillars the agent can actually SEE — the arena boundary is excluded
+## because it is the fence, not usable cover. Extra visible objects beyond
+## this count still exist; the slot budget is what keeps the observation
+## cheap and keeps the vector shape independent of how many boxes a layout
+## happens to contain.
+const OBSERVATION_MAX_TRACKED_OBJECTS: int = 3
+## Cardinality of Obstacle.Kind, used to normalize the object kind ordinal
+## onto [0, 1] exactly like the sound category ordinal.
+const OBJECT_KIND_COUNT: int = 7
 
 # ---------------------------------------------------------------------------
 # Vertical movement (gravity / jumping)

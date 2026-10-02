@@ -26,6 +26,12 @@ func test_bearing_is_signed_and_zero_dead_ahead() -> SandboxTest:
 	t.assert_almost_eq(absf(right), 45.0, 0.01)
 	t.assert_almost_eq(absf(left), 45.0, 0.01)
 	t.assert_true(right * left < 0.0, "left and right must have opposite signs")
+	# Which of the two is positive is not free: it is the same convention
+	# `Observation` uses for the enemy bearing (positive = the way a positive
+	# `look_yaw_axis` turns), which eight of the eleven bearing fields in the
+	# observation vector used to disagree with.
+	t.assert_gt(right, 0.0, "a target to the right must be a positive bearing")
+	t.assert_lt(left, 0.0, "a target to the left must be a negative bearing")
 	t.assert_almost_eq(
 		absf(PerceptionSystem.bearing_deg(FORWARD, Vector3.ZERO, Vector3(0.0, 0.0, 5.0))),
 		180.0,

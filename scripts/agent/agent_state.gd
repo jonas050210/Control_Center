@@ -19,6 +19,7 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
+const VectorMath = preload("res://scripts/core/vector_math.gd")
 const CharacterMotor = preload("res://scripts/world/character_motor.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 const WeaponState = preload("res://scripts/weapon/weapon_state.gd")
@@ -128,10 +129,9 @@ func get_forward_horizontal() -> Vector3:
 ## writable `forward` property; this is the supported way to point the
 ## agent at something from a test or a scripted setup.
 func set_forward_horizontal(direction: Vector3) -> void:
-	var flat := Vector3(direction.x, 0.0, direction.z)
-	if flat.is_zero_approx():
+	if Vector3(direction.x, 0.0, direction.z).is_zero_approx():
 		return
-	yaw_deg = rad_to_deg(atan2(flat.x, -flat.z))
+	yaw_deg = VectorMath.yaw_deg_from_direction(direction)
 
 
 func get_right_horizontal() -> Vector3:
@@ -232,7 +232,7 @@ func apply_action(action: Action, dt: float, arena_half_extent: float, world = n
 ## Recoil deliberately moves the REAL aim (and therefore `agent_forward`
 ## in the observation) rather than a cosmetic offset: that is what makes it
 ## something the policy can perceive and counter with the look axes without
-## adding a single field to the 84-float contract.
+## adding a single field to the 106-float contract.
 func apply_recoil(pitch_kick_deg: float, yaw_kick_deg: float) -> void:
 	if pitch_kick_deg == 0.0 and yaw_kick_deg == 0.0:
 		return

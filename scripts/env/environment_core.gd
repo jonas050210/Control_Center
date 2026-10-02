@@ -698,6 +698,11 @@ func _build_observation() -> Observation:
 				"sound_summary": perception.sound_summary,
 				"world": world,
 				"forward_clearance": perception.forward_clearance,
+				# The contract-v4 object slots ask the world with the same cone
+				# and the same reach the perception system itself uses, so the
+				# objects in the vector are exactly the ones this agent could see.
+				"fov_deg": perception.fov_deg,
+				"vision_range": perception.vision_range,
 				"in_cover": perception.in_cover,
 				"corpse_count": get_corpse_count(),
 				"enemy_slots": enemies.size(),

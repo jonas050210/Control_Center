@@ -41,6 +41,34 @@ func test_every_category_has_a_radius_and_a_name() -> SandboxTest:
 	return t
 
 
+## Hearing uses the same sign convention as every other bearing in the
+## vector: an event to the agent's right is positive. The perceived direction
+## is perturbed (up to ~15 degrees at this range), so the cases are placed
+## squarely to the side rather than near the axis.
+func test_bearing_sign_matches_the_observation_convention() -> SandboxTest:
+	var t := SandboxTest.new("bearing_sign_matches_the_observation_convention")
+	var right_bus: SoundBus = SoundBus.create()
+	right_bus.emit_sound(SoundBus.Category.SHOT, Vector3(5.0, 0.0, 0.0), 1)
+	var left_bus: SoundBus = SoundBus.create()
+	left_bus.emit_sound(SoundBus.Category.SHOT, Vector3(-5.0, 0.0, 0.0), 1)
+
+	var right_heard: Array = _heard_after_delay(right_bus, null)
+	var left_heard: Array = _heard_after_delay(left_bus, null)
+	t.assert_eq(right_heard.size(), 1)
+	t.assert_eq(left_heard.size(), 1)
+	t.assert_gt(
+		float((right_heard[0] as Dictionary)["bearing_deg"]),
+		0.0,
+		"a sound to the right must be a positive bearing"
+	)
+	t.assert_lt(
+		float((left_heard[0] as Dictionary)["bearing_deg"]),
+		0.0,
+		"a sound to the left must be a negative bearing"
+	)
+	return t
+
+
 func test_loudness_falls_off_with_distance() -> SandboxTest:
 	var t := SandboxTest.new("loudness_falls_off_with_distance")
 	var near_bus: SoundBus = SoundBus.create()

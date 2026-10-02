@@ -493,6 +493,9 @@ func _build_perception_context(perception: AgentPerception, beliefs: Array) -> D
 		"sound_summary": perception.sound_summary,
 		"world": world,
 		"forward_clearance": perception.forward_clearance,
+		# Same cone and reach as the perception system (contract v4 object slots).
+		"fov_deg": perception.fov_deg,
+		"vision_range": perception.vision_range,
 		"in_cover": perception.in_cover,
 		"corpse_count": 0,
 		"enemy_slots": 1,
