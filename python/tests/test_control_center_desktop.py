@@ -222,9 +222,21 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.update()
         press(listing, "<Down>")
         self.assertEqual(listing.curselection(), (1,))
-        # Escape closes it; the next Ctrl+K opens a fresh one.
+        # Escape closes it; the next Ctrl+K opens a fresh one, Ctrl+K closes
+        # that one again and a page accelerator jumps straight to the page.
         press(window, "<Escape>")
         self.assertFalse(window.winfo_exists())
+        self.app.open_command_palette()
+        self.app.update()
+        second = self.app._palette_window
+        self.assertIsNot(second, window)
+        press(second, "<Control-Key-k>")
+        self.assertFalse(second.winfo_exists())
+        self.app.open_command_palette()
+        self.app.update()
+        press(self.app._palette_window, "<Control-Key-4>")
+        self.assertFalse(self.app._palette_window.winfo_exists())
+        self.assertEqual(self.app._current.title, "Evaluations")
 
     def test_window_state_is_remembered_without_breaking_startup(self):
         """Maximized-ness is a preference, and saving it must never raise."""

@@ -1413,6 +1413,32 @@ def _exercise_command_palette(app: object, window: object) -> None:
     entry.event_generate("<Return>")
     if window.winfo_exists():
         raise AssertionError("Return must close the palette after choosing a page")
+    if app._current is None or app._current.title != "Training":
+        raise AssertionError("Return must switch to the highlighted page")
+
+
+def _exercise_palette_shortcuts(app: object) -> None:
+    """The palette's own Escape, Ctrl+K and Ctrl+1..7 bindings."""
+
+    def reopen() -> object:
+        app.open_command_palette()
+        fresh = app._palette_window
+        if fresh is None or not fresh.winfo_exists():
+            raise AssertionError("Ctrl+K must reopen the palette after it closed")
+        return fresh
+
+    # Escape and Ctrl+K close it again; Ctrl+1..7 jump straight to a page.
+    reopen().event_generate("<Escape>")
+    if app._palette_window.winfo_exists():
+        raise AssertionError("Escape must close the palette")
+    reopen().event_generate("<Control-Key-k>")
+    if app._palette_window.winfo_exists():
+        raise AssertionError("Ctrl+K must close the palette from inside it")
+    reopen().event_generate("<Control-Key-4>")
+    if app._palette_window.winfo_exists():
+        raise AssertionError("a page accelerator must close the palette")
+    if app._current is None or app._current.title != "Evaluations":
+        raise AssertionError("Ctrl+4 must switch to the fourth page")
     app.show_page("Dashboard")
 
 
@@ -1448,6 +1474,7 @@ def _exercise_page_handlers(app: object) -> None:
     if app._palette_window is not first:
         raise AssertionError("a second Ctrl+K must reuse the open palette, not stack one")
     _exercise_command_palette(app, first)
+    _exercise_palette_shortcuts(app)
     app.set_status("smoke status", toast=True)
     app.notify("smoke notify", kind="info")
     try:
