@@ -522,6 +522,7 @@ class PhaseStepper(tk.Canvas):
         self._fraction: float = 0.0
         self._display_fraction: float = 0.0
         self._anim_after_id: str | None = None
+        self._motion_handle: int | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Destroy>", self._cancel_anim, add="+")
         self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
@@ -542,7 +543,14 @@ class PhaseStepper(tk.Canvas):
             "failed": (theme.card, theme.error, theme.error),
         }
 
-    def _cancel_anim(self, _event: object = None) -> None:
+    def _cancel_anim(self, event: object = None) -> None:
+        # `<Destroy>` fires for every child as well; only the stepper itself
+        # owns these handles.
+        if event is not None and getattr(event, "widget", None) is not self:
+            return
+        if self._motion_handle is not None and self._motion is not None:
+            self._motion.cancel(self._motion_handle)
+            self._motion_handle = None
         if self._anim_after_id is not None:
             with contextlib.suppress(tk.TclError):
                 self.after_cancel(self._anim_after_id)
@@ -556,7 +564,11 @@ class PhaseStepper(tk.Canvas):
             self._display_fraction = 0.0
         if self._motion is not None:
             start = self._display_fraction
-            self._motion.tween(
+            if self._motion_handle is not None:
+                # One transition at a time: a second call (a new episode
+                # boundary) replaces the one in flight instead of stacking.
+                self._motion.cancel(self._motion_handle)
+            self._motion_handle = self._motion.tween(
                 320,
                 lambda progress: self._set_display(
                     start + (target - start) * ease_out_cubic(progress)

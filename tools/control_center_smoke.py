@@ -241,10 +241,21 @@ class _Base:
     wait_window = update
 
     def destroy(self):
-        object.__setattr__(self, "_tk_destroyed", True)
+        """Destroy like Tk: children first, then this widget's own bindings.
+
+        Real Tk fires ``<Destroy>`` for every widget it tears down, which is
+        where cleanup lives (releasing scrollbar bindings, cancelling an
+        animation, forgetting a toast). A stub that skipped the event made
+        those handlers look unnecessary - the same blind spot that once hid
+        two Tk-only bugs.
+        """
+        if getattr(self, "_tk_destroyed", False):
+            return
         for child in list(self._tk_children):
             child.destroy()
         self._tk_children.clear()
+        object.__setattr__(self, "_tk_destroyed", True)
+        self.event_generate("<Destroy>")
 
     def focus_set(self):
         return None
@@ -1473,6 +1484,66 @@ def _assert_theme_listeners_do_not_leak(app: object) -> None:
         )
 
 
+def _assert_motion_survives_a_dead_widget(app: object) -> None:
+    """One destroyed widget must not stop every animation in the window.
+
+    A density change rebuilds a page while its animations (a segmented
+    control's indicator, an animated number) may still be mid-flight. Their
+    next frame then paints a destroyed widget and Tk raises ``TclError`` -
+    inside the shared 16 ms ticker, which used to stop scheduling itself,
+    silently freezing every remaining animation.
+    """
+    import tkinter as tk
+
+    frames: list[float] = []
+
+    def exploding(_progress: float) -> None:
+        raise tk.TclError("application has been destroyed")
+
+    app.motion.tween(40, exploding)
+    app.motion.tween(40, frames.append)
+    app.motion._tick()  # must not raise: the ticker isolates each callback
+
+    if not frames:
+        raise AssertionError("a raising tween stopped the healthy one from running")
+    if not app.motion.running and any(
+        tween.on_frame is frames.append for tween in app.motion._tweens.values()
+    ):
+        raise AssertionError("the ticker stopped scheduling while a tween was still live")
+    app.motion.stop_all()
+
+
+def _assert_animations_release_the_ticker(app: object) -> None:
+    """A destroyed widget must hand its animation back.
+
+    A pulsing status dot keeps the shared 16 ms ticker alive. If destroying
+    the widget left the loop registered, a rebuilt page would keep the whole
+    window awake at 60 fps for nothing, and the loop would paint a dead
+    canvas on every frame.
+    """
+    import tkinter as tk
+
+    from sandboxai.control_center_ui import MotionController, StatusDot
+
+    host = tk.Frame(app)
+    motor = MotionController(app, "normal")
+    dot = StatusDot(host, app.bus, size=8)
+    dot.set_state(app.bus.theme.ok, pulse=True, motion=motor)
+    if not motor.running or not motor._loops:
+        raise AssertionError("a pulsing status dot must start the shared ticker")
+
+    host.destroy()
+
+    if motor._loops or motor._tweens:
+        raise AssertionError("a destroyed widget left its animation registered")
+    # The tick that was already scheduled still runs (Tk cannot un-schedule
+    # it retroactively); what matters is that it is the last one.
+    motor._tick()
+    if motor.running:
+        raise AssertionError("the ticker kept scheduling after its last animation went away")
+    motor.stop_all()
+
+
 def _assert_every_widget_uses_the_app_bus(app: object) -> None:
     """No widget may be left on the module's default palette.
 
@@ -1707,6 +1778,16 @@ def run_smoke() -> int:
         failures,
         "theme listeners are pruned with their widgets",
         lambda: _assert_theme_listeners_do_not_leak(app),
+    )
+    _step(
+        failures,
+        "one dead widget cannot stop the ticker",
+        lambda: _assert_motion_survives_a_dead_widget(app),
+    )
+    _step(
+        failures,
+        "destroyed widgets release their animations",
+        lambda: _assert_animations_release_the_ticker(app),
     )
     _step(failures, "reusable widgets", lambda: _exercise_widgets(app))
     _step(failures, "page handlers", lambda: _exercise_page_handlers(app))
