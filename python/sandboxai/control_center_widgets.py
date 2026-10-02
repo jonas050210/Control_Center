@@ -422,7 +422,7 @@ class StatCard(ttk.Frame):
         self._value.pack(anchor="w", pady=(self._bus.px(4, minimum=2), 0), fill="x")
         self._animated = AnimatedValue(self._value, motion or MotionController(self, level="off"))
         self._current_color: str | None = None
-        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+        self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
 
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
@@ -524,7 +524,7 @@ class PhaseStepper(tk.Canvas):
         self._anim_after_id: str | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Destroy>", self._cancel_anim, add="+")
-        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+        self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
 
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
@@ -706,7 +706,7 @@ class LineChart(tk.Canvas):
         self.bind("<Configure>", lambda _event: self._redraw())
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", self._on_leave)
-        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+        self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
 
     @property
     def _color(self) -> str:
@@ -967,7 +967,7 @@ class LogPanel(ttk.Frame):
         self.text.tag_configure("stderr", foreground=self._theme.error)
         self.text.tag_configure("meta", foreground=self._theme.text_muted)
         self.text.bind("<Enter>", lambda _e: self._reveal_scrollbars(), add="+")
-        self._unsubscribe = self._bus.subscribe(self.apply_theme)
+        self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
 
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme

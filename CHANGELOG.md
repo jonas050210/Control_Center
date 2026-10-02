@@ -316,6 +316,15 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- **Theme listeners of rebuilt pages no longer pile up.** Every widget that
+  repaints itself subscribes to the window's `ThemeBus`, and a density
+  change destroys and recreates a page's widgets. The subscriptions had no
+  owner, so each change left ~190 dead callbacks behind (97 -> 667 after
+  three) and every later theme change walked them - invisible headlessly
+  because a dead widget's repaint is a suppressed error. `subscribe()` now
+  takes `owner=` and the bus drops listeners whose widget no longer exists;
+  the smoke harness changes density three times and fails if the settled
+  listener count grows (verified by disabling the pruning: it fires).
 - The JSON-lines bridge no longer dies on engine output that happens to be
   valid JSON. `GodotProcessTransport.receive` called `.get("ok")` on
   whatever `json.loads` returned, so a single `print(0)` or `print([1, 2])`

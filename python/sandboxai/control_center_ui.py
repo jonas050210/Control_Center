@@ -153,7 +153,10 @@ class ThemeBus:
         self._theme = theme
         self.scale = scale or UiScale()
         self.density = density or DENSITIES["comfort"]
-        self._listeners: list[Callable[[Theme], None]] = []
+        # (listener, owner). The owner is the widget the listener repaints:
+        # a page rebuilt at a new density destroys its widgets, and without
+        # that reference their repaint callbacks stayed behind forever.
+        self._listeners: list[tuple[Callable[[Theme], None], object | None]] = []
 
     @property
     def theme(self) -> Theme:
@@ -169,15 +172,39 @@ class ThemeBus:
     def px(self, value: float, *, minimum: int = 0) -> int:
         return self.scale.px(value, minimum=minimum)
 
-    def subscribe(self, listener: Callable[[Theme], None]) -> Callable[[], None]:
-        """Register a repaint callback; the return value unsubscribes it."""
-        self._listeners.append(listener)
+    def subscribe(
+        self, listener: Callable[[Theme], None], *, owner: object | None = None
+    ) -> Callable[[], None]:
+        """Register a repaint callback; the return value unsubscribes it.
+
+        Pass ``owner=`` the widget that owns the listener: a destroyed
+        widget is dropped from the bus automatically, so rebuilding a page
+        (which is what a density change does) cannot leave dead listeners
+        behind. Without it a widget the operator can only destroy through a
+        rebuild would have to remember to unsubscribe in a ``<Destroy>``
+        handler, and every forgotten one costs a call on every theme change.
+        """
+        entry = (listener, owner)
+        self._listeners.append(entry)
 
         def unsubscribe() -> None:
             with contextlib.suppress(ValueError):
-                self._listeners.remove(listener)
+                self._listeners.remove(entry)
 
         return unsubscribe
+
+    @staticmethod
+    def _is_alive(owner: object | None) -> bool:
+        """False once the owner widget has been destroyed."""
+        if owner is None:
+            return True
+        exists = getattr(owner, "winfo_exists", None)
+        if not callable(exists):
+            return True
+        try:
+            return bool(exists())
+        except tk.TclError:
+            return False
 
     def set_theme(
         self,
@@ -191,14 +218,18 @@ class ThemeBus:
             self.scale = scale
         if density is not None:
             self.density = density
-        for listener in list(self._listeners):
+        for entry in list(self._listeners):
+            listener, owner = entry
+            if not self._is_alive(owner):
+                self._listeners.remove(entry)
+                continue
             try:
                 listener(theme)
             except tk.TclError:
                 # A widget destroyed between the theme change and this call
                 # must not stop the remaining widgets from repainting.
                 with contextlib.suppress(ValueError):
-                    self._listeners.remove(listener)
+                    self._listeners.remove(entry)
 
 
 class LayoutBus:
@@ -206,29 +237,37 @@ class LayoutBus:
 
     def __init__(self, state: LayoutState) -> None:
         self._state = state
-        self._listeners: list[Callable[[LayoutState], None]] = []
+        self._listeners: list[tuple[Callable[[LayoutState], None], object | None]] = []
 
     @property
     def state(self) -> LayoutState:
         return self._state
 
-    def subscribe(self, listener: Callable[[LayoutState], None]) -> Callable[[], None]:
-        self._listeners.append(listener)
+    def subscribe(
+        self, listener: Callable[[LayoutState], None], *, owner: object | None = None
+    ) -> Callable[[], None]:
+        """Register a layout listener; ``owner`` is dropped once destroyed."""
+        entry = (listener, owner)
+        self._listeners.append(entry)
 
         def unsubscribe() -> None:
             with contextlib.suppress(ValueError):
-                self._listeners.remove(listener)
+                self._listeners.remove(entry)
 
         return unsubscribe
 
     def set_state(self, state: LayoutState) -> None:
         self._state = state
-        for listener in list(self._listeners):
+        for entry in list(self._listeners):
+            listener, owner = entry
+            if not ThemeBus._is_alive(owner):
+                self._listeners.remove(entry)
+                continue
             try:
                 listener(state)
             except tk.TclError:
                 with contextlib.suppress(ValueError):
-                    self._listeners.remove(listener)
+                    self._listeners.remove(entry)
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +458,7 @@ class SlimScrollbar(tk.Canvas):
             cursor="arrow",
             takefocus=False,
         )
-        self._unsubscribe = bus.subscribe(self.apply_theme)
+        self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
         self.bind("<Enter>", lambda _e: self._on_hover(True), add="+")
         self.bind("<Leave>", lambda _e: self._on_hover(False), add="+")
         self.bind("<Button-1>", self._on_press, add="+")
@@ -748,7 +787,7 @@ class ScrollArea(ttk.Frame):
             for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>")
         ]
         self.bind("<Destroy>", self._on_destroy, add="+")
-        self._unsubscribe = bus.subscribe(self.apply_theme)
+        self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
 
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
@@ -868,7 +907,7 @@ class RoundedPanel(tk.Canvas):
         self.body.bind("<Configure>", lambda _e: self._on_body_configure(), add="+")
         self.bind("<Enter>", lambda _e: self._set_hover(True), add="+")
         self.bind("<Leave>", lambda _e: self._set_hover(False), add="+")
-        self._unsubscribe = bus.subscribe(self.apply_theme)
+        self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
 
     # -- theming ----------------------------------------------------------
 
@@ -997,7 +1036,7 @@ class SegmentedControl(tk.Canvas):
         self.bind("<Right>", lambda _e: self._step(1), add="+")
         self.bind("<FocusIn>", lambda _e: self._redraw(), add="+")
         self.bind("<FocusOut>", lambda _e: self._redraw(), add="+")
-        self._unsubscribe = bus.subscribe(self.apply_theme)
+        self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
 
     # -- state ------------------------------------------------------------
 
@@ -1133,7 +1172,7 @@ class StatusDot(tk.Canvas):
         self._color = self._theme.text_muted
         self._handle: int | None = None
         self._motion: MotionController | None = None
-        self._unsubscribe = bus.subscribe(self.apply_theme)
+        self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
         self._draw(1.0)
 
     def set_state(
@@ -1186,7 +1225,7 @@ class ToastHost:
         self._toasts: list[tk.Frame] = []
         self._after_ids: dict[tk.Frame, str] = {}
         self._offset = margin
-        self._unsubscribe = bus.subscribe(self.apply_theme)
+        self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
 
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
@@ -1355,7 +1394,7 @@ class LayoutBoard(ttk.Frame):
         self._min_column_width = min_column_width
         for index in range(self._max_columns):
             self.columnconfigure(index, weight=1, uniform="board")
-        self._unsubscribe = layout_bus.subscribe(lambda _state: self.rebuild())
+        self._unsubscribe = layout_bus.subscribe(lambda _state: self.rebuild(), owner=self)
         self.bind("<Configure>", lambda _e: self._on_resize(), add="+")
 
     def add(self, widget_id: str, factory: Callable[[tk.Misc], tk.Widget]) -> None:

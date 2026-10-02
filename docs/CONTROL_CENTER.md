@@ -81,7 +81,18 @@ back to the module's default palette and keep Corz colours forever, so the
 contract is checked twice - the smoke harness and the real-Tk suite each
 walk every page and fail if any widget carries a foreign bus. Helper
 widgets find the nearest bus by walking up their parents (`_cc_bus`), which
-keeps a tooltip or a chart correct even when a call site forgets `bus=`. A **density** change has to rebuild the widgets so
+keeps a tooltip or a chart correct even when a call site forgets `bus=`.
+
+Every subscription carries its **owner widget**, so the bus drops a
+listener whose widget no longer exists. That matters because a density
+change destroys and recreates a page's widgets: without ownership each
+change left ~190 dead repaint callbacks behind (97 -> 667 after three
+sweeps), and every later theme change walked them. The smoke harness
+changes density three times and fails if the settled listener count grows;
+the bus unit tests pin the pruning itself (a destroyed owner is neither
+called nor kept, a listener without an owner is never pruned).
+
+A **density** change has to rebuild the widgets so
 the new paddings fit; that rebuild captures what the operator was looking
 at first — the log text and its cursors, the selected rows, the page's
 scroll offset — and restores it on the fresh widgets, so the log does not
