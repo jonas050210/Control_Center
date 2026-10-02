@@ -316,6 +316,19 @@ records what changed and why.
 - Coverage is measured and gated at 70 % (currently 86 %).
 
 ### Fixed
+- **Destroyed widgets hand their animations back.** A pulsing status dot
+  keeps the shared 16 ms ticker alive, but nothing cancelled its loop when
+  the widget died, so a rebuilt page could leave the window animating at
+  60 fps for a widget that no longer existed. `StatusDot` now releases its
+  loop on `<Destroy>`, `PhaseStepper` cancels the transition it started
+  (and replaces an in-flight one instead of stacking a second), and the
+  smoke harness destroys a pulsing dot and fails if a loop is left
+  registered (verified by removing the cleanup: it fires).
+- **The fake Tk now fires `<Destroy>`.** Real Tk runs destroy handlers for
+  every widget it tears down; the stub skipped the event, which made those
+  handlers look unnecessary - the same blind spot that once hid two
+  Tk-only bugs. Children are destroyed first, then the widget's own
+  bindings run, exactly like Tk.
 - **A destroyed widget can no longer freeze every animation.** The shared
   16 ms `MotionController` called each tween frame unguarded, so when a
   density change rebuilt a page mid-animation its next frame painted a

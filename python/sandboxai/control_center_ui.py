@@ -1183,7 +1183,19 @@ class StatusDot(tk.Canvas):
         self._handle: int | None = None
         self._motion: MotionController | None = None
         self._unsubscribe = bus.subscribe(self.apply_theme, owner=self)
+        # A pulsing dot keeps the shared ticker alive; releasing the loop on
+        # destroy is what lets the window fall back to ~0 % CPU when nothing
+        # is animating (and a rebuilt page leaves no dead loop behind).
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self._draw(1.0)
+
+    def _on_destroy(self, event: object = None) -> None:
+        if getattr(event, "widget", None) is not self:
+            return
+        self._unsubscribe()
+        if self._handle is not None and self._motion is not None:
+            self._motion.cancel(self._handle)
+        self._handle = None
 
     def set_state(
         self, color: str, *, pulse: bool = False, motion: MotionController | None = None
