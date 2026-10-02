@@ -136,6 +136,38 @@ rather than overwriting the other preset. A preset from an older build is
 repaired on load: unknown cards are dropped and new cards appear with
 their defaults, so a stale preset can never break the window.
 
+**How the window stays still.** Tk re-lays out everything whose requested
+size changed, so a window built from cards that measure themselves can feed
+its own layout back into Tk forever. That is what used to happen: the
+benchmark workflow never settled (396 489 `<Configure>` events in half a
+second, and the desktop suite hung inside `update()`, which only returns
+when the event queue drains). The loop is pinned shut in four places.
+
+* A **card** (a frame whose content decides its size) paints its rounded
+  surface, accent rail and header on a canvas that is *placed* to fill it.
+  `place` never contributes to a requested size, so painting cannot resize
+  a card, and no card derives its own height from its geometry.
+* The **layout board** reacts to a *width* change only, and only when the
+  width clears a hysteresis band; the decision is debounced to one idle
+  tick, runs under a re-entrancy guard, and returns without touching a
+  single widget when the placement it computes is already on screen.
+* **Tables** keep their declared column widths and let Tk's own column
+  stretching fill spare width; nothing in Python rewrites a column width
+  after the table is built (a table that re-fits its columns to the width
+  it was just given produces the next Configure by itself).
+* **Split cards use grids.** `ttk.Panedwindow` re-arranges its panes
+  whenever a child reports a new requested size, and a table or a chart
+  reports exactly that; the two never settle. The static page suite fails
+  if a panedwindow comes back, and the smoke harness fails if a refresh
+  writes a table column.
+
+A table with no rows says why it is empty ("No runs found under the output
+root yet — launch a training run and it appears here while it trains"):
+headings over nothing read like a broken page. A page whose data is
+entirely absent prints one line under its heading telling the operator what
+to do next, and no table cell carries a bare "—" placeholder that could be
+mistaken for data.
+
 The layout state is also persisted without a preset, so closing and
 reopening the window keeps the arrangement. If `tkinter` is missing
 entirely, `main.py` still starts, prints the exact fix (`python3-tk`, or

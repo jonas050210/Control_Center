@@ -322,6 +322,29 @@ class ControlCenterConstructionTests(unittest.TestCase):
             attached = [child for child in board.winfo_children() if child.grid_info()]
             self.assertTrue(attached, f"{title}: no card on the board is attached")
 
+    def test_every_card_asks_for_a_real_size(self):
+        """A card must not collapse into the one-pixel line the tabs showed.
+
+        The reported symptom was every tab opening without content. The board
+        can look perfectly healthy while that happens - the card *is* gridded
+        and *is* attached - so this asks each card for the size it requests
+        from its own geometry manager. A card that derives its size from a body
+        it has not measured yet asks for a 1 px sliver, which is exactly how a
+        page renders as a heading over a line.
+        """
+        for page_class in PAGE_CLASSES:
+            title = page_class.title
+            self.app.show_page(title)
+            _pump_events(self.app, 0.2)
+            cards = _rounded_panels(self.app.pages[title])
+            self.assertTrue(cards, f"{title}: the page renders no card at all")
+            slivers = [
+                f"{card.winfo_reqwidth()}x{card.winfo_reqheight()}"
+                for card in cards
+                if card.winfo_reqwidth() < 40 or card.winfo_reqheight() < 24
+            ]
+            self.assertEqual(slivers, [], f"{title}: cards request a sliver: {slivers}")
+
     def test_stats_page_renders_the_contract_and_a_recorded_tick(self):
         """The Stats page must decode a real replay on the real window.
 
