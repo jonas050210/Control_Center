@@ -749,17 +749,19 @@ class TrainingAndBenchmarkPlanTests(unittest.TestCase):
         page._on_mode_changed("custom")
         self.assertEqual(page.current_plan()["errors"], [])
 
-        page.custom_env_var.set("64, 128")
+        page.custom_env_var.set("16, 32")
         page.custom_worker_var.set("nonsense")
         plan = page.current_plan()
         self.assertTrue(plan["errors"])
         self.assertEqual(str(page.run_button.cget("state")), "disabled")
 
-        page.custom_worker_var.set("32")
+        page.custom_worker_var.set("8, 64")
         plan = page.current_plan()
         # worker > envs is dropped with a warning rather than erroring out.
         self.assertEqual(plan["errors"], [])
+        self.assertEqual(plan["expected_configurations"], 2)
         self.assertTrue(plan["warnings"])
+        self.assertNotEqual(str(page.run_button.cget("state")), "disabled")
 
     def test_benchmark_auto_plan_covers_the_whole_host(self):
         self.app.show_page("Benchmarks")

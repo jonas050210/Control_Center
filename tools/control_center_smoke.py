@@ -1138,6 +1138,8 @@ def _exercise_benchmarks(page: object) -> None:
     if str(page.run_button.cget("state")) != "disabled":  # type: ignore[attr-defined]
         raise AssertionError("a malformed custom plan must disable the run button")
     page.custom_worker_var.set("4")  # type: ignore[attr-defined]
+    if str(page.run_button.cget("state")) == "disabled":  # type: ignore[attr-defined]
+        raise AssertionError("fixing the list must make the run button usable again")
 
 
 def _exercise_widgets(app: object) -> None:

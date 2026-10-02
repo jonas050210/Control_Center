@@ -933,6 +933,7 @@ def test_custom_benchmark_plan_skips_impossible_pairs():
     # 64 workers cannot be fed by 16 or 32 environments, so those pairs are
     # skipped rather than clamped into a duplicate of the 4-worker rows.
     assert view["expected_configurations"] == 2
+    assert view["warnings"], "dropping half the requested pairs must be said out loud"
     assert view["budget_mode"] == "time"
 
     broken = vm.benchmark_mode_view(

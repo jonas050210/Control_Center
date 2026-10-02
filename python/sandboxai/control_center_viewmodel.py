@@ -1923,6 +1923,12 @@ def _custom_benchmark_plan(
         1 for environment in environments for worker in workers if worker <= environment
     )
     view["expected_configurations"] = configurations
+    wanted = len(environments) * len(workers)
+    if 0 < configurations < wanted:
+        view["warnings"].append(
+            f"{wanted - configurations} of {wanted} requested configurations are skipped: "
+            "a worker count above the environment count cannot run"
+        )
     if configurations == 0 and not view["errors"]:
         view["errors"].append(
             "No valid pair: a worker count above the environment count is skipped"
