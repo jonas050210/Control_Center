@@ -36,6 +36,15 @@ records what changed and why.
   follows every arrow press, and the palette takes the keyboard focus once
   it is mapped (a window manager that keeps the focus on the parent window
   would otherwise leave it open but deaf).
+- **The wheel scrolls the whole page again.** A page scroll area only bound
+  the wheel on its own canvas, so with the pointer over a card's labels (the
+  normal place to be) nothing moved and the overlay scrollbar looked like
+  the only way down. The area now binds the wheel on the containing toplevel
+  and scrolls when the pointer is inside its content, while a log `Text`, a
+  table or the scrollbar itself keep the wheel and a wheel outside the area
+  leaves it alone. The smoke harness models Tk's bindtags (own bindings,
+  class, toplevel) so the routing is checked headlessly, and a real-Tk test
+  builds a deliberately overflowing page and drives both cases.
 - **One accent colour, free to choose.** Settings -> Appearance offers nine
   curated accents and a hex field; the colour is stored in the preferences
   and applied to *whichever* theme is active (`Theme.with_accent`), with

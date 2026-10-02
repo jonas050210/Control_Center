@@ -379,6 +379,10 @@ class SlimScrollbar(tk.Canvas):
     which is what stops the old "every table always has two bars" clutter.
     """
 
+    #: The wheel over the bar already scrolls the widget it is wired to (see
+    #: ``_on_wheel``), so a surrounding scroll area must stay put.
+    _cc_wheel_owner = True
+
     def __init__(
         self,
         parent: tk.Misc,
@@ -666,6 +670,23 @@ def attach_overlay_scrollbars(
     return vertical, horizontal_bar
 
 
+def _wheel_owner(widget: object) -> bool:
+    """True when the wheel already belongs to ``widget`` itself.
+
+    ``Treeview``, ``Text`` and ``Listbox`` scroll through Tk's class
+    bindings, and :class:`SlimScrollbar` carries its own handler; a page
+    scroll area that scrolled as well would move two viewports per click.
+    """
+    if getattr(widget, "_cc_wheel_owner", False):
+        return True
+    winfo_class = getattr(widget, "winfo_class", None)
+    if not callable(winfo_class):
+        return False
+    with contextlib.suppress(tk.TclError):
+        return winfo_class() in ("Treeview", "Text", "Listbox")
+    return False
+
+
 class ScrollArea(ttk.Frame):
     """A vertical scroll container for a page, with an overlay scrollbar.
 
@@ -673,6 +694,14 @@ class ScrollArea(ttk.Frame):
     scrollbar, until a window was mostly chrome. One scroll area per page
     keeps a single scroll context, and its scrollbar is invisible until the
     pointer is over the content or the wheel is used.
+
+    The wheel is bound on the containing *toplevel*, which Tk includes in the
+    bindtags of every descendant: a wheel event goes to the widget under the
+    pointer, so without that binding the page only scrolled when the pointer
+    happened to be over the canvas background - over a card's labels nothing
+    moved and the scrollbar looked like the only way down. Each area's
+    handler acts only when the pointer is inside *its* content and no inner
+    widget owns the wheel.
     """
 
     def __init__(
@@ -713,6 +742,12 @@ class ScrollArea(ttk.Frame):
         for sequence in ("<Enter>", "<MouseWheel>", "<Button-4>", "<Button-5>"):
             self.bind(sequence, self._on_interaction, add="+")
             self.canvas.bind(sequence, self._on_interaction, add="+")
+        self._wheel_toplevel = toplevel = self.canvas.winfo_toplevel()
+        self._wheel_bindings = [
+            (sequence, toplevel.bind(sequence, self._on_page_wheel, add="+"))
+            for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>")
+        ]
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self._unsubscribe = bus.subscribe(self.apply_theme)
 
     def apply_theme(self, theme: Theme) -> None:
@@ -729,6 +764,39 @@ class ScrollArea(ttk.Frame):
         # the window instead of leaving a dead gutter on the right.
         self.canvas.itemconfigure(self._window, width=event.width)
         self.scrollbar.set(*self.canvas.yview())
+
+    def _contains(self, widget: object) -> bool:
+        """True while ``widget`` sits inside this area's scrollable body."""
+        while widget is not None and widget is not self:
+            widget = getattr(widget, "master", None)
+        return widget is self
+
+    def _wheel_goes_inner(self, widget: object) -> bool:
+        """True when an inner widget of this area owns the wheel itself."""
+        node = widget
+        while node is not None and node is not self:
+            if _wheel_owner(node):
+                return True
+            node = getattr(node, "master", None)
+        return False
+
+    def _on_page_wheel(self, event: tk.Event) -> None:
+        """Toplevel wheel hook: scroll this area when the pointer is on it."""
+        widget = getattr(event, "widget", None)
+        if widget is self or widget is self.canvas:
+            return  # bound directly, and Tk calls those bindings before this one
+        if widget is None or not self._contains(widget) or self._wheel_goes_inner(widget):
+            return
+        self._on_interaction(event)
+
+    def _on_destroy(self, event: object = None) -> None:
+        """Drop the toplevel bindings so a rebuilt page leaves none behind."""
+        if getattr(event, "widget", None) is not self:
+            return
+        for sequence, funcid in self._wheel_bindings:
+            with contextlib.suppress(tk.TclError):
+                self._wheel_toplevel.unbind(sequence, funcid)
+        self._wheel_bindings = []
 
     def _on_interaction(self, event: tk.Event) -> None:
         self.scrollbar.reveal()

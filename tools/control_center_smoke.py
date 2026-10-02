@@ -200,6 +200,9 @@ class _Base:
         contract a pre-bound widget relies on; returns the same string so a
         caller can assert on it.
         """
+        # Tk sets %W to the widget the event was delivered to; handlers that
+        # ask "am I inside this scroll area?" depend on it.
+        kw = {"widget": self, **kw}
         if self._dispatch(sequence, kw) == "break":
             return "break"
         if self._tk_class_event(sequence) == "break":
@@ -265,6 +268,16 @@ class _Base:
 
     def bell(self):
         return None
+
+    # Real widgets expose both of these; product code walks ``master`` to find
+    # a theme bus or a scroll area's scope, so a ``_noop`` in their place would
+    # silently stop every such walk at the first hop.
+    @property
+    def master(self):
+        return self._tk_master
+
+    def winfo_class(self):
+        return type(self).__name__.lstrip("_")
 
     def __getattr__(self, name):
         if name.startswith("_"):
@@ -492,6 +505,12 @@ class Canvas(Widget):
 
     def yview_moveto(self, fraction):
         self._tk_options["yview"] = fraction
+        return None
+
+    def yview_scroll(self, number=0, what=None):
+        # The scroll areas move the view with this call, so the harness has to
+        # remember it: that is how a wheel check can see the page react.
+        self._tk_options.setdefault("yview_scrolls", []).append((number, what))
         return None
 
     def configure_scrollregion(self, *a):
@@ -1386,6 +1405,48 @@ def _exercise_widgets(app: object) -> None:
     animated.set("idle")
 
     ToolTip(row, "smoke tooltip", bus=app.bus)
+
+    _exercise_scroll_area(app, host)
+
+
+def _exercise_scroll_area(app: object, host: object) -> None:
+    """The wheel must scroll a page from anywhere over its content.
+
+    Tk delivers the wheel to the widget under the pointer, so the page used
+    to scroll only when the pointer happened to be over the canvas itself;
+    over a card's labels nothing moved and the scrollbar looked like the only
+    way down. The fake now delivers like Tk's bindtags (own bindings, class,
+    toplevel), which is what makes this check meaningful.
+    """
+    import tkinter as tk
+
+    from sandboxai.control_center_ui import ScrollArea
+
+    area = ScrollArea(host, app.bus, scale_px=app.px)  # type: ignore[attr-defined]
+    area.pack()
+    label = tk.Label(area.body, text="card label")
+    label.pack()
+
+    def scrolls() -> list:
+        return list(area.canvas._tk_options.get("yview_scrolls", []))
+
+    label.event_generate("<MouseWheel>", delta=-120)
+    if not scrolls():
+        raise AssertionError("the wheel over card content must scroll the page")
+    # A widget that scrolls itself keeps the wheel; the page must stay put.
+    text = tk.Text(area.body)
+    text.pack()
+    before = len(scrolls())
+    text.event_generate("<MouseWheel>", delta=-120)
+    if len(scrolls()) != before:
+        raise AssertionError("the wheel over a Text inside a page must not scroll the page")
+    # And a wheel outside the area must leave it alone.
+    outside = tk.Label(host, text="outside")
+    outside.pack()
+    before = len(scrolls())
+    outside.event_generate("<MouseWheel>", delta=-120)
+    if len(scrolls()) != before:
+        raise AssertionError("a wheel outside the page must not scroll it")
 
 
 def _assert_every_widget_uses_the_app_bus(app: object) -> None:

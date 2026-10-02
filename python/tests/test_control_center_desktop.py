@@ -239,6 +239,57 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.assertFalse(self.app._palette_window.winfo_exists())
         self.assertEqual(self.app._current.title, "Evaluations")
 
+    def test_the_wheel_scrolls_a_page_from_anywhere_over_its_content(self):
+        """The wheel must not need the pointer to be over the bare canvas.
+
+        Tk delivers the wheel to the widget under the pointer, so a page that
+        only binds it on its canvas does not move when the pointer is over a
+        card's labels - the scrollbar then looks like the only way down. A
+        widget that scrolls itself (a Text in a card) and anything outside
+        the area must keep the page still.
+        """
+        from sandboxai.control_center_ui import ScrollArea
+
+        host = tk.Frame(self.app)
+        self.addCleanup(host.destroy)
+        host.pack(fill="both", expand=True)
+        area = ScrollArea(host, self.app.bus, scale_px=self.app.px)
+        area.pack(fill="both", expand=True)
+        for index in range(120):
+            tk.Label(area.body, text=f"row {index}").pack()
+        self.app.update()
+        self.assertLess(area.canvas.yview()[1], 1.0, "the scratch page must overflow")
+
+        def wheel_down(widget: object) -> bool:
+            """One downwards wheel notch, spelled however this system does."""
+            before = area.canvas.yview()[0]
+            for sequence, options in (("<MouseWheel>", {"delta": -120}), ("<Button-5>", {})):
+                with contextlib.suppress(tk.TclError):
+                    widget.event_generate(sequence, **options)
+                self.app.update()
+                if area.canvas.yview()[0] > before:
+                    return True
+            return False
+
+        rows = area.body.winfo_children()
+        self.assertTrue(wheel_down(rows[5]), "the wheel over a card's label must scroll the page")
+
+        text = tk.Text(area.body, height=5)
+        text.pack()
+        self.app.update()
+        before = area.canvas.yview()[0]
+        with contextlib.suppress(tk.TclError):
+            text.event_generate("<MouseWheel>", delta=-120)
+        self.app.update()
+        self.assertEqual(area.canvas.yview()[0], before, "a Text keeps the wheel for itself")
+
+        outside = tk.Label(host, text="outside")
+        outside.pack()
+        self.app.update()
+        before = area.canvas.yview()[0]
+        self.assertFalse(wheel_down(outside), "a wheel outside the area must not scroll it")
+        self.assertEqual(area.canvas.yview()[0], before)
+
     def test_window_state_is_remembered_without_breaking_startup(self):
         """Maximized-ness is a preference, and saving it must never raise."""
         self.app.save_preferences()

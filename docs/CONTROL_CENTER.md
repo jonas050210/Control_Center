@@ -87,6 +87,14 @@ at first — the log text and its cursors, the selected rows, the page's
 scroll offset — and restores it on the fresh widgets, so the log does not
 blank out and the reading position survives.
 
+**Scrolling.** Tk delivers the wheel to the widget under the pointer, so a
+page scroll area binds it on the *containing toplevel* - the one tag Tk adds
+to every descendant's bindtags - and scrolls only when the pointer is inside
+its own content. Scrolling therefore works over a card's labels, not just
+over the bare canvas background, while a widget that scrolls itself (a log
+`Text`, a table, the overlay scrollbar) and anything outside the area keep
+the page still.
+
 **Movable cards.** Pages that declare widgets (Dashboard, Training,
 Benchmarks) are arranged by a layout board. On **Settings -> Layout
 studio** every card can be moved up/down, given a 1x/2x/3x span and
