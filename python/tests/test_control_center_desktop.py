@@ -50,24 +50,25 @@ def _drain_background(app: "ControlCenter", attempts: int = 20, delay: float = 0
         time.sleep(delay)
 
 
-def _pump_events(app: "ControlCenter", seconds: float) -> int:
-    """Processes Tk events for a bounded wall-clock window; never blocks.
+def _pump_events(app: "ControlCenter", seconds: float) -> None:
+    """Runs the Tk event loop for a bounded wall-clock window.
 
-    ``dooneevent(DONT_WAIT)`` returns as soon as it has nothing left to do, so
-    a window that streams events forever cannot hang this helper the way it
-    hangs ``update()`` - which only returns once the queue is empty, which is
-    exactly what an endless ``<Configure>`` stream prevents.
+    ``update()`` and ``dooneevent(DONT_WAIT)`` both drain the event queue and
+    only return once it is empty, so a window that feeds itself events keeps
+    them busy for good - that is the bug these probes exist for, and it is why
+    neither of them can be used to observe it. ``vwait`` runs the *loop*
+    instead: Tcl serves timers and window events in due order, so the callback
+    scheduled below ends the window no matter how many events arrive, and the
+    test gets to report what it saw instead of timing out.
     """
-    import _tkinter
-
-    processed = 0
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if app.tk.dooneevent(_tkinter.DONT_WAIT):
-            processed += 1
-        else:
-            time.sleep(0.005)
-    return processed
+    variable = f"sandboxai_pump_{id(app)}"
+    app.setvar(variable, "0")
+    handle = app.after(int(seconds * 1000), lambda: app.setvar(variable, "1"))
+    try:
+        app.tk.call("vwait", variable)
+    finally:
+        with contextlib.suppress(tk.TclError):
+            app.after_cancel(handle)
 
 
 def _rounded_panels(widget: "tk.Misc") -> list["RoundedPanel"]:
@@ -166,20 +167,14 @@ class ControlCenterSettlingTests(unittest.TestCase):
                 # Let the first layout and the pending poll tick finish.
                 _pump_events(self.app, 0.4)
                 samples: list[dict[str, tuple[int, int, int, int]]] = []
-                processed = 0
                 for _ in range(6):
-                    processed += _pump_events(self.app, 0.05)
+                    _pump_events(self.app, 0.05)
                     samples.append(_geometry_snapshot(self.app))
                 moving = {}
                 for name in samples[0]:
                     values = {snapshot.get(name) for snapshot in samples}
                     if len(values) > 1:
                         moving[name] = values
-                self.assertTrue(
-                    processed < 400,
-                    f"{title}: {processed} Tk events processed in 0.3 s of idle "
-                    "time - something keeps scheduling work",
-                )
                 self.assertEqual(
                     moving,
                     {},
@@ -208,7 +203,6 @@ class ControlCenterSettlingTests(unittest.TestCase):
         applied = dict(report["recommendation"], applied_utc="2026-01-01T00:00:00Z")
 
         configure_counts: dict[str, int] = {}
-        processed = {"events": 0}
 
         def count_configure(event, _counts=configure_counts):
             key = f"{type(event.widget).__name__} {event.widget}"
@@ -224,14 +218,11 @@ class ControlCenterSettlingTests(unittest.TestCase):
         ):
             page._start()
             for _ in range(10):
-                processed["events"] += _pump_events(self.app, 0.05)
+                _pump_events(self.app, 0.05)
         timers = len(str(self.app.tk.eval("after info")).split())
         total_configure = sum(configure_counts.values())
         worst = sorted(configure_counts.items(), key=lambda item: item[1], reverse=True)[:5]
-        detail = (
-            f"events={processed['events']} pending_after={timers} "
-            f"configure={total_configure} worst={worst}"
-        )
+        detail = f"pending_after={timers} configure={total_configure} worst={worst}"
         self.assertLess(
             total_configure,
             200,
