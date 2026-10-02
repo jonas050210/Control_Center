@@ -92,6 +92,11 @@ class Page(ttk.Frame):
     def __init__(self, parent: tk.Misc, app: Any) -> None:
         super().__init__(parent, padding=app.px(18, minimum=10))
         self.app = app
+        # Cached ThemeBus for helper widgets that discover it by walking up
+        # from themselves (see ToolTip) - a page constructs dozens of small
+        # widgets and forgetting `bus=` used to leave them on the default
+        # Corz palette forever.
+        self._cc_bus = app.bus
         # Typed deliberately: ``app`` is an untyped shell, but the adapter is
         # a real class, so every ``self.adapter.<call>`` on the pages is
         # checked against the adapter's public API. That is what catches a
@@ -1129,7 +1134,9 @@ class TrainingPage(Page):
         self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
         self.pause_button.pack(side="left")
         self._pause_tooltip = ToolTip(
-            self.pause_button, "Pause the training agent at its next safe boundary"
+            self.pause_button,
+            "Pause the training agent at its next safe boundary",
+            bus=self.app.bus,
         )
         self.resume_button = ttk.Button(
             actions, text="Resume", command=self._resume, state="disabled"
@@ -1256,7 +1263,7 @@ class TrainingPage(Page):
                 widget = ttk.Entry(cell, textvariable=var, width=18)
             widget.pack(fill="x", pady=(4, 2))
             if spec.help:
-                ToolTip(widget, spec.help)
+                ToolTip(widget, spec.help, bus=self.app.bus)
                 ttk.Label(
                     cell, text=spec.help, style="FieldHelp.TLabel", wraplength=210, justify="left"
                 ).pack(anchor="w")
@@ -1986,7 +1993,11 @@ class BenchmarkPage(Page):
             run_bar, text="Start benchmark", command=self._start, style="Primary.TButton"
         )
         self.run_button.pack(side="left")
-        ToolTip(self.run_button, "Run the complete automatic benchmark workflow")
+        ToolTip(
+            self.run_button,
+            "Run the complete automatic benchmark workflow",
+            bus=self.app.bus,
+        )
         self.cancel_button = ttk.Button(
             run_bar, text="Cancel", command=self._cancel, state="disabled"
         )
@@ -1996,7 +2007,7 @@ class BenchmarkPage(Page):
         )
         self.progress_label.pack(side="left", padx=(14, 0))
 
-        self.phase_stepper = PhaseStepper(intro)
+        self.phase_stepper = PhaseStepper(intro, bus=self.app.bus)
         self.phase_stepper.pack(fill="x", pady=(8, 2))
         self.phase_label = ttk.Label(
             intro, text="", foreground=self.palette.text_dim, justify="left"
@@ -2021,7 +2032,7 @@ class BenchmarkPage(Page):
             "Live telemetry",
             "Stage, throughput and the current leader while a run is active",
         )
-        self.live_cards = StatRow(card.body, self.LIVE_CARD_NAMES, max_columns=4)
+        self.live_cards = StatRow(card.body, self.LIVE_CARD_NAMES, max_columns=4, bus=self.app.bus)
         self.live_cards.pack(fill="x")
 
         best_card = self.card(
@@ -2065,7 +2076,10 @@ class BenchmarkPage(Page):
         )
         bottom.add(chart_card, weight=2)
         self.throughput_chart = LineChart(
-            chart_card.body, "Measured throughput (steps/s)", color=self.palette.accent
+            chart_card.body,
+            "Measured throughput (steps/s)",
+            color=self.palette.accent,
+            bus=self.app.bus,
         )
         self.throughput_chart.pack(fill="both", expand=True)
         return card
@@ -2899,11 +2913,11 @@ class RunsPage(Page):
         )
         bottom_split.add(chart_card, weight=2)
         self.run_reward_chart = LineChart(
-            chart_card.body, "Mean episode reward", color=self.palette.ok
+            chart_card.body, "Mean episode reward", color=self.palette.ok, bus=self.app.bus
         )
         self.run_reward_chart.pack(fill="both", expand=True, pady=(0, 4))
         self.run_fps_chart = LineChart(
-            chart_card.body, "Throughput (steps/s)", color=self.palette.accent
+            chart_card.body, "Throughput (steps/s)", color=self.palette.accent, bus=self.app.bus
         )
         self.run_fps_chart.pack(fill="both", expand=True)
 
@@ -3218,7 +3232,7 @@ class SystemPage(Page):
         area.pack(fill="both", expand=True)
         host = area.body
 
-        self.stats = StatRow(host, self.STAT_LABELS, max_columns=4)
+        self.stats = StatRow(host, self.STAT_LABELS, max_columns=4, bus=self.app.bus)
         self.stats.pack(fill="x")
 
         deps_card = self.card(host, "Optional dependencies & runtime capabilities")
@@ -3237,10 +3251,15 @@ class SystemPage(Page):
         charts_grid = ttk.Frame(chart_card.body, style="CardInner.TFrame")
         charts_grid.pack(fill="both", expand=True)
         self.cpu_chart = LineChart(
-            charts_grid, "CPU percent (this process)", color=self.palette.accent
+            charts_grid,
+            "CPU percent (this process)",
+            color=self.palette.accent,
+            bus=self.app.bus,
         )
         self.cpu_chart.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
-        self.rss_chart = LineChart(charts_grid, "Process RSS (MB)", color=self.palette.ok)
+        self.rss_chart = LineChart(
+            charts_grid, "Process RSS (MB)", color=self.palette.ok, bus=self.app.bus
+        )
         self.rss_chart.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
         charts_grid.columnconfigure(0, weight=1)
         charts_grid.columnconfigure(1, weight=1)
@@ -3549,7 +3568,7 @@ class SettingsPage(Page):
                 command=partial(self._pick_accent, color),
             )
             button.pack(side="left", padx=(0, 3))
-            ToolTip(button, f"{label} ({color})")
+            ToolTip(button, f"{label} ({color})", bus=self.app.bus)
             self._accent_swatches.append(button)
         self.accent_var = tk.StringVar(value=self.app.prefs.accent or self.app.palette.accent)
         entry = ttk.Entry(row, textvariable=self.accent_var, width=10)

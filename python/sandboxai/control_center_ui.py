@@ -392,6 +392,7 @@ class SlimScrollbar(tk.Canvas):
     ) -> None:
         self._theme = bus.theme
         self._bus = bus
+        self._cc_bus = self._bus
         self._orient = orient
         self._command = command
         self._thickness = thickness
@@ -685,6 +686,7 @@ class ScrollArea(ttk.Frame):
     ) -> None:
         super().__init__(parent, style=style)
         self._bus = bus
+        self._cc_bus = self._bus
         self._theme = bus.theme
         px = scale_px or (lambda value: value)
         self.canvas = tk.Canvas(
@@ -773,6 +775,7 @@ class RoundedPanel(tk.Canvas):
         body_style: str = "CardInner.TFrame",
     ) -> None:
         self._bus = bus
+        self._cc_bus = self._bus
         self._theme = bus.theme
         self._radius = radius
         self._padding = padding
@@ -903,6 +906,7 @@ class SegmentedControl(tk.Canvas):
         width: int = 0,
     ) -> None:
         self._bus = bus
+        self._cc_bus = self._bus
         self._theme = bus.theme
         self._segments = tuple(options)
         self._value = value or (self._segments[0][0] if self._segments else "")
@@ -1104,6 +1108,7 @@ class ToastHost:
         margin: int = 22,
     ) -> None:
         self._bus = bus
+        self._cc_bus = self._bus
         self._theme = bus.theme
         self._motion = motion
         self._width = width

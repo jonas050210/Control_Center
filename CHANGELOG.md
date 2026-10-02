@@ -16,6 +16,15 @@ records what changed and why.
   adjustable corner radius and optional glow/grid effects. All of it
   applies live, persists in `.sandboxai/ui/preferences.json` and never
   drops a font below the 11 px floor.
+- **Every widget follows the live theme again.** Eleven construction sites
+  (the benchmark phase stepper and live cards, the throughput and telemetry
+  charts, the System stat row, several tooltips) built their widget without
+  a `ThemeBus`, so those widgets subscribed to the module's default Corz
+  palette and never repainted on a theme or accent change - invisible
+  without a display. They now pass the shell's bus, a page stamps its bus
+  as `_cc_bus` so helper widgets can find it by walking up their parents,
+  and both the smoke harness and the real-Tk suite walk every page and fail
+  on a foreign bus.
 - **One accent colour, free to choose.** Settings -> Appearance offers nine
   curated accents and a hex field; the colour is stored in the preferences
   and applied to *whichever* theme is active (`Theme.with_accent`), with

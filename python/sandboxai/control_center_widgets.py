@@ -294,13 +294,33 @@ COLOR_BORDER = _DEFAULT_THEME.border
 COLOR_GRID = _DEFAULT_THEME.card_hover
 
 
+def _bus_from_ancestors(widget: tk.Misc) -> ThemeBus | None:
+    """The nearest ancestor's ThemeBus, for helpers built without one.
+
+    Widgets that take a bus stamp it as ``_cc_bus``, and a page stamps the
+    shell's bus on itself, so a small helper (a tooltip on a button, a chart
+    inside a card) can be constructed without repeating ``bus=`` and still
+    follow a live theme switch instead of the module's default palette.
+    """
+    node: Any = widget
+    seen = 0
+    while node is not None and seen < 64:
+        bus = getattr(node, "_cc_bus", None)
+        if isinstance(bus, ThemeBus):
+            return bus
+        node = getattr(node, "master", None)
+        seen += 1
+    return None
+
+
 class ToolTip:
     """Small, delayed keyboard/mouse help bubble for otherwise terse controls."""
 
     def __init__(self, widget: tk.Widget, text: str, *, bus: ThemeBus | None = None) -> None:
         self.widget = widget
         self.text = text
-        self.bus = bus or getattr(widget, "_cc_bus", None) or _DEFAULT_BUS
+        self.bus = bus or _bus_from_ancestors(widget) or _DEFAULT_BUS
+        self._cc_bus = self.bus
         self._after_id: str | None = None
         self._window: tk.Toplevel | None = None
         widget.bind("<Enter>", self._schedule, add="+")
@@ -378,6 +398,7 @@ class StatCard(ttk.Frame):
     ) -> None:
         super().__init__(parent, style="Card.TFrame", padding=(0, 0))
         self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
         self._theme = self._bus.theme
         self._motion = motion
         self._accent_bar = tk.Frame(self, height=2, background=self._theme.border, borderwidth=0)
@@ -442,6 +463,7 @@ class StatRow(ttk.Frame):
     ) -> None:
         super().__init__(parent)
         self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
         self._cards: dict[str, StatCard] = {}
         columns = min(max_columns, max(1, len(labels)))
         gap = self._bus.px(6, minimum=3)
@@ -486,6 +508,7 @@ class PhaseStepper(tk.Canvas):
         motion: MotionController | None = None,
     ) -> None:
         self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
         self._theme = self._bus.theme
         self._motion = motion
         super().__init__(
@@ -667,6 +690,7 @@ class LineChart(tk.Canvas):
         bus: ThemeBus | None = None,
     ) -> None:
         self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
         self._theme = self._bus.theme
         super().__init__(
             parent,

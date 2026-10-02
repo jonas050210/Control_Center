@@ -75,7 +75,13 @@ otherwise, and picking a theme's own accent is a no-op so the designed
 pair (Cyan with its deep-teal ink) is preserved exactly.
 
 A theme change only repaints (ttk styles, canvas colours and the table tag
-roles are re-applied). A **density** change has to rebuild the widgets so
+roles are re-applied). Every widget that draws itself subscribes to the
+window's `ThemeBus`; a widget constructed without one would silently fall
+back to the module's default palette and keep Corz colours forever, so the
+contract is checked twice - the smoke harness and the real-Tk suite each
+walk every page and fail if any widget carries a foreign bus. Helper
+widgets find the nearest bus by walking up their parents (`_cc_bus`), which
+keeps a tooltip or a chart correct even when a call site forgets `bus=`. A **density** change has to rebuild the widgets so
 the new paddings fit; that rebuild captures what the operator was looking
 at first — the log text and its cursors, the selected rows, the page's
 scroll offset — and restores it on the fresh widgets, so the log does not

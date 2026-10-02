@@ -1331,6 +1331,36 @@ def _exercise_widgets(app: object) -> None:
     ToolTip(row, "smoke tooltip", bus=app.bus)
 
 
+def _assert_every_widget_uses_the_app_bus(app: object) -> None:
+    """No widget may be left on the module's default palette.
+
+    A widget constructed without a bus silently subscribes to the *default*
+    theme, so it keeps Corz colours after the operator switches to Light or
+    changes the accent - invisible in a headless check and easy to miss in a
+    screenshot. Every widget that carries a bus must therefore carry the
+    application's own.
+    """
+
+    from sandboxai.control_center_ui import ThemeBus
+
+    app_bus = app.bus
+    offenders: list[str] = []
+    roots = [app, *app.pages.values()]
+    for root in roots:
+        pending = list(root.winfo_children())
+        while pending:
+            widget = pending.pop()
+            pending.extend(widget.winfo_children())
+            for attribute in ("_bus", "bus"):
+                value = getattr(widget, attribute, None)
+                if isinstance(value, ThemeBus) and value is not app_bus:
+                    offenders.append(
+                        f"{widget.winfo_class()} has a foreign theme bus on .{attribute}"
+                    )
+    if offenders:
+        raise AssertionError("; ".join(sorted(set(offenders))))
+
+
 def _exercise_page_handlers(app: object) -> None:
     """Call the selection handlers the tests cannot reach without a display."""
 
@@ -1450,6 +1480,9 @@ def run_smoke() -> int:
             app.show_page(title)
             app.pages[title].refresh()
             _drain(app)
+        for page_class in PAGE_CLASSES:
+            app.show_page(page_class.title)
+            _assert_every_widget_uses_the_app_bus(app)
 
     _step(failures, "show and refresh every page", sweep_pages)
     _step(failures, "themes, densities, motion levels", sweep_styles)

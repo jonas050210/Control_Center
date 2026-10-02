@@ -117,6 +117,31 @@ class ControlCenterConstructionTests(unittest.TestCase):
             self.assertNotEqual(scrollbar.winfo_manager(), "grid")
             self.assertFalse(scrollbar._overflow() and scrollbar.winfo_manager() == "")
 
+    def test_every_widget_follows_the_application_theme_bus(self):
+        """A widget built without a bus keeps the default palette forever.
+
+        That is invisible without a display: the widget subscribes to the
+        module's Corz default instead of the running window's bus, so it
+        never repaints when the operator switches theme or accent. The same
+        walk runs in the smoke harness; this is the real-Tk counterpart.
+        """
+        from sandboxai.control_center_ui import ThemeBus
+
+        for page_class in PAGE_CLASSES:
+            self.app.show_page(page_class.title)
+            offenders = []
+            pending = [self.app, *self.app.pages.values()]
+            while pending:
+                root = pending.pop()
+                children = list(root.winfo_children())
+                pending.extend(children)
+                for widget in children:
+                    for attribute in ("_bus", "bus"):
+                        value = getattr(widget, attribute, None)
+                        if isinstance(value, ThemeBus) and value is not self.app.bus:
+                            offenders.append(f"{widget.winfo_class()}.{attribute}")
+            self.assertEqual(offenders, [], f"{page_class.title}: {offenders}")
+
     def test_accent_and_preset_transfer_work_on_the_real_window(self):
         """Every page must repaint on the new accent, and presets must travel."""
         import json
