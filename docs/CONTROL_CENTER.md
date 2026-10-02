@@ -282,9 +282,13 @@ pixels, geometry or event dispatch — the `desktop-ui-tests` CI job runs it
 next to the real-Tk pytest file, and it is a development aid, not a
 substitute for that suite.
 
-Two source-level checks in `test_control_center_pages_static.py` are worth
-knowing about: every `ttk` style a widget asks for must be one the theme
-module configures (an unknown style is painted with the default look and
-is otherwise invisible), and every `hasattr(self.adapter, "...")` guard
+Three source-level checks in `test_control_center_pages_static.py` are
+worth knowing about: every `ttk` style a widget asks for must be one the
+theme module configures (an unknown style is painted with the default look
+and is otherwise invisible); every `hasattr(self.adapter, "...")` guard
 must name a real adapter method (a typo there silently disables a button
-on every machine).
+on every machine); and a class that inherits from a Tk widget must not
+assign an instance attribute that shadows a name Tk already defines —
+`self._options = (...)` on a `Canvas` subclass, for example, breaks widget
+construction with `TypeError: 'tuple' object is not callable` inside
+tkinter, which no headless check notices.

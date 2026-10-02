@@ -904,8 +904,8 @@ class SegmentedControl(tk.Canvas):
     ) -> None:
         self._bus = bus
         self._theme = bus.theme
-        self._options = tuple(options)
-        self._value = value or (self._options[0][0] if self._options else "")
+        self._segments = tuple(options)
+        self._value = value or (self._segments[0][0] if self._segments else "")
         self._on_change = on_change
         self._motion = motion
         self._positions: list[tuple[float, float]] = []
@@ -940,14 +940,14 @@ class SegmentedControl(tk.Canvas):
 
     def choices(self) -> tuple[str, ...]:
         """The visible labels, in order (``("Steps", "Time")``)."""
-        return tuple(label for _key, label in self._options)
+        return tuple(label for _key, label in self._segments)
 
     def labels(self) -> tuple[str, ...]:
         """Alias for :meth:`choices`, kept for call sites that think in labels."""
         return self.choices()
 
     def _index(self) -> int:
-        for index, (key, _label) in enumerate(self._options):
+        for index, (key, _label) in enumerate(self._segments):
             if key == self._value:
                 return index
         return 0
@@ -963,7 +963,7 @@ class SegmentedControl(tk.Canvas):
     def _on_click(self, event: tk.Event) -> None:
         for index, (start, end) in enumerate(self._positions):
             if start <= event.x <= end:
-                key = self._options[index][0]
+                key = self._segments[index][0]
                 if key != self._value:
                     self._value = key
                     self._animate_indicator()
@@ -972,10 +972,10 @@ class SegmentedControl(tk.Canvas):
                 return
 
     def _step(self, direction: int) -> None:
-        if not self._options:
+        if not self._segments:
             return
-        index = max(0, min(len(self._options) - 1, self._index() + direction))
-        key = self._options[index][0]
+        index = max(0, min(len(self._segments) - 1, self._index() + direction))
+        key = self._segments[index][0]
         if key != self._value:
             self._value = key
             self._animate_indicator()
@@ -1014,7 +1014,7 @@ class SegmentedControl(tk.Canvas):
         rounded_rect(
             self, 1, 1, width - 1, height - 1, height / 2, fill=theme.card, outline=theme.border
         )
-        count = max(1, len(self._options))
+        count = max(1, len(self._segments))
         segment = (width - 2) / count
         self._positions = [
             (1 + index * segment, 1 + (index + 1) * segment) for index in range(count)
@@ -1030,7 +1030,7 @@ class SegmentedControl(tk.Canvas):
             fill=theme.accent,
             outline=theme.accent,
         )
-        for index, (_key, label) in enumerate(self._options):
+        for index, (_key, label) in enumerate(self._segments):
             selected = index == self._index()
             self.create_text(
                 1 + index * segment + segment / 2,

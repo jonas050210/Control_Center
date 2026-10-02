@@ -27,6 +27,50 @@ from optional_deps import HAS_TKINTER, TKINTER_REASON
 PACKAGE = Path(__file__).resolve().parents[2] / "python" / "sandboxai"
 PAGES_SOURCE = PACKAGE / "control_center_pages.py"
 
+#: Every module that builds real Tk widgets.
+GUI_MODULES = (
+    PACKAGE / "control_center_desktop.py",
+    PACKAGE / "control_center_pages.py",
+    PACKAGE / "control_center_ui.py",
+    PACKAGE / "control_center_widgets.py",
+)
+
+#: Names every Tk widget already carries from ``Misc``/``BaseWidget``. An
+#: instance attribute with one of these names shadows Tk's own machinery,
+#: and that failure only surfaces on a machine with a real Tk:
+#: ``self._options = (...)`` turned ``Canvas.__init__`` into
+#: ``TypeError: 'tuple' object is not callable`` *inside tkinter*, which the
+#: headless suite never saw. This check runs everywhere.
+TKINTER_INTERNALS = frozenset(
+    {
+        "_bind",
+        "_configure",
+        "_displayof",
+        "_getboolean",
+        "_getconfigure",
+        "_getdoubles",
+        "_getints",
+        "_grid_configure",
+        "_last_child_ids",
+        "_name",
+        "_nametowidget",
+        "_options",
+        "_register",
+        "_report_exception",
+        "_root",
+        "_setup",
+        "_subst_format",
+        "_subst_format_dyn",
+        "_tclCommands",
+        "_w",
+        "_windowingsystem",
+        "children",
+        "master",
+        "tk",
+        "widgetName",
+    }
+)
+
 #: The shell (``control_center_desktop.ControlCenter``) calls these.
 PAGE_API = (
     "build",
@@ -210,7 +254,7 @@ class PageContractTests(unittest.TestCase):
             with self.subTest(page=title):
                 self.assertTrue(specs, f"{title} is registered with no widgets")
                 ids = [spec.widget_id for spec in specs]
-                self.assertEqual(ids, sorted(set(ids)), f"{title} lists a widget twice")
+                self.assertEqual(len(ids), len(set(ids)), f"{title} lists a widget twice: {ids}")
                 for spec in specs:
                     self.assertLessEqual(spec.min_span, spec.max_span)
                     self.assertLessEqual(spec.default_span, spec.max_span)
@@ -422,6 +466,71 @@ class FontFloorTests(unittest.TestCase):
             [],
             "font sizes below the 11 px floor belong in the theme, not in a widget: "
             + "; ".join(offenders),
+        )
+
+
+def _base_names(node: ast.ClassDef) -> list[str]:
+    """Base classes as written: ``tk.Canvas`` stays qualified, ``Page`` bare."""
+    names: list[str] = []
+    for base in node.bases:
+        if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+            names.append(f"{base.value.id}.{base.attr}")
+        elif isinstance(base, ast.Name):
+            names.append(base.id)
+    return names
+
+
+def _tk_widget_classes(tree: ast.Module) -> dict[str, ast.ClassDef]:
+    """Classes that inherit from a ``tk.``/``ttk.`` widget, transitively."""
+    classes = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+    widgets = {
+        name
+        for name, node in classes.items()
+        if any(base.startswith(("tk.", "ttk.")) for base in _base_names(node))
+    }
+    growing = True
+    while growing:
+        growing = False
+        for name, node in classes.items():
+            if name in widgets or not any(base in widgets for base in _base_names(node)):
+                continue
+            widgets.add(name)
+            growing = True
+    return {name: classes[name] for name in widgets}
+
+
+def _assigned_self_attributes(node: ast.ClassDef) -> set[str]:
+    """Every ``self.<name> = ...`` inside a class body."""
+    names: set[str] = set()
+    for statement in ast.walk(node):
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            continue
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        for target in targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "self"
+            ):
+                names.add(target.attr)
+    return names
+
+
+class TkInternalsShadowTests(unittest.TestCase):
+    """A widget subclass must not take over names Tk puts on every widget."""
+
+    def test_widget_subclasses_leave_tkinter_internals_alone(self) -> None:
+        offenders: list[str] = []
+        for path in GUI_MODULES:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for name, node in _tk_widget_classes(tree).items():
+                for attribute in sorted(_assigned_self_attributes(node) & TKINTER_INTERNALS):
+                    offenders.append(f"{path.name}:{node.lineno}: {name}.{attribute}")
+        self.assertEqual(
+            offenders,
+            [],
+            "these instance attributes shadow names tkinter already puts on every "
+            "widget; they only fail on a real Tk build: " + "; ".join(offenders),
         )
 
 

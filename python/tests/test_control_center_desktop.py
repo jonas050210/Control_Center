@@ -111,7 +111,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
                 f"{title}'s {attribute} reports horizontal movement to a scrollbar",
             )
             scrollbar = table._horizontal_scrollbar
-            self.assertEqual(str(scrollbar.cget("orient")), "horizontal")
+            self.assertEqual(scrollbar._orient, "horizontal")
             # An overlay bar is placed, never gridded into the layout, and it
             # hides itself while everything fits.
             self.assertNotEqual(scrollbar.winfo_manager(), "grid")
@@ -330,7 +330,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
         panel._on_wrap_toggled()
         self.app.update()
         self.assertEqual(str(panel.text.cget("wrap")), "none")
-        self.assertEqual(str(panel._xscroll.cget("orient")), "horizontal")
+        self.assertEqual(panel._xscroll._orient, "horizontal")
         self.assertNotEqual(panel._xscroll.winfo_manager(), "grid")
         self.assertTrue(
             panel.text.cget("xscrollcommand"),
