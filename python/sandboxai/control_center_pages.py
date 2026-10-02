@@ -10,6 +10,7 @@ import contextlib
 import threading
 import tkinter as tk
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -25,7 +26,16 @@ from .control_center_layout import (
     set_span,
     set_visible,
 )
-from .control_center_theme import DENSITIES, LAYOUT_MODES, MOTION_LEVELS, THEME_NAMES, THEMES, Theme
+from .control_center_theme import (
+    ACCENT_PRESETS,
+    DENSITIES,
+    LAYOUT_MODES,
+    MOTION_LEVELS,
+    THEME_NAMES,
+    THEMES,
+    Theme,
+    normalize_accent,
+)
 from .control_center_ui import (
     LayoutBoard,
     ScrollArea,
@@ -230,9 +240,38 @@ class Page(ttk.Frame):
         for area in self._scroll_areas():
             with contextlib.suppress(tk.TclError):
                 scroll.append(float(area.canvas.yview()[0]))
-        return {"logs": logs, "selections": selections, "scroll": scroll}
+        return {
+            "logs": logs,
+            "selections": selections,
+            "scroll": scroll,
+            "focus": self._focused_attribute(),
+        }
+
+    def _focused_attribute(self) -> str:
+        """Attribute name of the focused widget, when it is one of ours.
+
+        After a rebuild the operator should keep typing where they were
+        (the log, a table, a form field), so the keyboard focus is restored
+        to the same *element*, not to whatever happens to be first.
+        """
+        try:
+            focused = self.focus_get()
+        except (tk.TclError, KeyError):  # a destroyed widget has no focus
+            return ""
+        if focused is None:
+            return ""
+        for name, value in vars(self).items():
+            if value is focused:
+                return name
+        return ""
 
     def _restore_view_state(self, state: dict[str, Any]) -> None:
+        focus_name = str(state.get("focus") or "")
+        if focus_name:
+            widget = getattr(self, focus_name, None)
+            if widget is not None:
+                with contextlib.suppress(tk.TclError):
+                    widget.focus_set()
         for name, snapshot in state["logs"].items():
             panel = getattr(self, name, None)
             if isinstance(panel, LogPanel):
@@ -3462,6 +3501,8 @@ class SettingsPage(Page):
         )
         scale.pack(anchor="w")
 
+        self._build_accent_row(card.body)
+
         toggles = ttk.Frame(card.body, style="CardInner.TFrame")
         toggles.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
         self.glow_var = tk.BooleanVar(value=self.app.prefs.show_glow)
@@ -3485,11 +3526,85 @@ class SettingsPage(Page):
             command=self._reset_appearance,
         ).pack(side="right")
 
+    def _build_accent_row(self, parent: tk.Misc) -> None:
+        """Accent colour: quick swatches plus a hex field for anything else."""
+        row = ttk.Frame(parent, style="CardInner.TFrame")
+        row.pack(fill="x", pady=(self.app.px(10, minimum=5), 0))
+        ttk.Label(row, text="Accent", style="FieldTitle.TLabel").pack(side="left", padx=(0, 8))
+        swatches = ttk.Frame(row, style="CardInner.TFrame")
+        swatches.pack(side="left")
+        self._accent_swatches: list[tk.Widget] = []
+        for color, label in ACCENT_PRESETS:
+            button = tk.Button(
+                swatches,
+                text="",
+                width=2,
+                height=1,
+                background=color,
+                activebackground=color,
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+                cursor="hand2",
+                command=partial(self._pick_accent, color),
+            )
+            button.pack(side="left", padx=(0, 3))
+            ToolTip(button, f"{label} ({color})")
+            self._accent_swatches.append(button)
+        self.accent_var = tk.StringVar(value=self.app.prefs.accent or self.app.palette.accent)
+        entry = ttk.Entry(row, textvariable=self.accent_var, width=10)
+        entry.pack(side="left", padx=(self.app.px(10, minimum=6), 4))
+        entry.bind("<Return>", lambda _event: self._apply_accent())
+        ttk.Button(row, text="Apply", command=self._apply_accent).pack(side="left")
+        ttk.Button(
+            row,
+            text="Theme accent",
+            style="Ghost.TButton",
+            command=self._clear_accent,
+        ).pack(side="left", padx=(6, 0))
+        self.accent_hint = ttk.Label(row, text="", style="FieldHelp.TLabel")
+        self.accent_hint.pack(side="left", padx=(self.app.px(10, minimum=6), 0))
+        self._refresh_accent_hint()
+
+    def _refresh_accent_hint(self) -> None:
+        hint = getattr(self, "accent_hint", None)
+        if hint is None:
+            return
+        current = self.app.prefs.accent
+        hint.configure(
+            text=(
+                f"Custom accent {current} (every theme wears it)"
+                if current
+                else "Using the theme's own accent"
+            )
+        )
+
+    def _pick_accent(self, color: str) -> None:
+        if self.app.set_accent(color):
+            self.accent_var.set(color)
+            self._refresh_accent_hint()
+
+    def _apply_accent(self) -> None:
+        typed = self.accent_var.get().strip()
+        if typed and not normalize_accent(typed):
+            self.app.notify(f"'{typed}' is not a colour like #4F7CFF", kind="error")
+            return
+        if self.app.set_accent(typed):
+            self._refresh_accent_hint()
+
+    def _clear_accent(self) -> None:
+        self.app.set_accent("")
+        self.accent_var.set(self.app.palette.accent)
+        self._refresh_accent_hint()
+
     def _on_theme_selected(self, _event: object = None) -> None:
         labels = {THEMES[name].label: name for name in THEME_NAMES}
         picked = labels.get(str(self.theme_var.get()))
         if picked:
             self.app.set_theme(picked)
+            if not self.app.prefs.accent:
+                self.accent_var.set(self.app.palette.accent)
+            self._refresh_accent_hint()
 
     def _on_layout_selected(self, _event: object = None) -> None:
         modes = {label: key for key, label in LAYOUT_MODES.items()}
@@ -3520,6 +3635,7 @@ class SettingsPage(Page):
         self.app.notify("Visual effects updated", kind="info", timeout_ms=1800)
 
     def _reset_appearance(self) -> None:
+        self.app.set_accent("")
         self.app.set_theme("corz")
         self.app.set_density("comfort")
         self.app.set_motion("normal")
@@ -3691,6 +3807,57 @@ class SettingsPage(Page):
             card.body, text="", style="FieldHelp.TLabel", wraplength=self.app.px(880, minimum=420)
         )
         self.preset_status_label.pack(anchor="w", pady=(self.app.px(8, minimum=4), 0))
+
+        transfer = ttk.Frame(card.body, style="CardInner.TFrame")
+        transfer.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
+        ttk.Label(
+            transfer,
+            text="Share or back up a preset as a file",
+            style="FieldHelp.TLabel",
+        ).pack(side="left", padx=(0, 10))
+        ttk.Button(
+            transfer, text="Export…", style="Ghost.TButton", command=self._export_preset
+        ).pack(side="left")
+        ttk.Button(
+            transfer, text="Import…", style="Ghost.TButton", command=self._import_preset
+        ).pack(side="left", padx=(6, 0))
+        self._refresh_preset_list()
+
+    def _export_preset(self) -> None:
+        """Write the selected preset to a file the operator chooses."""
+        selected = self.preset_choice_var.get().strip()
+        if not selected:
+            self.app.notify("Select a preset to export", kind="warn")
+            return
+        target = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export preset",
+            defaultextension=".json",
+            initialfile=f"{selected}.json",
+            filetypes=[("Preset JSON", "*.json"), ("All files", "*.*")],
+        )
+        if target:
+            self.app.export_layout_preset(selected, target)
+
+    def _import_preset(self) -> None:
+        """Add a preset from a file, asking before a name is replaced."""
+        source = filedialog.askopenfilename(
+            parent=self,
+            title="Import preset",
+            filetypes=[("Preset JSON", "*.json"), ("All files", "*.*")],
+        )
+        if not source:
+            return
+        name = self.app.preset_name_for_import(source)
+        if name and name in self.app.list_layout_presets():
+            if not messagebox.askyesno(
+                "Preset already exists",
+                f"A preset named '{name}' already exists.\nReplace it with the imported one?",
+            ):
+                return
+            self.app.import_layout_preset(source, overwrite=True)
+        else:
+            self.app.import_layout_preset(source)
         self._refresh_preset_list()
 
     def _refresh_preset_list(self) -> None:

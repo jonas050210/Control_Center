@@ -16,6 +16,31 @@ records what changed and why.
   adjustable corner radius and optional glow/grid effects. All of it
   applies live, persists in `.sandboxai/ui/preferences.json` and never
   drops a font below the 11 px floor.
+- **One accent colour, free to choose.** Settings -> Appearance offers nine
+  curated accents and a hex field; the colour is stored in the preferences
+  and applied to *whichever* theme is active (`Theme.with_accent`), with
+  the label ink derived from it (white while a bold UI label keeps its 3:1
+  contrast, dark otherwise). Picking a theme's own accent is a no-op, so
+  the designed pairs stay as authored. Presets carry the accent too.
+  Fixed along the way: `Theme.contrast_ratio` unpacked `sorted()` the wrong
+  way round and reported the reciprocal of the WCAG ratio (a 3.7:1 pair
+  came back as 0.27); it had no caller, which is why it survived, and it
+  now has tests.
+- **Preset export/import.** A preset can be written to a JSON file and read
+  back on another machine or project (`PresetStore.export` /
+  `import_preset`, Settings -> Presets). The exported document carries
+  layout, appearance, accent and note; an import keeps the name inside the
+  file and refuses to replace an existing preset unless that is confirmed.
+- **The window remembers being maximized.** `UiPreferences.zoomed` is
+  saved with the geometry and re-applied at startup (best effort: a window
+  manager that does not support `state("zoomed")` must not break startup).
+- **A density rebuild keeps the keyboard focus**, not just the log, the
+  selections and the scroll offsets.
+- **`tools/desktop_tests.py`.** One command that runs the real-Tk desktop
+  suite when the machine can (Tkinter + display, or `xvfb-run`) and falls
+  back to the static contracts and the smoke harness otherwise, printing
+  the exact package to install. `--strict` fails instead of falling back;
+  the `desktop-ui-tests` CI job now goes through that script.
 - **Restyles keep the view.** Switching density rebuilds a page's widgets
   (the new paddings have to be laid out, not patched), which used to blank
   the log panel, drop the selected rows and jump the page back to the top.

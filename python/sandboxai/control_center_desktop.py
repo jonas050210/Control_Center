@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import tkinter as tk
+from pathlib import Path
 from tkinter import (  # messagebox re-export keeps the public test/embedding seam stable
     messagebox,
     ttk,
@@ -63,6 +64,7 @@ from .control_center_theme import (
     apply_ttk_styles,
     enable_dpi_awareness,
     get_theme,
+    normalize_accent,
     prefs_as_dict,
 )
 from .control_center_ui import (
@@ -94,7 +96,7 @@ class ControlCenter(tk.Tk):
         self.prefs_store = PreferencesStore(self.adapter.project_root)
         self.prefs: UiPreferences = self.prefs_store.load()
         self.bus = ThemeBus(
-            get_theme(self.prefs.theme),
+            get_theme(self.prefs.theme, self.prefs.accent),
             scale=self.scale,
             density=DENSITIES.get(self.prefs.density, DENSITIES["comfort"]),
         )
@@ -152,6 +154,12 @@ class ControlCenter(tk.Tk):
     def _apply_window_geometry(self) -> None:
         self.geometry(self.prefs.geometry or "1720x1000")
         self.minsize(self.px(1280, minimum=1000), self.px(800, minimum=640))
+        if self.prefs.zoomed:
+            # Restore a maximized window as maximized; `state("zoomed")` is
+            # the Tk spelling on Windows and on X11 alike, and a window
+            # manager that does not support it must not break startup.
+            with contextlib.suppress(tk.TclError):
+                self.state("zoomed")
         if self.prefs.show_grid:
             with contextlib.suppress(tk.TclError):
                 self.option_add("*Canvas.background", self.bus.theme.bg)
@@ -160,6 +168,7 @@ class ControlCenter(tk.Tk):
         """Persist theme/layout/density/motion, window size and last page."""
         with contextlib.suppress(tk.TclError):
             self.prefs.geometry = self.winfo_geometry()
+            self.prefs.zoomed = self.state() == "zoomed"
         self.prefs.theme = self.bus.theme.name
         self.prefs.density = self.bus.density.name
         self.prefs.motion = self.motion.level
@@ -172,7 +181,7 @@ class ControlCenter(tk.Tk):
 
     def set_theme(self, name: str, *, persist: bool = True) -> None:
         """Switch the palette and repaint the whole window."""
-        theme = get_theme(name)
+        theme = get_theme(name, self.prefs.accent)
         self.prefs.theme = theme.name
         self.bus.set_theme(
             theme, scale=self.scale, density=DENSITIES.get(self.prefs.density, DENSITIES["comfort"])
@@ -184,6 +193,38 @@ class ControlCenter(tk.Tk):
         if persist:
             self.save_preferences()
         self.notify(f"Theme: {theme.label}", kind="info", timeout_ms=2200)
+
+    def set_accent(self, value: str, *, persist: bool = True) -> bool:
+        """Override the accent colour of whichever theme is active.
+
+        ``""`` restores the theme's own designed accent. An unusable value is
+        refused with a message instead of being applied half-way, and the
+        chosen colour is stored in the preferences so it survives a restart.
+        """
+        accent = normalize_accent(value)
+        if value and not accent:
+            self.notify(f"'{value}' is not a colour like #4F7CFF", kind="error")
+            return False
+        self.prefs.accent = accent
+        self._reapply_appearance()
+        if persist:
+            self.save_preferences()
+        self.notify(
+            "Accent: theme default" if not accent else f"Accent: {accent}",
+            kind="info",
+            timeout_ms=2200,
+        )
+        return True
+
+    def _reapply_appearance(self) -> None:
+        """Re-apply theme colours from the current preferences to every page."""
+        theme = get_theme(self.prefs.theme, self.prefs.accent)
+        density = DENSITIES.get(self.prefs.density, DENSITIES["comfort"])
+        self.bus.set_theme(theme, scale=self.scale, density=density)
+        self.style = apply_ttk_styles(self, theme, density=density, scale=self.scale)
+        self._restyle_shell()
+        for page in self.pages.values():
+            page.on_theme(theme)
 
     def set_density(self, name: str, *, persist: bool = True) -> None:
         """Switch spacing/row height and rebuild the built pages."""
@@ -244,6 +285,7 @@ class ControlCenter(tk.Tk):
                 "radius": self.prefs.radius,
                 "show_glow": self.prefs.show_glow,
                 "show_grid": self.prefs.show_grid,
+                "accent": self.prefs.accent,
             },
             note=note,
         )
@@ -265,14 +307,24 @@ class ControlCenter(tk.Tk):
         previous_mode = self.prefs.layout
         appearance = document.get("appearance")
         if isinstance(appearance, dict):
+            accent = appearance.get("accent")
+            if isinstance(accent, str):
+                # Old presets have no accent; they keep whatever is active.
+                self.prefs.accent = normalize_accent(accent)
             theme = appearance.get("theme")
             if isinstance(theme, str) and theme in THEMES:
-                self.bus.set_theme(get_theme(theme), scale=self.scale, density=self.bus.density)
+                self.bus.set_theme(
+                    get_theme(theme, self.prefs.accent),
+                    scale=self.scale,
+                    density=self.bus.density,
+                )
                 self.prefs.theme = theme
                 self.style = apply_ttk_styles(
                     self, self.bus.theme, density=self.bus.density, scale=self.scale
                 )
                 self._restyle_shell()
+                for page in self.pages.values():
+                    page.on_theme(self.bus.theme)
             density = appearance.get("density")
             if isinstance(density, str) and density in DENSITIES:
                 self.prefs.density = density
@@ -310,6 +362,35 @@ class ControlCenter(tk.Tk):
             self.save_preferences()
         self.notify(f"Preset renamed: {old} → {renamed}", kind="info")
         return True
+
+    def export_layout_preset(self, name: str, target: str | Path) -> bool:
+        """Write one preset to ``target`` so it can be shared or backed up."""
+        try:
+            written = self.preset_store.export(name, Path(target))
+        except (PresetError, OSError) as exc:
+            self.notify(f"Preset could not be exported: {exc}", kind="error")
+            return False
+        self.notify(f"Preset exported to {written}", kind="ok")
+        return True
+
+    def preset_name_for_import(self, source: str | Path) -> str:
+        """The preset name an import file would take (``""`` when unusable)."""
+        return self.preset_store.import_target_name(source)
+
+    def import_layout_preset(self, source: str | Path, *, overwrite: bool = False) -> str | None:
+        """Add a preset from a file, keeping the local library intact.
+
+        The name comes from the file. An existing preset of that name is
+        refused unless ``overwrite`` is set, so importing a stranger's
+        export cannot silently replace the operator's own arrangement.
+        """
+        try:
+            imported = self.preset_store.import_preset(Path(source), overwrite=overwrite)
+        except (PresetError, OSError) as exc:
+            self.notify(f"Preset could not be imported: {exc}", kind="error")
+            return None
+        self.notify(f"Preset imported: {imported}", kind="ok")
+        return imported
 
     def delete_layout_preset(self, name: str) -> bool:
         """Delete a preset, clearing the active marker when it was the one."""

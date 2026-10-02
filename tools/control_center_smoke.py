@@ -1104,6 +1104,66 @@ def _exercise_presets(page: object) -> None:
     page._delete_preset()  # type: ignore[attr-defined]
 
 
+def _exercise_accent(app: object) -> None:
+    """Pick a curated accent, type a hex value, then fall back to the theme."""
+    page = app.pages["Settings"]
+    page._pick_accent("#F5A524")  # type: ignore[attr-defined]
+    if app.palette.accent.lower() != "#f5a524":
+        raise AssertionError(f"a picked accent did not reach the palette: {app.palette.accent}")
+    if app.prefs.accent.lower() != "#f5a524":
+        raise AssertionError("a picked accent was not remembered in the preferences")
+    page.accent_var.set("#22D3EE")
+    page._apply_accent()  # type: ignore[attr-defined]
+    if app.palette.accent.lower() != "#22d3ee":
+        raise AssertionError("a typed accent was not applied")
+    page.accent_var.set("not a colour")
+    page._apply_accent()  # type: ignore[attr-defined]
+    if app.prefs.accent.lower() != "#22d3ee":
+        raise AssertionError("an unusable accent must be refused, not stored")
+    page._clear_accent()  # type: ignore[attr-defined]
+    if app.prefs.accent:
+        raise AssertionError("clearing the accent must return to the theme's own")
+    if page.accent_hint.cget("text") and "theme" not in str(page.accent_hint.cget("text")).lower():
+        raise AssertionError("the accent hint must say which accent is active")
+
+
+def _exercise_preset_transfer(app: object) -> None:
+    """Export a preset to a file, import it back under a new name."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    page = app.pages["Settings"]
+    page.preset_name_var.set("smoke export")  # type: ignore[attr-defined]
+    page._save_preset()  # type: ignore[attr-defined]
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "exported.json"
+        if not app.export_layout_preset("smoke export", target):
+            raise AssertionError("export_layout_preset reported failure")
+        if not target.is_file():
+            raise AssertionError("export_layout_preset wrote no file")
+        document = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(document.get("layout"), dict):
+            raise AssertionError("an exported preset must carry its layout")
+        document["name"] = "smoke imported"
+        target.write_text(json.dumps(document), encoding="utf-8")
+        imported = app.import_layout_preset(target)
+        if imported != "smoke imported":
+            raise AssertionError(f"import did not produce the expected name: {imported!r}")
+        if "smoke imported" not in app.list_layout_presets():
+            raise AssertionError("an imported preset must appear in the preset list")
+        # A clash is refused unless overwriting is asked for.
+        if app.import_layout_preset(target) is not None:
+            raise AssertionError("importing onto an existing name must be refused")
+        if app.import_layout_preset(target, overwrite=True) != "smoke imported":
+            raise AssertionError("importing with overwrite=True must succeed")
+        if app.preset_name_for_import(target) != "smoke imported":
+            raise AssertionError("preset_name_for_import must report the target name")
+    for name in ("smoke export", "smoke imported"):
+        app.pages["Settings"].preset_choice_var.set(name)  # type: ignore[attr-defined]
+        app.pages["Settings"]._delete_preset()  # type: ignore[attr-defined]
+
+
 def _exercise_appearance(page: object) -> None:
     page.theme_var.set("Neon Lime")  # type: ignore[attr-defined]
     page._on_theme_selected()  # type: ignore[attr-defined]
@@ -1356,6 +1416,8 @@ def run_smoke() -> int:
         _exercise_shell(app, PAGE_CLASSES)
         _exercise_studio(app.pages["Settings"], PAGE_WIDGETS)
         _exercise_presets(app.pages["Settings"])
+        _exercise_preset_transfer(app)
+        _exercise_accent(app)
         _exercise_appearance(app.pages["Settings"])
         app.show_page("Training")
         _exercise_training(app.pages["Training"])

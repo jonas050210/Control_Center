@@ -27,7 +27,7 @@ the two must not contradict each other.
 | **No Godot binary**, and the release download is network-blocked | You cannot run the GDScript suite. Use `gdlint`, `gdformat --check` and `sandboxai.gdscript_analysis.analyze('.')`. The `godot-tests.yml` CI job is the real check. |
 | System Python is **PEP 668 managed** | `pip install -e .` fails. Create a venv: `python3 -m venv /tmp/venv`. |
 | `download.pytorch.org` is **SSL-blocked** locally | Install torch from PyPI locally. CI uses the CPU index, where it works. |
-| `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally (one of 9 skips). CI job `desktop-ui-tests` covers it. Use `python3 tools/control_center_smoke.py` to at least construct and drive the real GUI against a fake `tkinter` (wiring, not pixels). |
+| `python3-tk` / `xvfb` **cannot be apt-installed** | `test_control_center_desktop.py` is skipped locally (one of 9 skips). CI job `desktop-ui-tests` covers it. Use `python3 tools/desktop_tests.py`: it runs the real suite when Tk and a display (or `xvfb-run`) exist and otherwise falls back to the static contracts plus `tools/control_center_smoke.py`, printing the exact package to install. `--strict` fails instead of falling back - that is what CI runs. |
 
 Setup that works:
 
@@ -49,6 +49,7 @@ gdlint scripts tests         # Success: no problems found
 gdformat --check scripts tests
 PYTHONPATH=python python -m pytest -q
 python3 tools/control_center_smoke.py   # all smoke steps passed
+python3 tools/desktop_tests.py          # real-Tk suite, or the fallback + how to enable it
 ```
 
 The last line is the headless GUI run: it builds every page, cycles every

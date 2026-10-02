@@ -392,6 +392,80 @@ class PresetStore:
             return None
         return deserialize(layout, registry)
 
+    def export(self, name: str, target: str | Path) -> Path:
+        """Write one preset to ``target`` (a file), for sharing or backup.
+
+        The document is written exactly as it is stored, so an exported
+        preset and its local original describe the same arrangement. The
+        "name" field keeps the preset's name rather than the file's, so an
+        import can restore it under the name the operator gave it.
+        """
+        raw = self.load(name)
+        if raw is None:
+            raise PresetError(self.error or f"preset '{name}' could not be read")
+        path = Path(target).expanduser()
+        if path.is_dir():
+            path = path / f"{safe_preset_name(name)}.json"
+        raw["name"] = safe_preset_name(name)
+        try:
+            self._atomic_json(path, raw)
+        except OSError as exc:
+            raise PresetError(f"{path}: {exc}") from exc
+        return path
+
+    @staticmethod
+    def import_target_name(source: str | Path) -> str:
+        """The name a preset file would be imported as (``""`` when unusable).
+
+        Read-only, so a caller can ask "does this clash?" before deciding
+        whether to import with ``overwrite``.
+        """
+        path = Path(source).expanduser()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        if not isinstance(raw, dict) or not isinstance(raw.get("layout"), dict):
+            return ""
+        return safe_preset_name(str(raw.get("name") or path.stem))
+
+    def import_preset(self, source: str | Path, *, overwrite: bool = False) -> str:
+        """Add a preset from a file; returns the sanitised name it got.
+
+        The layout is repaired by ``deserialize`` when it is applied, so a
+        preset from another build (or a hand-edited one) cannot break the
+        window - unknown cards are dropped and missing ones fall back to
+        their defaults. A name clash is refused unless ``overwrite`` is set.
+        """
+        path = Path(source).expanduser()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PresetError(f"{path}: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise PresetError(f"{path}: expected a JSON object")
+        layout = raw.get("layout")
+        if not isinstance(layout, dict):
+            raise PresetError(f"{path}: not a preset document (no layout)")
+        requested = raw.get("name") or path.stem
+        name = safe_preset_name(str(requested))
+        target = self._path(name)
+        if target.exists() and not overwrite:
+            raise PresetError(f"a preset named '{name}' already exists")
+        document = {
+            "version": LAYOUT_VERSION,
+            "name": name,
+            "note": str(raw.get("note") or "")[:400],
+            "appearance": raw.get("appearance") if isinstance(raw.get("appearance"), dict) else {},
+            "layout": layout,
+        }
+        try:
+            self._atomic_json(target, document)
+        except OSError as exc:
+            raise PresetError(f"{target}: {exc}") from exc
+        self.error = None
+        return name
+
     def delete(self, name: str) -> bool:
         """Delete a preset, reporting whether a file was actually removed."""
         try:

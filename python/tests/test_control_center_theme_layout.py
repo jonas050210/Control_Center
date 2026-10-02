@@ -34,6 +34,7 @@ from sandboxai.control_center_layout import (
     set_visible,
 )
 from sandboxai.control_center_theme import (
+    ACCENT_PRESETS,
     DENSITIES,
     FONT_ROLES,
     LAYOUT_MODES,
@@ -44,6 +45,9 @@ from sandboxai.control_center_theme import (
     PreferencesStore,
     UiPreferences,
     UiScale,
+    get_theme,
+    normalize_accent,
+    readable_on,
 )
 
 SPECS = (
@@ -265,6 +269,75 @@ class LayoutModelTests(unittest.TestCase):
                 )
 
 
+class AccentTests(unittest.TestCase):
+    """The accent override: one free colour, applied to every theme."""
+
+    def test_only_real_colours_are_accepted(self) -> None:
+        self.assertEqual(normalize_accent("#4F7CFF"), "#4f7cff")
+        self.assertEqual(normalize_accent("4f7cff"), "#4f7cff")
+        self.assertEqual(normalize_accent("  #ABC  "), "#aabbcc")
+        for unusable in ("", None, "blue", "#12345", "#gggggg", "rgb(1,2,3)"):
+            with self.subTest(value=unusable):
+                self.assertEqual(normalize_accent(unusable), "")
+
+    def test_an_override_replaces_the_accent_and_keeps_text_readable(self) -> None:
+        base = get_theme("corz")
+        custom = get_theme("corz", "#F5A524")
+        self.assertEqual(custom.accent.lower(), "#f5a524")
+        self.assertNotEqual(custom.accent_soft, base.accent_soft)
+        # Amber is a light colour: white label text on it would be unreadable,
+        # so the theme must switch to its dark text token.
+        self.assertEqual(custom.on_accent, readable_on("#F5A524"))
+        self.assertGreater(custom.contrast_ratio("accent", "on_accent"), 4.5)
+        # An unusable override falls back to the theme's own accent.
+        self.assertEqual(get_theme("corz", "nonsense"), base)
+
+    def test_every_offered_swatch_is_usable_and_readable(self) -> None:
+        for color, label in ACCENT_PRESETS:
+            with self.subTest(color=color, label=label):
+                self.assertEqual(normalize_accent(color), color.lower())
+                theme = get_theme("corz", color)
+                self.assertGreater(
+                    theme.contrast_ratio("accent", "on_accent"),
+                    3.0,
+                    f"{label} cannot carry readable label text",
+                )
+
+    def test_contrast_ratio_is_a_ratio_and_symmetric(self) -> None:
+        """It used to unpack `sorted()` the wrong way round and report 1/ratio.
+
+        Nothing called it, so the inversion survived: a 3.7:1 pair came back
+        as 0.27. This pins the contract the WCAG formula actually has.
+        """
+        theme = get_theme("corz")
+        self.assertGreater(theme.contrast_ratio("text", "bg"), 10.0)
+        self.assertEqual(
+            theme.contrast_ratio("accent", "on_accent"),
+            theme.contrast_ratio("on_accent", "accent"),
+        )
+        black_on_white = theme.contrast_ratio("on_accent", "on_accent")
+        self.assertAlmostEqual(black_on_white, 1.0, places=6)
+
+    def test_the_designed_accent_keeps_its_label_colour(self) -> None:
+        """A picked accent must not repaint the built-in look differently."""
+        for name in ("corz", "cyan", "lime"):
+            with self.subTest(theme=name):
+                built_in = THEMES[name]
+                self.assertEqual(get_theme(name, built_in.accent), built_in)
+
+    def test_the_override_survives_a_preferences_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PreferencesStore(Path(tmp))
+            store.path.parent.mkdir(parents=True, exist_ok=True)
+            prefs = UiPreferences(accent="#22d3ee", zoomed=True)
+            store.save(prefs)
+            loaded = store.load()
+            self.assertEqual(loaded.accent, "#22d3ee")
+            self.assertTrue(loaded.zoomed)
+            # A junk accent in the file must not survive normalization.
+            self.assertEqual(UiPreferences(accent="not-a-colour").normalized().accent, "")
+
+
 class PresetStoreTests(unittest.TestCase):
     def test_save_load_list_delete_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -283,6 +356,49 @@ class PresetStoreTests(unittest.TestCase):
             self.assertTrue(store.delete("My Layout"))
             self.assertEqual(store.list_presets(), [])
             self.assertIsNone(store.load("My Layout"))
+
+    def test_export_and_import_move_a_preset_between_projects(self) -> None:
+        """An export must be a complete preset, importable under its own name."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PresetStore(Path(tmp))
+            state = set_span(normalize(LayoutState(pages={}), PAGES), "Dashboard", "kpis", 3)
+            store.save(
+                "shared layout", layout=state, appearance={"theme": "lime", "accent": "#22d3ee"}
+            )
+            target = Path(tmp) / "exports" / "anywhere.json"
+            written = store.export("shared layout", target)
+            self.assertTrue(written.is_file())
+            self.assertEqual(json.loads(written.read_text())["name"], "shared layout")
+
+            # Another project (a different .sandboxai directory) imports it.
+            other = PresetStore(Path(tmp) / "other")
+            with self.assertRaises(PresetError):
+                other.import_preset(Path(tmp) / "missing.json")
+            junk = Path(tmp) / "junk.json"
+            junk.write_text('{"hello": 1}')
+            with self.assertRaises(PresetError):
+                other.import_preset(junk)
+
+            name = other.import_preset(written)
+            self.assertEqual(name, "shared layout")
+            self.assertEqual(other.import_target_name(written), "shared layout")
+            document = other.load(name)
+            self.assertEqual(document["appearance"]["accent"], "#22d3ee")
+            self.assertEqual(
+                deserialize(document["layout"], PAGES).placements("Dashboard")[0].span, 3
+            )
+            # A clash is refused, never a silent replacement.
+            with self.assertRaises(PresetError):
+                other.import_preset(written)
+            self.assertEqual(other.import_preset(written, overwrite=True), name)
+
+    def test_export_to_a_directory_uses_the_preset_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = PresetStore(Path(tmp))
+            store.save("cool!!layout", layout=normalize(LayoutState(pages={}), PAGES))
+            written = store.export("cool!!layout", Path(tmp))
+            self.assertEqual(written.name, "coollayout.json")
+            self.assertEqual(PresetStore.import_target_name(written), "coollayout")
 
     def test_rename_moves_the_layout_and_its_appearance(self) -> None:
         """Renaming must keep the preset, not drop it and make a new one."""

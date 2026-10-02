@@ -154,9 +154,16 @@ It provides:
   bounded live telemetry charts; unavailable metrics are shown as such,
   never estimated
 - **Settings** - theme, shell layout (rail/topbar/board), density,
-  motion, accent effects, the **Layout studio** (move, span and hide
-  cards), savable **presets**, project/output roots and the Godot
-  executable
+  motion, a free **accent colour** (nine swatches or any `#rrggbb`) that
+  any theme can wear, accent effects, the **Layout studio** (move, span and
+  hide cards), savable **presets** that can also be exported to a file and
+  imported back, project/output roots and the Godot executable
+
+The desktop suite runs with `python3 tools/desktop_tests.py`: it uses the
+real Tk window when the machine has Tkinter and a display (or `xvfb-run`),
+and otherwise runs the static contracts plus the headless smoke harness and
+prints the exact package to install. `--strict` fails instead of falling
+back, which is what the CI job `desktop-ui-tests` does.
 
 The Control Center is built entirely on
 `sandboxai.adapter.SandboxAIAdapter` - the same `train`/`benchmark`/

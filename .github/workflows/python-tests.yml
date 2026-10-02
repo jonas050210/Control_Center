@@ -146,11 +146,15 @@ jobs:
       # tee'd and reported on failure for the same reason as full-tests:
       # the raw Actions log lives behind a blob store that is not always
       # reachable, and "exit code 1" is not a diagnosis.
+      # Same entry point a contributor runs locally (`tools/desktop_tests.py`),
+      # so the runner itself - its Tk/display detection and its `--strict`
+      # path - is exercised on every CI run instead of being an untested
+      # convenience script. Here the display already exists, so it goes
+      # straight to the suite.
       - name: Build every desktop page on a real Tk interpreter
         run: |
           set -o pipefail
-          xvfb-run -a .ui-venv/bin/python -m pytest \
-            python/tests/test_control_center_desktop.py -q -rf 2>&1 | tee pytest-output.txt
+          .ui-venv/bin/python tools/desktop_tests.py --strict -- -rf 2>&1 | tee pytest-output.txt
 
       # The smoke harness drives the same pages without Tk (it installs its
       # own stub), so it also catches callback code the page-building pytest

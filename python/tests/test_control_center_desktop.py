@@ -117,6 +117,55 @@ class ControlCenterConstructionTests(unittest.TestCase):
             self.assertNotEqual(scrollbar.winfo_manager(), "grid")
             self.assertFalse(scrollbar._overflow() and scrollbar.winfo_manager() == "")
 
+    def test_accent_and_preset_transfer_work_on_the_real_window(self):
+        """Every page must repaint on the new accent, and presets must travel."""
+        import json
+        import tempfile
+
+        from sandboxai.control_center_theme import normalize_accent
+
+        self.app.show_page("Settings")
+        self.assertTrue(self.app.set_accent("#F5A524"))
+        self.assertEqual(self.app.palette.accent.lower(), "#f5a524")
+        self.assertEqual(normalize_accent(self.app.prefs.accent), "#f5a524")
+        # Every page repaints against the new palette without raising.
+        for title in self.app.pages:
+            self.app.show_page(title)
+        self.assertFalse(self.app.set_accent("not a colour"))
+        self.assertEqual(normalize_accent(self.app.prefs.accent), "#f5a524")
+        self.assertTrue(self.app.set_accent(""))
+        self.assertNotEqual(self.app.palette.accent.lower(), "#f5a524")
+
+        self.app.show_page("Settings")
+        settings = self.app.pages["Settings"]
+        settings.preset_name_var.set("window test")
+        settings._save_preset()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "preset.json"
+            self.assertTrue(self.app.export_layout_preset("window test", target))
+            document = json.loads(target.read_text(encoding="utf-8"))
+            self.assertIn("layout", document)
+            self.assertIn("accent", document["appearance"])
+            document["name"] = "window import"
+            target.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(self.app.preset_name_for_import(target), "window import")
+            self.assertEqual(self.app.import_layout_preset(target), "window import")
+            self.assertIn("window import", self.app.list_layout_presets())
+            # An existing name is not replaced by surprise.
+            self.assertIsNone(self.app.import_layout_preset(target))
+            self.assertEqual(self.app.import_layout_preset(target, overwrite=True), "window import")
+        self.assertTrue(self.app.apply_layout_preset("window import"))
+        for name in ("window test", "window import"):
+            self.assertTrue(self.app.delete_layout_preset(name))
+
+    def test_window_state_is_remembered_without_breaking_startup(self):
+        """Maximized-ness is a preference, and saving it must never raise."""
+        self.app.save_preferences()
+        self.assertIsInstance(self.app.prefs.zoomed, bool)
+        document = json.loads(self.app.prefs_store.path.read_text(encoding="utf-8"))
+        self.assertIn("zoomed", document)
+        self.assertIn("accent", document)
+
     def test_density_change_rebuilds_the_page_without_losing_the_view(self):
         """A density change re-lays the widgets out; the view must survive.
 

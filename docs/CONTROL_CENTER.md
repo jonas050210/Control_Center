@@ -63,7 +63,16 @@ look. Everything below is chosen on the **Settings** page and persisted in
 | Shell layout | Rail, Topbar, Command Board | Where navigation lives and how much width the content gets |
 | Density | Comfort, Compact, Ultra | Row heights, paddings and one font step (never below the 11 px floor) |
 | Motion | Off, Reduced, Normal, Cinematic | Speed of the small transitions; **Off** renders final states immediately |
+| Accent | nine swatches or any `#rrggbb` | Replaces the accent of whichever theme is active; *Theme accent* restores the designed one |
 | Corner radius, glow, grid | slider / toggles | Card rounding and the optional backdrop effects |
+
+The accent is one colour, not a sixth theme: it is stored in the
+preferences (`"accent": "#22d3ee"`) and every theme wears it, so an
+operator can keep the Corz surfaces with a mint accent. The label colour
+*on* the accent is derived (`Theme.with_accent`), never guessed: white
+while it keeps the 3:1 contrast a bold UI label needs, dark ink
+otherwise, and picking a theme's own accent is a no-op so the designed
+pair (Cyan with its deep-teal ink) is preserved exactly.
 
 A theme change only repaints (ttk styles, canvas colours and the table tag
 roles are re-applied). A **density** change has to rebuild the widgets so
@@ -82,7 +91,13 @@ visible). The result applies to the running window immediately.
 card position as one JSON file under `.sandboxai/ui/presets/<name>.json`.
 *Save preset* captures the current arrangement, *Apply* switches back to
 it, *Delete* removes it, and *Rename to name* moves a preset to the name
-typed in the field. A rename onto a name that already exists is refused
+typed in the field. *Export…* writes a preset to a JSON file anywhere on
+disk and *Import…* reads one back: the file carries the whole document
+(layout, appearance, accent, note), an import keeps the name stored inside
+it, and a name that already exists is only replaced after a confirmation -
+so importing somebody else's arrangement cannot quietly overwrite your
+own. A preset from another build is repaired on import like any other:
+unknown cards are dropped when it is applied. A rename onto a name that already exists is refused
 rather than overwriting the other preset. A preset from an older build is
 repaired on load: unknown cards are dropped and new cards appear with
 their defaults, so a stale preset can never break the window.
@@ -283,6 +298,14 @@ without Tkinter), plus `test_agents.py`, `test_adapter.py` and
 throwaway project — those tests skip where Tkinter or a display is
 unavailable (environment facts, not regressions); the CI job
 `desktop-ui-tests` runs them.
+
+`python3 tools/desktop_tests.py` is the one command that runs whatever the
+machine can actually run: the real-Tk suite when Tkinter and a display (or
+`xvfb-run`) are present, and otherwise the static contracts plus the smoke
+harness below, with the exact package to install for the real thing.
+`--strict` fails instead of falling back, which is what CI uses - the
+`desktop-ui-tests` job calls that script rather than pytest directly, so
+the runner is exercised on every run.
 
 Where neither Tkinter nor a display exists, `python3
 tools/control_center_smoke.py` constructs the real application against a

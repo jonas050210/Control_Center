@@ -113,6 +113,67 @@ MONO_FONT_FAMILY = _pick_font(MONO_FONTS)
 # ---------------------------------------------------------------------------
 
 
+def _lighten(color: str, amount: float) -> str:
+    """Mix a ``#rrggbb`` colour towards white by ``amount`` (0..1)."""
+    color = color.lstrip("#")
+    channels = [int(color[index : index + 2], 16) for index in (0, 2, 4)]
+    mixed = [min(255, round(channel + (255 - channel) * amount)) for channel in channels]
+    return "#" + "".join(f"{channel:02x}" for channel in mixed)
+
+
+def _relative_luminance(color: str) -> float:
+    """WCAG relative luminance of a ``#rrggbb`` colour."""
+
+    def linear(channel: int) -> float:
+        value = channel / 255.0
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+    color = color.lstrip("#")
+    return (
+        0.2126 * linear(int(color[0:2], 16))
+        + 0.7152 * linear(int(color[2:4], 16))
+        + 0.0722 * linear(int(color[4:6], 16))
+    )
+
+
+def normalize_accent(value: str | None) -> str:
+    """Return a usable ``#rrggbb`` accent, or ``""`` for "use the theme's own".
+
+    Accepts ``#rgb``, ``#rrggbb``, the same without the hash, and surrounding
+    whitespace. Anything else is refused (``""``), because an accent the
+    operator typed is applied to every page and a silently invented colour
+    would be worse than falling back to the theme's designed one.
+    """
+    if not value:
+        return ""
+    text = str(value).strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(channel * 2 for channel in text)
+    if len(text) != 6:
+        return ""
+    try:
+        int(text, 16)
+    except ValueError:
+        return ""
+    return "#" + text.lower()
+
+
+def readable_on(color: str) -> str:
+    """Label text for a filled ``color`` surface: white, or black if needed.
+
+    White is kept whenever it reaches the 3:1 WCAG minimum for large/bold
+    text (which is what an accent-coloured button label is), so a
+    hand-picked accent looks like the theme's own design; only colours that
+    cannot carry white text at all - amber, lime, silver - switch to the
+    dark ink. Deriving the inverse (black first) would have flipped the
+    Corz blue of the built-in themes to dark text and made the same colour
+    look different depending on how it was chosen.
+    """
+    dark_ink = "#0B0C0E"
+    white_contrast = 1.05 / (_relative_luminance(color) + 0.05)
+    return "#FFFFFF" if white_contrast >= 3.0 else dark_ink
+
+
 @dataclass(frozen=True)
 class Theme:
     """One complete colour palette."""
@@ -146,19 +207,38 @@ class Theme:
             raise KeyError(f"unknown theme colour: {role}")
         return value
 
+    def with_accent(self, color: str) -> Theme:
+        """A copy of this theme with ``color`` as the accent.
+
+        The soft tint and the text colour *on* the accent are derived here,
+        so a hand-picked accent cannot produce unreadable button labels:
+        the same rule the built-in themes follow is applied to it.
+        """
+        from dataclasses import replace
+
+        if color.lower() == self.accent.lower():
+            # Picking the theme's own accent is a no-op, so a designed pair
+            # (cyan with its deep-teal label ink, lime with its dark green)
+            # stays exactly as the theme author chose it.
+            return self
+        return replace(
+            self,
+            accent=color,
+            accent_soft=_lighten(color, 0.22),
+            on_accent=readable_on(color),
+        )
+
     def contrast_ratio(self, first: str, second: str) -> float:
-        """WCAG contrast ratio between two of this theme's own tokens."""
+        """WCAG contrast ratio between two of this theme's own tokens.
 
-        def luminance(color: str) -> float:
-            color = color.lstrip("#")
-            channels = [int(color[index : index + 2], 16) / 255.0 for index in (0, 2, 4)]
-            linear = [
-                channel / 12.92 if channel <= 0.03928 else ((channel + 0.055) / 1.055) ** 2.4
-                for channel in channels
-            ]
-            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-        lighter, darker = sorted((luminance(self.color(first)), luminance(self.color(second))))
+        Always ``>= 1``: the brighter colour is the numerator. (The first
+        version of this helper unpacked ``sorted(...)`` the wrong way round,
+        so it reported the reciprocal - a contrast of 3.7:1 came back as
+        0.27. It had no caller at the time, which is how it survived.)
+        """
+        darker, lighter = sorted(
+            (_relative_luminance(self.color(first)), _relative_luminance(self.color(second)))
+        )
         return (lighter + 0.05) / (darker + 0.05)
 
 
@@ -183,12 +263,6 @@ def _theme(
 ) -> Theme:
     """Build a theme from the surface/accent inputs, deriving the rest."""
 
-    def lighten(color: str, amount: float) -> str:
-        color = color.lstrip("#")
-        channels = [int(color[index : index + 2], 16) for index in (0, 2, 4)]
-        mixed = [min(255, round(channel + (255 - channel) * amount)) for channel in channels]
-        return "#" + "".join(f"{channel:02x}" for channel in mixed)
-
     return Theme(
         name=name,
         label=label,
@@ -196,15 +270,15 @@ def _theme(
         shell=shell,
         panel=panel,
         card=card,
-        card_hover=lighten(card, 0.05),
-        card_active=lighten(card, 0.10),
-        border=lighten(card, 0.10),
-        border_strong=lighten(card, 0.20),
+        card_hover=_lighten(card, 0.05),
+        card_active=_lighten(card, 0.10),
+        border=_lighten(card, 0.10),
+        border_strong=_lighten(card, 0.20),
         text=text,
         text_dim=text_dim,
         text_muted=text_muted,
         accent=accent,
-        accent_soft=lighten(accent, 0.22),
+        accent_soft=_lighten(accent, 0.22),
         accent_second=accent_second,
         ok=ok,
         warn=warn,
@@ -279,16 +353,32 @@ THEMES: dict[str, Theme] = {
 
 THEME_NAMES: tuple[str, ...] = tuple(THEMES)
 
+#: Accent colours an operator can pick without typing a hex value. Kept
+#: deliberately few: an accent colour is a taste decision, and every one of
+#: these keeps its label text readable (see :func:`readable_on`).
+ACCENT_PRESETS: tuple[tuple[str, str], ...] = (
+    ("#4F7CFF", "Corz Blue"),
+    ("#22D3EE", "Cyan"),
+    ("#34D399", "Mint"),
+    ("#A3E635", "Lime"),
+    ("#F5A524", "Amber"),
+    ("#F26D6D", "Coral"),
+    ("#EC4899", "Pink"),
+    ("#8B5CF6", "Violet"),
+    ("#E5E7EB", "Silver"),
+)
 
-def get_theme(name: str | None) -> Theme:
+
+def get_theme(name: str | None, accent: str = "") -> Theme:
     """Return a theme by name, falling back to the default instead of raising.
 
     A preferences file written by a newer/older build must never stop the
     window from opening, so an unknown name is a fallback, not an error.
+    ``accent`` (when it parses) replaces the theme's own accent colour.
     """
-    if name is not None and name in THEMES:
-        return THEMES[name]
-    return THEMES["corz"]
+    theme = THEMES[name] if name is not None and name in THEMES else THEMES["corz"]
+    accent = normalize_accent(accent)
+    return theme.with_accent(accent) if accent else theme
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +500,12 @@ class UiPreferences:
     geometry: str = ""
     last_page: str = "Dashboard"
     active_preset: str = ""
+    ## "" = the theme's own designed accent; otherwise a #rrggbb override
+    ## that every theme then wears (see ``Theme.with_accent``).
+    accent: str = ""
+    ## Remembered window state: a maximized window should come back
+    ## maximized instead of shrinking to its last restored size.
+    zoomed: bool = False
 
     def normalized(self) -> UiPreferences:
         """Clamp every field to a supported value (never raise)."""
@@ -424,6 +520,8 @@ class UiPreferences:
             geometry=str(self.geometry or ""),
             last_page=str(self.last_page or "Dashboard"),
             active_preset=str(self.active_preset or ""),
+            accent=normalize_accent(self.accent),
+            zoomed=bool(self.zoomed),
         )
 
 
