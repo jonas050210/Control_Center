@@ -82,16 +82,14 @@ class Page(ttk.Frame):
 
     def _heading(self) -> None:
         header = ttk.Frame(self)
-        header.pack(fill="x", pady=(0, 10))
-        ttk.Label(header, text=f"// {self.title.upper()}", style="PageTitle.TLabel").pack(
-            anchor="w"
-        )
+        header.pack(fill="x", pady=(0, 12))
+        ttk.Label(header, text=self.title, style="PageTitle.TLabel").pack(anchor="w")
         if self.subtitle:
             ttk.Label(header, text=self.subtitle, style="PageSubtitle.TLabel").pack(
-                anchor="w", pady=(2, 4)
+                anchor="w", pady=(2, 6)
             )
         tk.Frame(header, height=1, background=COLOR_BORDER, borderwidth=0).pack(
-            fill="x", pady=(4, 0)
+            fill="x", pady=(2, 0)
         )
 
     def build(self) -> None:
@@ -167,18 +165,18 @@ class DashboardPage(Page):
     )
 
     def build(self) -> None:
-        # ---- 1-2-3 Operator Workflow & Live Roblox TTK Testing Bridge ----
+        # ---- Clean 1-2-3 Workflow & Live Roblox TTK Testing Bridge ------
         workflow_bar = ttk.LabelFrame(
             self,
-            text="Quick Workflow // 1. Roblox TTK Testing Bridge  ▸  2. Hardware Benchmark  ▸  3. Launch Agent",
-            padding=10,
+            text="Quick workflow  ·  1. Roblox TTK Testing   2. Hardware Benchmark   3. Launch Agent",
+            padding=12,
         )
-        workflow_bar.pack(fill="x", pady=(0, 10))
+        workflow_bar.pack(fill="x", pady=(0, 12))
         wf_top = ttk.Frame(workflow_bar, style="Surface.TFrame")
         wf_top.pack(fill="x")
         self.roblox_bridge_label = ttk.Label(
             wf_top,
-            text="ROBLOX BRIDGE // probing local Roblox Player & TTK Testing logs...",
+            text="Roblox Bridge: probing local Roblox Player & TTK Testing logs...",
             style="Leader.TLabel",
         )
         self.roblox_bridge_label.pack(side="left", fill="x", expand=True)
@@ -187,38 +185,38 @@ class DashboardPage(Page):
         wf_buttons.pack(fill="x", pady=(8, 0))
         ttk.Button(
             wf_buttons,
-            text="▶ 1. Launch Roblox TTK Testing",
+            text="1. Launch Roblox TTK Testing",
             command=self._launch_roblox_ttk,
             style="Primary.TButton",
         ).pack(side="left")
         ttk.Button(
             wf_buttons,
-            text="🪟 Focus Roblox",
+            text="Focus Window",
             command=self._focus_roblox_window,
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             wf_buttons,
-            text="📸 Capture Window",
+            text="Capture Screenshot",
             command=self._capture_roblox_window,
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             wf_buttons,
-            text="🎯 TTK Calibration Lab",
+            text="TTK Calibration",
             command=lambda: self.app.show_page("Settings"),
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             wf_buttons,
-            text="⚡ Ubuntu CPU Turbo",
+            text="Ubuntu CPU Turbo",
             command=self._enable_ubuntu_cpu_turbo,
-        ).pack(side="left", padx=(12, 0))
+        ).pack(side="left", padx=(14, 0))
         ttk.Button(
             wf_buttons,
-            text="⚡ 2. Run Benchmark",
+            text="2. Run Benchmark",
             command=lambda: self.app.show_page("Benchmarks"),
-        ).pack(side="left", padx=(8, 0))
+        ).pack(side="left", padx=(6, 0))
         ttk.Button(
             wf_buttons,
-            text="🚀 3. Deploy Agent",
+            text="3. Deploy Agent",
             command=lambda: self.app.show_page("Agents"),
         ).pack(side="left", padx=(6, 0))
 
@@ -229,20 +227,26 @@ class DashboardPage(Page):
         self.stats.pack(fill="x")
         self.warning_banner.pack(fill="x", pady=(8, 0))
 
-        checkpoints_frame = ttk.LabelFrame(self, text="Checkpoints & latest evaluation", padding=10)
+        checkpoints_frame = ttk.LabelFrame(
+            self, text="Checkpoints, PPO diagnostics & convergence", padding=12
+        )
         checkpoints_frame.pack(fill="x", pady=(12, 0))
         self.checkpoints_label = ttk.Label(checkpoints_frame, text="n/a", justify="left")
         self.checkpoints_label.pack(anchor="w")
+        self.convergence_label = ttk.Label(
+            checkpoints_frame, text="", justify="left", foreground=COLOR_MUTED
+        )
+        self.convergence_label.pack(anchor="w", pady=(4, 0))
 
-        charts_frame = ttk.LabelFrame(self, text="Live telemetry (bounded history)", padding=10)
+        charts_frame = ttk.LabelFrame(self, text="Live telemetry (bounded history)", padding=12)
         charts_frame.pack(fill="both", expand=True, pady=(12, 0))
         charts_grid = ttk.Frame(charts_frame)
         charts_grid.pack(fill="both", expand=True)
-        self.reward_chart = LineChart(charts_grid, "mean episode reward vs. timesteps")
-        self.fps_chart = LineChart(charts_grid, "steps/second vs. timesteps")
+        self.reward_chart = LineChart(charts_grid, "Mean episode reward vs. timesteps")
+        self.fps_chart = LineChart(charts_grid, "Steps/second vs. timesteps")
         self.kl_chart = LineChart(charts_grid, "PPO approx. KL vs. timesteps")
         for index, chart in enumerate((self.reward_chart, self.fps_chart, self.kl_chart)):
-            chart.grid(row=index // 2, column=index % 2, sticky="nsew", padx=4, pady=4)
+            chart.grid(row=index // 2, column=index % 2, sticky="nsew", padx=5, pady=5)
         charts_grid.columnconfigure(0, weight=1)
         charts_grid.columnconfigure(1, weight=1)
         charts_grid.rowconfigure(0, weight=1)
@@ -252,6 +256,12 @@ class DashboardPage(Page):
         actions.pack(fill="x", pady=(10, 0))
         ttk.Button(actions, text="Open run folder", command=self._open_run_folder).pack(side="left")
         ttk.Button(actions, text="View in Runs / Checkpoints", command=self._open_in_runs).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(actions, text="Resume in Agents", command=self._resume_in_agents).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(actions, text="Evaluate best checkpoint", command=self._evaluate_latest_best).pack(
             side="left", padx=(8, 0)
         )
 
@@ -270,13 +280,13 @@ class DashboardPage(Page):
             return
         tview = vm.ttk_testing_view(status)
         summary = (
-            f"▸ {tview['status_badge']}   │   Window: {tview['window_text']}   │   "
-            f"Place: {tview['place_text']}   │   "
+            f"{tview['status_badge']}   ·   Window: {tview['window_text']}   ·   "
+            f"Place: {tview['place_text']}   ·   "
             f"Calibration: {tview['calibration_progress_text']}"
         )
         self.roblox_bridge_label.configure(
             text=summary,
-            foreground=COLOR_OK if tview["connected"] else (COLOR_WARN if tview["roblox_running"] else COLOR_ACCENT),
+            foreground=COLOR_OK if tview["connected"] else (COLOR_WARN if tview["roblox_running"] else COLOR_TEXT),
         )
 
     def _launch_roblox_ttk(self) -> None:
@@ -441,9 +451,24 @@ class DashboardPage(Page):
         ):
             return
         data = series.get("series", {})
-        self.reward_chart.set_points(data.get("mean_episode_reward", []))
+        reward_pts = data.get("mean_episode_reward", [])
+        self.reward_chart.set_points(reward_pts)
         self.fps_chart.set_points(data.get("steps_per_second", []))
         self.kl_chart.set_points(data.get("approx_kl", []))
+        conv = vm.training_convergence_view(reward_pts)
+        conv_color = (
+            COLOR_OK
+            if conv["state"] == "IMPROVING"
+            else (
+                COLOR_WARN
+                if conv["state"] == "PLATEAU"
+                else (COLOR_ERROR if conv["state"] == "REGRESSING" else COLOR_MUTED)
+            )
+        )
+        self.convergence_label.configure(
+            text=f"Convergence radar: [{conv['badge']}] — {conv['recommendation']}",
+            foreground=conv_color,
+        )
 
     def _open_run_folder(self) -> None:
         if self._last_run_dir:
@@ -458,6 +483,34 @@ class DashboardPage(Page):
         page = self.app.pages["Runs / Checkpoints"]
         if self._last_run_dir:
             page.select_run(self._last_run_dir)
+
+    def _resume_in_agents(self) -> None:
+        if not self._last_run_dir:
+            messagebox.showinfo("No run yet", "No training run found to resume.")
+            return
+        latest = Path(self._last_run_dir) / "checkpoints" / "latest.zip"
+        best = Path(self._last_run_dir) / "checkpoints" / "best.zip"
+        ckpt = latest if latest.is_file() else (best if best.is_file() else None)
+        self.app.show_page("Agents")
+        agents = self.app.pages.get("Agents")
+        if agents is not None and ckpt is not None and hasattr(agents, "resume_checkpoint_var"):
+            agents.resume_checkpoint_var.set(str(ckpt))
+            self.app.set_status(f"Selected checkpoint for resume: {ckpt}")
+
+    def _evaluate_latest_best(self) -> None:
+        if not self._last_run_dir:
+            messagebox.showinfo("No run yet", "No training run found to evaluate.")
+            return
+        best = Path(self._last_run_dir) / "checkpoints" / "best.zip"
+        latest = Path(self._last_run_dir) / "checkpoints" / "latest.zip"
+        target = best if best.is_file() else (latest if latest.is_file() else None)
+        if target is None:
+            messagebox.showinfo(
+                "No checkpoint yet", "This run has neither best.zip nor latest.zip yet."
+            )
+            return
+        self.app.show_page("Evaluations")
+        self.app.pages["Evaluations"].select_checkpoint(str(target))
 
 
 class AgentsPage(Page):
@@ -533,14 +586,14 @@ class AgentsPage(Page):
         self._build_fields(basic_frame, vm.launch_field_specs(), defaults)
 
         presets_bar = ttk.Frame(form_frame, style="Surface.TFrame")
-        presets_bar.pack(fill="x", pady=(6, 0))
-        ttk.Label(presets_bar, text="QUICK TARGETS:", style="FieldTitle.TLabel").pack(
+        presets_bar.pack(fill="x", pady=(8, 0))
+        ttk.Label(presets_bar, text="Presets:", style="FieldTitle.TLabel").pack(
             side="left", padx=(0, 8)
         )
         for label, steps_val in (
-            ("⚡ 25k Smoke", "25000"),
-            ("🎯 100k Standard", "100000"),
-            ("🔥 500k Deep", "500000"),
+            ("25k Smoke", "25000"),
+            ("100k Standard", "100000"),
+            ("500k Deep", "500000"),
         ):
             ttk.Button(
                 presets_bar,
@@ -549,18 +602,18 @@ class AgentsPage(Page):
             ).pack(side="left", padx=(0, 6))
         ttk.Button(
             presets_bar,
-            text="♻ Sync Optimal Benchmark",
+            text="Sync Optimal Benchmark",
             command=self._sync_optimal_benchmark,
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             presets_bar,
-            text="⚡ Ubuntu CPU Turbo",
+            text="Ubuntu CPU Turbo",
             command=self._apply_ubuntu_cpu_turbo,
         ).pack(side="left", padx=(6, 0))
 
         resume_bar = ttk.Frame(form_frame, style="Surface.TFrame")
-        resume_bar.pack(fill="x", pady=(6, 0))
-        ttk.Label(resume_bar, text="RESUME CHECKPOINT (OPTIONAL):", style="FieldTitle.TLabel").pack(
+        resume_bar.pack(fill="x", pady=(8, 0))
+        ttk.Label(resume_bar, text="Resume checkpoint (optional):", style="FieldTitle.TLabel").pack(
             side="left", padx=(0, 8)
         )
         self.resume_checkpoint_var = tk.StringVar(value="")
@@ -665,9 +718,9 @@ class AgentsPage(Page):
     ) -> None:
         for col_index, spec in enumerate(specs):
             parent.columnconfigure(col_index, weight=1)
-            cell = ttk.Frame(parent, style="Surface.TFrame", padding=(0, 2, 12, 2))
+            cell = ttk.Frame(parent, style="Surface.TFrame", padding=(0, 2, 14, 2))
             cell.grid(row=0, column=col_index, sticky="nsew")
-            ttk.Label(cell, text=spec.label.upper(), style="FieldTitle.TLabel").pack(anchor="w")
+            ttk.Label(cell, text=spec.label, style="FieldTitle.TLabel").pack(anchor="w")
             var = self.field_vars.get(spec.name)
             if var is None:
                 var = tk.StringVar(value=defaults.get(spec.name, ""))
@@ -1399,7 +1452,7 @@ class BenchmarkPage(Page):
             }
         )
         self.leader_banner.configure(
-            text=f"▸ LEADING CONFIGURATION: {live_view['leader_summary']}"
+            text=f"Leading configuration: {live_view['leader_summary']}"
         )
         chart_points = list(live_view["chart_points"])
         if (
@@ -2084,6 +2137,12 @@ class RunsPage(Page):
         ttk.Button(
             actions, text="Clone topology to Agents", command=self._clone_to_agents
         ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            actions,
+            text="Resume checkpoint in Agents",
+            command=self._resume_run_in_agents,
+            style="Primary.TButton",
+        ).pack(side="left", padx=(8, 0))
 
         self._row_to_dir: dict[str, str] = {}
         self._selected_run_dir: str | None = None
@@ -2285,6 +2344,23 @@ class RunsPage(Page):
         )
         self.app.set_status(f"Cloned topology from {report.get('run_id', 'run')} to Agents")
 
+    def _resume_run_in_agents(self) -> None:
+        if not self._selected_run_dir:
+            return
+        latest = Path(self._selected_run_dir) / "checkpoints" / "latest.zip"
+        best = Path(self._selected_run_dir) / "checkpoints" / "best.zip"
+        target = latest if latest.is_file() else (best if best.is_file() else None)
+        if target is None:
+            messagebox.showinfo(
+                "No checkpoint yet", "This run has neither latest.zip nor best.zip yet."
+            )
+            return
+        self._clone_to_agents()
+        agents_page = self.app.pages.get("Agents")
+        if agents_page is not None and hasattr(agents_page, "resume_checkpoint_var"):
+            agents_page.resume_checkpoint_var.set(str(target))
+            self.app.set_status(f"Ready to resume from {target}")
+
 
 def _render_run_detail(report: dict[str, Any]) -> str:
     manifest = report.get("manifest") or {}
@@ -2466,8 +2542,13 @@ class SettingsPage(Page):
     subtitle = "Project/output roots, machine-local Godot executable & persisted calibration status."
 
     def build(self) -> None:
-        roots = ttk.LabelFrame(self, text="Directories", padding=10)
-        roots.pack(fill="x")
+        top_grid = ttk.Frame(self)
+        top_grid.pack(fill="x")
+        top_grid.columnconfigure(0, weight=1)
+        top_grid.columnconfigure(1, weight=1)
+
+        roots = ttk.LabelFrame(top_grid, text="Directories", padding=12)
+        roots.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         self.project_root_label = ttk.Label(roots, text="")
         self.project_root_label.pack(anchor="w", pady=2)
         self.output_root_label = ttk.Label(roots, text="")
@@ -2489,57 +2570,53 @@ class SettingsPage(Page):
         ).pack(side="left", padx=(8, 0))
         ttk.Label(
             roots,
-            text="Changing the output root points this session's Runs/Checkpoints/Evaluations/"
-            "Benchmarks pages at a different directory; it does not move existing runs.",
+            text="Changing the output root points Runs, Evaluations & Benchmarks at a different directory.",
             foreground=COLOR_MUTED,
-            wraplength=700,
-        ).pack(anchor="w", pady=(4, 0))
+            wraplength=520,
+        ).pack(anchor="w", pady=(6, 0))
 
         # ---- Godot executable (the #1 reason launches fail) -------------
-        godot = ttk.LabelFrame(self, text="Godot executable", padding=10)
-        godot.pack(fill="x", pady=(12, 0))
+        godot = ttk.LabelFrame(top_grid, text="Godot executable", padding=12)
+        godot.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         ttk.Label(
             godot,
-            text="Training, benchmarks and evaluations all resolve the engine through this "
-            "remembered setting when none is given explicitly (resolution order: explicit "
-            "path, GODOT_PATH/GODOT_EXECUTABLE, this setting, PATH). Verify & save probes "
-            "the executable before persisting it, so a saved value was actually seen "
-            "working.",
+            text="Training, benchmarks and evaluations resolve the Godot binary through this "
+            "remembered setting when none is given explicitly.",
             foreground=COLOR_MUTED,
-            wraplength=700,
+            wraplength=520,
             justify="left",
         ).pack(anchor="w")
-        entry_row = ttk.Frame(godot)
+        entry_row = ttk.Frame(godot, style="Surface.TFrame")
         entry_row.pack(fill="x", pady=(8, 0))
         self.godot_var = tk.StringVar(value=self.adapter.godot_executable_setting() or "")
-        ttk.Entry(entry_row, textvariable=self.godot_var, width=60).pack(side="left")
+        ttk.Entry(entry_row, textvariable=self.godot_var, width=42).pack(side="left", fill="x", expand=True)
         ttk.Button(entry_row, text="Browse", width=8, command=self._browse_godot).pack(
-            side="left", padx=(4, 0)
+            side="left", padx=(6, 0)
         )
         self.godot_save_button = ttk.Button(
-            entry_row, text="Verify && save", command=self._save_godot, style="Primary.TButton"
+            entry_row, text="Verify & save", command=self._save_godot, style="Primary.TButton"
         )
         self.godot_save_button.pack(side="left", padx=(8, 0))
-        self.godot_status_label = ttk.Label(godot, text="", justify="left", wraplength=700)
+        self.godot_status_label = ttk.Label(godot, text="", justify="left", wraplength=520)
         self.godot_status_label.pack(anchor="w", pady=(6, 0))
 
         # ---- Machine calibration & Ubuntu CPU Performance Turbo ---------
         calib = ttk.LabelFrame(
             self,
-            text="Persisted machine calibration & Ubuntu CPU Performance Turbo",
-            padding=10,
+            text="Machine calibration & Ubuntu CPU Performance Turbo",
+            padding=12,
         )
         calib.pack(fill="x", pady=(10, 0))
         self.calibration_label = ttk.Label(
-            calib, text="checking persisted calibration...", justify="left", wraplength=820
+            calib, text="Checking persisted calibration...", justify="left", wraplength=920
         )
         self.calibration_label.pack(anchor="w")
         self.cpu_turbo_label = ttk.Label(
-            calib, text="Ubuntu CPU Turbo: probing host topology...", justify="left", wraplength=820
+            calib, text="Ubuntu CPU Turbo: probing host topology...", justify="left", wraplength=920
         )
         self.cpu_turbo_label.pack(anchor="w", pady=(4, 0))
         calib_buttons = ttk.Frame(calib, style="Surface.TFrame")
-        calib_buttons.pack(anchor="w", pady=(6, 0))
+        calib_buttons.pack(anchor="w", pady=(8, 0))
         ttk.Button(
             calib_buttons,
             text="Open Benchmarks calibration",
@@ -2547,7 +2624,7 @@ class SettingsPage(Page):
         ).pack(side="left")
         ttk.Button(
             calib_buttons,
-            text="⚡ Enable Ubuntu CPU Turbo (OMP/MKL=1 + Optimal Shards)",
+            text="Enable Ubuntu CPU Turbo (OMP/MKL=1 + Optimal Shards)",
             command=self._activate_ubuntu_cpu_turbo,
             style="Primary.TButton",
         ).pack(side="left", padx=(8, 0))
@@ -2558,8 +2635,8 @@ class SettingsPage(Page):
     def _build_roblox_ttk_section(self) -> None:
         roblox_box = ttk.LabelFrame(
             self,
-            text="Roblox TTK Testing [MAP VOTING] // Sable Digital (PlaceId 120189115846709 | Universe 10090256806)",
-            padding=10,
+            text="Roblox TTK Testing [MAP VOTING]  ·  Sable Digital (PlaceId 120189115846709  ·  Universe 10090256806)",
+            padding=12,
         )
         roblox_box.pack(fill="both", expand=True, pady=(10, 0))
         shortcut_row = ttk.Frame(roblox_box, style="Surface.TFrame")
@@ -2568,7 +2645,7 @@ class SettingsPage(Page):
         self.roblox_shortcut_var = tk.StringVar(
             value=r"C:\Users\jonas\OneDrive\Desktop\Roblox Player.lnk"
         )
-        ttk.Entry(shortcut_row, textvariable=self.roblox_shortcut_var, width=44).pack(side="left")
+        ttk.Entry(shortcut_row, textvariable=self.roblox_shortcut_var, width=42).pack(side="left")
         ttk.Button(
             shortcut_row,
             text="Launch Shortcut",
@@ -2576,63 +2653,68 @@ class SettingsPage(Page):
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             shortcut_row,
-            text="▶ Join TTK Testing",
+            text="Join TTK Testing",
             command=lambda: self._launch_roblox(direct_place=True),
             style="Primary.TButton",
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             shortcut_row,
-            text="🪟 Focus Window",
+            text="Focus Window",
             command=self._focus_roblox_window,
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
             shortcut_row,
-            text="📸 Screenshot",
+            text="Capture Screenshot",
             command=self._capture_ttk_screenshot,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            shortcut_row,
+            text="Open Captures",
+            command=self._open_captures_folder,
         ).pack(side="left", padx=(6, 0))
 
         self.roblox_live_label = ttk.Label(
-            roblox_box, text="probing Roblox Player...", foreground=COLOR_ACCENT, justify="left"
+            roblox_box, text="Probing Roblox Player...", foreground=COLOR_ACCENT, justify="left"
         )
-        self.roblox_live_label.pack(anchor="w", pady=(6, 4))
+        self.roblox_live_label.pack(anchor="w", pady=(8, 6))
 
         # ---- Interactive TTK & DPS Calculator + 1-Click Presets ---------
         calc_row = ttk.Frame(roblox_box, style="Surface.TFrame")
-        calc_row.pack(fill="x", pady=(2, 6))
-        ttk.Label(calc_row, text="TTK/DPS LAB:", style="FieldTitle.TLabel").pack(side="left")
-        ttk.Label(calc_row, text="DMG:").pack(side="left", padx=(8, 2))
+        calc_row.pack(fill="x", pady=(2, 8))
+        ttk.Label(calc_row, text="TTK / DPS Calculator:", style="FieldTitle.TLabel").pack(side="left")
+        ttk.Label(calc_row, text="DMG:").pack(side="left", padx=(10, 4))
         self.ttk_dmg_var = tk.StringVar(value="34")
         ttk.Entry(calc_row, textvariable=self.ttk_dmg_var, width=6).pack(side="left")
-        ttk.Label(calc_row, text="RPM:").pack(side="left", padx=(8, 2))
+        ttk.Label(calc_row, text="RPM:").pack(side="left", padx=(10, 4))
         self.ttk_rpm_var = tk.StringVar(value="750")
         ttk.Entry(calc_row, textvariable=self.ttk_rpm_var, width=7).pack(side="left")
-        ttk.Label(calc_row, text="HP:").pack(side="left", padx=(8, 2))
+        ttk.Label(calc_row, text="HP:").pack(side="left", padx=(10, 4))
         self.ttk_hp_var = tk.StringVar(value="100")
         ttk.Entry(calc_row, textvariable=self.ttk_hp_var, width=6).pack(side="left")
         ttk.Button(
             calc_row,
-            text="Calculate TTK",
+            text="Calculate",
             command=self._recalc_ttk_lab,
-        ).pack(side="left", padx=(8, 6))
+        ).pack(side="left", padx=(10, 8))
         self.ttk_calc_result_label = ttk.Label(
             calc_row,
-            text="3 STK │ 160.0 ms TTK │ 425.0 Burst DPS │ Instant-Lethal CQB (<170 ms)",
+            text="3 STK  ·  160.0 ms TTK  ·  425.0 Burst DPS  ·  Instant-Lethal CQB (<170 ms)",
             foreground=COLOR_OK,
         )
-        self.ttk_calc_result_label.pack(side="left", padx=(4, 8))
-        ttk.Label(calc_row, text="PRESETS:", style="FieldTitle.TLabel").pack(
+        self.ttk_calc_result_label.pack(side="left", padx=(4, 10))
+        ttk.Label(calc_row, text="Presets:", style="FieldTitle.TLabel").pack(
             side="left", padx=(8, 4)
         )
         for preset_id, btn_label in (
-            ("sable_cqb_carbine", "⚡ Sable CQB (160ms)"),
-            ("tactical_rifle_ffa", "🎯 8P FFA Rifle (265ms)"),
-            ("precision_marksman", "🔭 Marksman (286ms)"),
+            ("sable_cqb_carbine", "Sable CQB (160ms)"),
+            ("tactical_rifle_ffa", "8P FFA Rifle (265ms)"),
+            ("precision_marksman", "Marksman (286ms)"),
         ):
             ttk.Button(
                 calc_row,
                 text=btn_label,
                 command=lambda pid=preset_id: self._apply_ttk_preset(pid),  # type: ignore[misc]
-            ).pack(side="left", padx=(2, 0))
+            ).pack(side="left", padx=(4, 0))
 
         ttk_columns = (
             ("mechanic", "Mechanic", 180),
@@ -2689,8 +2771,8 @@ class SettingsPage(Page):
         tview = vm.ttk_testing_view(status)
         self.roblox_live_label.configure(
             text=(
-                f"{tview['status_badge']}   │   Launcher: {tview['launcher_text']}   │   "
-                f"Window: {tview['window_text']}   │   Place: {tview['place_text']}   │   "
+                f"{tview['status_badge']}   ·   Launcher: {tview['launcher_text']}   ·   "
+                f"Window: {tview['window_text']}   ·   Place: {tview['place_text']}   ·   "
                 f"Progress: {tview['calibration_progress_text']}"
             ),
             foreground=COLOR_OK if tview["connected"] else (COLOR_WARN if tview["roblox_running"] else COLOR_MUTED),
@@ -2736,6 +2818,11 @@ class SettingsPage(Page):
 
         self.app.background.submit(self.adapter.focus_roblox_window, _done)
 
+    def _open_captures_folder(self) -> None:
+        captures_dir = Path(self.adapter.project_root) / ".sandboxai" / "ttk_captures"
+        captures_dir.mkdir(parents=True, exist_ok=True)
+        _open_in_file_manager(captures_dir)
+
     def _recalc_ttk_lab(self) -> None:
         try:
             dmg = float(self.ttk_dmg_var.get())
@@ -2748,9 +2835,9 @@ class SettingsPage(Page):
 
         metrics = calculate_ttk_metrics(damage=dmg, rpm=rpm, target_hp=hp)
         summary = (
-            f"{metrics['shots_to_kill']} STK ({metrics['headshots_to_kill']} HS) │ "
-            f"{metrics['ttk_ms']:.1f} ms TTK │ "
-            f"{metrics['burst_dps']:.1f} Burst DPS ({metrics['sustained_dps']:.1f} Sust.) │ "
+            f"{metrics['shots_to_kill']} STK ({metrics['headshots_to_kill']} HS)   ·   "
+            f"{metrics['ttk_ms']:.1f} ms TTK   ·   "
+            f"{metrics['burst_dps']:.1f} Burst DPS ({metrics['sustained_dps']:.1f} Sust.)   ·   "
             f"{metrics['pace_label']}"
         )
         self.ttk_calc_result_label.configure(text=summary, foreground=COLOR_OK)

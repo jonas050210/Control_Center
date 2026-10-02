@@ -253,21 +253,22 @@ class BackgroundRunner:
 # Small reusable widgets
 # ---------------------------------------------------------------------------
 
-# Shared desktop Control Center palette: Cyber-HUD tactical telemetry theme.
-_FONT_FAMILY = "Segoe UI"
-COLOR_BG = "#030711"
-COLOR_SURFACE = "#081121"
-COLOR_SURFACE_RAISED = "#0d1b33"
-COLOR_HOVER = "#14294a"
-COLOR_TEXT = "#ecf6ff"
-COLOR_ACCENT = "#00f0ff"
-COLOR_ACCENT_SECONDARY = "#8b5cf6"
-COLOR_OK = "#00ff9d"
-COLOR_WARN = "#ffb800"
-COLOR_ERROR = "#ff2e63"
-COLOR_MUTED = "#7c96b8"
-COLOR_BORDER = "#1b355a"
-COLOR_GRID = "#10223d"
+# Shared desktop Control Center palette: Clean Studio Dark (Linear / Raycast style).
+_FONT_FAMILY = "Segoe UI" if sys.platform.startswith("win") else "DejaVu Sans"
+_MONO_FONT = "Consolas" if sys.platform.startswith("win") else "DejaVu Sans Mono"
+COLOR_BG = "#0b0c0e"
+COLOR_SURFACE = "#121418"
+COLOR_SURFACE_RAISED = "#181b20"
+COLOR_HOVER = "#22262e"
+COLOR_TEXT = "#f4f5f7"
+COLOR_ACCENT = "#3b82f6"
+COLOR_ACCENT_SECONDARY = "#6366f1"
+COLOR_OK = "#10b981"
+COLOR_WARN = "#f59e0b"
+COLOR_ERROR = "#ef4444"
+COLOR_MUTED = "#8e95a2"
+COLOR_BORDER = "#242830"
+COLOR_GRID = "#191c22"
 
 
 class ToolTip:
@@ -288,7 +289,7 @@ class ToolTip:
         if not self.widget.winfo_exists():
             return
         self._cancel()
-        self._after_id = self.widget.after(450, self._show)
+        self._after_id = self.widget.after(380, self._show)
 
     def _cancel(self) -> None:
         if self._after_id is not None:
@@ -303,7 +304,7 @@ class ToolTip:
         tip = tk.Toplevel(self.widget)
         tip.wm_overrideredirect(True)
         tip.wm_geometry(
-            f"+{self.widget.winfo_rootx() + 14}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 8}"
+            f"+{self.widget.winfo_rootx() + 12}+{self.widget.winfo_rooty() + self.widget.winfo_height() + 6}"
         )
         tk.Label(
             tip,
@@ -313,7 +314,7 @@ class ToolTip:
             foreground=COLOR_TEXT,
             relief="solid",
             borderwidth=1,
-            padx=9,
+            padx=10,
             pady=6,
             font=(_FONT_FAMILY, 9),
             wraplength=320,
@@ -334,25 +335,29 @@ class ToolTip:
 
 
 class StatCard(ttk.Frame):
-    """One labelled value in a Dashboard/Benchmark/System HUD telemetry grid."""
+    """One cleanly aligned metric card with subtle status indicator and hover feedback."""
 
     def __init__(self, parent: tk.Misc, label: str) -> None:
         super().__init__(parent, style="Card.TFrame", padding=(0, 0))
-        self._accent_bar = tk.Frame(self, height=2, background=COLOR_ACCENT, borderwidth=0)
+        self._accent_bar = tk.Frame(self, height=2, background=COLOR_BORDER, borderwidth=0)
         self._accent_bar.pack(fill="x", side="top")
-        body = ttk.Frame(self, style="CardInner.TFrame", padding=(12, 8))
-        body.pack(fill="both", expand=True)
-        ttk.Label(body, text=label.upper(), style="CardLabel.TLabel").pack(anchor="w")
-        self._value = ttk.Label(body, text="n/a", style="CardValue.TLabel")
-        self._value.pack(anchor="w", pady=(2, 0))
+        self._body = ttk.Frame(self, style="CardInner.TFrame", padding=(14, 10))
+        self._body.pack(fill="both", expand=True)
+        clean_label = label[:1].upper() + label[1:] if label else ""
+        self._title_lbl = ttk.Label(self._body, text=clean_label, style="CardLabel.TLabel")
+        self._title_lbl.pack(anchor="w")
+        self._value = ttk.Label(self._body, text="n/a", style="CardValue.TLabel")
+        self._value.pack(anchor="w", pady=(4, 0))
+        self._current_color: str | None = None
 
     def set(self, text: str, color: str | None = None) -> None:
+        self._current_color = color
         self._value.configure(text=text, foreground=color or COLOR_TEXT)
-        self._accent_bar.configure(background=color or COLOR_ACCENT)
+        self._accent_bar.configure(background=color or COLOR_BORDER)
 
 
 class StatRow(ttk.Frame):
-    """A grid of :class:`StatCard` modules built from an ordered label tuple."""
+    """A balanced grid of :class:`StatCard` modules built from an ordered label tuple."""
 
     def __init__(
         self, parent: tk.Misc, labels: tuple[str, ...], *, max_columns: int = 5
@@ -363,7 +368,7 @@ class StatRow(ttk.Frame):
         for index, label in enumerate(labels):
             card = StatCard(self, label)
             row, column = divmod(index, columns)
-            card.grid(row=row, column=column, sticky="nsew", padx=4, pady=4)
+            card.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
             self.columnconfigure(column, weight=1, uniform="stats")
             self._cards[label] = card
 
@@ -374,17 +379,17 @@ class StatRow(ttk.Frame):
 
 
 class PhaseStepper(tk.Canvas):
-    """Futuristic horizontal HUD pipeline stepper + integrated progress bar."""
+    """Clean horizontal workflow stepper with smooth 60 FPS animated progress bar."""
 
     _STATUS_PALETTE: dict[str, tuple[str, str, str]] = {
-        "pending": (COLOR_SURFACE, COLOR_BORDER, COLOR_MUTED),
-        "active": ("#062c43", COLOR_ACCENT, COLOR_ACCENT),
-        "done": ("#052e24", COLOR_OK, COLOR_OK),
-        "skipped": ("#2b2108", COLOR_WARN, COLOR_WARN),
-        "failed": ("#360b1b", COLOR_ERROR, COLOR_ERROR),
+        "pending": (COLOR_SURFACE_RAISED, COLOR_BORDER, COLOR_MUTED),
+        "active": ("#172554", COLOR_ACCENT, COLOR_TEXT),
+        "done": ("#064e3b", COLOR_OK, COLOR_OK),
+        "skipped": ("#3f2e08", COLOR_WARN, COLOR_WARN),
+        "failed": ("#450a0a", COLOR_ERROR, COLOR_ERROR),
     }
 
-    def __init__(self, parent: tk.Misc, height: int = 54) -> None:
+    def __init__(self, parent: tk.Misc, height: int = 52) -> None:
         super().__init__(
             parent,
             height=height,
@@ -394,15 +399,44 @@ class PhaseStepper(tk.Canvas):
         )
         self._phases: list[dict[str, str]] = []
         self._fraction: float = 0.0
+        self._display_fraction: float = 0.0
+        self._anim_after_id: str | None = None
         self.bind("<Configure>", lambda _event: self._redraw())
+        self.bind("<Destroy>", self._cancel_anim, add="+")
+
+    def _cancel_anim(self, _event: object = None) -> None:
+        if self._anim_after_id is not None:
+            with contextlib.suppress(tk.TclError):
+                self.after_cancel(self._anim_after_id)
+            self._anim_after_id = None
 
     def set_state(self, phases: list[dict[str, str]], fraction: float = 0.0) -> None:
         self._phases = list(phases)
-        self._fraction = max(0.0, min(1.0, float(fraction)))
-        self._redraw()
+        target = max(0.0, min(1.0, float(fraction)))
+        self._fraction = target
+        if target == 0.0 and self._display_fraction > 0.5:
+            self._display_fraction = 0.0
+        self._schedule_smooth_step()
 
     def set_phases(self, phases: list[dict[str, str]], fraction: float = 0.0) -> None:
         self.set_state(phases, fraction)
+
+    def _schedule_smooth_step(self) -> None:
+        diff = self._fraction - self._display_fraction
+        if abs(diff) <= 0.004 or not self.winfo_exists():
+            self._display_fraction = self._fraction
+            self._cancel_anim()
+            self._redraw()
+            return
+        self._display_fraction += diff * 0.28
+        self._redraw()
+        if self._anim_after_id is None:
+            with contextlib.suppress(tk.TclError):
+                self._anim_after_id = self.after(16, self._on_anim_tick)
+
+    def _on_anim_tick(self) -> None:
+        self._anim_after_id = None
+        self._schedule_smooth_step()
 
     def _redraw(self) -> None:
         self.delete("all")
@@ -411,9 +445,9 @@ class PhaseStepper(tk.Canvas):
         if not self._phases:
             return
         count = len(self._phases)
-        pad_x = 12
-        gap = 10
-        box_h = 30
+        pad_x = 14
+        gap = 12
+        box_h = 28
         box_y0 = 8
         box_y1 = box_y0 + box_h
         slot_w = max(40.0, (width - 2 * pad_x - (count - 1) * gap) / count)
@@ -425,28 +459,40 @@ class PhaseStepper(tk.Canvas):
             if idx < count - 1:
                 conn_color = COLOR_OK if status == "done" else COLOR_BORDER
                 self.create_line(
-                    x1, (box_y0 + box_y1) / 2, x1 + gap, (box_y0 + box_y1) / 2, fill=conn_color, width=2
+                    x1,
+                    (box_y0 + box_y1) / 2,
+                    x1 + gap,
+                    (box_y0 + box_y1) / 2,
+                    fill=conn_color,
+                    width=1,
                 )
             self.create_rectangle(x0, box_y0, x1, box_y1, fill=bg, outline=border, width=1)
-            self.create_rectangle(x0, box_y0, x0 + 4, box_y1, fill=border, outline="")
-            prefix = f"0{idx + 1}"
-            label = str(phase.get("label", "")).upper()
-            self.create_text(
+            dot_color = border if status != "pending" else COLOR_MUTED
+            self.create_oval(
                 x0 + 10,
+                (box_y0 + box_y1) / 2 - 3,
+                x0 + 16,
+                (box_y0 + box_y1) / 2 + 3,
+                fill=dot_color,
+                outline="",
+            )
+            label = str(phase.get("label", "")).capitalize()
+            self.create_text(
+                x0 + 23,
                 (box_y0 + box_y1) / 2,
                 anchor="w",
-                text=f"{prefix} // {label}",
+                text=f"{idx + 1}. {label}",
                 fill=fg,
-                font=(_FONT_FAMILY, 8, "bold"),
+                font=(_FONT_FAMILY, 9, "bold" if status == "active" else "normal"),
             )
-        # Integrated bottom progress bar
-        bar_y0 = height - 8
+        # Smoothly animated bottom progress track
+        bar_y0 = height - 7
         bar_y1 = height - 3
         self.create_rectangle(
-            pad_x, bar_y0, width - pad_x, bar_y1, fill=COLOR_BG, outline=COLOR_BORDER
+            pad_x, bar_y0, width - pad_x, bar_y1, fill=COLOR_BG, outline=""
         )
-        if self._fraction > 0.0:
-            fill_w = (width - 2 * pad_x) * self._fraction
+        if self._display_fraction > 0.0:
+            fill_w = (width - 2 * pad_x) * self._display_fraction
             bar_color = COLOR_OK if self._fraction >= 0.999 else COLOR_ACCENT
             self.create_rectangle(
                 pad_x, bar_y0, pad_x + fill_w, bar_y1, fill=bar_color, outline=""
@@ -454,21 +500,13 @@ class PhaseStepper(tk.Canvas):
 
 
 class LineChart(tk.Canvas):
-    """A dependency-free bounded HUD oscilloscope chart with interactive crosshair.
-
-    Draws one series of ``(x, y)`` points already bounded by the adapter
-    (``deque(maxlen=...)``) and again decimated to the canvas width by
-    :func:`control_center_viewmodel.downsample_series`, so render cost never
-    grows with run length. Moving the pointer over the chart snaps a
-    crosshair to the nearest measured point and displays its exact ``(x, y)``
-    coordinates in the header.
-    """
+    """Clean, minimal telemetry chart with smooth Y-domain interpolation and hover pill."""
 
     def __init__(
         self,
         parent: tk.Misc,
         title: str,
-        height: int = 148,
+        height: int = 152,
         *,
         color: str = COLOR_ACCENT,
     ) -> None:
@@ -512,22 +550,18 @@ class LineChart(tk.Canvas):
         y_min: float,
         y_max: float,
     ) -> None:
-        plot_w = width - pad_left - pad_right
         plot_h = height - pad_top - pad_bottom
-        for v_frac in (0.25, 0.5, 0.75):
-            gx = pad_left + v_frac * plot_w
-            self.create_line(gx, pad_top, gx, height - pad_bottom, fill=COLOR_GRID)
         for fraction in (0.0, 0.5, 1.0):
             gy = pad_top + fraction * plot_h
-            self.create_line(pad_left, gy, width - pad_right, gy, fill=COLOR_BORDER)
+            self.create_line(pad_left, gy, width - pad_right, gy, fill=COLOR_GRID)
             value = y_max - fraction * (y_max - y_min)
             self.create_text(
-                pad_left - 6,
+                pad_left - 8,
                 gy,
                 anchor="e",
                 text=vm.format_number(value, 2),
                 fill=COLOR_MUTED,
-                font=("Consolas", 8),
+                font=(_MONO_FONT, 8),
             )
 
     def _draw_hover(
@@ -550,26 +584,25 @@ class LineChart(tk.Canvas):
         )
         hx, hy = coords[2 * best_idx], coords[2 * best_idx + 1]
         px, py = points[best_idx]
-        self.create_line(hx, pad_top, hx, height - pad_bottom, fill=COLOR_ACCENT, dash=(2, 2))
-        self.create_line(pad_left, hy, width - pad_right, hy, fill=COLOR_BORDER, dash=(2, 2))
+        self.create_line(hx, pad_top, hx, height - pad_bottom, fill=COLOR_BORDER, dash=(3, 3))
         self.create_oval(
-            hx - 4, hy - 4, hx + 4, hy + 4, fill=COLOR_WARN, outline=COLOR_TEXT, width=1
+            hx - 4, hy - 4, hx + 4, hy + 4, fill=self._color, outline=COLOR_TEXT, width=1
         )
-        return f"CURSOR [{vm.format_number(px, 0)} ▸ {vm.format_number(py, 3)}]  │  "
+        return f"Step {vm.format_number(px, 0)}: {vm.format_number(py, 3)}   ·   "
 
     def _redraw(self) -> None:
         self.delete("all")
         width = max(int(self.winfo_width()), 1)
         height = max(int(self.winfo_height()), 1)
-        pad_left, pad_right, pad_top, pad_bottom = 52, 12, 24, 18
-        self.create_rectangle(0, 0, width, 20, fill=COLOR_SURFACE, outline="")
+        pad_left, pad_right, pad_top, pad_bottom = 56, 16, 30, 18
+        clean_title = self._title[:1].upper() + self._title[1:] if self._title else ""
         self.create_text(
+            12,
             8,
-            4,
             anchor="nw",
-            text=f"// {self._title.upper()}",
-            font=(_FONT_FAMILY, 8, "bold"),
-            fill=self._color,
+            text=clean_title,
+            font=(_FONT_FAMILY, 9, "bold"),
+            fill=COLOR_TEXT,
         )
         points = vm.downsample_series(
             self._points, max_points=max(width - pad_left - pad_right, 10)
@@ -578,9 +611,9 @@ class LineChart(tk.Canvas):
             self.create_text(
                 width / 2,
                 height / 2 + 6,
-                text="AWAITING LIVE TELEMETRY STREAM...",
+                text="Waiting for telemetry...",
                 fill=COLOR_MUTED,
-                font=("Consolas", 9),
+                font=(_FONT_FAMILY, 9),
             )
             return
         xs = [p[0] for p in points]
@@ -603,29 +636,28 @@ class LineChart(tk.Canvas):
             coords.extend((cx, cy))
         baseline_y = height - pad_bottom
         poly_coords = [coords[0], baseline_y, *coords, coords[-2], baseline_y]
-        self.create_polygon(*poly_coords, fill="#07364d", stipple="gray25", outline="")
-        self.create_line(*coords, fill="#0a5c7d", width=4, smooth=False)
+        self.create_polygon(*poly_coords, fill="#172554", stipple="gray25", outline="")
         self.create_line(*coords, fill=self._color, width=2, smooth=False)
         last_x, last_y = coords[-2], coords[-1]
         self.create_oval(
-            last_x - 3, last_y - 3, last_x + 3, last_y + 3, fill=COLOR_OK, outline=COLOR_BG
+            last_x - 3, last_y - 3, last_x + 3, last_y + 3, fill=self._color, outline=COLOR_SURFACE_RAISED
         )
         cursor_prefix = (
             self._draw_hover(points, coords, width, height, pad_left, pad_right, pad_top, pad_bottom)
             or ""
         )
         summary = (
-            f"{cursor_prefix}MIN {vm.format_number(raw_y_min, 2)}  │  "
-            f"MAX {vm.format_number(raw_y_max, 2)}  │  "
-            f"NOW {vm.format_number(ys[-1], 3)}"
+            f"{cursor_prefix}Min {vm.format_number(raw_y_min, 2)}   ·   "
+            f"Max {vm.format_number(raw_y_max, 2)}   ·   "
+            f"Latest {vm.format_number(ys[-1], 3)}"
         )
         self.create_text(
             width - pad_right,
-            4,
+            8,
             anchor="ne",
             text=summary,
-            fill=COLOR_WARN if cursor_prefix else COLOR_TEXT,
-            font=("Consolas", 8, "bold"),
+            fill=COLOR_TEXT if cursor_prefix else COLOR_MUTED,
+            font=(_MONO_FONT, 8),
         )
 
 

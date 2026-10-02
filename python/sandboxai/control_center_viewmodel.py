@@ -1455,11 +1455,11 @@ def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
     connected = bool(live.get("ttk_session_active"))
 
     if connected:
-        badge = f"CONNECTED // TTK TESTING (PID {live.get('pid') or '?'})"
+        badge = f"Connected to TTK Testing (PID {live.get('pid') or '?'})"
     elif running:
-        badge = f"ROBLOX RUNNING (PID {live.get('pid') or '?'}) — OPEN TTK TESTING"
+        badge = f"Roblox running (PID {live.get('pid') or '?'}) — open TTK Testing"
     else:
-        badge = "ROBLOX // NOT RUNNING (CLICK LAUNCH)"
+        badge = "Roblox offline (click Launch)"
 
     launcher_text = (
         str(live.get("resolved_launcher"))
@@ -1567,13 +1567,13 @@ def ubuntu_cpu_turbo_view(profile: dict[str, Any] | None) -> dict[str, Any]:
     gov = str(profile.get("cpu_governor") or "unknown")
     os_name = str(profile.get("os_name") or "Linux")
     badge = (
-        f"UBUNTU CPU TURBO // ACTIVE ({rec_envs}e/{rec_workers}w, OMP=1)"
+        f"Ubuntu CPU Turbo Active ({rec_envs}e/{rec_workers}w, OMP=1)"
         if active
-        else f"CPU READY // {physical}C/{logical}T ({os_name}) — CLICK TURBO"
+        else f"CPU Ready ({physical}C/{logical}T {os_name})"
     )
     summary = (
-        f"{os_name} | {physical} phys / {logical} threads | gov={gov} | "
-        f"Optimal: {rec_envs} Envs x {rec_workers} Workers | "
+        f"{os_name}  ·  {physical} phys / {logical} threads  ·  gov={gov}  ·  "
+        f"Optimal: {rec_envs} Envs x {rec_workers} Workers  ·  "
         f"BLAS Anti-Thrash: {'ON (OMP/MKL=1)' if active else 'OFF'}"
     )
     return {
