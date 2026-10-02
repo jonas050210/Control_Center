@@ -117,6 +117,32 @@ class ControlCenterConstructionTests(unittest.TestCase):
             self.assertNotEqual(scrollbar.winfo_manager(), "grid")
             self.assertFalse(scrollbar._overflow() and scrollbar.winfo_manager() == "")
 
+    def test_density_change_rebuilds_the_page_without_losing_the_view(self):
+        """A density change re-lays the widgets out; the view must survive.
+
+        The rebuild destroys and recreates the page's children, which is how
+        the new paddings take effect. Only a real Tk build can verify the
+        consequence: the log the operator was reading, its poll cursors
+        (without them the next poll would duplicate everything) and the page
+        staying usable afterwards.
+        """
+        self.app.show_page("Training")
+        page = self.app.pages["Training"]
+        page.log_panel.apply_log(
+            {"stdout": ["density marker line"], "stdout_cursor": 7, "stderr_cursor": 3}
+        )
+
+        self.app.set_density("compact")
+
+        page = self.app.pages["Training"]  # the rebuild replaces the widgets
+        self.assertIn("density marker line", page.log_panel.text.get("1.0", "end-1c"))
+        self.assertEqual(page.log_panel.stdout_after, 7)
+        self.assertEqual(page.log_panel.stderr_after, 3)
+        # The page still works after being rebuilt underneath itself.
+        page.refresh()
+        _drain_background(self.app, attempts=3)
+        self.app.set_density("comfort")
+
     def test_page_poll_gate_coalesces_slow_refreshes_without_losing_the_latest_one(
         self,
     ) -> None:
