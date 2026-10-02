@@ -28,6 +28,7 @@ if HAS_TKINTER:
     import tkinter as tk
 
     from sandboxai.control_center_desktop import PAGE_CLASSES, ControlCenter
+    from sandboxai.control_center_ui import RoundedPanel
 
 
 def _make_app(project_root: Path) -> "ControlCenter":
@@ -47,6 +48,34 @@ def _drain_background(app: "ControlCenter", attempts: int = 20, delay: float = 0
         app.background._pump()
         app.update()
         time.sleep(delay)
+
+
+def _pump_events(app: "ControlCenter", seconds: float) -> int:
+    """Processes Tk events for a bounded wall-clock window; never blocks.
+
+    ``dooneevent(DONT_WAIT)`` returns as soon as it has nothing left to do, so
+    a window that streams events forever cannot hang this helper the way it
+    hangs ``update()`` - which only returns once the queue is empty, which is
+    exactly what an endless ``<Configure>`` stream prevents.
+    """
+    import _tkinter
+
+    processed = 0
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if app.tk.dooneevent(_tkinter.DONT_WAIT):
+            processed += 1
+        else:
+            time.sleep(0.005)
+    return processed
+
+
+def _rounded_panels(widget: "tk.Misc") -> list["RoundedPanel"]:
+    """Every card surface in the window, however deep it is nested."""
+    found = [widget] if isinstance(widget, RoundedPanel) else []
+    for child in widget.winfo_children():
+        found.extend(_rounded_panels(child))
+    return found
 
 
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
@@ -696,6 +725,61 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.update()
         assert tip._after_id is None
         assert tip._window is None
+
+
+@unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
+class ControlCenterSettlingTests(unittest.TestCase):
+    """A window that has been laid out must stop emitting ``<Configure>``.
+
+    Regression guard for a real CI failure. ``RoundedPanel`` sized its inner
+    body from the canvas height while the canvas sized itself from the body's
+    request, so every resize produced the next one. Tk never ran out of
+    ``<Configure>`` events, ``app.update()`` never returned (it returns only
+    when the queue drains), and the desktop job died on its 180 s timeout with
+    nothing but a thread dump - reproduced by the page that was on screen at
+    the time. Counting the events through a non-blocking pump turns that
+    failure mode into a fast assertion that names the count.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project_root = Path(self._tmp.name)
+        try:
+            self.app = _make_app(self.project_root)
+        except tk.TclError as exc:
+            self.skipTest(f"no display available for Tk: {exc}")
+        self.addCleanup(self._safe_destroy)
+
+    def _safe_destroy(self):
+        with contextlib.suppress(tk.TclError):
+            self.app._on_close()
+
+    def test_a_shown_page_stops_emitting_configure_events(self):
+        for title in ("Benchmarks", "Training", "Stats"):
+            with self.subTest(page=title):
+                self.app.show_page(title)
+                self.app.update_idletasks()
+                # Let the first layout of the page finish, then watch.
+                _pump_events(self.app, 0.4)
+                events = {"count": 0}
+
+                def count(_event, _events=events):
+                    _events["count"] += 1
+
+                panels = _rounded_panels(self.app)
+                self.assertTrue(panels, f"{title}: no card surface found to watch")
+                for panel in panels:
+                    panel.bind("<Configure>", count, add="+")
+                _pump_events(self.app, 0.4)
+                self.assertLess(
+                    events["count"],
+                    200,
+                    f"{title}: {events['count']} <Configure> events in 0.4 s after the "
+                    "page settled - the card geometry is feeding itself",
+                )
 
 
 if __name__ == "__main__":

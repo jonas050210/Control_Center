@@ -918,6 +918,9 @@ class RoundedPanel(tk.Canvas):
         #: surface, the accent bar and the two header texts each time made a
         #: window drag noticeably heavy for no visible gain.
         self._last_draw: tuple[int, int, int, bool] | None = None
+        #: Size currently applied to the body window, so a redundant resize
+        #: (and the Configure event it would produce) is skipped.
+        self._body_size: tuple[int, int] | None = None
         self.bind("<Configure>", lambda _e: self._redraw(), add="+")
         self.body.bind("<Configure>", lambda _e: self._on_body_configure(), add="+")
         self.bind("<Enter>", lambda _e: self._set_hover(True), add="+")
@@ -1011,15 +1014,26 @@ class RoundedPanel(tk.Canvas):
         self.tag_lower("surface")
         header = self._header_height()
         self.coords(self._body_window, self._padding, self._padding + header)
-        # Never squeeze the content frame below what its children need. A grid
-        # row that is shorter than a card used to clip its body (labels
-        # overlapping the next card), because the window item height was
-        # forced to the canvas height instead of the larger of the two.
-        self.itemconfigure(
-            self._body_window,
-            width=max(1, width - 2 * self._padding),
-            height=max(1, height - 2 * self._padding - header, needed),
-        )
+        self._resize_body(max(1, width - 2 * self._padding), max(1, needed))
+
+    def _resize_body(self, width: int, height: int) -> None:
+        """Sizes the body window, and only when the value actually changes.
+
+        The body keeps exactly the size its content asks for. Deriving it from
+        the canvas height instead made the two depend on each other: a resize
+        fires ``<Configure>``, the handler resizes the window item, that fires
+        the next ``<Configure>``. Tk keeps delivering those events forever, so
+        ``update()`` - which only returns when the queue drains - never
+        returned, and the desktop suite died on its 180 s timeout instead of
+        on an assertion. Content still cannot be clipped: the canvas itself is
+        sized from the same request (``_on_body_configure``), and a card that
+        is shorter than its grid row leaves the spare pixels to the surface.
+        """
+        target = (max(1, int(width)), max(1, int(height)))
+        if self._body_size == target:
+            return
+        self._body_size = target
+        self.itemconfigure(self._body_window, width=target[0], height=target[1])
 
 
 class SegmentedControl(tk.Canvas):

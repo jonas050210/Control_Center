@@ -273,6 +273,19 @@ records what changed and why.
   meet the TTK-only evidence boundary.
 
 ### Fixed
+- **A card's inner body fed its own resize back into the canvas.** The
+  Control Center's `RoundedPanel` sized the body window from the canvas height
+  while the canvas sized itself from the body's request, so a resize produced
+  the next `<Configure>` event forever. `Tk.update()` returns only when the
+  event queue drains, so the desktop suite hung on its 180 s timeout inside
+  `update()` with nothing but a thread dump to show for it, and a real window
+  would have burned a core while it was on screen. The body now keeps exactly
+  the size its content asks for - derived from nothing but that request - and
+  is resized only when the value changes, which makes the panel idempotent;
+  the canvas is sized from the same request, so content still cannot be
+  clipped. A new test watches every card surface through a non-blocking
+  `dooneevent(DONT_WAIT)` pump and fails with the event count if a settled
+  page keeps emitting, turning the slow timeout into a fast assertion.
 - **Three scripts called `VectorMath` without preloading it, and the engine
   refused to compile them.** `environment_reset.gd`, `world_generator.gd` and
   `scenario_library.gd` were given a `VectorMath.yaw_deg_from_direction(...)`
