@@ -176,10 +176,18 @@ jobs:
               if os.path.exists(path)
               else "(no output captured)"
           )
+          # Head first: pytest prints the failing test, its assertion and the
+          # traceback before the summary, and a timeout dump puts the MAIN
+          # thread's stack at the top - the tail alone shows consequences.
           print("### Desktop UI tests failed\n")
           print("```text")
-          print(raw[-40000:])
+          print(raw[:40000])
           print("```")
+          if len(raw) > 40000:
+              print("\n### Tail (last 40000 chars)\n")
+              print("```text")
+              print(raw[-40000:])
+              print("```")
           PY
 
       - name: Comment on the commit when the suite fails

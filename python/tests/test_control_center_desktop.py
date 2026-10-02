@@ -102,6 +102,34 @@ def _geometry_snapshot(root: "tk.Misc") -> dict[str, tuple[int, int, int, int]]:
     return snapshot
 
 
+def _stub_benchmark_report() -> tuple[dict, dict]:
+    """The report a finished benchmark run returns, as the pipeline mock.
+
+    Kept in one place so the settle probe and the workflow test drive the
+    page with exactly the same payload.
+    """
+    recommendation = {
+        "environment_count": 8,
+        "env_workers": 2,
+        "device": "cpu",
+        "inference_device": "cpu",
+        "expected_steps_per_second": 100.0,
+        "basis": "validated_training_slice",
+        "rationale": ["measured"],
+        "warnings": [],
+    }
+    report = {
+        "status": "completed",
+        "elapsed_seconds": 1.0,
+        "stages": [
+            {"name": "discovery", "status": "completed"},
+            {"name": "screening", "status": "completed", "configurations": []},
+        ],
+        "recommendation": recommendation,
+    }
+    return recommendation, report
+
+
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
 class ControlCenterSettlingTests(unittest.TestCase):
     """A laid-out window must reach a steady state, with no event stream.
@@ -160,6 +188,60 @@ class ControlCenterSettlingTests(unittest.TestCase):
                         f"{name} -> {sorted(values)}" for name, values in list(moving.items())[:6]
                     ),
                 )
+
+    def test_the_benchmark_workflow_settles_after_it_finishes(self):
+        """The workflow that used to hang must not stream events afterwards.
+
+        This is the path the desktop suite died on: the benchmark run updates
+        phases, log lines and its result table, and something in that update
+        kept the window busy for good. The probe drives the same workflow as
+        the real test but watches through the non-blocking pump, so a
+        regression is reported (with the widgets and counts that explain it)
+        instead of turning into a three-minute timeout.
+        """
+        from unittest import mock
+
+        self.app.show_page("Training")
+        self.app.show_page("Benchmarks")
+        page = self.app.pages["Benchmarks"]
+        _, report = _stub_benchmark_report()
+        applied = dict(report["recommendation"], applied_utc="2026-01-01T00:00:00Z")
+
+        configure_counts: dict[str, int] = {}
+        processed = {"events": 0}
+
+        def count_configure(event, _counts=configure_counts):
+            key = f"{type(event.widget).__name__} {event.widget}"
+            _counts[key] = _counts.get(key, 0) + 1
+
+        self.app.bind_all("<Configure>", count_configure, add="+")
+        self.addCleanup(lambda: self.app.unbind_all("<Configure>"))
+        with (
+            mock.patch.object(page.adapter, "run_benchmark_pipeline", return_value=report),
+            mock.patch.object(
+                page.adapter, "apply_recommended_configuration", return_value=applied
+            ),
+        ):
+            page._start()
+            for _ in range(10):
+                processed["events"] += _pump_events(self.app, 0.05)
+        timers = len(str(self.app.tk.eval("after info")).split())
+        total_configure = sum(configure_counts.values())
+        worst = sorted(configure_counts.items(), key=lambda item: item[1], reverse=True)[:5]
+        detail = (
+            f"events={processed['events']} pending_after={timers} "
+            f"configure={total_configure} worst={worst}"
+        )
+        self.assertLess(
+            total_configure,
+            200,
+            f"the finished benchmark workflow keeps resizing itself: {detail}",
+        )
+        self.assertEqual(
+            configure_counts,
+            {},
+            f"the finished benchmark workflow resizes widgets: {detail}",
+        )
 
 
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
