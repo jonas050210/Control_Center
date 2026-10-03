@@ -90,6 +90,16 @@ Nothing in this surface feeds the training pipeline. The policy's observation
 comes from the local Godot simulator; the helper exists so a human can
 measure the real game and type the result in.
 
+**Reaching the desktop.** The three window helpers need a *desktop*, not a
+filesystem, and the project is operated from WSL with the client on the
+Windows host. `sandboxai.ttk_testing` therefore has one host bridge with
+two routes: on native Windows it calls user32 through `ctypes`; under WSL it
+asks the Windows host's own PowerShell to make the same Win32 calls, which
+is the interop `launch_roblox_ttk_testing` already relies on to start the
+client. A host with neither reports that, instead of pretending the button
+worked. `screenshots` are written to the Windows form of the captures
+directory so they appear at the POSIX path Python expects.
+
 ## Implementation matrix
 
 | Status | Mechanic | Allowed project behavior |

@@ -152,8 +152,10 @@ Launch with `python3 main.py` from the repository root, or
 Tkinter from the standard library only (Windows-first, no paid/cloud
 dependency) and never renders the game. Pages: **Dashboard**, **Training**,
 **Benchmarks**, **Evaluations**, **Runs / Checkpoints**, **Stats**,
-**System / Telemetry**, **Settings**. The shell has three layouts (rail,
-topbar, command board), five themes and three density presets, all applied
+**System / Telemetry**, **Settings**. The shell is one fixed navigation
+rail (it is not switchable and it does not collapse: a collapsed rail
+traded the page titles for two-letter codes to win ~160 px), with
+five themes and three density presets, all applied
 live and persisted in `.sandboxai/ui/preferences.json`; pages that declare
 widgets expose a layout board whose card order, span and visibility are
 editable in **Settings -> Layout studio** and savable as a preset under

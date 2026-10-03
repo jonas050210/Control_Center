@@ -45,7 +45,7 @@ PYTHONPATH=python /tmp/venv/bin/python -m pytest -q
 ```
 
 The same environment without the training extras (this is the one behind the
-"1030 passed, 147 skipped" figure below - keep `numpy`, drop torch and
+"1075 passed, 153 skipped" figure below - keep `numpy`, drop torch and
 friends):
 
 ```bash
@@ -78,7 +78,7 @@ The only tests that legitimately skip everywhere are the Tk-dependent ones
 
 ```bash
 ruff check .                 # All checks passed!
-ruff format --check .        # 141 files already formatted
+ruff format --check .        # 142 files already formatted
 mypy                         # Success: no issues found in 54 source files
 gdlint scripts tests         # Success: no problems found
 gdformat --check scripts tests
@@ -100,11 +100,11 @@ the suite grows with every change (`pytest` prints its own totals, and
 the environment decides how many optional-extra tests skip). Run the
 commands and read their output; do not edit a number to match.
 
-Those counts were last taken with the training extras installed. This
-checkout shows `1030 passed, 147 skipped, 880 subtests` without
-torch/SB3/gymnasium and without Tkinter (the extra skips are those
-optional extras plus the Tk-dependent Control Center tests), so a green
-run here looks different from a green run in CI and both are correct.
+With the training extras installed this checkout shows `1179 passed, 49
+skipped, 884 subtests`; without torch/SB3/gymnasium and without Tkinter it
+shows `1075 passed, 153 skipped, 884 subtests` (the extra skips are those
+optional extras plus the Tk-dependent Control Center tests). A green run
+here looks different from a green run in CI and both are correct.
 
 `mypy` takes **no arguments** — its configuration lives in
 `pyproject.toml`. It is deliberately **not** `--strict`: the torch/SB3
@@ -125,16 +125,17 @@ reverted; do not re-enable it.
   and enforced by a test. Do not reorganise into subpackages: every
   import path is public API and appears in docs, user scripts and saved
   run manifests.
-- `python/tests/` — 52 pytest files. Note the real names:
+- `python/tests/` — 59 pytest files. Note the real names:
   `test_ppo_smoke.py`, `test_ppo_helpers.py`, `test_training_infrastructure.py`,
   `test_weapon_profiles_static.py`, `test_weapons_constant_parser.py`.
   There is **no** `test_ppo.py` and **no** `test_weapons.py`.
-- `scripts/` — 98 GDScript files. `scripts/env/environment_core.gd` is
+- `scripts/` — 56 GDScript files. `scripts/env/environment_core.gd` is
   the simulation loop; it delegates to `EnvironmentReset`,
   `EnvironmentCombat`, `EnvironmentEnemies` and `EnvironmentIntrospection`,
   all stateless static helpers taking the environment as an untyped first
   argument (typing it would need a preload cycle).
-- `tests/` — 57 GDScript tests, runner `tests/run_tests.gd`.
+- `tests/` — 43 discovered GDScript test files (397 test functions), runner
+  `tests/run_tests.gd`.
 
 ## 5. Single sources of truth (all enforced by `python/tests/test_docs_consistency.py`)
 
