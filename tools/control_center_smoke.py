@@ -1379,6 +1379,47 @@ def _exercise_training(page: object) -> None:
         raise AssertionError(f"unclear Training controls are still visible: {present}")
 
 
+def _exercise_benchmark_column_alignment(page: object) -> None:
+    """Every rendered value must land under its own table heading."""
+    # Exercise the actual renderer: one missing FPS value shifted every
+    # following cell under the wrong heading despite a complete column list.
+    page._render_report(  # type: ignore[attr-defined]
+        {
+            "stages": [
+                {
+                    "name": "screening",
+                    "configurations": [
+                        {
+                            "environments": 8,
+                            "workers": 2,
+                            "status": "ok",
+                            "total_steps": 320,
+                            "steps_per_second": 16.0,
+                            "frames_per_second": 2.0,
+                            "speedup_vs_baseline": 1.5,
+                            "elapsed_seconds": 20.0,
+                            "vector_step_latency_p50_ms": 2.0,
+                            "vector_step_latency_p95_ms": 4.0,
+                            "error": "fixture",
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    item = page.tree.get_children()[0]  # type: ignore[attr-defined]
+    rendered = dict(zip(page.tree["columns"], page.tree.item(item, "values"), strict=True))  # type: ignore[attr-defined]
+    for key, expected in {
+        "frames_per_second": "2.0",
+        "speedup": "1.50x",
+        "elapsed_seconds": "20.00",
+        "error": "fixture",
+    }.items():
+        actual = str(rendered[key])
+        if actual != expected:
+            raise AssertionError(f"benchmark column {key}: {actual!r} != {expected!r}")
+
+
 def _exercise_benchmarks(page: object) -> None:
     """The UI exposes one automatic action; Cancel exists only during a run."""
     obsolete_controls = (
@@ -1400,10 +1441,16 @@ def _exercise_benchmarks(page: object) -> None:
     plan = page.current_plan()  # type: ignore[attr-defined]
     if plan["mode"] != "auto" or plan["errors"]:
         raise AssertionError(f"the benchmark must build a valid automatic plan: {plan}")
-    if "Steps/s" not in page.LIVE_CARD_NAMES:  # type: ignore[attr-defined]
-        raise AssertionError("live telemetry must include Steps/s")
+    if "Simulation Steps/s" not in page.LIVE_CARD_NAMES:  # type: ignore[attr-defined]
+        raise AssertionError("live telemetry must label simulation throughput")
+    if "PPO Training Steps/s" not in page.LIVE_CARD_NAMES:  # type: ignore[attr-defined]
+        raise AssertionError("live telemetry must label PPO throughput separately")
+    if plan["budget_mode"] != "fixed" or plan["per_config_seconds"] != 20.0:
+        raise AssertionError("automatic benchmarks must use a fixed 20-second window")
     if "peak fps" in page.LIVE_CARD_NAMES:  # type: ignore[attr-defined]
         raise AssertionError("duplicate Peak FPS telemetry should be removed")
+
+    _exercise_benchmark_column_alignment(page)
 
     from threading import Event
 

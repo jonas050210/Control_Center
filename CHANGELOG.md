@@ -10,6 +10,21 @@ records what changed and why.
 
 ### Control Center
 
+- **Automatic benchmark windows are fixed, not budget-thinned.** Every
+  planned environment/worker pair gets 20 seconds of measurement after
+  startup/warmup, with no user duration setting or early step cutoff. The
+  full sweep remains intact and the GUI states its minimum screening time.
+  Finalists are checked with separate timed PPO windows; a slice without an
+  optimizer update cannot become an automatically applied recommendation.
+- **Simulation throughput is no longer presented as training throughput.**
+  The live cards, curves and leader labels separate both paths. PPO rates
+  use actual training-loop time, excluding startup/final saves; total wall
+  time remains recorded. Table cells align with their headers (the missing
+  per-environment FPS value had shifted every following column), and wide
+  table columns fit using measured heading-font minima rather than a relaxed
+  overflow test. A missing Godot executable no longer silently switches the
+  GUI benchmark to the synthetic Python bridge.
+
 - **`python3 tools/control_center_ui_report.py` measures the real window.**
   Every UI complaint so far had to be translated into words by whoever was
   looking at the screen, because the headless harness proves the window

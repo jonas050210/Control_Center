@@ -142,6 +142,24 @@ class CliTests(unittest.TestCase):
         self.assertIn("No persisted benchmark recommendation", out.getvalue())
         load.assert_called_once()
 
+    def test_benchmark_pipeline_defaults_to_fixed_windows(self):
+        with (
+            mock.patch(
+                "sandboxai.benchmark_pipeline.run_benchmark_pipeline",
+                return_value={
+                    "status": "unavailable",
+                    "recommendation": None,
+                    "recommendation_reason": "no engine",
+                },
+            ) as run,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            main(["benchmark-pipeline"])
+        self.assertEqual(run.call_args.kwargs["budget"].mode, "fixed")
+        self.assertEqual(
+            run.call_args.kwargs["budget"].describe()["seconds_per_configuration"], 20.0
+        )
+
     def test_benchmark_pipeline_rejects_an_invalid_budget(self):
         with contextlib.redirect_stderr(io.StringIO()):
             exit_code = main(["benchmark-pipeline", "--budget-mode", "time", "--minutes", "500"])

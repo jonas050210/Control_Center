@@ -2007,7 +2007,7 @@ class BenchmarkPage(Page):
     """One-click, host-scaled benchmark with live telemetry.
 
     The UI exposes no tuning controls: the pipeline chooses candidate
-    environment/worker pairs and its time budget from this machine, compares
+    environment/worker pairs from this machine, measures fixed windows, compares
     available devices, validates the strongest candidates, and applies its
     measured recommendation automatically.
     """
@@ -2059,7 +2059,7 @@ class BenchmarkPage(Page):
         ("p50_ms", "p50 ms", 65),
         ("p95_ms", "p95 ms", 65),
         ("jitter", "p95/p50", 65),
-        ("startup_seconds", "Startup s", 75),
+        ("elapsed_seconds", "Measured s", 78),
         ("bottleneck", "Regime", 95),
         ("error", "Error", 200),
     )
@@ -2067,8 +2067,9 @@ class BenchmarkPage(Page):
     LIVE_CARD_NAMES = (
         "stage / progress",
         "active config",
-        vm.UNIT_STEPS_PER_SECOND,
-        vm.UNIT_FPS_PER_ENV,
+        vm.UNIT_SIMULATION_STEPS_PER_SECOND,
+        vm.UNIT_PPO_STEPS_PER_SECOND,
+        f"{vm.UNIT_FPS_PER_ENV} (simulation)",
         "live steps",
         "latency (p50 / p95)",
         "stability (jitter)",
@@ -2118,7 +2119,9 @@ class BenchmarkPage(Page):
         intro_desc.pack(anchor="w", fill="x")
 
         def resize_intro_description(event: tk.Event[tk.Misc]) -> None:
-            intro_desc.configure(wraplength=max(240, int(getattr(event, "width", 800) or 800) - 20))
+            width = max(240, int(getattr(event, "width", 800) or 800) - 20)
+            intro_desc.configure(wraplength=width)
+            self.plan_label.configure(wraplength=width)
 
         intro.bind("<Configure>", resize_intro_description, add=True)
 
@@ -2129,6 +2132,7 @@ class BenchmarkPage(Page):
             intro,
             text="",
             justify="left",
+            wraplength=self.app.px(920, minimum=360),
             style="CardLabel.TLabel",
             foreground=self.palette.accent,
         )
@@ -2180,9 +2184,10 @@ class BenchmarkPage(Page):
         card = self.card(
             parent,
             "Live telemetry",
-            "Stage, throughput and the current leader while a run is active",
+            "Simulation excludes policy/learning; PPO includes rollouts and updates, "
+            "but not periodic evaluation or final saves",
         )
-        self.live_cards = StatRow(card.body, self.LIVE_CARD_NAMES, max_columns=4, bus=self.app.bus)
+        self.live_cards = StatRow(card.body, self.LIVE_CARD_NAMES, max_columns=3, bus=self.app.bus)
         self.live_cards.pack(fill="x")
 
         best_card = self.card(
@@ -2212,19 +2217,16 @@ class BenchmarkPage(Page):
     def _build_results_card(self, parent: tk.Misc) -> tk.Widget:
         """The measurement table, as a full-width card.
 
-        It used to share one card with the chart in a 3:2 split. The table
-        declares 1203 px of columns (15 of them) and the 3:2 left half of a
-        1920x1080 window is only about 900 px, so the project's marquee table
-        opened with a horizontal scrollbar on the very screens that have room
-        to spare. Full width gives it ~1450 px and the overlay bar disappears;
-        the chart gets its own full-width card right below instead of a
-        squeezed 600 px column.
+        The table has its own full-width card. Column fitting uses actual
+        heading-font minima and the available viewport, including Windows
+        border/padding space; narrow windows intentionally retain scrolling.
         """
         card = self.card(parent, "Measurements", "Every tested configuration, live")
         self.tree = _scrollable_table(
             card.body,
             self.RESULT_COLUMNS,
             bus=self.app.bus,
+            fit_columns=True,
             empty_text=("No measurements yet.\nPress Start Benchmark to measure this machine."),
         )
         self.tag_style(self.tree, "failed", "error")
@@ -2232,7 +2234,7 @@ class BenchmarkPage(Page):
         return card
 
     def _build_scaling_card(self, parent: tk.Misc) -> tk.Widget:
-        """Two curves: the topology's throughput, and what one env gets of it.
+        """Separate simulation/PPO curves and the simulation rate per env.
 
         Steps/s and FPS/env answer different questions and they do not move
         together — the first keeps climbing after the second has already
@@ -2241,16 +2243,23 @@ class BenchmarkPage(Page):
         """
         card = self.card(
             parent,
-            "Throughput & FPS scaling",
-            "Steps per second, and simulation steps per second per environment",
+            "Simulation & PPO scaling",
+            "Separate throughput paths; the per-environment curve is simulation only",
         )
         self.throughput_chart = LineChart(
             card.body,
-            "Measured throughput (steps/s)",
+            vm.UNIT_SIMULATION_STEPS_PER_SECOND,
             color=self.palette.accent,
             bus=self.app.bus,
         )
         self.throughput_chart.pack(fill="both", expand=True)
+        self.training_chart = LineChart(
+            card.body,
+            vm.UNIT_PPO_STEPS_PER_SECOND,
+            color=self.palette.warn,
+            bus=self.app.bus,
+        )
+        self.training_chart.pack(fill="both", expand=True, pady=(self.app.px(8, minimum=4), 0))
         self.fps_chart = LineChart(
             card.body,
             f"Per-environment rate ({vm.UNIT_FPS_PER_ENV})",
@@ -2278,15 +2287,15 @@ class BenchmarkPage(Page):
         if plan["errors"]:
             self.plan_label.configure(text="; ".join(plan["errors"]), foreground=self.palette.error)
             return
-        minutes = plan.get("minutes")
         per_config = plan.get("per_config_seconds")
         self.plan_label.configure(
             text=(
                 f"{plan['expected_configurations']} configurations   ·   "
                 f"up to {max(plan['environments'])} environments   ·   "
-                f"up to {max(plan['workers'])} workers   ·   "
-                f"~{vm.format_number(per_config, 1)} s each   ·   "
-                f"budget {vm.format_number(minutes, 0)} min"
+                f"up to {max(plan['workers'])} workers\n"
+                f"Fixed {vm.format_number(per_config, 0)} s per configuration   ·   "
+                f"at least {vm.format_duration(plan['screening_measurement_seconds'])} screening "
+                "+ startup/warmup + PPO validation"
             ),
             foreground=self.palette.accent,
         )
@@ -2334,11 +2343,6 @@ class BenchmarkPage(Page):
         stage_text = live_view["stage_label"]
         if live_view["index"] and live_view["total"]:
             stage_text = f"{stage_text} ({live_view['index']}/{live_view['total']})"
-        steps_per_second_text = (
-            f"{vm.format_number(live_view['steps_per_second'], 1)} ({live_view['live_phase']})"
-            if live_view["steps_per_second"] is not None and live_view["live_phase"]
-            else vm.format_number(live_view["steps_per_second"], 1)
-        )
         if live_view["live_steps"] is not None:
             steps_text = vm.format_number(live_view["live_steps"])
             if live_view["steps_per_env"] is not None:
@@ -2374,11 +2378,17 @@ class BenchmarkPage(Page):
                     self.palette.accent if self._running else None,
                 ),
                 "active config": (live_view["active_config"], None),
-                vm.UNIT_STEPS_PER_SECOND: (
-                    steps_per_second_text,
-                    self.palette.ok if live_view["steps_per_second"] is not None else None,
+                vm.UNIT_SIMULATION_STEPS_PER_SECOND: (
+                    vm.format_number(live_view["simulation_steps_per_second"], 1),
+                    self.palette.accent
+                    if live_view["simulation_steps_per_second"] is not None
+                    else None,
                 ),
-                vm.UNIT_FPS_PER_ENV: (
+                vm.UNIT_PPO_STEPS_PER_SECOND: (
+                    vm.format_number(live_view["training_steps_per_second"], 1),
+                    self.palette.ok if live_view["training_steps_per_second"] is not None else None,
+                ),
+                f"{vm.UNIT_FPS_PER_ENV} (simulation)": (
                     fps_text,
                     self.palette.accent if live_view["frames_per_second"] is not None else None,
                 ),
@@ -2389,23 +2399,11 @@ class BenchmarkPage(Page):
             }
         )
         self.leader_banner.configure(text=f"Leading configuration: {live_view['leader_summary']}")
-        chart_points = list(live_view["chart_points"])
-        if (
-            self._running
-            and live_view["steps_per_second"] is not None
-            and isinstance(live_view["steps_per_second"], (int, float))
-        ):
-            next_idx = len(chart_points) + 1
-            chart_points.append((next_idx, float(live_view["steps_per_second"])))
-        self.throughput_chart.set_points(chart_points)
-        fps_points = list(live_view.get("fps_chart_points") or [])
-        if (
-            self._running
-            and isinstance(live_view["frames_per_second"], (int, float))
-            and live_view["frames_per_second"] is not None
-        ):
-            fps_points.append((len(fps_points) + 1, float(live_view["frames_per_second"])))
-        self.fps_chart.set_points(fps_points)
+        # The viewmodel already adds an in-flight point to the correct path.
+        # Do not duplicate it or append a PPO rate to the simulation curve.
+        self.throughput_chart.set_points(live_view["chart_points"])
+        self.training_chart.set_points(live_view["training_chart_points"])
+        self.fps_chart.set_points(live_view["fps_chart_points"])
 
     def current_plan(self) -> dict[str, Any]:
         """Build the automatic host-scaled plan; no tuning fields are exposed in the UI."""
@@ -2431,6 +2429,7 @@ class BenchmarkPage(Page):
             self._latest_progress = None
         self.tree.delete(*self.tree.get_children())
         self.throughput_chart.set_points([])
+        self.training_chart.set_points([])
         self.fps_chart.set_points([])
         self._update_buttons()
         self.progress_label.configure(text="starting...", foreground=self.palette.text_dim)
@@ -2442,15 +2441,9 @@ class BenchmarkPage(Page):
 
         cancel_event = self._cancel_event
 
-        budget_mode = str(plan["budget_mode"])
-        steps = int(plan["steps"]) if isinstance(plan["steps"], (int, float)) else None
-        minutes = float(plan["minutes"]) if isinstance(plan["minutes"], (int, float)) else None
-
         def _run() -> dict[str, Any]:
             return self.adapter.run_benchmark_pipeline(
-                budget_mode=budget_mode,
-                steps=steps,
-                minutes=minutes,
+                budget_mode="fixed",
                 environment_counts=list(plan["environments"]) or None,
                 worker_counts=list(plan["workers"]) or None,
                 cancel=cancel_event.is_set if cancel_event else None,
@@ -2462,7 +2455,15 @@ class BenchmarkPage(Page):
     def _cancel(self) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
-            self.progress_label.configure(text="Cancelling after the current measurement…")
+            with self._progress_lock:
+                stage = (self._latest_progress or {}).get("stage")
+            self.progress_label.configure(
+                text=(
+                    "Cancelling at the next simulation step…"
+                    if stage == "screening"
+                    else "Cancelling after the current bounded measurement…"
+                )
+            )
             self._update_buttons()
 
     def _on_finished(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
@@ -2567,18 +2568,23 @@ class BenchmarkPage(Page):
     ) -> None:
         rows = vm.benchmark_pipeline_rows(report, live_rows=live_rows)
         self.tree.delete(*self.tree.get_children())
-        best_fps = max(
-            (
-                float(r["steps_per_second"])
-                for r in rows
-                if (r.get("status") or "ok") in ("ok", "measured")
-                and isinstance(r.get("steps_per_second"), (int, float))
-            ),
-            default=None,
-        )
+        best_by_stage = {
+            stage: max(
+                (
+                    float(r["steps_per_second"])
+                    for r in rows
+                    if r["stage"] == stage
+                    and r.get("status", "ok") in ("ok", "measured")
+                    and isinstance(r.get("steps_per_second"), (int, float))
+                ),
+                default=None,
+            )
+            for stage in {r["stage"] for r in rows}
+        }
         for row in rows:
             status = row["status"] or "ok"
             fps = row.get("steps_per_second")
+            best_fps = best_by_stage.get(row["stage"])
             if status not in ("ok", "measured"):
                 tags: tuple[str, ...] = ("failed",)
             elif best_fps is not None and isinstance(fps, (int, float)) and float(fps) >= best_fps:
@@ -2591,18 +2597,21 @@ class BenchmarkPage(Page):
                 "",
                 "end",
                 values=(
-                    row["stage"] or "n/a",
+                    {"screening": "Simulation", "validation": "PPO"}.get(
+                        row["stage"], row["stage"] or "n/a"
+                    ),
                     status,
                     vm.format_number(row["environments"]),
                     vm.format_number(row["workers"]),
                     row["device"] or "-",
                     vm.format_number(row["steps"]),
                     vm.format_number(fps, 1),
+                    vm.format_number(row["frames_per_second"], 1),
                     speedup_str,
                     vm.format_number(row["p50_ms"], 2),
                     vm.format_number(row["p95_ms"], 2),
                     vm.format_number(row["jitter"], 2),
-                    vm.format_number(row["startup_seconds"], 2),
+                    vm.format_number(row["elapsed_seconds"], 2),
                     row.get("bottleneck") or "-",
                     row["error"] or "",
                 ),

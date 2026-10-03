@@ -84,9 +84,9 @@ sandboxai benchmark --env-counts 1,2,4,8,16,24,32,48,64 \
   --output-dir training/benchmarks/4060ti
 ```
 
-Each environment count is time-boxed (`--max-seconds-per-config`, default
-20 s) so the full recommended sweep finishes in a few minutes instead of
-being proportional to `steps * len(env_counts)`. The result JSON/CSV
+This low-level scripted command retains its step target and safety cap
+(`--max-seconds-per-config`, default 20 s); fast configurations may finish
+before the cap. It is not the automatic GUI sweep described below. Its JSON/CSV
 includes, per environment count: `steps_per_second`, `frames_per_second`
 (the same throughput divided by the environment count, i.e. how many
 simulation ticks one agent lives through per second), `episodes_per_second`,
@@ -103,15 +103,33 @@ validates the strongest finalists with a training slice, and writes both a
 report and a recommendation:
 
 ```bash
+sandboxai benchmark-pipeline              # fixed automatic windows
+sandboxai benchmark-pipeline --show        # print the persisted recommendation
+# Legacy budget modes for scripted callers, not GUI settings:
 sandboxai benchmark-pipeline --budget-mode time --minutes 30
 sandboxai benchmark-pipeline --budget-mode steps --steps 2000
-sandboxai benchmark-pipeline --show        # print the persisted recommendation
 ```
 
-The 30-minute default is what it costs to carry 100+ measurements plus
-validation. Thinning to fit a smaller budget stops at 100 configurations:
-below that the sweep could no longer locate the knee of the scaling curve,
-and its report would still present the winner as "the best configuration".
+The automatic default fixes every screening window at **20 seconds after
+startup/warmup**, keeps the entire planned grid, and does not stop early at
+a step target. The user cannot choose the duration in the GUI. For 175
+configurations, screening alone takes at least **58 minutes 20 seconds**;
+startup/warmup, device checks and the default four PPO finalists add overhead.
+There is no automatic 30-minute cutoff or budget-driven grid thinning.
+
+**Simulation Steps/s** measures bridge stepping without policy inference or
+PPO updates. **PPO Training Steps/s** comes from separate 20-second finalist
+windows on the real training path, using actual learning-loop time rather
+than startup/final-save time. Windows with no optimizer update are failed
+validation, never a training recommendation; automatic mode applies nothing
+without usable PPO evidence. The two rates, curves and leaders stay separate.
+Longer simulation windows improve sampling, but do not make simulation
+throughput equal to training throughput. Regular training can additionally
+pay for evaluation, checkpointing, recording or harder curriculum levels.
+
+Missing Godot produces an unavailable report, not a synthetic engine stand-in.
+Screening cancellation is cooperative between vector steps. A PPO update or
+engine step may overrun its target; the report uses actual elapsed time.
 
 ### Profiling the complete PPO path
 

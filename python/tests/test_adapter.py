@@ -841,3 +841,22 @@ def test_export_run_report_and_ttk_combat_profile(tmp_path):
     payload = json.loads(Path(ttk_res["path"]).read_text(encoding="utf-8"))
     assert payload["format"] == "sandboxai.ttk_combat_profile/v1"
     assert payload["preset_id"] == "assault_rifle_standard"
+
+
+def test_automatic_benchmark_has_a_fixed_window_and_no_synthetic_fallback(tmp_path, monkeypatch):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    monkeypatch.setattr(
+        "sandboxai.benchmark_pipeline.available_runtime",
+        lambda *args, **kwargs: {"godot_available": False, "torch_available": False},
+    )
+
+    def synthetic_is_not_a_benchmark():
+        raise AssertionError("a missing engine must not be replaced by a synthetic benchmark")
+
+    monkeypatch.setattr(adapter, "ensure_simulated_godot_executable", synthetic_is_not_a_benchmark)
+    report = adapter.run_benchmark_pipeline(output_dir=tmp_path / "reports")
+    assert report["budget"]["mode"] == "fixed"
+    assert report["budget"]["seconds_per_configuration"] == 20.0
+    assert report["status"] == "unavailable"
+    assert report["recommendation"] is None
+    assert not (tmp_path / "training" / ".runtime").exists()

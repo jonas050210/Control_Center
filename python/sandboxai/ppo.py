@@ -505,6 +505,7 @@ def _make_metrics_callback(
             self.interval_shoot_requests = 0
 
         def _on_training_start(self) -> None:
+            self.started = time.perf_counter()
             self.budget.restart()
             self.start_timesteps = self.num_timesteps
             self.target_timesteps = self.start_timesteps + config.total_training_steps
@@ -1627,12 +1628,14 @@ def train_ppo(
                     inference_device=inference_scheduler.inference_device,
                     training_device=inference_scheduler.training_device,
                 )
+        initial_ppo_updates = int(getattr(model, "_n_updates", 0))
         model.learn(
             total_timesteps=config.total_training_steps,
             callback=callbacks,
             reset_num_timesteps=not bool(checkpoint_path),
             progress_bar=False,
         )
+        training_wall_seconds = max(time.perf_counter() - metrics_callback.started, 1e-9)
         latest = checkpoints / "latest.zip"
         final_save_started = time.perf_counter() if profiler is not None else 0.0
         model.save(latest)
@@ -1662,6 +1665,10 @@ def train_ppo(
             "stopped": bool(run_control is not None and run_control.stop_requested),
             "stop_reason": state.stop_reason or "completed",
             "max_train_minutes": config.max_train_minutes,
+            "training_wall_seconds": training_wall_seconds,
+            "ppo_updates_completed": max(
+                0, int(getattr(model, "_n_updates", 0)) - initial_ppo_updates
+            ),
             "elapsed_minutes": round(metrics_callback.budget.elapsed_seconds() / 60.0, 3),
             "warm_start": warm_start,
             "training_profile": str(profile_path) if profile_path is not None else None,

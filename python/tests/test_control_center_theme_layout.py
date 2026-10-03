@@ -29,6 +29,7 @@ from sandboxai.control_center_layout import (
     WidgetSpec,
     columns_for_width,
     deserialize,
+    fit_table_column_widths,
     fit_window_geometry,
     move,
     normalize,
@@ -733,6 +734,24 @@ class WindowGeometryTests(unittest.TestCase):
         self.assertLess(small_scale.viewport_scale, 1.0)
         self.assertLess(small_scale.px(238, minimum=180), full_scale.px(238, minimum=180))
         self.assertLess(small_scale.font("h1")[1], full_scale.font("h1")[1])
+
+
+class TableColumnFitTests(unittest.TestCase):
+    def test_a_few_pixels_of_overflow_are_fitted_without_clipping_headers(self):
+        preferred = [85, 75, 50, 60, 55, 80, 85, 78, 70, 65, 65, 65, 78, 95, 200]
+        minimum = [min(width, 48) for width in preferred]
+        available = sum(preferred) - 6
+        fitted = fit_table_column_widths(preferred, minimum, available)
+        self.assertLessEqual(sum(fitted), available)
+        self.assertTrue(all(width >= floor for width, floor in zip(fitted, minimum)))
+
+    def test_narrow_tables_keep_header_minima_and_intentional_scrolling(self):
+        fitted = fit_table_column_widths([100, 100], [80, 80], 120)
+        self.assertEqual(fitted, [80, 80])
+
+    def test_spare_viewport_and_no_spare_column_space_are_safe(self):
+        self.assertEqual(fit_table_column_widths([80, 90], [80, 90], 160), [80, 90])
+        self.assertEqual(fit_table_column_widths([100, 100], [40, 40], 300), [100, 100])
 
 
 if __name__ == "__main__":

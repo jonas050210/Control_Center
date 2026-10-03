@@ -476,9 +476,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pipeline.add_argument(
         "--budget-mode",
-        choices=["time", "steps"],
-        default="time",
-        help="time: approximately N minutes total; steps: screen until N steps per configuration",
+        choices=["fixed", "time", "steps"],
+        default="fixed",
+        help="fixed: automatic 20-second windows (default); time/steps: legacy scripted budgets",
     )
     pipeline.add_argument(
         "--minutes",
@@ -500,8 +500,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--worker-counts",
         default="",
-        help="comma-separated worker counts to sweep (default: 1 plus powers of two up to "
-        "the host's recommended worker count)",
+        help="comma-separated worker counts to sweep (default: a host-scaled worker ladder)",
     )
     pipeline.add_argument(
         "--finalists",
@@ -1061,11 +1060,12 @@ def _cmd_benchmark_pipeline(args: argparse.Namespace) -> int:
         print(json.dumps(recommendation, indent=2, default=str))
         return 0
     try:
-        budget = (
-            PipelineBudget.for_steps(args.steps)
-            if args.budget_mode == "steps"
-            else PipelineBudget.for_time(args.minutes)
-        )
+        if args.budget_mode == "fixed":
+            budget = PipelineBudget.fixed()
+        elif args.budget_mode == "steps":
+            budget = PipelineBudget.for_steps(args.steps)
+        else:
+            budget = PipelineBudget.for_time(args.minutes)
     except ValueError as exc:
         print(f"Invalid benchmark budget: {exc}", file=sys.stderr)
         return 1

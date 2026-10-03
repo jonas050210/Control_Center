@@ -1208,7 +1208,7 @@ class SandboxAIAdapter:
     def run_benchmark_pipeline(
         self,
         *,
-        budget_mode: str = "time",
+        budget_mode: str = "fixed",
         steps: int | None = None,
         minutes: float | None = None,
         environment_counts: list[int] | None = None,
@@ -1233,21 +1233,21 @@ class SandboxAIAdapter:
             DEFAULT_SCREEN_STEPS,
             DEFAULT_TIME_BUDGET_MINUTES,
             PipelineBudget,
-            available_runtime,
             run_benchmark_pipeline,
         )
 
-        if budget_mode == "steps":
+        if budget_mode == "fixed":
+            budget = PipelineBudget.fixed()
+        elif budget_mode == "steps":
             budget = PipelineBudget.for_steps(steps or DEFAULT_SCREEN_STEPS)
         elif budget_mode == "time":
             budget = PipelineBudget.for_time(minutes or DEFAULT_TIME_BUDGET_MINUTES)
         else:
-            raise ValueError("budget_mode must be 'steps' or 'time'")
+            raise ValueError("budget_mode must be 'fixed', 'steps' or 'time'")
+        # A synthetic bridge cannot size this machine's Godot workers. Let
+        # runtime discovery report a missing engine instead of silently
+        # benchmarking the Python stand-in and applying its recommendation.
         effective_godot = godot_executable
-        if not effective_godot or effective_godot == "godot":
-            rt = available_runtime(self.project_root, effective_godot)
-            if not rt.get("godot_available"):
-                effective_godot = self.ensure_simulated_godot_executable()
         return run_benchmark_pipeline(
             project_path=self.project_root,
             godot_executable=effective_godot,

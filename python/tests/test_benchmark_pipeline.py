@@ -631,3 +631,135 @@ class TestSimulatedBridgeEndToEnd:
         assert (tmp_path / "pipelines" / "run" / "pipeline.json").is_file()
         assert (tmp_path / "pipelines" / "run" / "benchmark.json").is_file()
         assert load_recommendation(tmp_path) is not None
+
+
+class TestFixedAutomaticPipeline:
+    def test_window_is_fixed_and_has_no_user_duration(self):
+        from sandboxai.benchmark_pipeline import FIXED_MEASUREMENT_SECONDS
+
+        assert FIXED_MEASUREMENT_SECONDS == 20.0
+        budget = PipelineBudget.fixed()
+        assert budget.mode == "fixed"
+        assert budget.describe()["seconds_per_configuration"] == 20.0
+        assert budget.describe()["minutes"] is None
+        assert budget.describe()["steps"] is None
+
+    def test_default_measures_the_entire_grid_for_identical_windows(self, tmp_path, monkeypatch):
+        calls = []
+
+        def measure(**kwargs):
+            calls.append(kwargs)
+            return [screen_row(kwargs["environment_counts"][0], kwargs["worker_counts"][0], 100.0)]
+
+        monkeypatch.setattr("sandboxai.benchmark_pipeline.benchmark_simulation", measure)
+        monkeypatch.setattr(
+            "sandboxai.benchmark_pipeline.fit_candidates_to_budget",
+            lambda *args, **kwargs: pytest.fail("automatic mode must not thin the grid"),
+        )
+        report = run_benchmark_pipeline(
+            project_path=tmp_path,
+            runtime=TestOrchestration.runtime(torch_available=False),
+            save=False,
+        )
+        planned = plan_candidates(None, None, cpu_count=8)
+        assert len(calls) == len(planned)
+        assert len(report["plan"]["candidates"]) == len(planned)
+        assert all(
+            call["steps"] is None and call["max_seconds_per_config"] == 20.0 for call in calls
+        )
+        assert report["plan"]["screening_measurement_seconds"] == len(planned) * 20.0
+        assert report["recommendation"] is None
+        assert report["status"] == "incomplete"
+        assert "PPO" in report["recommendation_reason"]
+
+    def test_finalists_use_fixed_real_training_windows(self, tmp_path, monkeypatch):
+        from sandboxai.hardware_profile import DeviceMeasurement
+
+        calls = []
+
+        def validate(candidate, **kwargs):
+            calls.append(kwargs)
+            return DeviceMeasurement(
+                label=candidate.label,
+                device="cpu",
+                inference_device="cpu",
+                status="measured",
+                steps_per_second=40.0,
+                steps_completed=800,
+                wall_seconds=20.0,
+                ppo_updates_completed=10,
+                measurement_seconds=20.0,
+            )
+
+        monkeypatch.setattr("sandboxai.hardware_profile.default_measure", validate)
+        report = run_benchmark_pipeline(
+            project_path=tmp_path,
+            environment_counts=[4, 8],
+            worker_counts=[1, 2],
+            finalists=2,
+            runtime=TestOrchestration.runtime(),
+            screen=lambda environments, workers: [screen_row(environments, workers, 500.0)],
+            save=False,
+        )
+        assert report["budget"]["mode"] == "fixed"
+        assert len(calls) == 2
+        assert all(call["measurement_seconds"] == 20.0 for call in calls)
+        rec = report["recommendation"]
+        assert rec["basis"] == "validated_training_slice"
+        assert rec["expected_steps_per_second"] == 40.0
+        assert rec["screened_steps_per_second"] == 500.0
+        assert report["status"] == "completed"
+
+    def test_failed_validation_never_applies_simulation_as_training(self):
+        assert (
+            recommend(
+                [screen_row(8, 2, 5000.0)],
+                [{"environments": 8, "workers": 2, "status": "failed"}],
+                require_training_validation=True,
+            )
+            is None
+        )
+
+    def test_failed_ppo_windows_leave_a_failed_stage_and_no_recommendation(self, tmp_path):
+        from sandboxai.hardware_profile import DeviceMeasurement
+
+        def failed(**kwargs):
+            return DeviceMeasurement(
+                label="cpu",
+                device="cpu",
+                inference_device="cpu",
+                status="failed",
+                error="no PPO update",
+                measurement_seconds=20.0,
+            )
+
+        report = run_benchmark_pipeline(
+            project_path=tmp_path,
+            environment_counts=[4],
+            worker_counts=[1],
+            runtime=TestOrchestration.runtime(),
+            screen=lambda environments, workers: [screen_row(environments, workers, 5000.0)],
+            validate_training=failed,
+            save=False,
+        )
+        assert report["status"] == "incomplete"
+        assert report["stages"][3]["status"] == "failed"
+        assert report["recommendation"] is None
+
+    def test_in_flight_cancellation_is_not_a_failed_topology(self, tmp_path, monkeypatch):
+        from sandboxai.benchmark import BenchmarkCancelled
+
+        def cancelled(**kwargs):
+            raise BenchmarkCancelled("cancelled by operator")
+
+        monkeypatch.setattr("sandboxai.benchmark_pipeline.benchmark_simulation", cancelled)
+        report = run_benchmark_pipeline(
+            project_path=tmp_path,
+            environment_counts=[4],
+            worker_counts=[1, 2],
+            runtime=TestOrchestration.runtime(),
+            save=False,
+        )
+        assert report["status"] == "cancelled"
+        assert report["stages"][1]["configurations"][0]["status"] == "cancelled"
+        assert report["recommendation"] is None

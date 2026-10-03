@@ -57,6 +57,15 @@ DEFAULT_ENVIRONMENT_COUNTS: tuple[int, ...] = (
 DEFAULT_WORKER_COUNTS: tuple[int, ...] = (1,)
 
 
+class BenchmarkCancelled(RuntimeError):
+    """The operator stopped an in-flight measurement, not a failed topology."""
+
+
+def _check_cancelled(cancel: Callable[[], bool] | None) -> None:
+    if cancel is not None and cancel():
+        raise BenchmarkCancelled("cancelled by operator")
+
+
 def frames_per_second(row: Mapping[str, Any]) -> float | None:
     """How fast one environment advances, in simulation steps per second.
 
@@ -98,7 +107,7 @@ def _emit_step_progress(
     environment_count: int,
     worker_count: int,
     completed_steps: int,
-    target_steps: int,
+    target_steps: int | None,
     elapsed_seconds: float,
     max_seconds_per_config: float,
     step_latencies: list[float],
@@ -149,7 +158,7 @@ def _measure_single_config(
     godot_executable: str,
     environment_count: int,
     worker_count: int,
-    steps: int,
+    steps: int | None,
     enemy_count: int,
     seed: int,
     curriculum_level: int,
@@ -157,7 +166,9 @@ def _measure_single_config(
     compact_infos: bool,
     warmup_steps: int,
     on_step_progress: Callable[[dict[str, Any]], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
+    _check_cancelled(cancel)
     startup_started = time.perf_counter()
     _emit_step_progress(
         on_step_progress,
@@ -212,6 +223,7 @@ def _measure_single_config(
             )
             warmup_started = time.perf_counter()
             for _ in range(warmup_steps):
+                _check_cancelled(cancel)
                 client.step(actions)
             warmup_seconds = time.perf_counter() - warmup_started
         started = time.perf_counter()
@@ -220,7 +232,8 @@ def _measure_single_config(
         episode_count = 0
         completed_steps = 0
         step_latencies: list[float] = []
-        for _ in range(steps):
+        while steps is None or completed_steps < steps:
+            _check_cancelled(cancel)
             step_started = time.perf_counter()
             _observations, _rewards, dones, _infos = client.step(actions)
             now = time.perf_counter()
@@ -262,7 +275,9 @@ def _measure_single_config(
             "vector_step_latency_p95_ms": percentile(step_latencies, 0.95) * 1000.0,
             "episodes": episode_count,
             "episodes_per_second": episode_count / elapsed,
-            "time_boxed": completed_steps < steps,
+            "time_boxed": steps is None or completed_steps < steps,
+            "measurement_mode": "fixed_time" if steps is None else "steps",
+            "measurement_seconds": max_seconds_per_config if steps is None else None,
             "info_mode": "compact_training" if compact_infos else "full_diagnostics",
             "resources": resources,
             "startup_seconds": startup_seconds,
@@ -279,7 +294,7 @@ def benchmark_simulation(
     project_path: str | Path,
     godot_executable: str = "godot",
     environment_counts: list[int] | tuple[int, ...] = DEFAULT_ENVIRONMENT_COUNTS,
-    steps: int = 2_000,
+    steps: int | None = 2_000,
     enemy_count: int = 1,
     seed: int = 1234,
     curriculum_level: int = 3,
@@ -289,8 +304,15 @@ def benchmark_simulation(
     compact_infos: bool = True,
     warmup_steps: int = 0,
     on_step_progress: Callable[[dict[str, Any]], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """Measure stepping throughput for one or more configurations.
+
+    ``steps=None`` measures for the full ``max_seconds_per_config`` window;
+    there is no step target that can end a fast configuration early. The
+    current vector step finishes before the window closes, so its actual
+    elapsed time (including any overrun) is reported, never the target time.
+    ``cancel`` is checked between vector steps, including warmup.
 
     ``warmup_steps`` optionally runs that many vector steps before the
     timed measurement. Warmup covers one-off costs the trainer never sees
@@ -300,7 +322,7 @@ def benchmark_simulation(
     from starting to build the bridge client (process spawn, environment
     construction, protocol handshake) until the initial ``reset`` returns.
     """
-    if steps < 1 or not environment_counts:
+    if (steps is not None and steps < 1) or not environment_counts:
         raise ValueError("benchmark needs positive steps and at least one environment count")
     if max_seconds_per_config <= 0.0:
         raise ValueError("max_seconds_per_config must be positive")
@@ -331,6 +353,7 @@ def benchmark_simulation(
                     compact_infos=compact_infos,
                     warmup_steps=warmup_steps,
                     on_step_progress=on_step_progress,
+                    cancel=cancel,
                 )
             )
     if output_dir is not None:

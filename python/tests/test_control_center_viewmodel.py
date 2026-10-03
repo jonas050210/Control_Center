@@ -946,7 +946,12 @@ def test_auto_benchmark_plan_is_the_pipeline_ladder():
     assert view["expected_configurations"] == len(
         plan_candidates(view["environments"], view["workers"], cpu_count=32)
     )
-    assert vm.benchmark_mode_view("auto", cpu_count=32)["minutes"] == 30.0
+    fixed = vm.benchmark_mode_view("auto", minutes_raw="1", steps_raw="1", cpu_count=32)
+    assert fixed["minutes"] is None
+    assert fixed["steps"] is None
+    assert fixed["budget_mode"] == "fixed"
+    assert fixed["per_config_seconds"] == 20.0
+    assert fixed["screening_measurement_seconds"] == fixed["expected_configurations"] * 20.0
 
 
 def test_push_benchmark_plan_goes_wider_than_auto():
@@ -1308,3 +1313,99 @@ def test_ttk_action_result_view_reports_a_refusal_without_crashing():
     assert view["ok"] is False
     assert view["role"] == "warn"
     assert view["text"] == "not running yet"
+
+
+def test_benchmark_paths_never_mix_rates_charts_or_leaders():
+    report = {
+        "status": "completed",
+        "stages": [
+            {
+                "name": "screening",
+                "configurations": [
+                    {
+                        "environments": 8,
+                        "workers": 2,
+                        "status": "ok",
+                        "steps_per_second": 5000.0,
+                        "frames_per_second": 625.0,
+                    },
+                ],
+            },
+            {
+                "name": "validation",
+                "configurations": [
+                    {
+                        "environments": 8,
+                        "workers": 2,
+                        "status": "measured",
+                        "steps_per_second": 800.0,
+                        "steps": 999999,
+                        "steps_completed": 16000,
+                        "wall_seconds": 20.0,
+                    },
+                ],
+            },
+        ],
+        "recommendation": {
+            "environment_count": 8,
+            "env_workers": 2,
+            "device": "cpu",
+            "basis": "validated_training_slice",
+            "expected_steps_per_second": 800.0,
+            "validated_steps_per_second": 800.0,
+            "screened_steps_per_second": 5000.0,
+        },
+    }
+    view = vm.benchmark_live_telemetry_view(running=False, event=None, report=report)
+    assert view["simulation_steps_per_second"] == 5000.0
+    assert view["training_steps_per_second"] == 800.0
+    assert view["steps_per_second"] == 800.0
+    assert view["chart_points"] == [(1.0, 5000.0)]
+    assert view["training_chart_points"] == [(1.0, 800.0)]
+    assert view["fps_chart_points"] == [(1.0, 625.0)]
+    assert view["rows"][1]["steps"] == 16000
+    assert "PPO training" in view["leader_summary"]
+
+
+def test_ppo_startup_never_displays_the_previous_simulation_rate_as_ppo():
+    event = {
+        "stage": "validation",
+        "status": "started",
+        "index": 0,
+        "total": 2,
+        "configuration": {"environments": 8, "workers": 2},
+        "completed_rows": [
+            {
+                "stage": "screening",
+                "status": "ok",
+                "environments": 8,
+                "workers": 2,
+                "steps_per_second": 5000.0,
+            }
+        ],
+    }
+    view = vm.benchmark_live_telemetry_view(running=True, event=event, report=None)
+    assert view["simulation_steps_per_second"] == 5000.0
+    assert view["training_steps_per_second"] is None
+    assert view["steps_per_second"] is None
+    assert view["progress_fraction"] == 0.0
+
+
+def test_fixed_benchmark_progress_is_time_based_not_step_based():
+    event = {
+        "stage": "screening",
+        "status": "running",
+        "index": 1,
+        "total": 4,
+        "live": {
+            "phase": "stepping",
+            "elapsed_seconds": 10.0,
+            "max_seconds_per_config": 20.0,
+            "target_steps": None,
+            "completed_steps": 999999,
+            "total_steps": 999999,
+        },
+    }
+    view = vm.pipeline_progress_view(event)
+    assert view["fraction"] == 0.375
+    assert "10.0/20 s measuring" in view["text"]

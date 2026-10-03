@@ -135,6 +135,9 @@ class DeviceMeasurement:
     steps_completed: int | None = None
     wall_seconds: float | None = None
     error: str | None = None
+    total_wall_seconds: float | None = None
+    ppo_updates_completed: int | None = None
+    measurement_seconds: float | None = None
 
     @property
     def ok(self) -> bool:
@@ -150,6 +153,9 @@ class DeviceMeasurement:
             "steps_completed": self.steps_completed,
             "wall_seconds": self.wall_seconds,
             "error": self.error,
+            "total_wall_seconds": self.total_wall_seconds,
+            "ppo_updates_completed": self.ppo_updates_completed,
+            "measurement_seconds": self.measurement_seconds,
         }
 
     @classmethod
@@ -162,6 +168,9 @@ class DeviceMeasurement:
             steps_per_second=_opt_float(data.get("steps_per_second")),
             steps_completed=_opt_int(data.get("steps_completed")),
             wall_seconds=_opt_float(data.get("wall_seconds")),
+            total_wall_seconds=_opt_float(data.get("total_wall_seconds")),
+            ppo_updates_completed=_opt_int(data.get("ppo_updates_completed")),
+            measurement_seconds=_opt_float(data.get("measurement_seconds")),
             error=(str(data["error"]) if data.get("error") is not None else None),
         )
 
@@ -408,13 +417,18 @@ def default_measure(
     enemy_count: int = 1,
     seed: int = 12345,
     output_root: str | Path | None = None,
+    measurement_seconds: float | None = None,
 ) -> DeviceMeasurement:
     """Measure one candidate by timing a short real PPO training slice.
 
     This is the honest, engine-backed measurement: it builds a
     :class:`~sandboxai.config.TrainingConfig` for the candidate's device
-    pair, runs ``steps`` timesteps through :func:`sandboxai.ppo.train_ppo`,
-    and reports ``steps_completed / wall_seconds``. It needs a working
+    pair, runs a step-budgeted slice or a ``measurement_seconds`` window,
+    and reports completed transitions divided by actual training-loop time.
+    Model/bridge startup and final saves are excluded from that rate;
+    ``total_wall_seconds`` includes the full slice. Timed slices without a
+    completed PPO update are failed measurements, not training throughput.
+    It needs a working
     Godot bridge (``godot_executable``); when the bridge is missing or the
     slice fails, the exception is surfaced to
     :func:`measure_devices`, which records a ``failed`` measurement.
@@ -430,15 +444,19 @@ def default_measure(
     from .config import TrainingConfig
     from .ppo import train_ppo
 
+    if measurement_seconds is not None and measurement_seconds <= 0.0:
+        raise ValueError("measurement_seconds must be positive")
+    training_steps = 10**9 if measurement_seconds is not None else steps
     with tempfile.TemporaryDirectory(prefix="sandboxai-hw-") as tmp:
         root = str(output_root) if output_root is not None else tmp
         config = TrainingConfig(
             environment_count=environment_count,
             env_workers=env_workers,
             enemy_count=enemy_count,
-            total_training_steps=steps,
-            checkpoint_frequency=max(steps * 2, 1),
-            evaluation_frequency=max(steps * 2, 1),
+            total_training_steps=training_steps,
+            max_train_minutes=measurement_seconds / 60.0 if measurement_seconds else 0.0,
+            checkpoint_frequency=max(training_steps * 2, 1),
+            evaluation_frequency=max(training_steps * 2, 1),
             seed=seed,
             device=candidate.device,
             inference_device=candidate.inference_device,
@@ -452,11 +470,32 @@ def default_measure(
             replay_mode="off",
             curriculum_mode="fixed",
         ).validate()
+        # SB3 finishes complete rollouts even for tiny step budgets. Periodic
+        # evaluation/checkpoint work must stay outside the entire scheduled
+        # slice, not merely outside the requested number of steps.
+        scheduled = int(config.rollout_schedule()["scheduled_timesteps"])
+        config.checkpoint_frequency = max(scheduled * 2, 1)
+        config.evaluation_frequency = max(scheduled * 2, 1)
         started = time.monotonic()
         result = train_ppo(config)
-        elapsed = time.monotonic() - started
+        total_elapsed = time.monotonic() - started
 
-    completed = int(result.get("training_steps_completed") or result.get("timesteps") or 0)
+    completed = int(result.get("training_steps_completed", result.get("timesteps", 0)))
+    elapsed = float(result.get("training_wall_seconds") or total_elapsed)
+    updates = _opt_int(result.get("ppo_updates_completed"))
+    if measurement_seconds is not None and (updates is None or updates <= 0):
+        return DeviceMeasurement(
+            label=candidate.label,
+            device=candidate.device,
+            inference_device=candidate.inference_device,
+            status=STATUS_FAILED,
+            error="fixed training window completed no PPO update; not a training-throughput measurement",
+            steps_completed=completed,
+            wall_seconds=elapsed,
+            total_wall_seconds=total_elapsed,
+            ppo_updates_completed=updates,
+            measurement_seconds=measurement_seconds,
+        )
     steps_per_second = (completed / elapsed) if elapsed > 0 and completed > 0 else None
     if steps_per_second is None:
         return DeviceMeasurement(
@@ -474,6 +513,9 @@ def default_measure(
         steps_per_second=steps_per_second,
         steps_completed=completed,
         wall_seconds=elapsed,
+        total_wall_seconds=total_elapsed,
+        ppo_updates_completed=updates,
+        measurement_seconds=measurement_seconds,
     )
 
 

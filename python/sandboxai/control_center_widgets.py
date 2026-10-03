@@ -23,6 +23,7 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 from . import control_center_viewmodel as vm
+from .control_center_layout import fit_table_column_widths
 from .control_center_theme import (
     FONT_FAMILY,
     MONO_FONT_FAMILY,
@@ -1232,6 +1233,7 @@ def _scrollable_table(
     expand: bool = True,
     bus: ThemeBus | None = None,
     empty_text: str = "",
+    fit_columns: bool = False,
 ) -> ttk.Treeview:
     """Build a sortable table whose overlay bars appear only when needed.
 
@@ -1253,9 +1255,45 @@ def _scrollable_table(
     tree = _sortable_table(frame, columns, bus=active_bus)
     tree.pack(fill="both", expand=True)
     attach_overlay_scrollbars(frame, tree, active_bus, scale_px=active_bus.px)
+    if fit_columns:
+        _fit_table_to_viewport(tree, columns, active_bus)
     if empty_text:
         tree.empty_state = TableEmptyState(tree, active_bus, empty_text)  # type: ignore[attr-defined]
     return tree
+
+
+def _fit_table_to_viewport(
+    tree: ttk.Treeview, columns: tuple[tuple[str, str, int], ...], bus: ThemeBus
+) -> None:
+    """Fit a wide table using real heading-font widths, not relaxed tests."""
+    from tkinter import font as tkfont
+
+    def fit(_event: Any = None) -> None:
+        try:
+            available = tree.winfo_width() - bus.px(16, minimum=12)
+            if available <= 0:
+                return
+            font_name = ttk.Style(tree).lookup("Treeview.Heading", "font") or "TkHeadingFont"
+            font = tkfont.Font(root=tree, font=font_name)
+            minimum = [
+                max(32, font.measure(title) + bus.px(16, minimum=12))
+                for _key, title, _width in columns
+            ]
+            vp = min(1.0, bus.scale.viewport_scale)
+            preferred = [max(32, round(width * vp)) for _key, _title, width in columns]
+            fitted = fit_table_column_widths(preferred, minimum, available)
+            for (key, _title, _width), width, floor in zip(columns, fitted, minimum):
+                tree.column(key, width=width, minwidth=floor)
+        except tk.TclError:  # destruction during a density/layout rebuild
+            return
+
+    tree.bind("<Configure>", fit, add="+")
+
+    def schedule_fit(_theme: Theme) -> None:
+        with contextlib.suppress(tk.TclError):
+            tree.after_idle(fit)
+
+    bus.subscribe(schedule_fit, owner=tree)
 
 
 def refresh_table_empty(tree: Any) -> None:
