@@ -1027,19 +1027,28 @@ class ControlCenterConstructionTests(unittest.TestCase):
                 )
 
     def test_the_roblox_window_actions_wait_for_a_client(self):
-        """Focus/Screenshot/Analyze HUD must not claim to work without Roblox."""
+        """Focus/Screenshot/Analyze HUD stay disabled when the probe finds no client.
+
+        This is a desktop integration test, but the current machine's Roblox
+        process is not part of its fixture: a developer may legitimately have
+        the game open while running the suite. Feed the page the offline result
+        explicitly instead of making the assertion depend on the host process
+        table.
+        """
         from sandboxai.control_center_pages import DashboardPage
 
         self.app.show_page("Dashboard")
         _drain_background(self.app)
         page = self.app.pages["Dashboard"]
-        for label in DashboardPage.WINDOW_ACTIONS:
-            with self.subTest(action=label):
-                self.assertEqual(
-                    str(page.roblox_action_buttons[label].cget("state")),
-                    "disabled",
-                    f"{label} is enabled with no Roblox client running",
-                )
+        for running, expected_state in ((False, "disabled"), (True, "normal")):
+            page._on_roblox_status({"live_session": {"running": running}}, None)
+            for label in DashboardPage.WINDOW_ACTIONS:
+                with self.subTest(action=label, running=running):
+                    self.assertEqual(
+                        str(page.roblox_action_buttons[label].cget("state")),
+                        expected_state,
+                        f"{label} has the wrong state when running={running}",
+                    )
 
     def test_the_benchmark_card_states_the_sweep_before_it_starts(self):
         self.app.show_page("Benchmarks")
