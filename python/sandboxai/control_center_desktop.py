@@ -556,7 +556,7 @@ class ControlCenter(tk.Tk):
         self.status_label.pack(side="left")
         self.telemetry_badge = ttk.Label(
             status,
-            text="Bridge v3  ·  106-Obs  ·  6-Head",
+            text="Bridge v3  ·  126-Obs  ·  6-Head",
             style="Pill.TLabel",
         )
         self.telemetry_badge.pack(side="left", padx=(self.px(8, minimum=4), 0))

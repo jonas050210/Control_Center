@@ -167,6 +167,12 @@ const NAV_MAX_WAYPOINTS: int = 32
 ## typical FPS horizontal FOV.
 const AGENT_FOV_DEG: float = 100.0
 const ENEMY_FOV_DEG: float = 110.0
+## Width / height of the agent's view. `AGENT_FOV_DEG` is the HORIZONTAL
+## cone (the same axis the bearing test uses); the vertical cone follows from
+## this aspect, and both are needed to turn a target's body into a box on the
+## agent's own screen. One constant, because a second aspect ratio in the
+## Control Center would quietly draw a different box than the engine reports.
+const AGENT_VIEW_ASPECT: float = 16.0 / 9.0
 ## Maximum distance at which a target can be visually acquired.
 const VISION_RANGE: float = 28.0
 ## How long a target must remain continuously inside FOV with clear line of

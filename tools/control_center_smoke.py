@@ -2132,7 +2132,7 @@ def _exercise_stats(app: object) -> None:
     """Drive the Stats page with a synthetic detailed replay.
 
     The page is the one place that decodes a recording end to end (header ->
-    tick -> the 106-float vector -> contacts/objects/hearing/action), so the
+    tick -> the 126-float vector -> contacts/objects/hearing/action), so the
     smoke run feeds it a replay shaped exactly like ``adapter.replay_stats``
     returns instead of only checking that the page exists.
     """
@@ -2167,7 +2167,7 @@ def _exercise_stats(app: object) -> None:
         "action": [2, 1, 0, 1, 1, 0],
         "reward": 0.25,
         "done": False,
-        "observation": [0.5] * 106,
+        "observation": [0.5] * 126,
         "events": [{"kind": "combat", "tick": 1, "data": {"damage_taken": 5.0}}],
     }
     stats._on_replay_stats(replay, None)

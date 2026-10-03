@@ -55,7 +55,7 @@ Human, stub AI, external PPO and demonstrations all pass through `Action`.
 
 ## Observation contract
 
-`Observation.to_array()` always returns **106** float32-compatible values
+`Observation.to_array()` always returns **126** float32-compatible values
 (contract v4). The layout is strictly additive across four generations:
 
 - **0–32 (v1)** agent state, the primary/nearest-alive enemy, weapon-ready

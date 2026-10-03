@@ -58,7 +58,7 @@ def _make_run(
                 "run_id": name,
                 "experiment_id": "exp",
                 "seed": 1234,
-                "contract": {"observation_dim": 106, "action_nvec": [3, 3, 3, 3, 2, 2]},
+                "contract": {"observation_dim": 126, "action_nvec": [3, 3, 3, 3, 2, 2]},
                 "code": {"commit": "abc123def456", "branch": "main", "dirty": dirty},
                 "host": {"python": "3.11.2", "system": "Linux", "logical_cpus": 12},
                 "godot": {"version": "4.7.2.stable"},

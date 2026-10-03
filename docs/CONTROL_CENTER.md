@@ -421,7 +421,7 @@ them into the current contract's table. The page shows the three tracked contact
 distance, bearing, elevation, health, visibility, in-FOV/LOS, information
 age, confidence and whether the belief came from vision or hearing), the
 world objects and memory rows around the agent, the hearing summary, the
-recorded action per component, the raw 106-value observation vector, and
+recorded action per component, the raw 126-value observation vector, and
 the TTK Testing evidence manifest (what is verified about the real game and
 what still needs a manual measurement). Listing a large folder is bounded
 work: a replay's header and tick count are read in one pass and cached behind

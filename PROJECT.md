@@ -22,7 +22,7 @@
 
 ### Non-negotiable contracts
 
-- **CONSTRAINT:** every policy observation is **exactly 106 float32-compatible values**, each in `[-1, 1]`.
+- **CONSTRAINT:** every policy observation is **exactly 126 float32-compatible values**, each in `[-1, 1]`.
 - **CONSTRAINT:** the PPO action space is **exactly `MultiDiscrete([3,3,3,3,2,2])`**.
 - **CONSTRAINT:** the trained path is structured state, **not RGB**, pixels, optical flow, or frame stacking.
 - **CONSTRAINT:** do not reorder/reinterpret fields silently. Shape checks cannot detect semantic drift.
@@ -79,11 +79,11 @@ The server blocks on one request, parses JSON, executes it, serializes one respo
 
 **CURRENT bridge commands.** `spaces`, `reset`, `reset_indices`, `step`, `metrics`, `reward_breakdown`, `set_curriculum`, `set_episode_plans`, `episode_conditions`, `health_check`, `profile_snapshot`, `ping`, and `close`; self-play mode exposes a smaller two-slot variant. Input lines are capped at 1 MiB. Python drains both stdout and stderr on background threads and enforces a request timeout, preventing pipe-fill deadlocks.
 
-**CONSTRAINT:** the wire protocol has no explicit negotiated protocol version. The `spaces` handshake and Python's 106-field check catch shape drift, but not every semantic or message-schema change.
+**CONSTRAINT:** the wire protocol has no explicit negotiated protocol version. The `spaces` handshake and Python's 126-field check catch shape drift, but not every semantic or message-schema change.
 
 ## 3. Observation, action, and API contract
 
-### Observation v4: exactly 106 floats
+### Observation v5: exactly 126 floats
 
 The full field-level authority is `docs/OBSERVATION_ACTION_CONTRACT.md`; the executable mirrors are `Observation.FIELD_SPEC` and `python/sandboxai/contract.py:OBSERVATION_SPEC`. Static tests compare names, widths, indices, total size, tracked-enemy count, and action cardinalities across languages.
 
@@ -126,7 +126,7 @@ Important semantics:
 
 `Action` also stores continuous `look_delta.x/y` for lossless human logging. Those values are **not** PPO actions. The canonical demonstration log array is eight values: four signed axes, shoot, jump, and two continuous look deltas.
 
-**CURRENT compatibility.** Five-component old actions are padded with `jump=0`; seven-value old log arrays remain readable. This does not make old PPO checkpoints compatible: v1/v2 policies have different input or action-head shapes. Old demonstration files can be loaded and trained at their recorded observation width, but a resulting actor cannot warm-start the 106-input PPO unless dimensions and hidden layers match exactly.
+**CURRENT compatibility.** Five-component old actions are padded with `jump=0`; seven-value old log arrays remain readable. This does not make old PPO checkpoints compatible: v1/v2 policies have different input or action-head shapes. Old demonstration files can be loaded and trained at their recorded observation width, but a resulting actor cannot warm-start the 126-input PPO unless dimensions and hidden layers match exactly.
 
 ### Engine step boundary
 
@@ -263,12 +263,12 @@ The protocol the schema encodes:
 4. Repeat enough trials across people and conditions; preserve raw annotations, uncertainty, and outliers instead of retaining one “best” number.
 5. Use aggregate distributions to calibrate reaction delay, spread, damage/falloff, cadence, and scenario difficulty in Godot. Keep a holdout set to test the calibration.
 
-**CONSTRAINT:** manually measured external TTK is calibration evidence, not automatically a BC transition dataset. Direct BC needs each action aligned with the same 106-field SandboxAI observation. Converting video/ordinary inputs from another game would require explicit annotation/state estimation and action quantization; no such importer is implemented. Never fill unavailable fields with private/server data—use neutral “unknown” encodings or do not claim contract compatibility.
+**CONSTRAINT:** manually measured external TTK is calibration evidence, not automatically a BC transition dataset. Direct BC needs each action aligned with the same 126-field SandboxAI observation. Converting video/ordinary inputs from another game would require explicit annotation/state estimation and action quantization; no such importer is implemented. Never fill unavailable fields with private/server data—use neutral “unknown” encodings or do not claim contract compatibility.
 
 ### BC implementation
 
 - **CURRENT:** JSON or JSONL `sandboxai.demonstrations` schema; finite-value and action validation; legacy action conversion.
-- **CURRENT:** two-layer Tanh MLP, default `106 → 128 → 128`, with one categorical head per action component (sizes `3,3,3,3,2,2`). Loss is the sum of six cross-entropies.
+- **CURRENT:** two-layer Tanh MLP, default `126 → 128 → 128`, with one categorical head per action component (sizes `3,3,3,3,2,2`). Loss is the sum of six cross-entropies.
 - **CURRENT:** seeded **episode/group-aware** train/validation split (`split_strategy` = `auto`|`episode`|`transition`), Adam, validation loss, component accuracy, exact-six-component accuracy, early stopping, CSV/JSONL metrics. `auto` splits by episode group (`run_id|environment_id|episode_id`) when the dataset has at least two groups and otherwise falls back to the transition shuffle while recording `degraded_reason`; `episode` raises rather than leaking; `transition` must be asked for explicitly.
 - **CURRENT:** every BC run writes `dataset_report.json` (split report with `leakage_free`, dataset fingerprint `blake2b:<hex>`, episode structure, action histograms, duplicate fraction, observation-range violations) and stamps the split + fingerprint into each checkpoint. `sandboxai inspect-dataset --statistics` prints the same report without training. `BCConfig.require_contract_observations` and `max_duplicate_fraction` fail a bad corpus before it becomes a model.
 - **CURRENT:** resumable trusted PyTorch `sandboxai.bc.v1` `.pt` files containing model and optimizer state; atomic `latest.pt`, `best.pt`, periodic epochs.
@@ -303,7 +303,7 @@ The protocol the schema encodes:
 
 **CURRENT resume.** `PPO.load(..., env=..., device=...)` restores model/optimizer/timestep state; `learn(reset_num_timesteps=false)` continues. The integrated pipeline also reloads curriculum state and episode stream.
 
-**RESEARCH priorities.** Before changing algorithms, run multiple seeds and inspect entropy, KL, explained variance, success, timeout, and per-condition results. Tune rollout/batch size only after measuring simulator throughput and update/rollout wall time. For partial observability and hidden ammo/bloom history, compare explicit frame/action history or a recurrent policy against the feed-forward baseline; either requires a versioned model/input decision and must not silently alter the 106-field contract.
+**RESEARCH priorities.** Before changing algorithms, run multiple seeds and inspect entropy, KL, explained variance, success, timeout, and per-condition results. Tune rollout/batch size only after measuring simulator throughput and update/rollout wall time. For partial observability and hidden ammo/bloom history, compare explicit frame/action history or a recurrent policy against the feed-forward baseline; either requires a versioned model/input decision and must not silently alter the 126-field contract.
 
 ### Offline-to-online boundary
 
@@ -346,7 +346,7 @@ The protocol the schema encodes:
 
 ## 9. Self-play and league status
 
-- **CURRENT:** `SelfPlayEnvironmentCore` accepts both policy actions for one tick, applies both movements before combat, and gives both slots symmetric 106-float observations, handling configuration, independent seeded RNG streams, per-slot reward/metrics, and no privileged opponent fields.
+- **CURRENT:** `SelfPlayEnvironmentCore` accepts both policy actions for one tick, applies both movements before combat, and gives both slots symmetric 126-float observations, handling configuration, independent seeded RNG streams, per-slot reward/metrics, and no privileged opponent fields.
 - **CURRENT:** fire is **simultaneous**. Both slots pull their trigger and both volleys are resolved against the pre-tick world (positions, health, alive flags); damage is applied afterwards, clamped to the target's remaining health exactly as `AgentState.take_damage` clamps it. A lethal exchange therefore kills both agents and ends `draw`, neither trigger is cancelled by the other's outcome, and near-miss geometry is sampled before damage lands. Pinned by symmetric-duel tests (mutual kill, slot symmetry, clamped/mirrored damage, non-lethal trade, symmetry under full weapon handling).
 - **CURRENT:** Python can load independent frozen checkpoints, register snapshots, verify fingerprints/weight independence, sample opponent pools, schedule deterministic tournaments, and compute reporting-only Elo.
 - **CURRENT:** opponent sampling is deterministic by construction. `SelfPlayCoordinator` owns a seeded generator (never the global `random` module) and supports `uniform`, `latest`, `recency_weighted` and `round_robin`; `reset_sampling()` rewinds the stream, `choose_opponent_checkpoint()` selects without loading a model, and `sampling_snapshot()` records strategy/seed/draws/pool for manifests. `SelfPlayConfig.opponent_strategy`/`opponent_seed` put the rule in the config snapshot (`SelfPlayCoordinator.from_config`). `League` was already seeded and is unchanged.
@@ -451,7 +451,7 @@ Target: **i7-12700F (12 cores/20 threads), RTX 4060 Ti 8 GB, 32 GB RAM, Windows 
 
 Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu with a Linux Godot build, project files under Windows/OneDrive), not a hypothetical target - `tools/wsl/run_full_validation.sh` / `docs/RUN_LOCAL_VALIDATION.md` exist to turn the PLANNED items below into real, measured, timestamped files from that exact machine instead of estimates.
 
-1. **CURRENT expectation:** structured simulation is CPU/IPC-bound; the tiny 106→128→128 MLP often makes per-step CPU inference more sensible than CUDA. The RTX is most useful for PPO update minibatches, BC, and future CNNs—not Godot's headless analytic state.
+1. **CURRENT expectation:** structured simulation is CPU/IPC-bound; the tiny 126→128→128 MLP often makes per-step CPU inference more sensible than CUDA. The RTX is most useful for PPO update minibatches, BC, and future CNNs—not Godot's headless analytic state.
 2. **PLANNED baseline matrix:** measure native Windows Python+Godot, WSL Python+Linux Godot, and (if needed) WSL Python+Windows Godot. WSL interop is supported but must not be assumed free.
 3. **PLANNED sweep:** first run existing `1,2,4,8,16,24,32,48,64` single-process benchmarks. Record steps/s, episodes/s, p50/p95 step latency, JSON bytes, CPU/RAM, and profile buckets.
 4. **CURRENT tooling, PLANNED measurement:** `sandboxai benchmark --worker-counts 1,2,4,8` sweeps worker processes per environment count and reports measured steps/s per configuration; `recommended_worker_count` (`--env-workers auto`) estimates physical cores and reserves two for the trainer. `tools/bridge_scaling_probe.py` isolates transport/process-parallelism scaling **with a synthetic workload** - it is a transport probe, never a Godot measurement. No target-hardware Godot scaling number is claimed yet.
@@ -464,7 +464,7 @@ Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu wi
 - **CURRENT limitation:** no checked-in trained policy or target-hardware run establishes learning quality or throughput.
 - **CURRENT limitation:** only structured observations are trained; no RGB, CNN, frame stack, recurrent PPO, or visual sim-transfer pipeline.
 - **CURRENT limitation:** `env_workers` defaults to 1, so out of the box one bridge process still steps N environments serially; the sharded path exists and is tested but its throughput gain is unmeasured on target hardware.
-- **CURRENT limitation:** JSON serialization copies 106 floats/environment/tick plus metadata; compact infos reduce but do not remove this cost.
+- **CURRENT limitation:** JSON serialization copies 126 floats/environment/tick plus metadata; compact infos reduce but do not remove this cost.
 - **CURRENT limitation:** feed-forward PPO cannot infer long hidden histories; ammo and bloom are consequences of actions but are not explicit observations.
 - **CURRENT limitation:** BC splits are episode-aware, but a dataset with no episode structure at all still degrades to a transition shuffle (reported as `degraded_reason`, never silent).
 - **CURRENT limitation:** the *default* checkpoint-selection rule is still mean shaped reward, so reward hacking/generalization regressions can win selection unless the rule is configured otherwise.
@@ -500,7 +500,7 @@ Confirmed 2026-09-30: this is the project author's actual machine (WSL/Ubuntu wi
 2. **RESEARCH:** prove Godot 4.7.2's chosen offscreen rendering path on Windows and Linux; `--headless` disables ordinary display/rendering behavior, so do not assume current launch flags produce pixels.
 3. **PLANNED only after proof:** replace JSON pixel transport with binary/shared memory; benchmark end-to-end capture, transfer, augmentation, inference, and update.
 4. **RESEARCH:** pretrain or jointly train a CNN/ViT encoder, compare pixels-only vs structured-only vs multimodal, and test texture/light/map holdouts for shortcuts.
-5. **CONSTRAINT:** keep the existing 106-float model family and replays versioned and usable. RGB is a new modality, not a silent contract mutation.
+5. **CONSTRAINT:** keep the existing 126-float model family and replays versioned and usable. RGB is a new modality, not a silent contract mutation.
 
 ## 15. Roadmap with exit gates
 

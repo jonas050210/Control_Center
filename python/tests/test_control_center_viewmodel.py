@@ -1037,7 +1037,7 @@ def test_observation_field_rows_come_from_the_contract():
     # A multi-value field reports its index range, not just its start.
     ranged = [row for row in rows if "\u2013" in row["index"]]
     assert ranged, "vector fields must show their index range"
-    assert sum(1 for row in rows) and OBSERVATION_FIELD_COUNT == 106
+    assert sum(1 for row in rows) and OBSERVATION_FIELD_COUNT == 126
 
 
 def test_observation_field_rows_decode_a_recorded_vector():
@@ -1200,17 +1200,17 @@ def test_table_signature_sees_only_what_a_table_renders():
 def test_replay_contract_view_labels_a_foreign_recording():
     """A replay from an older contract stays readable and says so."""
     current = vm.replay_contract_view(
-        {"contract_match": True, "recorded_observation_dim": 106, "current_observation_dim": 106}
+        {"contract_match": True, "recorded_observation_dim": 126, "current_observation_dim": 126}
     )
     assert current["matches"] is True
-    assert "106 floats" in current["text"]
+    assert "126 floats" in current["text"]
 
     older = vm.replay_contract_view(
-        {"contract_match": False, "recorded_observation_dim": 84, "current_observation_dim": 106}
+        {"contract_match": False, "recorded_observation_dim": 84, "current_observation_dim": 126}
     )
     assert older["matches"] is False
     assert "older contract" in older["text"]
-    assert "84 floats" in older["text"] and "current 106" in older["text"]
+    assert "84 floats" in older["text"] and "current 126" in older["text"]
     assert "not comparable" in older["text"]
 
     # A result without the keys (older adapter payload) must not read as a

@@ -28,7 +28,7 @@
 ##     along a FIXED pattern, and the view recovers after a short pause.
 ##     The policy perceives this through `agent_forward` / bearing /
 ##     elevation and counters it with the look axes; nothing was added to
-##     the 106-float observation.
+##     the 126-float observation.
 ##   * **bloom** — sustained fire, movement and being airborne widen the
 ##     cone of fire. A settled weapon's first shot is *exactly* pinpoint,
 ##     which keeps the early aiming curriculum learnable.

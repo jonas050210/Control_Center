@@ -352,7 +352,7 @@ sandboxai bc-train --dataset training/datasets/human_demo.jsonl \
 
 The trainer starts one Godot headless process containing the requested number
 of independent environments and uses a `MultiDiscrete([3,3,3,3,2,2])` action
-space. The structured observation is a 106-float `Box` (see
+space. The structured observation is a 126-float `Box` (see
 [`docs/OBSERVATION_ACTION_CONTRACT.md`](docs/OBSERVATION_ACTION_CONTRACT.md)
 for the full field-by-field table, including the multi-enemy tracking
 fields added for curriculum levels with more than one enemy).
@@ -401,7 +401,7 @@ see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
 - `--inference-device cpu` (default `auto`): run rollout/evaluation policy
   inference on CPU while PPO updates stay on `--device`. On CUDA hardware
   this removes the per-step host<->device round trip that makes GPU training
-  *slower* than CPU for the tiny (106 -> 128 -> 128) policy.
+  *slower* than CPU for the tiny (126 -> 128 -> 128) policy.
 - `--env-workers N|auto` (default 1): host the environments in N independent
   headless Godot processes instead of one. Shard *k* owns a contiguous slice
   of the environments and is launched with that slice's base seed, which is

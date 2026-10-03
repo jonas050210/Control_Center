@@ -207,6 +207,57 @@ static func summarize_contacts(beliefs: Array, slot_count: int) -> Dictionary:
 	}
 
 
+## The vision reading for one enemy: the box it covers on the agent's screen,
+## how much of its body is exposed, and how much light it is standing in.
+##
+## This is the part of perception that used to be missing entirely. The
+## observation could say "an enemy is 12 m away, 20 degrees left" and nothing
+## about how big that enemy looks on screen, whether it is half behind a
+## crate, or whether it is standing in a lit patch or in the dark - so the
+## policy had no way to tell "a clear shot at a well-lit target" from "the
+## top of a head in a shadow". All three are things a player can see, so all
+## three are fair game; what is NOT reported is anything the agent could not
+## perceive (an unseen enemy has no box, not a box at a guessed position).
+## Not static: it reads this perception's own `fov_deg`, which is the cone
+## the agent is looking through and therefore the cone the box lives in.
+func _vision_reading(
+	enemy: EnemyState,
+	world,
+	eye: Vector3,
+	forward: Vector3,
+	position: Vector3,
+	distance: float,
+	profile: LightingProfile,
+	live: bool,
+) -> Dictionary:
+	var box: Dictionary = PerceptionSystem.target_screen_box(
+		eye, forward, position, enemy.height, enemy.radius, fov_deg
+	)
+	var illumination: float = profile.illumination_at(position)
+	# How much of the light leaving the contact actually reaches the eye:
+	# darkness costs range, and fog costs the rest. Reported as one number
+	# because the policy's decision ("can I make this shot out?") is one
+	# number, and fog density itself stays unobserved on purpose.
+	var clarity: float = illumination * profile.transmittance(distance) if live else 0.0
+	var exposure: float = (
+		PerceptionSystem.exposure_fraction(world, eye, position, enemy.height) if live else 0.0
+	)
+	var in_front: bool = bool(box.get("in_front", false))
+	return {
+		"screen_box": box,
+		"exposure_fraction": exposure,
+		"illumination": illumination,
+		"clarity": clampf(clarity, 0.0, 1.0),
+		"reticle_on_target":
+		(
+			in_front
+			and live
+			and absf(float(box.get("center_x", 0.0))) <= float(box.get("half_width", 0.0))
+			and absf(float(box.get("center_y", 0.0))) <= float(box.get("half_height", 0.0))
+		),
+	}
+
+
 func _evaluate_enemy(
 	agent, enemy: EnemyState, world, eye: Vector3, forward: Vector3, dt: float
 ) -> Dictionary:
@@ -228,6 +279,20 @@ func _evaluate_enemy(
 		threat_count += 1
 
 	var health_norm: float = enemy.health / maxf(enemy.max_health, 0.0001)
+	# The geometry of the sighting is measured once, whether or not the
+	# perception gate is on: on the legacy levels the agent still sees the
+	# enemy, so it still has a box on its screen - it simply never had to
+	# acquire it first.
+	var reading: Dictionary = _vision_reading(
+		enemy,
+		world,
+		eye,
+		forward,
+		enemy.position,
+		float(evaluation["distance"]),
+		lighting,
+		true,
+	)
 	if not enabled:
 		# Legacy path: full ground truth, no latency, no memory.
 		return {
@@ -245,6 +310,11 @@ func _evaluate_enemy(
 			"source": EnemyMemory.Source.VISUAL,
 			"threatening": threatening,
 			"alive": true,
+			"screen_box": reading["screen_box"],
+			"exposure_fraction": reading["exposure_fraction"],
+			"illumination": reading["illumination"],
+			"clarity": reading["clarity"],
+			"reticle_on_target": reading["reticle_on_target"],
 		}
 
 	var enemy_id: int = enemy.enemy_id
@@ -294,6 +364,11 @@ func _evaluate_enemy(
 			"source": EnemyMemory.Source.VISUAL,
 			"threatening": threatening,
 			"alive": true,
+			"screen_box": reading["screen_box"],
+			"exposure_fraction": reading["exposure_fraction"],
+			"illumination": reading["illumination"],
+			"clarity": reading["clarity"],
+			"reticle_on_target": reading["reticle_on_target"],
 		}
 
 	if not memory_enabled or not memory.has(enemy_id):
@@ -301,6 +376,20 @@ func _evaluate_enemy(
 
 	var track: Dictionary = memory.get_track(enemy_id)
 	var remembered: Vector3 = track["position"]
+	# A remembered contact keeps the BOX it had where it was last seen - an
+	# agent that lost someone around a corner knows roughly how big they
+	# looked - but nothing that only a live sighting could produce: no
+	# exposure, no clarity, and never a reticle.
+	var remembered_reading: Dictionary = _vision_reading(
+		enemy,
+		world,
+		eye,
+		forward,
+		remembered,
+		agent.position.distance_to(remembered),
+		lighting,
+		false,
+	)
 	return {
 		"id": enemy_id,
 		"visible": false,
@@ -316,6 +405,11 @@ func _evaluate_enemy(
 		"source": int(track["source"]),
 		"threatening": threatening,
 		"alive": true,
+		"screen_box": remembered_reading["screen_box"],
+		"exposure_fraction": 0.0,
+		"illumination": remembered_reading["illumination"],
+		"clarity": 0.0,
+		"reticle_on_target": false,
 	}
 
 

@@ -21,7 +21,7 @@ LOCAL GAME STATE (Godot calibration simulator)
         |
 Observation Adapter        <- Observation.build() in Godot
         |
-Normalized Observation Vector (106 float32 values, all in [-1, 1])
+Normalized Observation Vector (126 float32 values, all in [-1, 1])
         |
 PPO Policy (MultiDiscrete([3,3,3,3,2,2]) actions)
         |
@@ -47,7 +47,7 @@ GAME
    (booleans are emitted as `0.0`/`1.0`). Distances are divided by the
    arena's maximum diagonal distance; positions by the arena half-extent;
    velocities by the agent's move speed.
-3. **Stable dimension.** The vector is always exactly 106 floats, regardless
+3. **Stable dimension.** The vector is always exactly 126 floats, regardless
    of curriculum level, configured enemy count or how much cover is in the
    map: three enemy slots and three object slots are budgets, and the visible
    object *count* field carries the rest. Enemies beyond the 3rd
@@ -87,7 +87,7 @@ Below level 6 the gating is disabled and indices 10–32 keep their original
 ground-truth meaning byte-for-byte, so curriculum levels 1–4 reproduce the
 pre-world dynamics exactly.
 
-## Observation vector (106 floats)
+## Observation vector (126 floats)
 
 `Observation.to_array()` / `python/sandboxai/contract.py:OBSERVATION_SPEC`.
 
@@ -106,7 +106,7 @@ pre-world dynamics exactly.
 
 From curriculum level 5 the weapon gains recoil, bloom, fire modes,
 magazines and reloads (see `docs/CURRICULUM_AND_COMBAT.md`). **This adds no
-observation fields and no action fields** — the vector is still exactly 106
+observation fields and no action fields** — the vector is still exactly 126
 floats and the action space is still `MultiDiscrete([3,3,3,3,2,2])`.
 
 The one semantic change is to index 15. `WeaponState.is_ready()` now also
@@ -122,7 +122,7 @@ Everything else is felt indirectly and deliberately so:
   `agent_forward` and in the bearing/elevation fields;
 - **bloom** is not observed at all. It is a function of the agent's own
   recent fire, so a recurrent or frame-stacked policy can infer it, and
-  exposing it would have meant breaking the 106-float contract;
+  exposing it would have meant breaking the 126-float contract;
 - **ammunition count** is not observed either, for the same reason.
 
 Below level 5 the handling layer is inert and index 15 keeps its original

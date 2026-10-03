@@ -4831,7 +4831,7 @@ class StatsPage(Page):
     enemies, what objects are around the agent, and why did the policy do
     that?" - with the *same* numbers the network gets. Two honest sources:
 
-    * ``contract.OBSERVATION_SPEC`` is the contract itself (all 106 fields,
+    * ``contract.OBSERVATION_SPEC`` is the contract itself (all 126 fields,
       their meaning and their normalisation), so the table is complete even
       before a single replay exists;
     * a recorded replay is the only thing that can show real values. Only
@@ -4943,7 +4943,7 @@ class StatsPage(Page):
         WidgetSpec(
             "vector",
             "Observation vector (raw)",
-            "All 106 fields, grouped, exactly as the contract defines them.",
+            "All 126 fields, grouped, exactly as the contract defines them.",
             default_span=3,
             max_span=3,
         ),

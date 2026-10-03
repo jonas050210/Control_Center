@@ -96,7 +96,7 @@ handling layer, gated by `weapon_handling_enabled()`:
 
 ### It adds no observation and no action fields
 
-The observation stays at exactly 106 floats and the action space stays
+The observation stays at exactly 126 floats and the action space stays
 `MultiDiscrete([3,3,3,3,2,2])`. Handling is felt through channels that
 already exist:
 

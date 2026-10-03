@@ -57,7 +57,10 @@ const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 ## what it perceived. There is no map id, no lighting mode, no enemy count,
 ## no hidden geometry: "it is dark HERE", "two more contacts I am not
 ## tracking individually", "I have seen 40% of this place".
-const FIELD_COUNT: int = 106
+const FIELD_COUNT: int = 126
+## The v4 prefix length, for the same reason as the older prefixes: contract
+## v5 appended the vision block (106-125) and changed nothing below 106.
+const V4_FIELD_COUNT: int = 106
 ## The v2 prefix length, for the same reason as LEGACY_FIELD_COUNT.
 const V2_FIELD_COUNT: int = 65
 ## The v1 prefix length, kept as a named constant because several tests and
@@ -194,6 +197,116 @@ const FIELD_SPEC: Array = [
 	{"index": 103, "width": 1, "name": "object_3_kind_norm", "group": "objects"},
 	{"index": 104, "width": 1, "name": "object_3_visible", "group": "objects"},
 	{"index": 105, "width": 1, "name": "visible_object_count_norm", "group": "objects"},
+	{
+		"index": 106,
+		"width": 1,
+		"name": "primary_enemy_screen_x",
+		"group": "vision",
+	},
+	{
+		"index": 107,
+		"width": 1,
+		"name": "primary_enemy_screen_y",
+		"group": "vision",
+	},
+	{
+		"index": 108,
+		"width": 1,
+		"name": "primary_enemy_screen_half_width",
+		"group": "vision",
+	},
+	{
+		"index": 109,
+		"width": 1,
+		"name": "primary_enemy_screen_half_height",
+		"group": "vision",
+	},
+	{
+		"index": 110,
+		"width": 1,
+		"name": "primary_enemy_exposure_fraction",
+		"group": "vision",
+	},
+	{
+		"index": 111,
+		"width": 1,
+		"name": "primary_enemy_illumination",
+		"group": "vision",
+	},
+	{
+		"index": 112,
+		"width": 1,
+		"name": "secondary_enemy_screen_x",
+		"group": "vision",
+	},
+	{
+		"index": 113,
+		"width": 1,
+		"name": "secondary_enemy_screen_y",
+		"group": "vision",
+	},
+	{
+		"index": 114,
+		"width": 1,
+		"name": "secondary_enemy_screen_half_width",
+		"group": "vision",
+	},
+	{
+		"index": 115,
+		"width": 1,
+		"name": "secondary_enemy_screen_half_height",
+		"group": "vision",
+	},
+	{
+		"index": 116,
+		"width": 1,
+		"name": "secondary_enemy_exposure_fraction",
+		"group": "vision",
+	},
+	{
+		"index": 117,
+		"width": 1,
+		"name": "secondary_enemy_illumination",
+		"group": "vision",
+	},
+	{
+		"index": 118,
+		"width": 1,
+		"name": "tertiary_enemy_screen_x",
+		"group": "vision",
+	},
+	{
+		"index": 119,
+		"width": 1,
+		"name": "tertiary_enemy_screen_y",
+		"group": "vision",
+	},
+	{
+		"index": 120,
+		"width": 1,
+		"name": "tertiary_enemy_screen_half_width",
+		"group": "vision",
+	},
+	{
+		"index": 121,
+		"width": 1,
+		"name": "tertiary_enemy_screen_half_height",
+		"group": "vision",
+	},
+	{
+		"index": 122,
+		"width": 1,
+		"name": "tertiary_enemy_exposure_fraction",
+		"group": "vision",
+	},
+	{
+		"index": 123,
+		"width": 1,
+		"name": "tertiary_enemy_illumination",
+		"group": "vision",
+	},
+	{"index": 124, "width": 1, "name": "reticle_on_primary", "group": "vision"},
+	{"index": 125, "width": 1, "name": "primary_contact_clarity", "group": "vision"},
 ]
 
 ## Per-component suffixes appended to a multi-value field's name (a width-3
@@ -326,6 +439,52 @@ var object_3_kind_norm: float = 0.0
 var object_3_visible: float = 0.0
 var visible_object_count_norm: float = 0.0
 
+# ---------------------------------------------------------------------------
+# Contract v5: the vision block.
+#
+# Everything below here describes what a contact LOOKS LIKE from where the
+# agent is standing, in the coordinates of the agent's own screen: the view
+# spans [-1, 1] on both axes, +x is right, +y is up.
+#
+# Before v5 the vector could place a contact (distance, bearing, elevation)
+# but not size it: "an enemy at 12 m" and "an enemy at 12 m whose head is the
+# only thing over the crate, in a shadow" produced the same numbers. Six
+# values per contact close that gap and are all things a player sees:
+#
+#   screen_x / screen_y          where the box sits on the screen
+#   screen_half_width / _height  how much of the screen it covers
+#   exposure_fraction            how much of the body is NOT behind cover
+#   illumination                 how much light it is standing in
+#
+# `reticle_on_primary` answers "is the crosshair inside that box" - one
+# comparison in the engine instead of a computation the policy has to learn -
+# and `primary_contact_clarity` folds the contact's illumination and the
+# medium between them into "how well can I make this shot out at all", which
+# is the question the old vector could not express at all.
+#
+# A contact the agent cannot see has NO box: these fields are zero for it,
+# which reads as "not on my screen" rather than "on my screen at the origin".
+# ---------------------------------------------------------------------------
+var primary_enemy_screen_x: float = 0.0
+var primary_enemy_screen_y: float = 0.0
+var primary_enemy_screen_half_width: float = 0.0
+var primary_enemy_screen_half_height: float = 0.0
+var primary_enemy_exposure_fraction: float = 0.0
+var primary_enemy_illumination: float = 0.0
+var secondary_enemy_screen_x: float = 0.0
+var secondary_enemy_screen_y: float = 0.0
+var secondary_enemy_screen_half_width: float = 0.0
+var secondary_enemy_screen_half_height: float = 0.0
+var secondary_enemy_exposure_fraction: float = 0.0
+var secondary_enemy_illumination: float = 0.0
+var tertiary_enemy_screen_x: float = 0.0
+var tertiary_enemy_screen_y: float = 0.0
+var tertiary_enemy_screen_half_width: float = 0.0
+var tertiary_enemy_screen_half_height: float = 0.0
+var tertiary_enemy_exposure_fraction: float = 0.0
+var tertiary_enemy_illumination: float = 0.0
+var reticle_on_primary: bool = false
+var primary_contact_clarity: float = 0.0
 # ---------------------------------------------------------------------------
 # Contract v3: conditions, contact overflow, target selection, hearing
 # detail and map knowledge.
@@ -768,6 +927,26 @@ static func _clear_enemy_blocks(obs: Observation) -> void:
 	obs.tertiary_enemy_alive = false
 	obs.tertiary_enemy_visible = false
 	obs.tertiary_enemy_elevation_norm = 0.0
+	obs.primary_enemy_screen_x = 0.0
+	obs.primary_enemy_screen_y = 0.0
+	obs.primary_enemy_screen_half_width = 0.0
+	obs.primary_enemy_screen_half_height = 0.0
+	obs.primary_enemy_exposure_fraction = 0.0
+	obs.primary_enemy_illumination = 0.0
+	obs.secondary_enemy_screen_x = 0.0
+	obs.secondary_enemy_screen_y = 0.0
+	obs.secondary_enemy_screen_half_width = 0.0
+	obs.secondary_enemy_screen_half_height = 0.0
+	obs.secondary_enemy_exposure_fraction = 0.0
+	obs.secondary_enemy_illumination = 0.0
+	obs.tertiary_enemy_screen_x = 0.0
+	obs.tertiary_enemy_screen_y = 0.0
+	obs.tertiary_enemy_screen_half_width = 0.0
+	obs.tertiary_enemy_screen_half_height = 0.0
+	obs.tertiary_enemy_exposure_fraction = 0.0
+	obs.tertiary_enemy_illumination = 0.0
+	obs.reticle_on_primary = false
+	obs.primary_contact_clarity = 0.0
 
 
 static func _apply_belief(
@@ -785,6 +964,19 @@ static func _apply_belief(
 		float(belief.get("age", 0.0)) / maxf(SandboxConfig.MEMORY_MAX_AGE, 0.0001), 0.0, 1.0
 	)
 	var elevation: float = clampf(float(belief.get("elevation_deg", 0.0)) / 90.0, -1.0, 1.0)
+	# The vision block is only ever filled from a belief that carries one. A
+	# belief without a `screen_box` (a replay recorded before contract v5, an
+	# adapter that does not model geometry) leaves these at zero, which reads
+	# as "no box" - never as a box at the centre of the screen.
+	var box: Dictionary = belief.get("screen_box", {})
+	var in_front: bool = bool(box.get("in_front", false))
+	var screen_x: float = float(box.get("center_x", 0.0)) if in_front else 0.0
+	var screen_y: float = float(box.get("center_y", 0.0)) if in_front else 0.0
+	var half_width: float = float(box.get("half_width", 0.0)) if in_front else 0.0
+	var half_height: float = float(box.get("half_height", 0.0)) if in_front else 0.0
+	var exposure: float = clampf(float(belief.get("exposure_fraction", 0.0)), 0.0, 1.0)
+	var illumination: float = clampf(float(belief.get("illumination", 0.0)), 0.0, 1.0)
+	var on_reticle: bool = bool(belief.get("reticle_on_target", false))
 
 	match rank:
 		0:
@@ -805,6 +997,14 @@ static func _apply_belief(
 			obs.primary_enemy_confidence = clampf(float(belief.get("confidence", 0.0)), 0.0, 1.0)
 			obs.primary_enemy_source_visual = int(belief.get("source", 0)) == 1
 			obs.primary_enemy_source_sound = int(belief.get("source", 0)) == 2
+			obs.primary_enemy_screen_x = screen_x
+			obs.primary_enemy_screen_y = screen_y
+			obs.primary_enemy_screen_half_width = half_width
+			obs.primary_enemy_screen_half_height = half_height
+			obs.primary_enemy_exposure_fraction = exposure
+			obs.primary_enemy_illumination = illumination
+			obs.reticle_on_primary = on_reticle
+			obs.primary_contact_clarity = clampf(float(belief.get("clarity", 0.0)), 0.0, 1.0)
 		1:
 			obs.secondary_enemy_relative_position_norm = relative
 			obs.secondary_enemy_distance_norm = distance_norm
@@ -814,6 +1014,12 @@ static func _apply_belief(
 			obs.secondary_enemy_visible = visible
 			obs.secondary_enemy_info_age_norm = age_norm
 			obs.secondary_enemy_elevation_norm = elevation
+			obs.secondary_enemy_screen_x = screen_x
+			obs.secondary_enemy_screen_y = screen_y
+			obs.secondary_enemy_screen_half_width = half_width
+			obs.secondary_enemy_screen_half_height = half_height
+			obs.secondary_enemy_exposure_fraction = exposure
+			obs.secondary_enemy_illumination = illumination
 		2:
 			obs.tertiary_enemy_relative_position_norm = relative
 			obs.tertiary_enemy_distance_norm = distance_norm
@@ -823,6 +1029,12 @@ static func _apply_belief(
 			obs.tertiary_enemy_visible = visible
 			obs.tertiary_enemy_info_age_norm = age_norm
 			obs.tertiary_enemy_elevation_norm = elevation
+			obs.tertiary_enemy_screen_x = screen_x
+			obs.tertiary_enemy_screen_y = screen_y
+			obs.tertiary_enemy_screen_half_width = half_width
+			obs.tertiary_enemy_screen_half_height = half_height
+			obs.tertiary_enemy_exposure_fraction = exposure
+			obs.tertiary_enemy_illumination = illumination
 
 
 ## Normalizes a small count onto [0, 1] using a fixed saturation point, so
@@ -923,6 +1135,13 @@ static func _horizontal_bearing_norm(agent: AgentState, target_position: Vector3
 ## [30]    tertiary_enemy_bearing_norm
 ## [31]    tertiary_enemy_health_norm
 ## [32]    tertiary_enemy_alive (0/1)
+##   ... (see docs/OBSERVATION_ACTION_CONTRACT.md for 33-105)
+## [106-111] primary_enemy_screen_x / _y / _half_width / _half_height /
+##           _exposure_fraction / _illumination   -- the primary contact's box
+## [112-117] the same six values for the secondary contact
+## [118-123] the same six values for the tertiary contact
+## [124]    reticle_on_primary (0/1)   -- crosshair inside the primary's box
+## [125]    primary_contact_clarity    -- how well it can be made out at all
 func to_array() -> PackedFloat32Array:
 	# Pre-allocated once and assigned by index: this runs once per
 	# environment per simulation step on the training hot path, and
@@ -1037,6 +1256,26 @@ func to_array() -> PackedFloat32Array:
 	arr[103] = object_3_kind_norm
 	arr[104] = object_3_visible
 	arr[105] = visible_object_count_norm
+	arr[106] = primary_enemy_screen_x
+	arr[107] = primary_enemy_screen_y
+	arr[108] = primary_enemy_screen_half_width
+	arr[109] = primary_enemy_screen_half_height
+	arr[110] = primary_enemy_exposure_fraction
+	arr[111] = primary_enemy_illumination
+	arr[112] = secondary_enemy_screen_x
+	arr[113] = secondary_enemy_screen_y
+	arr[114] = secondary_enemy_screen_half_width
+	arr[115] = secondary_enemy_screen_half_height
+	arr[116] = secondary_enemy_exposure_fraction
+	arr[117] = secondary_enemy_illumination
+	arr[118] = tertiary_enemy_screen_x
+	arr[119] = tertiary_enemy_screen_y
+	arr[120] = tertiary_enemy_screen_half_width
+	arr[121] = tertiary_enemy_screen_half_height
+	arr[122] = tertiary_enemy_exposure_fraction
+	arr[123] = tertiary_enemy_illumination
+	arr[124] = 1.0 if reticle_on_primary else 0.0
+	arr[125] = primary_contact_clarity
 	return arr
 
 
@@ -1130,6 +1369,26 @@ func to_dict() -> Dictionary:
 		"object_3_kind_norm": object_3_kind_norm,
 		"object_3_visible": object_3_visible,
 		"visible_object_count_norm": visible_object_count_norm,
+		"primary_enemy_screen_x": primary_enemy_screen_x,
+		"primary_enemy_screen_y": primary_enemy_screen_y,
+		"primary_enemy_screen_half_width": primary_enemy_screen_half_width,
+		"primary_enemy_screen_half_height": primary_enemy_screen_half_height,
+		"primary_enemy_exposure_fraction": primary_enemy_exposure_fraction,
+		"primary_enemy_illumination": primary_enemy_illumination,
+		"secondary_enemy_screen_x": secondary_enemy_screen_x,
+		"secondary_enemy_screen_y": secondary_enemy_screen_y,
+		"secondary_enemy_screen_half_width": secondary_enemy_screen_half_width,
+		"secondary_enemy_screen_half_height": secondary_enemy_screen_half_height,
+		"secondary_enemy_exposure_fraction": secondary_enemy_exposure_fraction,
+		"secondary_enemy_illumination": secondary_enemy_illumination,
+		"tertiary_enemy_screen_x": tertiary_enemy_screen_x,
+		"tertiary_enemy_screen_y": tertiary_enemy_screen_y,
+		"tertiary_enemy_screen_half_width": tertiary_enemy_screen_half_width,
+		"tertiary_enemy_screen_half_height": tertiary_enemy_screen_half_height,
+		"tertiary_enemy_exposure_fraction": tertiary_enemy_exposure_fraction,
+		"tertiary_enemy_illumination": tertiary_enemy_illumination,
+		"reticle_on_primary": reticle_on_primary,
+		"primary_contact_clarity": primary_contact_clarity,
 	}
 
 
