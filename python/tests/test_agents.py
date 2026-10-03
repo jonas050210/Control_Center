@@ -339,6 +339,13 @@ class TestLifecycleActions:
         assert manager.clear_finished() == 1
         assert manager.get(other["agent_id"]) is None
 
+        # clear_finished also sweeps launch-failed records (process_id is None and error is set).
+        failed = manager.launch_evaluation("/nonexistent/checkpoint.zip")
+        assert failed["process_id"] is None
+        assert failed["error"] is not None
+        assert manager.clear_finished() == 1
+        assert manager.get(failed["agent_id"]) is None
+
     def test_summary_counts_lifecycles(self, stack):
         processes, launcher, manager = stack
         view = manager.launch_training({"total_training_steps": 10})

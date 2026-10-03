@@ -449,17 +449,47 @@ def enable_dpi_awareness() -> bool:
     return False
 
 
+def compute_viewport_scale(width: int, height: int) -> float:
+    """Compute a proportional UI scale factor from the live window viewport size.
+
+    At 1800x980 (a 1920x1080 screen) the factor is 1.0. Smaller windows scale
+    elements, fonts, paddings, and row heights down proportionally (down to 0.68x),
+    while larger windows scale up gently (up to 1.15x). Quantized in 0.04 steps
+    so dragging a window border does not thrash style rebuilds on 1-pixel jitter.
+    """
+    w = max(480, int(width or 1800))
+    h = max(360, int(height or 980))
+    raw = min(w / 1800.0, h / 980.0)
+    clamped = max(0.68, min(1.15, raw))
+    return round(round(clamped / 0.04) * 0.04, 2)
+
+
 @dataclass(frozen=True)
 class UiScale:
-    """Pixel scaling and the type scale derived from one DPI value."""
+    """Pixel scaling and the type scale derived from one DPI value and viewport scale."""
 
     dpi: float = 96.0
     font_family: str = FONT_FAMILY
     mono_family: str = MONO_FONT_FAMILY
+    viewport_scale: float = 1.0
 
     @property
     def factor(self) -> float:
-        return max(0.85, min(2.5, float(self.dpi) / 96.0))
+        dpi_factor = max(0.85, min(2.5, float(self.dpi) / 96.0))
+        vp_factor = max(0.65, min(1.25, float(self.viewport_scale)))
+        return max(0.60, min(2.5, dpi_factor * vp_factor))
+
+    def with_viewport(self, width: int, height: int) -> UiScale:
+        """Return a copy of this UiScale adjusted for the current window dimensions."""
+        vp = compute_viewport_scale(width, height)
+        if abs(vp - self.viewport_scale) < 0.03:
+            return self
+        return UiScale(
+            dpi=self.dpi,
+            font_family=self.font_family,
+            mono_family=self.mono_family,
+            viewport_scale=vp,
+        )
 
     @classmethod
     def from_root(cls, root: Any, override: float | None = None) -> UiScale:
@@ -471,12 +501,20 @@ class UiScale:
         return cls(dpi=float(dpi or 96.0))
 
     def px(self, value: float, *, minimum: int = 0) -> int:
-        return max(minimum, int(round(value * self.factor)))
+        eff_min = minimum
+        if minimum > 1 and self.viewport_scale < 1.0:
+            eff_min = max(1, int(round(minimum * self.viewport_scale)))
+        return max(eff_min, int(round(value * self.factor)))
 
     def font(self, role: str, *, bold: bool = False, mono: bool = False) -> FontSpec:
-        """Resolve a font role into a Tk font tuple, never below 11 px."""
+        """Resolve a font role into a Tk font tuple, never below 11 px at default viewport scale."""
         base = FONT_ROLES.get(role, FONT_ROLES["body"])
-        size = max(MIN_FONT_PX, self.px(base, minimum=MIN_FONT_PX))
+        floor = (
+            MIN_FONT_PX
+            if self.viewport_scale >= 1.0
+            else max(9, int(round(MIN_FONT_PX * self.viewport_scale)))
+        )
+        size = max(floor, self.px(base, minimum=floor))
         family = self.mono_family if mono else self.font_family
         return (family, size, "bold") if bold else (family, size)
 
@@ -615,7 +653,12 @@ def apply_ttk_styles(
         resolved = scale.font(role, bold=bold, mono=mono)
         if density.font_delta:
             family, size, *rest = resolved
-            size = max(MIN_FONT_PX, int(size) + density.font_delta)
+            floor = (
+                MIN_FONT_PX
+                if scale.viewport_scale >= 1.0
+                else max(9, int(round(MIN_FONT_PX * scale.viewport_scale)))
+            )
+            size = max(floor, int(size) + density.font_delta)
             return (family, size, *rest)
         return resolved
 

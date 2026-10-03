@@ -429,6 +429,17 @@ class EvaluationScheduleTests(unittest.TestCase):
         driver.close()
         self.assertIsNone(driver.eval_env)
 
+    def test_kl_adaptive_learning_rate_damps_high_kl_and_boosts_low_kl(self) -> None:
+        base = 5e-4
+        damped = ppo.kl_adaptive_learning_rate(base, 0.05, base)
+        self.assertLess(damped, base)
+        self.assertGreaterEqual(damped, base * 0.2)
+        boosted = ppo.kl_adaptive_learning_rate(base, 0.003, base)
+        self.assertGreater(boosted, base)
+        self.assertLessEqual(boosted, base * 1.5)
+        steady = ppo.kl_adaptive_learning_rate(base, 0.015, base)
+        self.assertAlmostEqual(steady, base)
+
 
 def _config(**overrides: Any) -> Any:
     from sandboxai.config import TrainingConfig

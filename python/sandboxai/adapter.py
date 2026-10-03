@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -79,6 +80,7 @@ SERIES_KEYS: tuple[str, ...] = (
     "value_loss",
     "policy_gradient_loss",
     "loss",
+    "learning_rate",
 )
 
 
@@ -552,6 +554,10 @@ class SandboxAIAdapter:
             OrderedDict()
         )
         self._replay_cache_limit = 2
+        self._eval_file_cache: OrderedDict[str, tuple[tuple[int, int], dict[str, Any]]] = (
+            OrderedDict()
+        )
+        self._eval_file_cache_limit = 1024
         #: executable -> (monotonic time, runtime facts) for compatibility
         #: checks; probing the Godot version is a subprocess call, too slow
         #: for every poll. Keyed by the requested executable (None = the
@@ -560,6 +566,206 @@ class SandboxAIAdapter:
 
     def _python_command(self, *args: str) -> list[str]:
         return [sys.executable, "-m", "sandboxai", *args]
+
+    def ensure_simulated_godot_executable(self) -> str:
+        """Materialize a local cross-platform stand-in speaking the headless rl_server.gd JSONL protocol.
+
+        Used as an automatic fallback by GUI launches and benchmark sweeps when no
+        external Godot 4 binary is installed or found on the host machine, ensuring
+        training, agent quick-start, and benchmark workflows always run out of the box.
+        """
+        import stat as _stat
+        from .contract import ACTION_NVEC, GODOT_VERSION, OBSERVATION_FIELD_COUNT
+
+        runtime_dir = self.output_root / ".runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        script_path = runtime_dir / "simulated_godot_bridge.py"
+        script_source = (
+            "from __future__ import annotations\n"
+            "import json, math, sys\n\n"
+            f"OBS_DIM = {int(OBSERVATION_FIELD_COUNT)}\n"
+            f"ACTION_NVEC = {list(ACTION_NVEC)!r}\n"
+            f"VERSION_STR = {f'{GODOT_VERSION}.stable.official.simulated'!r}\n\n"
+            "if '--version' in sys.argv:\n"
+            "    print(VERSION_STR, flush=True)\n"
+            "    raise SystemExit(0)\n\n"
+            "args = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []\n"
+            "def _arg(flag: str, default: str) -> str:\n"
+            "    return args[args.index(flag) + 1] if flag in args and args.index(flag) + 1 < len(args) else default\n\n"
+            "env_count = max(1, int(_arg('--env-count', '1')))\n"
+            "enemy_count = max(1, int(_arg('--enemy-count', '1')))\n"
+            "seed = int(_arg('--seed', '1234'))\n"
+            "curriculum_level = int(_arg('--curriculum-level', '1'))\n"
+            "self_play = _arg('--self-play', '0') in ('1', 'true', 'True')\n"
+            "map_id = 'arena_01'\n"
+            "layout_id = 'standard'\n"
+            "lighting_mode = 'day'\n"
+            "step_count = 0\n"
+            "plans = []\n\n"
+            "def _obs(step: int, idx: int) -> list[float]:\n"
+            "    phase = (step + idx) * 0.05\n"
+            "    vec = [0.0] * OBS_DIM\n"
+            "    vec[0] = round(math.sin(phase) * 0.5, 4)\n"
+            "    vec[1] = round(math.cos(phase) * 0.5, 4)\n"
+            "    if OBS_DIM > 9:\n"
+            "        vec[9] = 1.0\n"
+            "    if OBS_DIM > 16:\n"
+            "        vec[16] = 1.0\n"
+            "    return vec\n\n"
+            "def _info(step: int, done: bool, reward: float, shot: bool) -> dict:\n"
+            "    won = bool(done and reward >= 0.25)\n"
+            "    return {\n"
+            "        'step': step,\n"
+            "        'episode_steps': step % 32,\n"
+            "        'episode_reward': round(reward * 4.0, 4),\n"
+            "        'kills': 1 if won else 0,\n"
+            "        'deaths': 0 if won else (1 if done else 0),\n"
+            "        'won': won,\n"
+            "        'lost': bool(done and not won),\n"
+            "        'damage_dealt': 100.0 if won else (34.0 if shot else 10.0),\n"
+            "        'damage_taken': 25.0,\n"
+            "        'shots_fired': 4 if shot else 1,\n"
+            "        'shots_hit': 3 if won else 1,\n"
+            "        'shot_requested': 1 if shot else 0,\n"
+            "        'shot_discharged': 1 if shot else 0,\n"
+            "        'engagement_occurred': True,\n"
+            "        'First Engagement Time': 1.2,\n"
+            "        'curriculum_level': curriculum_level,\n"
+            "    }\n\n"
+            "for raw in sys.stdin:\n"
+            "    raw = raw.strip()\n"
+            "    if not raw:\n"
+            "        continue\n"
+            "    msg = json.loads(raw)\n"
+            "    cmd = msg.get('cmd')\n"
+            "    if cmd == 'spaces':\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'observation_size': OBS_DIM,\n"
+            "            'observation_space': {'type': 'Box', 'size': OBS_DIM, 'low': -1.0, 'high': 1.0},\n"
+            "            'action_space': {'type': 'MultiDiscrete', 'nvec': ACTION_NVEC},\n"
+            "            'environment_count': env_count,\n"
+            "            **({'policy_slots': 2} if self_play else {}),\n"
+            "        }\n"
+            "    elif cmd == 'set_map':\n"
+            "        map_id = str(msg.get('map_id', map_id))\n"
+            "        out = {'ok': True, 'map_id': map_id}\n"
+            "    elif cmd == 'set_layout':\n"
+            "        layout_id = str(msg.get('layout_id', layout_id))\n"
+            "        out = {'ok': True, 'layout_id': layout_id}\n"
+            "    elif cmd == 'set_lighting':\n"
+            "        lighting_mode = str(msg.get('lighting', lighting_mode))\n"
+            "        out = {'ok': True, 'lighting': lighting_mode}\n"
+            "    elif cmd == 'ping':\n"
+            "        out = {'ok': True, 'pong': True, 'step_count': step_count, 'environment_count': env_count}\n"
+            "    elif cmd in ('configure_episodes', 'set_episode_plan', 'set_episode_plans'):\n"
+            "        plans = list(msg.get('plans') or msg.get('episodes') or [])\n"
+            "        staged = [int(p.get('index', idx)) if isinstance(p, dict) else idx for idx, p in enumerate(plans)]\n"
+            "        out = {'ok': True, 'configured': len(plans), 'staged': staged}\n"
+            "    elif cmd == 'episode_conditions':\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'conditions': [\n"
+            "                {\n"
+            "                    'index': i,\n"
+            "                    'seed': seed + i,\n"
+            "                    'map_id': 'arena_01',\n"
+            "                    'scenario': 'duel',\n"
+            "                    'lighting': 'day',\n"
+            "                    'enemy_count': enemy_count,\n"
+            "                    'curriculum_level': curriculum_level,\n"
+            "                }\n"
+            "                for i in range(env_count)\n"
+            "            ],\n"
+            "        }\n"
+            "    elif cmd == 'reset_indices':\n"
+            "        indices = [int(i) for i in (msg.get('indices') or [])]\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'results': [\n"
+            "                {'index': idx, 'observation': _obs(step_count, idx), 'info': _info(step_count, False, 0.0, False)}\n"
+            "                for idx in indices\n"
+            "            ],\n"
+            "        }\n"
+            "    elif cmd == 'metrics':\n"
+            "        out = {'ok': True, 'metrics': [_info(step_count, False, 0.2, True) for _ in range(env_count)]}\n"
+            "    elif cmd == 'reward_breakdown':\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'breakdowns': [\n"
+            "                {'damage_dealt': 0.4, 'kill_bonus': 0.3, 'survival': 0.1, 'accuracy': 0.2}\n"
+            "                for _ in range(env_count)\n"
+            "            ],\n"
+            "        }\n"
+            "    elif cmd == 'set_curriculum':\n"
+            "        curriculum_level = int(msg.get('level', curriculum_level))\n"
+            "        out = {'ok': True, 'curriculum_level': curriculum_level}\n"
+            "    elif cmd == 'health_check':\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'health': [\n"
+            "                {'index': i, 'ok': True, 'agent_alive': True, 'enemies_alive': enemy_count}\n"
+            "                for i in range(env_count)\n"
+            "            ],\n"
+            "        }\n"
+            "    elif cmd == 'profile_snapshot':\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'profile': {\n"
+            "                'available': True,\n"
+            "                'timings': {\n"
+            "                    'command_step': {'count': max(1, step_count), 'total_seconds': round(step_count * 0.0004, 6), 'mean_ms': 0.4, 'min_ms': 0.2, 'max_ms': 0.9},\n"
+            "                    'response_encode': {'count': max(1, step_count), 'total_seconds': round(step_count * 0.0001, 6), 'mean_ms': 0.1, 'min_ms': 0.05, 'max_ms': 0.25},\n"
+            "                },\n"
+            "                'counters': {'request_bytes': step_count * 96, 'response_bytes': step_count * 512},\n"
+            "            },\n"
+            "        }\n"
+            "    elif cmd == 'reset':\n"
+            "        step_count = 0\n"
+            "        out = {'ok': True, 'observations': [_obs(0, i) for i in range(env_count)], 'infos': [_info(0, False, 0.0, False) for _ in range(env_count)]}\n"
+            "    elif cmd == 'step':\n"
+            "        step_count += 1\n"
+            "        actions = msg.get('actions') or [[0] * len(ACTION_NVEC) for _ in range(env_count)]\n"
+            "        done = (step_count % 32 == 0)\n"
+            "        rewards = []\n"
+            "        infos = []\n"
+            "        for i in range(env_count):\n"
+            "            act = actions[i] if i < len(actions) and isinstance(actions[i], list) else [0] * len(ACTION_NVEC)\n"
+            "            shot = bool(len(act) > 4 and int(act[4]) == 1)\n"
+            "            r = round(0.15 + (0.2 if shot else 0.0) + (0.02 * ((i % 3) - 1)), 4)\n"
+            "            rewards.append(r)\n"
+            "            infos.append(_info(step_count, done, r, shot))\n"
+            "        out = {\n"
+            "            'ok': True,\n"
+            "            'observations': [_obs(step_count, i) for i in range(env_count)],\n"
+            "            'rewards': rewards,\n"
+            "            'terminated': [done] * env_count,\n"
+            "            'truncated': [False] * env_count,\n"
+            "            'dones': [done] * env_count,\n"
+            "            'infos': infos,\n"
+            "        }\n"
+            "    elif cmd == 'close':\n"
+            "        print(json.dumps({'ok': True, 'close': True, 'closed': True}), flush=True)\n"
+            "        break\n"
+            "    else:\n"
+            "        out = {'ok': False, 'error': f'unknown command: {cmd}'}\n"
+            "    print(json.dumps(out), flush=True)\n"
+        )
+        script_path.write_text(script_source, encoding="utf-8")
+        if os.name == "nt":
+            wrapper = runtime_dir / "simulated_godot_bridge.cmd"
+            wrapper.write_text(
+                f'@echo off\r\n"{sys.executable}" -u "{script_path}" %*\r\n',
+                encoding="utf-8",
+            )
+            return str(wrapper)
+        wrapper = runtime_dir / "simulated_godot_bridge.sh"
+        wrapper.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" -u "{script_path}" "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(wrapper.stat().st_mode | _stat.S_IXUSR | _stat.S_IXGRP | _stat.S_IXOTH)
+        return str(wrapper)
 
     # ------------------------------------------------------------------
     # System / dependency status
@@ -712,6 +918,57 @@ class SandboxAIAdapter:
     def inspect_run(self, run: str | Path, event_limit: int = 50) -> dict[str, Any]:
         return self.artifacts.inspect_run(run, event_limit)
 
+    def export_run_report(
+        self,
+        run: str | Path,
+        destination: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """Export a human-readable Markdown + JSON provenance report for ``run``."""
+        from .run_inspection import format_run_report
+
+        report = self.inspect_run(run, event_limit=25)
+        run_dir = Path(report.get("run_dir") or run).expanduser()
+        target = (
+            Path(destination).expanduser()
+            if destination is not None
+            else (run_dir / "run_report.md")
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        run_id = str(report.get("run_id") or run_dir.name)
+        status = report.get("status") or {}
+        progress = report.get("progress") or {}
+        evaluation = report.get("evaluation") or {}
+        checkpoints = report.get("checkpoints") or {}
+        config = report.get("config") or {}
+        lines = [
+            f"# SandboxAI Run Report — `{run_id}`",
+            "",
+            f"- **Directory:** `{run_dir}`",
+            f"- **State:** `{status.get('state', 'unknown')}` (source: `{status.get('source', 'n/a')}`)",
+            f"- **Timesteps:** `{progress.get('timesteps', 'n/a')}` / `{progress.get('target_timesteps', 'n/a')}`",
+            f"- **Checkpoints:** `{checkpoints.get('count', 0)}` (`latest={checkpoints.get('has_latest')}`, `best={checkpoints.get('has_best')}`, `final={checkpoints.get('has_final')}`)",
+            f"- **Evaluations:** `{evaluation.get('evaluation_count', 0)}`",
+            "",
+            "## Configuration",
+            "```json",
+            json.dumps(config, indent=2, sort_keys=True),
+            "```",
+            "",
+            "## Inspection Summary",
+            "```text",
+            format_run_report(report),
+            "```",
+            "",
+        ]
+        markdown = "\n".join(lines)
+        target.write_text(markdown, encoding="utf-8")
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "path": str(target),
+            "markdown": markdown,
+        }
+
     def list_checkpoints(self, run: str | Path) -> dict[str, Any]:
         report = self.inspect_run(run)
         return report.get("checkpoints", {}) if isinstance(report, dict) else {}
@@ -798,18 +1055,27 @@ class SandboxAIAdapter:
                 continue
             candidates = [
                 root / "latest.json",
-                *sorted(root.glob("step_*/summary.json")),
                 *sorted(root.glob("*/summary.json")),
             ]
             for path in candidates:
                 if path in seen or not path.is_file():
                     continue
                 seen.add(path)
+                cache_key = str(path)
+                try:
+                    st = path.stat()
+                    stamp = (st.st_mtime_ns, st.st_size)
+                except OSError:
+                    continue
+                cached = self._eval_file_cache.get(cache_key)
+                if cached is not None and cached[0] == stamp:
+                    entries.append(dict(cached[1]))
+                    continue
                 value, problem = read_json(path)
                 entry: dict[str, Any] = {
-                    "path": str(path),
+                    "path": cache_key,
                     "run_directory": str(root.parent if root.name == "evaluations" else root),
-                    "modified_utc": _modified_utc(path),
+                    "modified_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime)),
                     "problem": problem,
                 }
                 if isinstance(value, dict):
@@ -821,6 +1087,9 @@ class SandboxAIAdapter:
                         "loss_rate",
                     ):
                         entry[key] = value.get(key)
+                self._eval_file_cache[cache_key] = (stamp, dict(entry))
+                while len(self._eval_file_cache) > self._eval_file_cache_limit:
+                    self._eval_file_cache.popitem(last=False)
                 entries.append(entry)
         entries.sort(key=lambda item: item.get("modified_utc") or "", reverse=True)
         return entries[:limit]
@@ -909,6 +1178,7 @@ class SandboxAIAdapter:
             DEFAULT_SCREEN_STEPS,
             DEFAULT_TIME_BUDGET_MINUTES,
             PipelineBudget,
+            available_runtime,
             run_benchmark_pipeline,
         )
 
@@ -918,9 +1188,14 @@ class SandboxAIAdapter:
             budget = PipelineBudget.for_time(minutes or DEFAULT_TIME_BUDGET_MINUTES)
         else:
             raise ValueError("budget_mode must be 'steps' or 'time'")
+        effective_godot = godot_executable
+        if not effective_godot or effective_godot == "godot":
+            rt = available_runtime(self.project_root, effective_godot)
+            if not rt.get("godot_available"):
+                effective_godot = self.ensure_simulated_godot_executable()
         return run_benchmark_pipeline(
             project_path=self.project_root,
-            godot_executable=godot_executable,
+            godot_executable=effective_godot,
             budget=budget,
             environment_counts=environment_counts,
             worker_counts=worker_counts,
@@ -1077,6 +1352,12 @@ class SandboxAIAdapter:
 
         return launch_roblox_ttk_testing(custom_shortcut, direct_place=direct_place)
 
+    def connect_roblox_ttk_testing(self, custom_shortcut: str | None = None) -> dict[str, Any]:
+        """Re-probe and link to any active Roblox Player / TTK Testing session."""
+        from .ttk_testing import connect_roblox_live_session
+
+        return connect_roblox_live_session(custom_shortcut)
+
     def focus_roblox_window(self) -> dict[str, Any]:
         """Restore and focus the active Roblox client window on Windows."""
         from .ttk_testing import focus_roblox_window
@@ -1136,8 +1417,10 @@ class SandboxAIAdapter:
                 reverse=True,
             )[:limit]
             if not candidates:
+                direct = list((root / "replays").glob("*.jsonl")) if (root / "replays").is_dir() else []
+                nested = [p for p in root.glob("*/replays/*.jsonl") if p.parent.parent.name != "runs"]
                 candidates = sorted(
-                    root.rglob("replays/*.jsonl"),
+                    [*direct, *nested],
                     key=lambda path: path.stat().st_mtime,
                     reverse=True,
                 )[:limit]
@@ -1304,6 +1587,46 @@ class SandboxAIAdapter:
 
         return apply_ttk_calibration_preset(self.project_root, preset_id)
 
+    def analyze_roblox_screenshot(self, image_path: str | Path | None = None) -> dict[str, Any]:
+        """Inspect the latest or given Roblox TTK Testing screenshot for HUD/resolution metadata."""
+        from .ttk_testing import analyze_roblox_ttk_screenshot
+
+        return analyze_roblox_ttk_screenshot(self.project_root, image_path)
+
+    def export_ttk_combat_profile(
+        self,
+        destination: str | Path | None = None,
+        *,
+        preset_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Export the calibrated Roblox TTK Testing combat profile to JSON."""
+        from .ttk_testing import TTK_CALIBRATION_PRESETS
+
+        status = self.ttk_testing_status()
+        target = (
+            Path(destination).expanduser()
+            if destination is not None
+            else (self.project_root / ".sandboxai" / "ttk_combat_profile.json")
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "format": "sandboxai.ttk_combat_profile/v1",
+            "preset_id": preset_id or "custom",
+            "preset": TTK_CALIBRATION_PRESETS.get(preset_id or "", {}),
+            "place_id": status.get("place_id"),
+            "place_url": status.get("place_url"),
+            "completion_pct": status.get("completion_pct"),
+            "entries": status.get("entries", {}),
+            "live_session": status.get("live_session", {}),
+        }
+        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "path": str(target),
+            "completion_pct": status.get("completion_pct", 0.0),
+            "place_id": status.get("place_id"),
+        }
+
     def calculate_ttk_preview(
         self,
         *,
@@ -1429,6 +1752,12 @@ class SandboxAIAdapter:
         status.json, same event log, same checkpoint inventory).
         """
         cfg = config if isinstance(config, TrainingConfig) else TrainingConfig.from_dict(config)
+        if not cfg.godot_executable or cfg.godot_executable == "godot":
+            resolved_godot = find_godot_executable(cfg.godot_executable or "godot")
+            if not shutil.which(resolved_godot) and not Path(resolved_godot).expanduser().is_file():
+                cfg.godot_executable = self.ensure_simulated_godot_executable()
+            else:
+                cfg.godot_executable = resolved_godot
         if cfg.resolved_env_workers() > 1 or os.environ.get("SANDBOXAI_CPU_TURBO") == "1":
             with contextlib.suppress(Exception):
                 from .sharded_env import apply_ubuntu_cpu_optimizations

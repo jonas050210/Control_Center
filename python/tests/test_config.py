@@ -285,6 +285,18 @@ class GodotExecutableResolutionTests(unittest.TestCase):
         with mock.patch("sandboxai.config._GODOT_CANDIDATES", ()):
             self.assertEqual(find_godot_executable("godot"), "godot")
 
+    def test_discovers_godot_in_user_onedrive_desktop(self):
+        fake_home = Path(self._tmp.name) / "user_home"
+        desktop = fake_home / "OneDrive" / "Desktop"
+        desktop.mkdir(parents=True, exist_ok=True)
+        binary = desktop / "Godot_v4.6.2-stable_win64_console.exe"
+        binary.touch()
+        with (
+            mock.patch("sandboxai.config.Path.home", return_value=fake_home),
+            mock.patch.dict(os.environ, {"USERPROFILE": str(fake_home)}, clear=False),
+        ):
+            self.assertEqual(find_godot_executable("godot"), str(binary))
+
 
 class TimeBudgetConfigTests(unittest.TestCase):
     """`max_train_minutes` is the trainer's own wall-clock budget."""

@@ -363,12 +363,14 @@ def test_telemetry_series_missing_run_reports_unavailable(tmp_path):
 
 
 def test_system_status_reports_real_dependency_and_godot_fields(tmp_path):
+    from optional_deps import HAS_NUMPY
+
     adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
     status = adapter.system_status()
     assert status["python"] == sys.executable
     assert "godot_available" in status
     assert "godot_version" in status
-    assert status["dependencies"]["numpy"] is True
+    assert status["dependencies"]["numpy"] is HAS_NUMPY
 
 
 def test_start_training_rejects_invalid_config(tmp_path):
@@ -821,3 +823,22 @@ def test_ttk_evidence_is_the_static_manifest(tmp_path):
     # No Roblox probing happens for the Stats page: an empty project has no
     # calibration file and the call still succeeds.
     assert adapter.ttk_calibration_notes() == {}
+
+
+def test_export_run_report_and_ttk_combat_profile(tmp_path):
+    output_root = tmp_path / "training"
+    run_dir = _write_run(output_root, "run-export", checkpoints=["latest.zip", "best_eval.zip"])
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=output_root)
+
+    report_res = adapter.export_run_report(run_dir)
+    assert report_res["ok"] is True
+    assert Path(report_res["path"]).is_file()
+    assert "SandboxAI Run Report" in report_res["markdown"]
+
+    ttk_res = adapter.export_ttk_combat_profile(preset_id="assault_rifle_standard")
+    assert ttk_res["ok"] is True
+    assert Path(ttk_res["path"]).is_file()
+    payload = json.loads(Path(ttk_res["path"]).read_text(encoding="utf-8"))
+    assert payload["format"] == "sandboxai.ttk_combat_profile/v1"
+    assert payload["preset_id"] == "assault_rifle_standard"
+

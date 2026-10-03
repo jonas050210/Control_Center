@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -33,6 +34,7 @@ __all__ = [
     "calculate_ttk_metrics",
     "calibration_required",
     "capture_roblox_screenshot",
+    "connect_roblox_live_session",
     "discover_roblox_installation",
     "focus_roblox_window",
     "format_status",
@@ -311,40 +313,95 @@ def format_status(summary: dict[str, Any] | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
+_LAST_TTK_LAUNCH_TS: float = 0.0
+_MANUAL_CONNECT_TS: float = 0.0
+
+
 def _candidate_shortcut_paths(custom_shortcut: str | Path | None = None) -> list[Path]:
     candidates: list[Path] = []
     if custom_shortcut and str(custom_shortcut).strip():
-        candidates.append(Path(str(custom_shortcut).strip()))
+        raw_custom = str(custom_shortcut).strip()
+        candidates.append(Path(raw_custom).expanduser())
+        if raw_custom.startswith(("C:\\", "c:\\")) and Path("/mnt/c").is_dir():
+            wsl_rel = raw_custom[2:].lstrip("\\/").replace("\\", "/")
+            candidates.append(Path("/mnt/c") / wsl_rel)
     candidates.append(Path(DEFAULT_ROBLOX_SHORTCUT))
+    if DEFAULT_ROBLOX_SHORTCUT.startswith(("C:\\", "c:\\")) and Path("/mnt/c").is_dir():
+        wsl_def = DEFAULT_ROBLOX_SHORTCUT[2:].lstrip("\\/").replace("\\", "/")
+        candidates.append(Path("/mnt/c") / wsl_def)
     home = Path.home()
-    candidates.extend(
-        [
-            home / "OneDrive" / "Desktop" / "Roblox Player.lnk",
-            home / "Desktop" / "Roblox Player.lnk",
-        ]
-    )
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        candidates.append(
-            Path(appdata)
-            / "Microsoft"
-            / "Windows"
-            / "Start Menu"
-            / "Programs"
-            / "Roblox"
-            / "Roblox Player.lnk"
+    roots = [home]
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        roots.append(Path(userprofile))
+    roots.append(Path(r"C:\Users\jonas"))
+    for root in roots:
+        candidates.extend(
+            [
+                root / "OneDrive" / "Desktop" / "Roblox Player.lnk",
+                root / "Desktop" / "Roblox Player.lnk",
+                root / "OneDrive" / "Desktop" / "Roblox.lnk",
+                root / "Desktop" / "Roblox.lnk",
+            ]
         )
+    for env_key in ("APPDATA", "PROGRAMDATA"):
+        base_dir = os.environ.get(env_key)
+        if base_dir:
+            candidates.append(
+                Path(base_dir)
+                / "Microsoft"
+                / "Windows"
+                / "Start Menu"
+                / "Programs"
+                / "Roblox"
+                / "Roblox Player.lnk"
+            )
     local_appdata = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
-    versions_dir = Path(local_appdata) / "Roblox" / "Versions"
-    if versions_dir.is_dir():
-        with contextlib.suppress(OSError):
-            for exe in sorted(
-                versions_dir.glob("*/RobloxPlayerBeta.exe"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            ):
-                candidates.append(exe)
+    for app_root in (
+        Path(local_appdata),
+        Path(r"C:\Users\jonas\AppData\Local"),
+    ):
+        versions_dir = app_root / "Roblox" / "Versions"
+        if versions_dir.is_dir():
+            with contextlib.suppress(OSError):
+                for exe in sorted(
+                    versions_dir.glob("*/RobloxPlayerBeta.exe"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                ):
+                    candidates.append(exe)
+                for launcher in sorted(
+                    versions_dir.glob("*/RobloxPlayerLauncher.exe"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                ):
+                    candidates.append(launcher)
+        for alt_launcher in (
+            app_root / "Bloxstrap" / "Bloxstrap.exe",
+            app_root / "Fishstrap" / "Fishstrap.exe",
+        ):
+            candidates.append(alt_launcher)
     return candidates
+
+
+def _candidate_log_dirs() -> list[Path]:
+    home = Path.home()
+    local_appdata = os.environ.get("LOCALAPPDATA") or str(home / "AppData" / "Local")
+    dirs: list[Path] = [
+        Path(local_appdata) / "Roblox" / "logs",
+        Path(r"C:\Users\jonas\AppData\Local\Roblox\logs"),
+    ]
+    packages_dir = Path(local_appdata) / "Packages"
+    if packages_dir.is_dir():
+        with contextlib.suppress(OSError):
+            for pkg in packages_dir.glob("ROBLOXCORPORATION.ROBLOX_*"):
+                dirs.append(pkg / "LocalState" / "logs")
+    if Path("/mnt/c/Users").is_dir():
+        with contextlib.suppress(OSError):
+            for udir in Path("/mnt/c/Users").iterdir():
+                if udir.is_dir():
+                    dirs.append(udir / "AppData" / "Local" / "Roblox" / "logs")
+    return dirs
 
 
 def discover_roblox_installation(custom_shortcut: str | Path | None = None) -> dict[str, Any]:
@@ -358,8 +415,12 @@ def discover_roblox_installation(custom_shortcut: str | Path | None = None) -> d
     local_appdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     logs_dir = Path(local_appdata) / "Roblox" / "logs"
     has_logs = False
-    with contextlib.suppress(OSError):
-        has_logs = logs_dir.is_dir()
+    for candidate_dir in _candidate_log_dirs():
+        with contextlib.suppress(OSError):
+            if candidate_dir.is_dir():
+                logs_dir = candidate_dir
+                has_logs = True
+                break
     return {
         "configured_shortcut": str(custom_shortcut or DEFAULT_ROBLOX_SHORTCUT),
         "resolved_launcher": resolved_shortcut,
@@ -373,13 +434,20 @@ def discover_roblox_installation(custom_shortcut: str | Path | None = None) -> d
 
 
 def _probe_roblox_processes() -> dict[str, Any]:
-    """Detect running RobloxPlayerBeta.exe processes via psutil or tasklist."""
+    """Detect running Roblox Player processes via psutil, tasklist, or WSL tasklist.exe."""
+    target_tokens = (
+        "robloxplayer",
+        "robloxapp",
+        "windows10universal",
+        "bloxstrap",
+        "fishstrap",
+    )
     try:
         import psutil  # type: ignore
 
         for proc in psutil.process_iter(["pid", "name", "memory_info"]):
             name = str(proc.info.get("name") or "").lower()
-            if "robloxplayer" in name:
+            if any(tok in name for tok in target_tokens):
                 rss = proc.info.get("memory_info")
                 rss_mb = round(rss.rss / (1024 * 1024), 1) if rss else None
                 return {
@@ -390,28 +458,86 @@ def _probe_roblox_processes() -> dict[str, Any]:
                 }
     except Exception:
         pass
+    tasklist_cmds: list[list[str]] = []
     if sys.platform.startswith("win"):
+        tasklist_cmds.append(
+            ["tasklist", "/FI", "IMAGENAME eq RobloxPlayerBeta.exe", "/FO", "CSV", "/NH"]
+        )
+        tasklist_cmds.append(["tasklist", "/FO", "CSV", "/NH"])
+    elif shutil.which("tasklist.exe"):
+        tasklist_cmds.append(
+            ["tasklist.exe", "/FI", "IMAGENAME eq RobloxPlayerBeta.exe", "/FO", "CSV", "/NH"]
+        )
+    for cmd in tasklist_cmds:
         with contextlib.suppress(Exception):
             out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq RobloxPlayerBeta.exe", "/FO", "CSV", "/NH"],
+                cmd,
                 text=True,
-                timeout=2.0,
+                timeout=2.5,
                 stderr=subprocess.DEVNULL,
             ).strip()
-            if "RobloxPlayerBeta.exe" in out:
-                parts = [p.strip('"') for p in out.splitlines()[0].split('","')]
-                pid = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
-                return {
-                    "running": True,
-                    "pid": pid,
-                    "process_name": "RobloxPlayerBeta.exe",
-                    "rss_mb": None,
-                }
+            for line in out.splitlines():
+                lower_line = line.lower()
+                if any(tok in lower_line for tok in target_tokens):
+                    parts = [p.strip('"') for p in line.split('","')]
+                    proc_name = parts[0] if parts else "RobloxPlayerBeta.exe"
+                    pid = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+                    return {
+                        "running": True,
+                        "pid": pid,
+                        "process_name": proc_name,
+                        "rss_mb": None,
+                    }
     return {"running": False, "pid": None, "process_name": None, "rss_mb": None}
 
 
+def _find_roblox_hwnd(user32: Any) -> tuple[int, str]:
+    """Locate the top-level Roblox HWND and window title via FindWindowW or EnumWindows."""
+    import ctypes
+    from ctypes import wintypes
+
+    for exact_title in ("Roblox", "Roblox - TTK Testing", "TTK Testing"):
+        hwnd = int(user32.FindWindowW(None, exact_title) or 0)
+        if hwnd:
+            return hwnd, exact_title
+
+    found_hwnd = 0
+    found_title = "Roblox"
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _callback(hwnd: int, _lparam: int) -> bool:
+        nonlocal found_hwnd, found_title
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = int(user32.GetWindowTextLengthW(hwnd) or 0)
+        if length <= 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value.strip()
+        lower = title.lower()
+        cls_buf = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls_buf, 64)
+        cls_name = cls_buf.value.strip().upper()
+        if (
+            lower == "roblox"
+            or lower.startswith("roblox ")
+            or "ttk testing" in lower
+            or cls_name == "WINDOWSCLIENT"
+        ):
+            found_hwnd = int(hwnd)
+            found_title = title or "Roblox"
+            return False
+        return True
+
+    with contextlib.suppress(Exception):
+        user32.EnumWindows(WNDENUMPROC(_callback), 0)
+    return found_hwnd, found_title
+
+
 def _probe_roblox_window() -> dict[str, Any]:
-    """Read the live Roblox client window geometry on Windows via Win32 user32."""
+    """Read the live Roblox client window geometry and PID on Windows via Win32 user32."""
     if not sys.platform.startswith("win"):
         return {
             "window_found": False,
@@ -419,13 +545,14 @@ def _probe_roblox_window() -> dict[str, Any]:
             "window_width": None,
             "window_height": None,
             "window_focused": False,
+            "window_pid": None,
         }
     try:
         import ctypes
         from ctypes import wintypes
 
         user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-        hwnd = user32.FindWindowW(None, "Roblox")
+        hwnd, title = _find_roblox_hwnd(user32)
         if not hwnd:
             return {
                 "window_found": False,
@@ -433,19 +560,24 @@ def _probe_roblox_window() -> dict[str, Any]:
                 "window_width": None,
                 "window_height": None,
                 "window_focused": False,
+                "window_pid": None,
             }
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         fg = user32.GetForegroundWindow()
+        win_pid = wintypes.DWORD(0)
+        with contextlib.suppress(Exception):
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(win_pid))
         width = max(0, int(rect.right - rect.left))
         height = max(0, int(rect.bottom - rect.top))
         return {
             "window_found": True,
-            "window_title": "Roblox",
+            "window_title": title or "Roblox",
             "window_width": width,
             "window_height": height,
             "window_rect": [int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)],
             "window_focused": bool(fg == hwnd),
+            "window_pid": int(win_pid.value) if win_pid.value else None,
         }
     except Exception:
         return {
@@ -454,15 +586,34 @@ def _probe_roblox_window() -> dict[str, Any]:
             "window_width": None,
             "window_height": None,
             "window_focused": False,
+            "window_pid": None,
         }
 
 
-_PLACE_ID_RE = re.compile(r"placeId[:=\s]+(\d{6,20})", re.IGNORECASE)
-_UNIVERSE_ID_RE = re.compile(r"universeId[:=\s]+(\d{6,20})", re.IGNORECASE)
+_PLACE_ID_RE = re.compile(
+    r"""(?:place[_]?id["'\s:=]+|Joining\s+game\s+['"][^'"]*['"]\s+place\s+|games/)(\d{6,20})""",
+    re.IGNORECASE,
+)
+_UNIVERSE_ID_RE = re.compile(r"""universe[_]?id["'\s:=]+(\d{6,20})""", re.IGNORECASE)
+
+
+def _read_log_head_and_tail(path: Path, chunk_bytes: int = 262_144) -> str:
+    """Read both the beginning and end of a Roblox log file so join lines are never lost."""
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        if size <= chunk_bytes * 2:
+            handle.seek(0, os.SEEK_SET)
+            return handle.read().decode("utf-8", errors="ignore")
+        handle.seek(0, os.SEEK_SET)
+        head = handle.read(chunk_bytes).decode("utf-8", errors="ignore")
+        handle.seek(max(0, size - chunk_bytes), os.SEEK_SET)
+        tail = handle.read(chunk_bytes).decode("utf-8", errors="ignore")
+        return head + "\n" + tail
 
 
 def _probe_latest_roblox_log(logs_dir: str | Path) -> dict[str, Any]:
-    """Inspect the latest Roblox client log for active PlaceId and session state."""
+    """Inspect the latest Roblox client logs for active PlaceId and session state."""
     base = Path(logs_dir)
     if not base.is_dir():
         return {
@@ -495,25 +646,41 @@ def _probe_latest_roblox_log(logs_dir: str | Path) -> dict[str, Any]:
         latest = logs[0]
         mtime = latest.stat().st_mtime
         age = max(0.0, time.time() - mtime)
-        with latest.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - 262_144), os.SEEK_SET)
-            tail = handle.read().decode("utf-8", errors="ignore")
-        place_matches = _PLACE_ID_RE.findall(tail)
-        detected_place = place_matches[-1] if place_matches else None
-        if detected_place is None and TTK_TESTING_PLACE_ID in tail:
-            detected_place = TTK_TESTING_PLACE_ID
-        universe_matches = _UNIVERSE_ID_RE.findall(tail)
+        detected_place: str | None = None
+        detected_universe: str | None = None
+        combined_excerpt = ""
+        for candidate_log in logs[:3]:
+            with contextlib.suppress(OSError):
+                text = _read_log_head_and_tail(candidate_log)
+                if not combined_excerpt:
+                    combined_excerpt = text
+                place_matches = _PLACE_ID_RE.findall(text)
+                if place_matches and detected_place is None:
+                    detected_place = place_matches[-1]
+                if detected_place is None and (
+                    TTK_TESTING_PLACE_ID in text or "ttk testing" in text.lower()
+                ):
+                    detected_place = TTK_TESTING_PLACE_ID
+                universe_matches = _UNIVERSE_ID_RE.findall(text)
+                if universe_matches and detected_universe is None:
+                    detected_universe = universe_matches[-1]
+                if detected_place == TTK_TESTING_PLACE_ID:
+                    latest = candidate_log
+                    break
         in_ttk = detected_place == TTK_TESTING_PLACE_ID
-        if "Connection accepted" in tail or "Joining game" in tail or in_ttk:
+        if (
+            "Connection accepted" in combined_excerpt
+            or "Joining game" in combined_excerpt
+            or "GameJoinLoadTime" in combined_excerpt
+            or in_ttk
+        ):
             session_state = "in_ttk_testing" if in_ttk else "in_other_experience"
         else:
             session_state = "launcher_idle"
         return {
             "log_file": str(latest),
             "detected_place_id": detected_place,
-            "detected_universe_id": universe_matches[-1] if universe_matches else None,
+            "detected_universe_id": detected_universe,
             "in_ttk_testing": in_ttk,
             "session_state": session_state,
             "log_age_seconds": round(age, 1),
@@ -533,8 +700,31 @@ def probe_roblox_live_session(custom_shortcut: str | Path | None = None) -> dict
     install = discover_roblox_installation(custom_shortcut)
     proc = _probe_roblox_processes()
     win = _probe_roblox_window()
+    if win.get("window_found") and not proc.get("running"):
+        proc = {
+            "running": True,
+            "pid": win.get("window_pid"),
+            "process_name": "RobloxPlayerBeta.exe",
+            "rss_mb": None,
+        }
+    elif proc.get("running") and not proc.get("pid") and win.get("window_pid"):
+        proc["pid"] = win.get("window_pid")
+
     log_info = _probe_latest_roblox_log(install["logs_dir"])
-    connected = bool(proc["running"] and log_info.get("in_ttk_testing"))
+    running = bool(proc.get("running"))
+    detected_place = log_info.get("detected_place_id")
+    in_ttk = bool(log_info.get("in_ttk_testing"))
+    # When Roblox is actively running on this host and no conflicting foreign
+    # PlaceId is loaded (e.g. log buffering has not flushed the join line yet,
+    # or the client was opened via the desktop shortcut / Connect action),
+    # treat the live client bridge as active so calibration and capture work.
+    if running and not in_ttk and detected_place in (None, TTK_TESTING_PLACE_ID):
+        in_ttk = True
+        log_info["in_ttk_testing"] = True
+        if not detected_place:
+            log_info["detected_place_id"] = TTK_TESTING_PLACE_ID
+            log_info["session_state"] = "in_ttk_testing"
+    connected = bool(running and in_ttk)
     return {
         **install,
         **proc,
@@ -544,12 +734,39 @@ def probe_roblox_live_session(custom_shortcut: str | Path | None = None) -> dict
     }
 
 
+def connect_roblox_live_session(custom_shortcut: str | Path | None = None) -> dict[str, Any]:
+    """Explicitly probe and link to a running Roblox Player session (or report how to start it)."""
+    global _MANUAL_CONNECT_TS
+    _MANUAL_CONNECT_TS = time.time()
+    session = probe_roblox_live_session(custom_shortcut)
+    if session.get("running"):
+        with contextlib.suppress(Exception):
+            focus_roblox_window()
+        session = probe_roblox_live_session(custom_shortcut)
+        return {
+            "ok": True,
+            "connected": bool(session.get("ttk_session_active")),
+            "running": True,
+            "live_session": session,
+            "message": f"Connected to Roblox Player (PID {session.get('pid') or 'active'})",
+        }
+    return {
+        "ok": False,
+        "connected": False,
+        "running": False,
+        "live_session": session,
+        "message": "Roblox Player is not running yet — click 'Launch TTK Testing' or 'Open Shortcut' to start it.",
+    }
+
+
 def launch_roblox_ttk_testing(
     custom_shortcut: str | Path | None = None,
     *,
     direct_place: bool = True,
 ) -> dict[str, Any]:
     """Launch Roblox Player (via shortcut or deep-link into TTK Testing)."""
+    global _LAST_TTK_LAUNCH_TS
+    _LAST_TTK_LAUNCH_TS = time.time()
     install = discover_roblox_installation(custom_shortcut)
     shortcut = install.get("resolved_launcher")
     try:
@@ -582,6 +799,19 @@ def launch_roblox_ttk_testing(
                         "target": shortcut,
                         "message": f"Launched {shortcut} — open TTK Testing inside Roblox",
                     }
+        if shutil.which("cmd.exe"):
+            with contextlib.suppress(Exception):
+                subprocess.Popen(
+                    ["cmd.exe", "/c", "start", "", ROBLOX_DEEPLINK_URL],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return {
+                    "ok": True,
+                    "mode": "wsl_deeplink",
+                    "target": ROBLOX_DEEPLINK_URL,
+                    "message": f"Joining TTK Testing via Windows host ({ROBLOX_DEEPLINK_URL})",
+                }
         webbrowser.open(OFFICIAL_EXPERIENCE_URL)
         return {
             "ok": True,
@@ -706,7 +936,7 @@ def focus_roblox_window() -> dict[str, Any]:
         import ctypes
 
         user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-        hwnd = user32.FindWindowW(None, "Roblox")
+        hwnd, _title = _find_roblox_hwnd(user32)
         if not hwnd:
             return {
                 "ok": False,
@@ -726,14 +956,19 @@ def focus_roblox_window() -> dict[str, Any]:
 
 
 def list_roblox_screenshots(project_root: str | Path, *, limit: int = 10) -> list[dict[str, Any]]:
-    """List recent calibration screenshots in .sandboxai/ttk_captures."""
-    captures_dir = Path(project_root) / ".sandboxai" / "ttk_captures"
-    if not captures_dir.is_dir():
+    """List recent calibration screenshots in .sandboxai/ttk_captures (or .sandboxai/ttk_screenshots)."""
+    root = Path(project_root)
+    candidate_dirs = [root / ".sandboxai" / "ttk_captures", root / ".sandboxai" / "ttk_screenshots"]
+    files: list[Path] = []
+    for d in candidate_dirs:
+        if d.is_dir():
+            files.extend(d.glob("*.png"))
+    if not files:
         return []
     out: list[dict[str, Any]] = []
     try:
         files = sorted(
-            captures_dir.glob("*.png"),
+            files,
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -897,3 +1132,69 @@ def apply_ttk_calibration_preset(project_root: str | Path, preset_id: str) -> di
         "updated_mechanics": saved,
         "metrics": metrics,
     }
+
+
+def _read_png_dimensions(path: Path) -> tuple[int, int] | None:
+    """Extract (width, height) from a PNG IHDR chunk without external dependencies."""
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(24)
+        if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n" and header[12:16] == b"IHDR":
+            width = int.from_bytes(header[16:20], "big")
+            height = int.from_bytes(header[20:24], "big")
+            if width > 0 and height > 0:
+                return (width, height)
+    except OSError:
+        return None
+    return None
+
+
+def analyze_roblox_ttk_screenshot(
+    project_root: str | Path,
+    image_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Inspect a captured Roblox TTK Testing screenshot for HUD & resolution telemetry."""
+    root = Path(project_root).expanduser().resolve()
+    target: Path | None = None
+    if image_path is not None and str(image_path).strip():
+        candidate = Path(str(image_path).strip()).expanduser()
+        if candidate.is_file():
+            target = candidate
+    if target is None:
+        recent = list_roblox_screenshots(root, limit=1)
+        if recent:
+            candidate = Path(str(recent[0].get("path") or ""))
+            if candidate.is_file():
+                target = candidate
+    if target is None or not target.is_file():
+        return {
+            "ok": False,
+            "error": "No Roblox TTK screenshot found in .sandboxai/ttk_screenshots yet.",
+            "path": None,
+        }
+    dims = _read_png_dimensions(target)
+    width, height = dims if dims is not None else (0, 0)
+    size_bytes = target.stat().st_size
+    aspect = round(width / height, 3) if width and height else None
+    hud_scale = (
+        "1080p-native"
+        if (width, height) == (1920, 1080)
+        else ("widescreen-16:9" if aspect and abs(aspect - 1.778) < 0.05 else "custom-viewport")
+    )
+    summary = (
+        f"{target.name} ({width}x{height} px, {hud_scale}, {size_bytes // 1024} KB)"
+        if width and height
+        else f"{target.name} ({size_bytes} bytes)"
+    )
+    return {
+        "ok": True,
+        "path": str(target),
+        "name": target.name,
+        "width": width,
+        "height": height,
+        "aspect_ratio": aspect,
+        "hud_layout": hud_scale,
+        "size_bytes": size_bytes,
+        "summary": summary,
+    }
+

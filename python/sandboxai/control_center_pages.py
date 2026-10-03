@@ -69,6 +69,9 @@ def state_colors(theme: Theme) -> dict[str, str]:
     }
 
 
+_resolve_run_checkpoint = vm.resolve_run_checkpoint
+
+
 # ---------------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------------
@@ -174,13 +177,21 @@ class Page(ttk.Frame):
         self._heading_pill = ttk.Label(row, text="", style="Pill.TLabel")
         self._heading_pill.pack(side="right")
         if self.subtitle:
-            ttk.Label(
+            sub_lbl = ttk.Label(
                 header,
                 text=self.subtitle,
                 style="PageSubtitle.TLabel",
                 justify="left",
-                wraplength=self.app.px(1180, minimum=420),
-            ).pack(anchor="w", fill="x", pady=(self.app.px(4, minimum=2), 0))
+                wraplength=self.app.px(1180, minimum=360),
+            )
+            sub_lbl.pack(anchor="w", fill="x", pady=(self.app.px(4, minimum=2), 0))
+            header.bind(
+                "<Configure>",
+                lambda evt, lbl=sub_lbl: lbl.configure(
+                    wraplength=max(240, int(getattr(evt, "width", 600) or 600) - 24)
+                ),
+                add="+",
+            )
         tk.Frame(header, height=1, background=self.palette.border, borderwidth=0).pack(
             fill="x", pady=(self.app.px(10, minimum=6), 0)
         )
@@ -194,7 +205,7 @@ class Page(ttk.Frame):
             style="Hint.TLabel",
             justify="left",
             anchor="w",
-            wraplength=self.app.px(1180, minimum=420),
+            wraplength=self.app.px(1180, minimum=360),
         )
 
     def set_hint(self, text: str) -> None:
@@ -632,21 +643,43 @@ class DashboardPage(Page):
             card.body,
             text="Probing Roblox Player & TTK Testing…",
             style="FieldTitle.TLabel",
-            wraplength=280,
+            wraplength=self.app.px(320, minimum=200),
+            justify="left",
         )
-        self.roblox_bridge_label.pack(anchor="w", pady=(0, self.app.px(8, minimum=4)))
+        self.roblox_bridge_label.pack(anchor="w", fill="x", pady=(0, self.app.px(8, minimum=4)))
+        card.body.bind(
+            "<Configure>",
+            lambda evt: self.roblox_bridge_label.configure(
+                wraplength=max(180, int(getattr(evt, "width", 320) or 320) - 16)
+            ),
+            add="+",
+        )
         buttons = ttk.Frame(card.body, style="CardInner.TFrame")
         buttons.pack(fill="x")
-        for label, command, style in (
+        buttons.columnconfigure(0, weight=1, uniform="wfbtn")
+        buttons.columnconfigure(1, weight=1, uniform="wfbtn")
+        workflow_actions = (
             ("Launch TTK Testing", self._launch_roblox_ttk, "Primary.TButton"),
+            ("Connect Roblox", self._connect_roblox_ttk, "TButton"),
+            ("Open Shortcut (.lnk)", self._launch_roblox_shortcut, "Ghost.TButton"),
             ("Focus window", self._focus_roblox_window, "Ghost.TButton"),
             ("Screenshot", self._capture_roblox_window, "Ghost.TButton"),
+            ("Analyze HUD", self._analyze_roblox_screenshot, "Ghost.TButton"),
+            ("Export TTK profile", self._export_roblox_ttk_profile, "Ghost.TButton"),
             ("CPU turbo", self._enable_ubuntu_cpu_turbo, "Ghost.TButton"),
+            ("Start benchmark", self._start_benchmark_from_dashboard, "Primary.TButton"),
+            ("Quick start agent", self._quick_start_agent_from_dashboard, "Primary.TButton"),
             ("Run benchmark", lambda: self.app.show_page("Benchmarks"), "TButton"),
             ("Open training", lambda: self.app.show_page("Training"), "TButton"),
-        ):
-            ttk.Button(buttons, text=label, command=command, style=style).pack(
-                fill="x", pady=self.app.px(2, minimum=1)
+        )
+        for idx, (label, command, style) in enumerate(workflow_actions):
+            r, c = divmod(idx, 2)
+            ttk.Button(buttons, text=label, command=command, style=style).grid(
+                row=r,
+                column=c,
+                sticky="ew",
+                padx=(0 if c == 0 else self.app.px(4, minimum=2), 0),
+                pady=self.app.px(2, minimum=1),
             )
         return card
 
@@ -702,6 +735,7 @@ class DashboardPage(Page):
             ("Open in Runs / Checkpoints", self._open_in_runs),
             ("Resume latest in Training", self._resume_in_training),
             ("Evaluate best checkpoint", self._evaluate_latest_best),
+            ("Export run report (.md)", self._export_latest_run_report),
         ):
             ttk.Button(card.body, text=label, command=command, style="Ghost.TButton").pack(
                 fill="x", pady=self.app.px(2, minimum=1)
@@ -710,12 +744,24 @@ class DashboardPage(Page):
 
     # -- polling ----------------------------------------------------------
 
+    def _configured_roblox_shortcut(self) -> str | None:
+        settings_page = self.app.pages.get("Settings")
+        if settings_page is not None and hasattr(settings_page, "roblox_shortcut_var"):
+            with contextlib.suppress(Exception):
+                val = str(settings_page.roblox_shortcut_var.get() or "").strip()
+                if val:
+                    return val
+        return None
+
     def refresh(self) -> None:
         self.submit_poll("dashboard", self.adapter.dashboard_snapshot, self._on_snapshot)
         self.submit_poll("agents-summary", self.adapter.agents.views, self._on_agents_summary)
         if hasattr(self.adapter, "ttk_testing_status"):
+            shortcut = self._configured_roblox_shortcut()
             self.submit_poll(
-                "roblox-bridge", self.adapter.ttk_testing_status, self._on_roblox_status
+                "roblox-bridge",
+                lambda: self.adapter.ttk_testing_status(shortcut),
+                self._on_roblox_status,
             )
 
     def _on_roblox_status(self, status: dict[str, Any] | None, error: BaseException | None) -> None:
@@ -737,6 +783,7 @@ class DashboardPage(Page):
     def _launch_roblox_ttk(self) -> None:
         if not hasattr(self.adapter, "launch_roblox_ttk_testing"):
             return
+        shortcut = self._configured_roblox_shortcut()
 
         def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
             if error is not None or not result or not result.get("ok"):
@@ -747,7 +794,58 @@ class DashboardPage(Page):
                 self.app.set_status(str(result.get("message") or "Launched Roblox TTK Testing"))
             self.refresh()
 
-        self.app.background.submit(self.adapter.launch_roblox_ttk_testing, _done)
+        self.app.background.submit(
+            lambda: self.adapter.launch_roblox_ttk_testing(shortcut, direct_place=True), _done
+        )
+
+    def _launch_roblox_shortcut(self) -> None:
+        if not hasattr(self.adapter, "launch_roblox_ttk_testing"):
+            return
+        shortcut = self._configured_roblox_shortcut()
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result or not result.get("ok"):
+                self.app.set_status(
+                    f"Shortcut launch failed: {error or (result or {}).get('error')}", error=True
+                )
+            else:
+                self.app.set_status(str(result.get("message") or "Launched Roblox shortcut"))
+            self.refresh()
+
+        self.app.background.submit(
+            lambda: self.adapter.launch_roblox_ttk_testing(shortcut, direct_place=False), _done
+        )
+
+    def _connect_roblox_ttk(self) -> None:
+        if not hasattr(self.adapter, "connect_roblox_ttk_testing"):
+            return
+        shortcut = self._configured_roblox_shortcut()
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not result:
+                self.app.set_status(f"Roblox probe failed: {error}", error=True)
+            else:
+                self.app.set_status(
+                    str(result.get("message") or "Probed Roblox session"),
+                    error=not bool(result.get("ok")),
+                )
+            self.refresh()
+
+        self.app.background.submit(
+            lambda: self.adapter.connect_roblox_ttk_testing(shortcut), _done
+        )
+
+    def _start_benchmark_from_dashboard(self) -> None:
+        self.app.show_page("Benchmarks")
+        bench_page = self.app.pages.get("Benchmarks")
+        if bench_page is not None and hasattr(bench_page, "_start"):
+            bench_page._start()
+
+    def _quick_start_agent_from_dashboard(self) -> None:
+        self.app.show_page("Training")
+        train_page = self.app.pages.get("Training")
+        if train_page is not None and hasattr(train_page, "_quick_launch_agent"):
+            train_page._quick_launch_agent()
 
     def _focus_roblox_window(self) -> None:
         if not hasattr(self.adapter, "focus_roblox_window"):
@@ -962,29 +1060,64 @@ class DashboardPage(Page):
         if not self._last_run_dir:
             messagebox.showinfo("No run yet", "No training run found to resume.")
             return
-        latest = Path(self._last_run_dir) / "checkpoints" / "latest.zip"
-        best = Path(self._last_run_dir) / "checkpoints" / "best.zip"
-        ckpt = latest if latest.is_file() else (best if best.is_file() else None)
+        ckpt = _resolve_run_checkpoint(self._last_run_dir, prefer_best=False)
         self.app.show_page("Training")
         page = self.app.pages.get("Training")
         if page is not None and ckpt is not None and hasattr(page, "resume_checkpoint_var"):
             page.resume_checkpoint_var.set(str(ckpt))
             self.app.set_status(f"Selected checkpoint for resume: {ckpt}")
+        elif ckpt is None:
+            self.app.set_status("Run has no checkpoint yet; ready for fresh launch")
 
     def _evaluate_latest_best(self) -> None:
         if not self._last_run_dir:
             messagebox.showinfo("No run yet", "No training run found to evaluate.")
             return
-        best = Path(self._last_run_dir) / "checkpoints" / "best.zip"
-        latest = Path(self._last_run_dir) / "checkpoints" / "latest.zip"
-        target = best if best.is_file() else (latest if latest.is_file() else None)
+        target = _resolve_run_checkpoint(self._last_run_dir, prefer_best=True)
         if target is None:
             messagebox.showinfo(
-                "No checkpoint yet", "This run has neither best.zip nor latest.zip yet."
+                "No checkpoint yet",
+                "This run has neither best_eval.zip nor latest.zip yet.",
             )
             return
         self.app.show_page("Evaluations")
         self.app.pages["Evaluations"].select_checkpoint(str(target))
+
+    def _export_latest_run_report(self) -> None:
+        if not self._last_run_dir:
+            messagebox.showinfo("No run yet", "No training run found to export.")
+            return
+        if not hasattr(self.adapter, "export_run_report"):
+            return
+        try:
+            res = self.adapter.export_run_report(self._last_run_dir)
+        except Exception as exc:
+            self.app.set_status(f"Run report export failed: {exc}", error=True)
+            return
+        self.app.set_status(f"Exported run report: {res.get('path')}", toast=True)
+
+    def _export_roblox_ttk_profile(self) -> None:
+        if not hasattr(self.adapter, "export_ttk_combat_profile"):
+            return
+        try:
+            res = self.adapter.export_ttk_combat_profile()
+        except Exception as exc:
+            self.app.set_status(f"TTK profile export failed: {exc}", error=True)
+            return
+        self.app.set_status(f"Exported TTK combat profile: {res.get('path')}", toast=True)
+
+    def _analyze_roblox_screenshot(self) -> None:
+        if not hasattr(self.adapter, "analyze_roblox_screenshot"):
+            return
+        try:
+            res = self.adapter.analyze_roblox_screenshot()
+        except Exception as exc:
+            self.app.set_status(f"HUD analysis failed: {exc}", error=True)
+            return
+        if not res.get("ok"):
+            self.app.set_status(str(res.get("error") or "No screenshot found"), error=True)
+            return
+        self.app.set_status(f"TTK HUD analysis: {res.get('summary')}", toast=True)
 
 
 class TrainingPage(Page):
@@ -1118,6 +1251,32 @@ class TrainingPage(Page):
         basic_frame.pack(fill="x")
         self._build_fields(basic_frame, vm.launch_field_specs(), defaults)
 
+        # ---- PPO Optimizer & Learning Rate Efficiency ------------------
+        optimizer_header = ttk.Frame(form_frame, style="CardInner.TFrame")
+        optimizer_header.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
+        ttk.Label(
+            optimizer_header,
+            text="PPO Optimizer & Learning Rate Efficiency:",
+            style="FieldTitle.TLabel",
+        ).pack(side="left", padx=(0, 8))
+        for preset_key, preset_data in vm.PPO_EFFICIENCY_PRESETS.items():
+            ttk.Button(
+                optimizer_header,
+                text=preset_data["label"],
+                style="Ghost.TButton",
+                command=lambda k=preset_key: self._apply_ppo_efficiency_preset(k),  # type: ignore[misc]
+            ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            optimizer_header,
+            text="⚡ Auto-tune LR for topology",
+            style="Primary.TButton",
+            command=self._auto_tune_ppo_hyperparameters,
+        ).pack(side="left", padx=(4, 0))
+
+        optimizer_frame = ttk.Frame(form_frame, style="CardInner.TFrame")
+        optimizer_frame.pack(fill="x", pady=(self.app.px(4, minimum=2), 0))
+        self._build_fields(optimizer_frame, vm.optimizer_field_specs(), defaults)
+
         # ---- Budget: Steps | Time -------------------------------------
         budget_row = ttk.Frame(form_frame, style="CardInner.TFrame")
         budget_row.pack(fill="x", pady=(self.app.px(10, minimum=6), 0))
@@ -1183,35 +1342,51 @@ class TrainingPage(Page):
         ttk.Label(resume_bar, text="Resume checkpoint (optional):", style="FieldTitle.TLabel").pack(
             side="left", padx=(0, 8)
         )
-        self.resume_checkpoint_var = tk.StringVar(value="")
-        self.resume_combo = ttk.Combobox(
-            resume_bar,
-            textvariable=self.resume_checkpoint_var,
-            values=("",),
-            width=52,
-        )
-        self.resume_combo.pack(side="left")
         ttk.Button(
             resume_bar,
             text="Clear (fresh run)",
             style="Ghost.TButton",
             command=lambda: self.resume_checkpoint_var.set(""),
-        ).pack(side="left", padx=(6, 0))
+        ).pack(side="right", padx=(6, 0))
+        self.resume_checkpoint_var = tk.StringVar(value="")
+        self.resume_combo = ttk.Combobox(
+            resume_bar,
+            textvariable=self.resume_checkpoint_var,
+            values=("",),
+            width=32,
+        )
+        self.resume_combo.pack(side="left", fill="x", expand=True)
 
         launch_bar = ttk.Frame(form_frame, style="CardInner.TFrame")
         launch_bar.pack(fill="x", pady=(self.app.px(10, minimum=6), 0))
+        # Pack action buttons on the right FIRST so Tk's pack manager never
+        # allows a long status label to push Launch training off-screen.
+        self.launch_button = ttk.Button(
+            launch_bar, text="Launch training", command=self._launch, style="Primary.TButton"
+        )
+        self.launch_button.pack(side="right", padx=(self.app.px(6, minimum=4), 0))
+        self.quick_agent_button = ttk.Button(
+            launch_bar,
+            text="Quick Smoke Agent (25k)",
+            command=self._quick_launch_agent,
+            style="TButton",
+        )
+        self.quick_agent_button.pack(side="right", padx=(self.app.px(6, minimum=4), 0))
         self.launch_status_label = ttk.Label(
             launch_bar,
             text="",
             justify="left",
-            wraplength=self.app.px(760, minimum=420),
+            wraplength=self.app.px(640, minimum=260),
             style="CardLabel.TLabel",
         )
         self.launch_status_label.pack(side="left", fill="x", expand=True)
-        self.launch_button = ttk.Button(
-            launch_bar, text="Launch training", command=self._launch, style="Primary.TButton"
+        launch_bar.bind(
+            "<Configure>",
+            lambda evt: self.launch_status_label.configure(
+                wraplength=max(180, int(getattr(evt, "width", 640) or 640) - 340)
+            ),
+            add="+",
         )
-        self.launch_button.pack(side="right")
         return card
 
     def _build_runs_card(self, parent: tk.Misc) -> tk.Widget:
@@ -1230,7 +1405,9 @@ class TrainingPage(Page):
         self._apply_lifecycle_tags()
         actions = ttk.Frame(card.body, style="CardInner.TFrame")
         actions.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
-        self.pause_button = ttk.Button(actions, text="Pause", command=self._pause, state="disabled")
+        row1 = ttk.Frame(actions, style="CardInner.TFrame")
+        row1.pack(fill="x")
+        self.pause_button = ttk.Button(row1, text="Pause", command=self._pause, state="disabled")
         self.pause_button.pack(side="left")
         self._pause_tooltip = ToolTip(
             self.pause_button,
@@ -1238,35 +1415,44 @@ class TrainingPage(Page):
             bus=self.app.bus,
         )
         self.resume_button = ttk.Button(
-            actions, text="Resume", command=self._resume, state="disabled"
+            row1, text="Resume", command=self._resume, state="disabled"
         )
-        self.resume_button.pack(side="left", padx=(8, 0))
-        self.stop_button = ttk.Button(actions, text="Stop", command=self._stop, state="disabled")
-        self.stop_button.pack(side="left", padx=(8, 0))
+        self.resume_button.pack(side="left", padx=(6, 0))
+        self.stop_button = ttk.Button(row1, text="Stop", command=self._stop, state="disabled")
+        self.stop_button.pack(side="left", padx=(6, 0))
         self.restart_button = ttk.Button(
-            actions, text="Restart", command=self._restart, state="disabled"
+            row1, text="Restart", command=self._restart, state="disabled"
         )
-        self.restart_button.pack(side="left", padx=(8, 0))
+        self.restart_button.pack(side="left", padx=(6, 0))
         self.force_stop_button = ttk.Button(
-            actions,
+            row1,
             text="Force stop",
             command=self._force_stop,
             state="disabled",
             style="Danger.TButton",
         )
-        self.force_stop_button.pack(side="left", padx=(16, 0))
+        self.force_stop_button.pack(side="left", padx=(10, 0))
         self.remove_button = ttk.Button(
-            actions, text="Remove", command=self._remove, state="disabled"
+            row1, text="Remove", command=self._remove, state="disabled"
         )
-        self.remove_button.pack(side="left", padx=(8, 0))
+        self.remove_button.pack(side="left", padx=(6, 0))
+
+        row2 = ttk.Frame(actions, style="CardInner.TFrame")
+        row2.pack(fill="x", pady=(self.app.px(6, minimum=3), 0))
+        ttk.Button(
+            row2,
+            text="+ Start New Agent",
+            command=self._quick_launch_agent,
+            style="Primary.TButton",
+        ).pack(side="left")
         self.stop_all_button = ttk.Button(
-            actions, text="Stop all", command=self._stop_all, state="disabled"
+            row2, text="Stop all", command=self._stop_all, state="disabled"
         )
         self.stop_all_button.pack(side="right")
         self.clear_button = ttk.Button(
-            actions, text="Clear exited", style="Ghost.TButton", command=self._clear
+            row2, text="Clear exited", style="Ghost.TButton", command=self._clear
         )
-        self.clear_button.pack(side="right", padx=(8, 0))
+        self.clear_button.pack(side="right", padx=(6, 6))
         return card
 
     def _apply_lifecycle_tags(self) -> None:
@@ -1327,6 +1513,49 @@ class TrainingPage(Page):
         self.field_vars["total_training_steps"].set(steps)
         self._update_launch_slot(self.current_values())
 
+    def _apply_ppo_efficiency_preset(self, preset_key: str) -> None:
+        preset = vm.PPO_EFFICIENCY_PRESETS.get(preset_key)
+        if not preset:
+            return
+        self.apply_launch_values(
+            {k: v for k, v in preset.items() if k != "label"}
+        )
+        self.app.set_status(
+            f"Applied PPO efficiency preset: {preset['label']} (LR={preset['learning_rate']}, batch={preset['batch_size']}, epochs={preset['ppo_epochs']})"
+        )
+
+    def _auto_tune_ppo_hyperparameters(self) -> None:
+        values = self.current_values()
+        try:
+            envs = int(values.get("environment_count") or 8)
+        except ValueError:
+            envs = 8
+        try:
+            workers = int(values.get("env_workers") or 2)
+        except ValueError:
+            workers = 2
+        try:
+            steps = int(values.get("total_training_steps") or 100_000)
+        except ValueError:
+            steps = 100_000
+        device = str(values.get("device") or "auto")
+        rec = vm.recommend_ppo_hyperparameters(
+            environment_count=envs,
+            env_workers=workers,
+            device=device,
+            total_steps=steps,
+        )
+        self.apply_launch_values(
+            {
+                "learning_rate": str(rec["learning_rate"]),
+                "batch_size": str(rec["batch_size"]),
+                "ppo_epochs": str(rec["ppo_epochs"]),
+                "entropy_coefficient": str(rec["entropy_coefficient"]),
+                "rollout_length": str(rec["rollout_length"]),
+            }
+        )
+        self.app.set_status(str(rec["rationale"]), toast=True)
+
     def current_budget(self) -> dict[str, Any]:
         """Validated budget view for the current selector state."""
         steps_var = self.field_vars.get("total_training_steps")
@@ -1341,10 +1570,17 @@ class TrainingPage(Page):
     def _build_fields(
         self, parent: tk.Misc, specs: list[vm.TrainingFieldSpec], defaults: dict[str, str]
     ) -> None:
-        for col_index, spec in enumerate(specs):
-            parent.columnconfigure(col_index, weight=1)
-            cell = ttk.Frame(parent, style="Surface.TFrame", padding=(0, 2, 14, 2))
-            cell.grid(row=0, column=col_index, sticky="nsew")
+        max_cols = 3
+        for col in range(min(max_cols, max(1, len(specs)))):
+            parent.columnconfigure(col, weight=1, uniform="launchfields")
+        for idx, spec in enumerate(specs):
+            row_index, col_index = divmod(idx, max_cols)
+            cell = ttk.Frame(
+                parent,
+                style="Surface.TFrame",
+                padding=(0, self.app.px(2, minimum=1), self.app.px(12, minimum=6), self.app.px(4, minimum=2)),
+            )
+            cell.grid(row=row_index, column=col_index, sticky="nsew")
             ttk.Label(cell, text=spec.label, style="FieldTitle.TLabel").pack(anchor="w")
             var = self.field_vars.get(spec.name)
             if var is None:
@@ -1354,17 +1590,21 @@ class TrainingPage(Page):
                 var.set(defaults.get(spec.name, ""))
             if spec.kind == "choice" and spec.choices:
                 widget: tk.Widget = ttk.Combobox(
-                    cell, textvariable=var, values=spec.choices, state="readonly", width=18
+                    cell, textvariable=var, values=spec.choices, state="readonly", width=14
                 )
             elif spec.kind == "bool":
                 widget = ttk.Checkbutton(cell, variable=var, onvalue="true", offvalue="false")
             else:
-                widget = ttk.Entry(cell, textvariable=var, width=18)
-            widget.pack(fill="x", pady=(4, 2))
+                widget = ttk.Entry(cell, textvariable=var, width=14)
+            widget.pack(fill="x", pady=(3, 2))
             if spec.help:
                 ToolTip(widget, spec.help, bus=self.app.bus)
                 ttk.Label(
-                    cell, text=spec.help, style="FieldHelp.TLabel", wraplength=210, justify="left"
+                    cell,
+                    text=spec.help,
+                    style="FieldHelp.TLabel",
+                    wraplength=self.app.px(220, minimum=140),
+                    justify="left",
                 ).pack(anchor="w")
 
     def _browse_file(self, var: tk.StringVar) -> None:
@@ -1389,6 +1629,8 @@ class TrainingPage(Page):
             if name in self.field_vars and value is not None:
                 self.field_vars[name].set(str(value))
                 applied.append(name)
+        if applied and hasattr(self, "launch_status_label"):
+            self._update_launch_slot(self.current_values())
         return applied
 
     def _sync_optimal_benchmark(self) -> None:
@@ -1536,7 +1778,9 @@ class TrainingPage(Page):
                 budget_hint += f"   ·   {estimate}"
             text = (
                 f"AVAILABLE — {summary['environment_count']} environments / "
-                f"{summary['env_workers']} workers ({topology}) on {summary['device']}\n"
+                f"{summary['env_workers']} workers ({topology}) on {summary['device']}   ·   "
+                f"LR {summary.get('learning_rate', 3e-4):g}  ·  batch {summary.get('batch_size', 256)}  ·  "
+                f"epochs {summary.get('ppo_epochs', 10)}  ·  rollout {summary.get('resolved_rollout_length', 'auto')}\n"
                 f"Budget: {budget_hint}   ·   step cap {vm.format_number(summary['total_training_steps'])}"
             )
             for warning in slot["warnings"]:
@@ -1575,6 +1819,25 @@ class TrainingPage(Page):
     ) -> None:
         if error is not None or validation is None:
             return
+        values = self.current_values()
+        godot_override = (values.get("godot_executable") or "").strip()
+        raw_errors = list(validation.get("errors") or [])
+        if raw_errors and not godot_override:
+            non_godot_errors = [
+                err for err in raw_errors if "Godot executable" not in str(err)
+            ]
+            if len(non_godot_errors) < len(raw_errors):
+                warnings = list(validation.get("warnings") or [])
+                warnings.append(
+                    "External Godot binary not on PATH — Launch training will use the built-in "
+                    "simulated bridge fallback unless a Godot binary is configured in Settings."
+                )
+                validation = {
+                    **validation,
+                    "errors": non_godot_errors,
+                    "warnings": warnings,
+                    "valid": len(non_godot_errors) == 0,
+                }
         previous = self._compatibility
         self._compatibility = validation
         if (
@@ -1582,7 +1845,21 @@ class TrainingPage(Page):
             or previous.get("errors") != validation.get("errors")
             or previous.get("warnings") != validation.get("warnings")
         ):
+            self._update_launch_slot(values)
+
+    def _quick_launch_agent(self) -> None:
+        """One-click quick-start for a 25k smoke training agent."""
+        if self._launching:
+            return
+        slot = getattr(self, "_launch_slot", None)
+        if not slot or slot.get("state") != "AVAILABLE":
+            self._apply_step_preset("25000")
+            self.field_vars["environment_count"].set("4")
+            self.field_vars["env_workers"].set("1")
+            self.field_vars["device"].set("cpu")
+            self._compatibility = None
             self._update_launch_slot(self.current_values())
+        self._launch()
 
     def _launch(self) -> None:
         slot = getattr(self, "_launch_slot", None)
@@ -2044,7 +2321,7 @@ class BenchmarkPage(Page):
         )
         intro = ttk.Frame(intro_card.body, style="CardInner.TFrame")
         intro.pack(fill="x")
-        ttk.Label(
+        intro_desc = ttk.Label(
             intro,
             text=(
                 "Start measures the real runtime end to end: it screens a host-scaled "
@@ -2053,10 +2330,18 @@ class BenchmarkPage(Page):
                 "short real PPO training slices, then picks the fastest stable "
                 "configuration and applies it automatically."
             ),
-            wraplength=980,
+            wraplength=self.app.px(920, minimum=360),
             justify="left",
             foreground=self.palette.text_dim,
-        ).pack(anchor="w")
+        )
+        intro_desc.pack(anchor="w", fill="x")
+        intro.bind(
+            "<Configure>",
+            lambda evt, lbl=intro_desc: lbl.configure(
+                wraplength=max(240, int(getattr(evt, "width", 800) or 800) - 20)
+            ),
+            add="+",
+        )
 
         mode_row = ttk.Frame(intro, style="Surface.TFrame")
         mode_row.pack(fill="x", pady=(self.app.px(10, minimum=6), 0))
@@ -2069,38 +2354,57 @@ class BenchmarkPage(Page):
             on_change=self._on_mode_changed,
             motion=self.app.motion,
             height=self.app.px(30, minimum=24),
-            width=self.app.px(240, minimum=180),
+            width=self.app.px(240, minimum=160),
         )
         self.mode_control.pack(side="left")
         self.mode_plan_label = ttk.Label(
             mode_row,
             text="",
             style="FieldHelp.TLabel",
-            wraplength=self.app.px(560, minimum=280),
+            wraplength=self.app.px(560, minimum=220),
             justify="left",
         )
-        self.mode_plan_label.pack(side="left", padx=(self.app.px(14, minimum=8), 0))
+        self.mode_plan_label.pack(side="left", fill="x", expand=True, padx=(self.app.px(12, minimum=6), 0))
+        mode_row.bind(
+            "<Configure>",
+            lambda evt: self.mode_plan_label.configure(
+                wraplength=max(160, int(getattr(evt, "width", 640) or 640) - 310)
+            ),
+            add="+",
+        )
 
         # Custom mode: the same candidate lists the CLI accepts. Auto and
         # Push derive their ladders from this host and keep these disabled.
         custom_row = ttk.Frame(intro, style="Surface.TFrame")
         custom_row.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
+        custom_row.columnconfigure(1, weight=1)
+        custom_row.columnconfigure(3, weight=1)
         self.custom_env_var = tk.StringVar(value="16,32,64,128")
         self.custom_worker_var = tk.StringVar(value="4,8,16")
         self.custom_steps_var = tk.StringVar(value="")
         self.custom_minutes_var = tk.StringVar(value="5")
         self._custom_fields: list[tk.Widget] = []
-        for label, var, width in (
-            ("Environments", self.custom_env_var, 22),
-            ("Workers", self.custom_worker_var, 12),
-            ("Steps / config", self.custom_steps_var, 10),
-            ("or minutes", self.custom_minutes_var, 8),
+        for idx, (label, var, width) in enumerate(
+            (
+                ("Environments", self.custom_env_var, 18),
+                ("Workers", self.custom_worker_var, 12),
+                ("Steps / config", self.custom_steps_var, 10),
+                ("or minutes", self.custom_minutes_var, 8),
+            )
         ):
-            ttk.Label(custom_row, text=label, style="FieldHelp.TLabel").pack(
-                side="left", padx=(0, 4)
+            r, c_pair = divmod(idx, 2)
+            col_lbl = c_pair * 2
+            ttk.Label(custom_row, text=label, style="FieldHelp.TLabel").grid(
+                row=r, column=col_lbl, sticky="w", padx=(0 if col_lbl == 0 else 10, 4), pady=2
             )
             entry = ttk.Entry(custom_row, textvariable=var, width=width, state="disabled")
-            entry.pack(side="left", padx=(0, self.app.px(12, minimum=6)))
+            entry.grid(
+                row=r,
+                column=col_lbl + 1,
+                sticky="ew",
+                padx=(0, self.app.px(8, minimum=4)),
+                pady=2,
+            )
             self._custom_fields.append(entry)
 
         run_bar = ttk.Frame(intro, style="Surface.TFrame")
@@ -2118,10 +2422,27 @@ class BenchmarkPage(Page):
             run_bar, text="Cancel", command=self._cancel, state="disabled"
         )
         self.cancel_button.pack(side="left", padx=(8, 0))
+        self.auto_train_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            run_bar,
+            text="Auto-launch Training on finish",
+            variable=self.auto_train_var,
+        ).pack(side="left", padx=(10, 0))
         self.progress_label = ttk.Label(
-            run_bar, text="idle", foreground=self.palette.text_dim, wraplength=680, justify="left"
+            run_bar,
+            text="idle",
+            foreground=self.palette.text_dim,
+            wraplength=self.app.px(620, minimum=240),
+            justify="left",
         )
-        self.progress_label.pack(side="left", padx=(14, 0))
+        self.progress_label.pack(side="left", fill="x", expand=True, padx=(12, 0))
+        run_bar.bind(
+            "<Configure>",
+            lambda evt: self.progress_label.configure(
+                wraplength=max(160, int(getattr(evt, "width", 640) or 640) - 240)
+            ),
+            add="+",
+        )
 
         self.phase_stepper = PhaseStepper(intro, bus=self.app.bus)
         self.phase_stepper.pack(fill="x", pady=(8, 2))
@@ -2468,6 +2789,14 @@ class BenchmarkPage(Page):
                     foreground=self.palette.ok,
                 )
                 self.app.set_status("Benchmark finished - best configuration applied")
+                if getattr(self, "auto_train_var", None) is not None and bool(
+                    self.auto_train_var.get()
+                ):
+                    self.app.show_page("Training")
+                    train_page = self.app.pages.get("Training")
+                    if train_page is not None and hasattr(train_page, "_quick_launch_agent"):
+                        self._push_to_launch_form(result)
+                        train_page._quick_launch_agent()
             self._refresh_workflow_labels()
 
         self.app.background.submit(_run, _done)
@@ -3141,6 +3470,12 @@ class RunsPage(Page):
         ).pack(side="left", padx=(8, 0))
         ttk.Button(
             actions,
+            text="Export report (.md)",
+            command=self._export_selected_run_report,
+            style="Ghost.TButton",
+        ).pack(side="left", padx=(8, 0))
+        ttk.Button(
+            actions,
             text="Resume checkpoint in Training",
             command=self._resume_run_in_training,
             style="Primary.TButton",
@@ -3344,25 +3679,21 @@ class RunsPage(Page):
     def _evaluate(self) -> None:
         if not self._selected_run_dir:
             return
-        latest = Path(self._selected_run_dir) / "checkpoints" / "latest.zip"
-        if not latest.is_file():
+        target = _resolve_run_checkpoint(self._selected_run_dir, prefer_best=False)
+        if target is None:
             messagebox.showinfo("No checkpoint yet", "This run has no checkpoints/latest.zip yet.")
             return
         self.app.show_page("Evaluations")
-        self.app.pages["Evaluations"].select_checkpoint(str(latest))
+        self.app.pages["Evaluations"].select_checkpoint(str(target))
 
     def _evaluate_best(self) -> None:
         if not self._selected_run_dir:
             return
-        best = Path(self._selected_run_dir) / "checkpoints" / "best.zip"
-        target = (
-            best
-            if best.is_file()
-            else (Path(self._selected_run_dir) / "checkpoints" / "latest.zip")
-        )
-        if not target.is_file():
+        target = _resolve_run_checkpoint(self._selected_run_dir, prefer_best=True)
+        if target is None:
             messagebox.showinfo(
-                "No checkpoint yet", "This run has neither best.zip nor latest.zip yet."
+                "No checkpoint yet",
+                "This run has neither best_eval.zip nor latest.zip yet.",
             )
             return
         self.app.show_page("Evaluations")
@@ -3377,25 +3708,25 @@ class RunsPage(Page):
         if agents_page is None:
             return
         self.app.show_page("Training")
-        agents_page.apply_launch_values(
-            {
-                "environment_count": str(config.get("environment_count", 1)),
-                "env_workers": str(config.get("env_workers", 1)),
-                "total_training_steps": str(config.get("total_training_steps", 100000)),
-                "device": str(config.get("device", "auto")),
-            }
-        )
+        payload = {
+            "environment_count": str(config.get("environment_count", 1)),
+            "env_workers": str(config.get("env_workers", 1)),
+            "total_training_steps": str(config.get("total_training_steps", 100000)),
+            "device": str(config.get("device", "auto")),
+        }
+        if config.get("curriculum_mode"):
+            payload["curriculum_mode"] = str(config["curriculum_mode"])
+        agents_page.apply_launch_values(payload)
         self.app.set_status(f"Cloned topology from {report.get('run_id', 'run')} to Training")
 
     def _resume_run_in_training(self) -> None:
         if not self._selected_run_dir:
             return
-        latest = Path(self._selected_run_dir) / "checkpoints" / "latest.zip"
-        best = Path(self._selected_run_dir) / "checkpoints" / "best.zip"
-        target = latest if latest.is_file() else (best if best.is_file() else None)
+        target = _resolve_run_checkpoint(self._selected_run_dir, prefer_best=False)
         if target is None:
             messagebox.showinfo(
-                "No checkpoint yet", "This run has neither latest.zip nor best.zip yet."
+                "No checkpoint yet",
+                "This run has neither latest.zip nor best_eval.zip yet.",
             )
             return
         self._clone_to_training()
@@ -3403,6 +3734,19 @@ class RunsPage(Page):
         if agents_page is not None and hasattr(agents_page, "resume_checkpoint_var"):
             agents_page.resume_checkpoint_var.set(str(target))
             self.app.set_status(f"Ready to resume from {target}")
+
+    def _export_selected_run_report(self) -> None:
+        if not self._selected_run_dir:
+            messagebox.showinfo("No run selected", "Select a training run first to export its report.")
+            return
+        if not hasattr(self.adapter, "export_run_report"):
+            return
+        try:
+            res = self.adapter.export_run_report(self._selected_run_dir)
+        except Exception as exc:
+            self.app.set_status(f"Run report export failed: {exc}", error=True)
+            return
+        self.app.set_status(f"Exported run report: {res.get('path')}", toast=True)
 
 
 def _render_run_detail(report: dict[str, Any]) -> str:
@@ -4216,30 +4560,46 @@ class SettingsPage(Page):
         self.roblox_shortcut_var = tk.StringVar(
             value=r"C:\Users\jonas\OneDrive\Desktop\Roblox Player.lnk"
         )
-        ttk.Entry(shortcut_row, textvariable=self.roblox_shortcut_var, width=42).pack(side="left")
         ttk.Button(
             shortcut_row,
+            text="Browse",
+            width=8,
+            command=lambda: self._browse_file(self.roblox_shortcut_var),
+        ).pack(side="right", padx=(6, 0))
+        ttk.Entry(shortcut_row, textvariable=self.roblox_shortcut_var, width=36).pack(
+            side="left", fill="x", expand=True, padx=(6, 0)
+        )
+
+        shortcut_btns = ttk.Frame(roblox_box, style="Surface.TFrame")
+        shortcut_btns.pack(fill="x", pady=(self.app.px(6, minimum=3), 0))
+        ttk.Button(
+            shortcut_btns,
+            text="Join TTK Testing",
+            command=lambda: self._launch_roblox(direct_place=True),
+            style="Primary.TButton",
+        ).pack(side="left")
+        ttk.Button(
+            shortcut_btns,
+            text="Connect / Re-probe",
+            command=self._connect_roblox_live,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            shortcut_btns,
             text="Launch Shortcut",
             command=lambda: self._launch_roblox(direct_place=False),
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
-            shortcut_row,
-            text="Join TTK Testing",
-            command=lambda: self._launch_roblox(direct_place=True),
-            style="Primary.TButton",
-        ).pack(side="left", padx=(6, 0))
-        ttk.Button(
-            shortcut_row,
+            shortcut_btns,
             text="Focus Window",
             command=self._focus_roblox_window,
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
-            shortcut_row,
+            shortcut_btns,
             text="Capture Screenshot",
             command=self._capture_ttk_screenshot,
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
-            shortcut_row,
+            shortcut_btns,
             text="Open Captures",
             command=self._open_captures_folder,
         ).pack(side="left", padx=(6, 0))
@@ -4249,12 +4609,20 @@ class SettingsPage(Page):
             text="Probing Roblox Player...",
             foreground=self.palette.accent,
             justify="left",
+            wraplength=self.app.px(880, minimum=320),
         )
-        self.roblox_live_label.pack(anchor="w", pady=(8, 6))
+        self.roblox_live_label.pack(anchor="w", fill="x", pady=(8, 6))
+        roblox_box.bind(
+            "<Configure>",
+            lambda evt: self.roblox_live_label.configure(
+                wraplength=max(220, int(getattr(evt, "width", 720) or 720) - 24)
+            ),
+            add="+",
+        )
 
         # ---- Interactive TTK & DPS Calculator + 1-Click Presets ---------
         calc_row = ttk.Frame(roblox_box, style="Surface.TFrame")
-        calc_row.pack(fill="x", pady=(2, 8))
+        calc_row.pack(fill="x", pady=(2, 4))
         ttk.Label(calc_row, text="TTK / DPS Calculator:", style="FieldTitle.TLabel").pack(
             side="left"
         )
@@ -4276,10 +4644,14 @@ class SettingsPage(Page):
             calc_row,
             text="3 STK  ·  160.0 ms TTK  ·  425.0 Burst DPS  ·  Instant-Lethal CQB (<170 ms)",
             foreground=self.palette.ok,
+            justify="left",
         )
-        self.ttk_calc_result_label.pack(side="left", padx=(4, 10))
-        ttk.Label(calc_row, text="Presets:", style="FieldTitle.TLabel").pack(
-            side="left", padx=(8, 4)
+        self.ttk_calc_result_label.pack(side="left", fill="x", expand=True, padx=(4, 4))
+
+        preset_row = ttk.Frame(roblox_box, style="Surface.TFrame")
+        preset_row.pack(fill="x", pady=(0, 8))
+        ttk.Label(preset_row, text="Presets:", style="FieldTitle.TLabel").pack(
+            side="left", padx=(0, 6)
         )
         for preset_id, btn_label in (
             ("sable_cqb_carbine", "Sable CQB (160ms)"),
@@ -4287,10 +4659,10 @@ class SettingsPage(Page):
             ("precision_marksman", "Marksman (286ms)"),
         ):
             ttk.Button(
-                calc_row,
+                preset_row,
                 text=btn_label,
                 command=lambda pid=preset_id: self._apply_ttk_preset(pid),  # type: ignore[misc]
-            ).pack(side="left", padx=(4, 0))
+            ).pack(side="left", padx=(0, 6))
 
         ttk_columns = (
             ("mechanic", "Mechanic", 180),
@@ -4314,22 +4686,26 @@ class SettingsPage(Page):
         edit_row = ttk.Frame(roblox_box, style="Surface.TFrame")
         edit_row.pack(fill="x", pady=(6, 0))
         self._selected_mechanic: str | None = None
-        self.mechanic_label = ttk.Label(
-            edit_row, text="Mechanic: (select row)", width=26, style="FieldTitle.TLabel"
-        )
-        self.mechanic_label.pack(side="left")
-        ttk.Label(edit_row, text="Measured value:").pack(side="left", padx=(6, 4))
-        self.mechanic_value_var = tk.StringVar(value="")
-        ttk.Entry(edit_row, textvariable=self.mechanic_value_var, width=28).pack(side="left")
-        ttk.Label(edit_row, text="Notes:").pack(side="left", padx=(8, 4))
-        self.mechanic_notes_var = tk.StringVar(value="")
-        ttk.Entry(edit_row, textvariable=self.mechanic_notes_var, width=28).pack(side="left")
         ttk.Button(
             edit_row,
             text="Save calibration",
             command=self._save_ttk_mechanic,
             style="Primary.TButton",
-        ).pack(side="left", padx=(8, 0))
+        ).pack(side="right", padx=(8, 0))
+        self.mechanic_label = ttk.Label(
+            edit_row, text="Mechanic: (select row)", width=22, style="FieldTitle.TLabel"
+        )
+        self.mechanic_label.pack(side="left")
+        ttk.Label(edit_row, text="Measured value:").pack(side="left", padx=(6, 4))
+        self.mechanic_value_var = tk.StringVar(value="")
+        ttk.Entry(edit_row, textvariable=self.mechanic_value_var, width=18).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Label(edit_row, text="Notes:").pack(side="left", padx=(8, 4))
+        self.mechanic_notes_var = tk.StringVar(value="")
+        ttk.Entry(edit_row, textvariable=self.mechanic_notes_var, width=18).pack(
+            side="left", fill="x", expand=True
+        )
         self._ttk_row_map: dict[str, dict[str, Any]] = {}
 
     def refresh(self) -> None:
@@ -4510,6 +4886,31 @@ class SettingsPage(Page):
             lambda: self.adapter.launch_roblox_ttk_testing(shortcut, direct_place=direct_place),
             _done,
         )
+
+    def _connect_roblox_live(self) -> None:
+        if not hasattr(self.adapter, "connect_roblox_ttk_testing"):
+            return
+        shortcut = self.roblox_shortcut_var.get().strip() or None
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or not res:
+                self.app.set_status(f"Roblox probe failed: {error}", error=True)
+            else:
+                self.app.set_status(
+                    str(res.get("message") or "Probed Roblox session"),
+                    error=not bool(res.get("ok")),
+                )
+            self.refresh()
+
+        self.app.background.submit(
+            lambda: self.adapter.connect_roblox_ttk_testing(shortcut),
+            _done,
+        )
+
+    def _browse_file(self, var: tk.StringVar) -> None:
+        path = filedialog.askopenfilename()
+        if path:
+            var.set(path)
 
     def _capture_ttk_screenshot(self) -> None:
         if not hasattr(self.adapter, "capture_roblox_screenshot"):
@@ -4864,9 +5265,23 @@ class StatsPage(Page):
         tick_entry = ttk.Entry(controls, textvariable=self.tick_var, width=8)
         tick_entry.pack(side="left", padx=(4, 4))
         tick_entry.bind("<Return>", lambda _e: self._jump_to_tick())
-        ttk.Button(controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick).pack(
-            side="left"
+        ttk.Button(
+            controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick
+        ).pack(side="left")
+        self.play_button = ttk.Button(
+            controls, text="▶ Play", style="Ghost.TButton", command=self._toggle_replay_playback
         )
+        self.play_button.pack(side="left", padx=(8, 4))
+        self.play_speed_var = tk.StringVar(value="1x")
+        ttk.Combobox(
+            controls,
+            textvariable=self.play_speed_var,
+            values=("1x", "2x", "4x"),
+            state="readonly",
+            width=4,
+        ).pack(side="left")
+        self._playing_replay = False
+        self._radar_trails: dict[int, list[tuple[float, float]]] = {}
         self.tick_label = ttk.Label(controls, text="no replay selected", style="CardLabel.TLabel")
         self.tick_label.pack(side="left", padx=(12, 0))
         self.summary_label = ttk.Label(
@@ -4885,6 +5300,23 @@ class StatsPage(Page):
             wraplength=self.app.px(900, minimum=420),
         )
         self.event_label.pack(anchor="w", pady=(self.app.px(4, minimum=2), 0))
+        self.tactical_radar = tk.Canvas(
+            card.body,
+            height=self.app.px(164, minimum=116),
+            background=self.palette.card,
+            highlightthickness=1,
+            highlightbackground=self.palette.border,
+        )
+        self.tactical_radar.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
+        self.tactical_radar.bind(
+            "<Configure>",
+            lambda _evt: self._draw_tactical_radar(
+                (self._replay or {}).get("observation"),
+                (self._replay or {}).get("action"),
+            ),
+            add="+",
+        )
+        self._draw_tactical_radar(None, None)
         return card
 
     def _build_vector_card(self, parent: tk.Misc) -> tk.Widget:
@@ -4995,6 +5427,16 @@ class StatsPage(Page):
             self.submit_poll("replays", self.adapter.list_replays, self._on_replays)
         if not self._evidence_loaded:
             self.submit_poll("ttk-evidence", self.adapter.ttk_evidence, self._on_evidence)
+        if getattr(self, "_playing_replay", False) and self._replay is not None:
+            speed_str = str(getattr(self, "play_speed_var", tk.StringVar(value="1x")).get() or "1x")
+            step_delta = {"1x": 1, "2x": 2, "4x": 4}.get(speed_str, 1)
+            count = int(self._replay.get("tick_count") or 0)
+            if self._tick + step_delta < count:
+                self._step_tick(step_delta)
+            else:
+                self._playing_replay = False
+                if hasattr(self, "play_button"):
+                    self.play_button.configure(text="▶ Play")
 
     def _rescan_replays(self) -> None:
         self._scan_requested = True
@@ -5146,6 +5588,7 @@ class StatsPage(Page):
         self._fill_world(result.get("observation"))
         self._fill_audio(result.get("observation"))
         self._fill_action(result.get("action"))
+        self._draw_tactical_radar(result.get("observation"), result.get("action"))
 
     def _clear_decode(self) -> None:
         """Show the contract without a recording again.
@@ -5171,6 +5614,136 @@ class StatsPage(Page):
         self._fill_world(None)
         self._fill_audio(None)
         self._fill_action(None)
+        self._draw_tactical_radar(None, None)
+
+    def _draw_tactical_radar(self, observation: Any, action: Any) -> None:
+        """Render a 2D top-down tactical minimap of the agent, FOV cone, and tracked contacts."""
+        import math
+
+        radar = getattr(self, "tactical_radar", None)
+        if radar is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            radar.delete("all")
+            radar.configure(
+                background=self.palette.card,
+                highlightbackground=self.palette.border,
+            )
+            w = max(int(radar.winfo_width() or 360), 220)
+            h = max(int(radar.winfo_height() or 140), 110)
+            cx = min(w // 3, max(90, h // 2 + 24))
+            cy = h // 2
+            radius = max(36, min(cx - 18, cy - 16))
+            for frac in (0.33, 0.66, 1.0):
+                rr = int(radius * frac)
+                radar.create_oval(
+                    cx - rr,
+                    cy - rr,
+                    cx + rr,
+                    cy + rr,
+                    outline=self.palette.border,
+                )
+            radar.create_line(cx - radius, cy, cx + radius, cy, fill=self.palette.border)
+            radar.create_line(cx, cy - radius, cx, cy + radius, fill=self.palette.border)
+            fov_dx = int(radius * math.sin(math.radians(38)))
+            fov_dy = int(radius * math.cos(math.radians(38)))
+            radar.create_line(
+                cx, cy, cx - fov_dx, cy - fov_dy, fill=self.palette.accent, dash=(3, 2)
+            )
+            radar.create_line(
+                cx, cy, cx + fov_dx, cy - fov_dy, fill=self.palette.accent, dash=(3, 2)
+            )
+            shooting = False
+            if isinstance(action, (list, tuple)) and len(action) > 4:
+                with contextlib.suppress(TypeError, ValueError):
+                    shooting = int(action[4]) == 1
+            if shooting:
+                radar.create_line(
+                    cx, cy, cx, cy - radius, fill=self.palette.warn, width=2, dash=(4, 2)
+                )
+            radar.create_oval(
+                cx - 5,
+                cy - 5,
+                cx + 5,
+                cy + 5,
+                fill=self.palette.accent,
+                outline=self.palette.text,
+            )
+            contacts = vm.contact_rows(observation)
+            active_contacts = 0
+            for idx, row in enumerate(contacts):
+                state = str(row.get("state") or "")
+                if state in ("not tracked", "dead / absent"):
+                    continue
+                active_contacts += 1
+                dist_str = str(row.get("distance") or "0.5")
+                bear_str = str(row.get("bearing") or "0.0")
+                try:
+                    dist_val = max(0.08, min(1.0, float(dist_str)))
+                except ValueError:
+                    dist_val = 0.45 + 0.15 * idx
+                try:
+                    bear_val = max(-1.0, min(1.0, float(bear_str)))
+                except ValueError:
+                    bear_val = (idx - 1) * 0.35
+                angle = bear_val * math.pi
+                ex = cx + int(radius * dist_val * math.sin(angle))
+                ey = cy - int(radius * dist_val * math.cos(angle))
+                color = self.palette.ok if state == "visible" else self.palette.warn
+                trails = getattr(self, "_radar_trails", None)
+                if isinstance(trails, dict):
+                    history = trails.setdefault(idx, [])
+                    if not history or history[-1] != (float(ex), float(ey)):
+                        history.append((float(ex), float(ey)))
+                        if len(history) > 12:
+                            del history[:-12]
+                    if len(history) >= 2:
+                        flat_pts = [coord for pt in history for coord in pt]
+                        radar.create_line(*flat_pts, fill=color, width=1, dash=(2, 2))
+                radar.create_oval(
+                    ex - 5,
+                    ey - 5,
+                    ex + 5,
+                    ey + 5,
+                    fill=color,
+                    outline=self.palette.card,
+                )
+                radar.create_text(
+                    ex + 8,
+                    ey,
+                    anchor="w",
+                    text=f"C{idx + 1}",
+                    fill=color,
+                    font=self.app.font("micro", bold=True, mono=True),
+                )
+            legend_x = cx + radius + 24
+            radar.create_text(
+                legend_x,
+                16,
+                anchor="nw",
+                text="2D Tactical Replay Radar (Agent Centered · +Forward Up)",
+                fill=self.palette.text,
+                font=self.app.font("small", bold=True),
+            )
+            status_line = (
+                f"Tracked contacts: {active_contacts} / 3   ·   "
+                f"Weapon state: {'FIRING' if shooting else 'READY'}"
+                if observation is not None
+                else "Idle radar ring — select a detailed replay tick to plot relative enemy bearings & FOV"
+            )
+            radar.create_text(
+                legend_x,
+                38,
+                anchor="nw",
+                text=status_line,
+                fill=self.palette.text_muted,
+                font=self.app.font("micro", mono=True),
+            )
+
+    def _toggle_replay_playback(self) -> None:
+        self._playing_replay = not getattr(self, "_playing_replay", False)
+        if hasattr(self, "play_button"):
+            self.play_button.configure(text="⏸ Pause" if self._playing_replay else "▶ Play")
 
     def _step_tick(self, delta: int) -> None:
         if self._replay is None:

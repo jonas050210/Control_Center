@@ -1028,6 +1028,25 @@ def _make_checkpoint_callback(
     )
 
 
+def kl_adaptive_learning_rate(
+    current_lr: float,
+    approx_kl: float | None,
+    base_lr: float,
+    *,
+    target_kl: float = 0.015,
+) -> float:
+    """Compute a KL-bounded adaptive learning rate around ``base_lr``."""
+    base = max(1e-6, float(base_lr))
+    cur = max(1e-6, float(current_lr))
+    if approx_kl is None or not math.isfinite(approx_kl) or approx_kl < 0.0:
+        return cur
+    if approx_kl > target_kl * 2.0:
+        return max(base * 0.2, cur / 1.25)
+    if 0.0 < approx_kl < target_kl * 0.5:
+        return min(base * 1.5, cur * 1.10)
+    return cur
+
+
 def _make_ppo_stats_callback(
     BaseCallback: Any, *, telemetry: Any, run_control: RunControl | None
 ) -> Any:
@@ -1063,6 +1082,7 @@ def _make_ppo_stats_callback(
         def __init__(self) -> None:
             super().__init__()
             self._last_n_updates: float | None = None
+            self._base_lr: float | None = None
 
         def _flush(self) -> None:
             values = getattr(self.model.logger, "name_to_value", None)
@@ -1080,6 +1100,22 @@ def _make_ppo_stats_callback(
                 # here is the only arithmetic this callback performs, and
                 # it stays traceable to the exact same measured value.
                 payload["entropy"] = -payload["entropy_loss"]
+            cur_lr = payload.get("learning_rate")
+            if isinstance(cur_lr, (int, float)) and self._base_lr is None:
+                self._base_lr = float(cur_lr)
+            if self._base_lr is not None and "approx_kl" in payload:
+                next_lr = kl_adaptive_learning_rate(
+                    float(cur_lr if isinstance(cur_lr, (int, float)) else self._base_lr),
+                    float(payload["approx_kl"]),
+                    self._base_lr,
+                )
+                self.model.learning_rate = next_lr
+                self.model.lr_schedule = lambda _progress, lr=next_lr: lr
+                optimizer = getattr(getattr(self.model, "policy", None), "optimizer", None)
+                for group in getattr(optimizer, "param_groups", ()) or ():
+                    if isinstance(group, dict):
+                        group["lr"] = next_lr
+                payload["learning_rate"] = round(next_lr, 7)
             telemetry.write(payload)
             if run_control is not None:
                 run_control.update(
@@ -1303,6 +1339,15 @@ def _build_model(
     if checkpoint_path:
         model = algorithm_class.load(str(checkpoint_path), env=env, device=device)
         model.set_env(env)
+        model.learning_rate = float(config.learning_rate)
+        model.lr_schedule = lambda _progress: float(config.learning_rate)
+        model.batch_size = int(config.batch_size)
+        model.n_epochs = int(config.ppo_epochs)
+        model.ent_coef = float(config.entropy_coefficient)
+        optimizer = getattr(getattr(model, "policy", None), "optimizer", None)
+        for group in getattr(optimizer, "param_groups", ()) or ():
+            if isinstance(group, dict):
+                group["lr"] = float(config.learning_rate)
         return model, {"transferred": False, "source": "resume checkpoint"}
 
     model = algorithm_class(
