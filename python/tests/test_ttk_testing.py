@@ -114,6 +114,23 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(main(arguments), 0)
                 self.assertIn(expected, output.getvalue())
 
+    def test_analyze_roblox_ttk_screenshot_extracts_png_dimensions(self) -> None:
+        import struct
+        import tempfile
+        from pathlib import Path
+        from sandboxai.ttk_testing import analyze_roblox_ttk_screenshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_dir = Path(tmp) / ".sandboxai" / "ttk_screenshots"
+            shot_dir.mkdir(parents=True)
+            png = shot_dir / "ttk_1080p.png"
+            ihdr = struct.pack(">IIBBBBB", 1920, 1080, 8, 6, 0, 0, 0)
+            png.write_bytes(b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr)
+            res = analyze_roblox_ttk_screenshot(tmp)
+            self.assertTrue(res["ok"])
+            self.assertEqual((res["width"], res["height"]), (1920, 1080))
+            self.assertEqual(res["hud_layout"], "1080p-native")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

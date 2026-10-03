@@ -1238,5 +1238,8 @@ def test_optimizer_field_specs_and_ppo_efficiency_presets():
         slot = vm.launch_slot_view(values)
         assert slot["state"] == "AVAILABLE", preset_id
         assert slot["summary"]["learning_rate"] == float(preset["learning_rate"])
+    rec = vm.recommend_ppo_hyperparameters(environment_count=32, env_workers=4, device="cpu")
+    assert float(rec["learning_rate"]) > 3e-4
+    assert int(rec["batch_size"]) >= 512
 
 

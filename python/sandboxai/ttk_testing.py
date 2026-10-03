@@ -956,14 +956,19 @@ def focus_roblox_window() -> dict[str, Any]:
 
 
 def list_roblox_screenshots(project_root: str | Path, *, limit: int = 10) -> list[dict[str, Any]]:
-    """List recent calibration screenshots in .sandboxai/ttk_captures."""
-    captures_dir = Path(project_root) / ".sandboxai" / "ttk_captures"
-    if not captures_dir.is_dir():
+    """List recent calibration screenshots in .sandboxai/ttk_captures (or .sandboxai/ttk_screenshots)."""
+    root = Path(project_root)
+    candidate_dirs = [root / ".sandboxai" / "ttk_captures", root / ".sandboxai" / "ttk_screenshots"]
+    files: list[Path] = []
+    for d in candidate_dirs:
+        if d.is_dir():
+            files.extend(d.glob("*.png"))
+    if not files:
         return []
     out: list[dict[str, Any]] = []
     try:
         files = sorted(
-            captures_dir.glob("*.png"),
+            files,
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -1127,3 +1132,69 @@ def apply_ttk_calibration_preset(project_root: str | Path, preset_id: str) -> di
         "updated_mechanics": saved,
         "metrics": metrics,
     }
+
+
+def _read_png_dimensions(path: Path) -> tuple[int, int] | None:
+    """Extract (width, height) from a PNG IHDR chunk without external dependencies."""
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(24)
+        if len(header) >= 24 and header[:8] == b"\x89PNG\r\n\x1a\n" and header[12:16] == b"IHDR":
+            width = int.from_bytes(header[16:20], "big")
+            height = int.from_bytes(header[20:24], "big")
+            if width > 0 and height > 0:
+                return (width, height)
+    except OSError:
+        return None
+    return None
+
+
+def analyze_roblox_ttk_screenshot(
+    project_root: str | Path,
+    image_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Inspect a captured Roblox TTK Testing screenshot for HUD & resolution telemetry."""
+    root = Path(project_root).expanduser().resolve()
+    target: Path | None = None
+    if image_path is not None and str(image_path).strip():
+        candidate = Path(str(image_path).strip()).expanduser()
+        if candidate.is_file():
+            target = candidate
+    if target is None:
+        recent = list_roblox_screenshots(root, limit=1)
+        if recent:
+            candidate = Path(str(recent[0].get("path") or ""))
+            if candidate.is_file():
+                target = candidate
+    if target is None or not target.is_file():
+        return {
+            "ok": False,
+            "error": "No Roblox TTK screenshot found in .sandboxai/ttk_screenshots yet.",
+            "path": None,
+        }
+    dims = _read_png_dimensions(target)
+    width, height = dims if dims is not None else (0, 0)
+    size_bytes = target.stat().st_size
+    aspect = round(width / height, 3) if width and height else None
+    hud_scale = (
+        "1080p-native"
+        if (width, height) == (1920, 1080)
+        else ("widescreen-16:9" if aspect and abs(aspect - 1.778) < 0.05 else "custom-viewport")
+    )
+    summary = (
+        f"{target.name} ({width}x{height} px, {hud_scale}, {size_bytes // 1024} KB)"
+        if width and height
+        else f"{target.name} ({size_bytes} bytes)"
+    )
+    return {
+        "ok": True,
+        "path": str(target),
+        "name": target.name,
+        "width": width,
+        "height": height,
+        "aspect_ratio": aspect,
+        "hud_layout": hud_scale,
+        "size_bytes": size_bytes,
+        "summary": summary,
+    }
+

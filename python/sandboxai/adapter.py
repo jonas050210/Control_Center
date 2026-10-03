@@ -596,6 +596,10 @@ class SandboxAIAdapter:
             "enemy_count = max(1, int(_arg('--enemy-count', '1')))\n"
             "seed = int(_arg('--seed', '1234'))\n"
             "curriculum_level = int(_arg('--curriculum-level', '1'))\n"
+            "self_play = _arg('--self-play', '0') in ('1', 'true', 'True')\n"
+            "map_id = 'arena_01'\n"
+            "layout_id = 'standard'\n"
+            "lighting_mode = 'day'\n"
             "step_count = 0\n"
             "plans = []\n\n"
             "def _obs(step: int, idx: int) -> list[float]:\n"
@@ -641,7 +645,17 @@ class SandboxAIAdapter:
             "            'observation_space': {'type': 'Box', 'size': OBS_DIM, 'low': -1.0, 'high': 1.0},\n"
             "            'action_space': {'type': 'MultiDiscrete', 'nvec': ACTION_NVEC},\n"
             "            'environment_count': env_count,\n"
+            "            **({'policy_slots': 2} if self_play else {}),\n"
             "        }\n"
+            "    elif cmd == 'set_map':\n"
+            "        map_id = str(msg.get('map_id', map_id))\n"
+            "        out = {'ok': True, 'map_id': map_id}\n"
+            "    elif cmd == 'set_layout':\n"
+            "        layout_id = str(msg.get('layout_id', layout_id))\n"
+            "        out = {'ok': True, 'layout_id': layout_id}\n"
+            "    elif cmd == 'set_lighting':\n"
+            "        lighting_mode = str(msg.get('lighting', lighting_mode))\n"
+            "        out = {'ok': True, 'lighting': lighting_mode}\n"
             "    elif cmd == 'ping':\n"
             "        out = {'ok': True, 'pong': True, 'step_count': step_count, 'environment_count': env_count}\n"
             "    elif cmd in ('configure_episodes', 'set_episode_plan', 'set_episode_plans'):\n"
@@ -1572,6 +1586,12 @@ class SandboxAIAdapter:
         from .ttk_testing import apply_ttk_calibration_preset
 
         return apply_ttk_calibration_preset(self.project_root, preset_id)
+
+    def analyze_roblox_screenshot(self, image_path: str | Path | None = None) -> dict[str, Any]:
+        """Inspect the latest or given Roblox TTK Testing screenshot for HUD/resolution metadata."""
+        from .ttk_testing import analyze_roblox_ttk_screenshot
+
+        return analyze_roblox_ttk_screenshot(self.project_root, image_path)
 
     def export_ttk_combat_profile(
         self,

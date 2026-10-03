@@ -664,6 +664,7 @@ class DashboardPage(Page):
             ("Open Shortcut (.lnk)", self._launch_roblox_shortcut, "Ghost.TButton"),
             ("Focus window", self._focus_roblox_window, "Ghost.TButton"),
             ("Screenshot", self._capture_roblox_window, "Ghost.TButton"),
+            ("Analyze HUD", self._analyze_roblox_screenshot, "Ghost.TButton"),
             ("Export TTK profile", self._export_roblox_ttk_profile, "Ghost.TButton"),
             ("CPU turbo", self._enable_ubuntu_cpu_turbo, "Ghost.TButton"),
             ("Start benchmark", self._start_benchmark_from_dashboard, "Primary.TButton"),
@@ -1105,6 +1106,19 @@ class DashboardPage(Page):
             return
         self.app.set_status(f"Exported TTK combat profile: {res.get('path')}", toast=True)
 
+    def _analyze_roblox_screenshot(self) -> None:
+        if not hasattr(self.adapter, "analyze_roblox_screenshot"):
+            return
+        try:
+            res = self.adapter.analyze_roblox_screenshot()
+        except Exception as exc:
+            self.app.set_status(f"HUD analysis failed: {exc}", error=True)
+            return
+        if not res.get("ok"):
+            self.app.set_status(str(res.get("error") or "No screenshot found"), error=True)
+            return
+        self.app.set_status(f"TTK HUD analysis: {res.get('summary')}", toast=True)
+
 
 class TrainingPage(Page):
     """Training launch deck + the lifecycle of every training agent.
@@ -1252,6 +1266,12 @@ class TrainingPage(Page):
                 style="Ghost.TButton",
                 command=lambda k=preset_key: self._apply_ppo_efficiency_preset(k),  # type: ignore[misc]
             ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            optimizer_header,
+            text="⚡ Auto-tune LR for topology",
+            style="Primary.TButton",
+            command=self._auto_tune_ppo_hyperparameters,
+        ).pack(side="left", padx=(4, 0))
 
         optimizer_frame = ttk.Frame(form_frame, style="CardInner.TFrame")
         optimizer_frame.pack(fill="x", pady=(self.app.px(4, minimum=2), 0))
@@ -1503,6 +1523,38 @@ class TrainingPage(Page):
         self.app.set_status(
             f"Applied PPO efficiency preset: {preset['label']} (LR={preset['learning_rate']}, batch={preset['batch_size']}, epochs={preset['ppo_epochs']})"
         )
+
+    def _auto_tune_ppo_hyperparameters(self) -> None:
+        values = self.current_values()
+        try:
+            envs = int(values.get("environment_count") or 8)
+        except ValueError:
+            envs = 8
+        try:
+            workers = int(values.get("env_workers") or 2)
+        except ValueError:
+            workers = 2
+        try:
+            steps = int(values.get("total_training_steps") or 100_000)
+        except ValueError:
+            steps = 100_000
+        device = str(values.get("device") or "auto")
+        rec = vm.recommend_ppo_hyperparameters(
+            environment_count=envs,
+            env_workers=workers,
+            device=device,
+            total_steps=steps,
+        )
+        self.apply_launch_values(
+            {
+                "learning_rate": str(rec["learning_rate"]),
+                "batch_size": str(rec["batch_size"]),
+                "ppo_epochs": str(rec["ppo_epochs"]),
+                "entropy_coefficient": str(rec["entropy_coefficient"]),
+                "rollout_length": str(rec["rollout_length"]),
+            }
+        )
+        self.app.set_status(str(rec["rationale"]), toast=True)
 
     def current_budget(self) -> dict[str, Any]:
         """Validated budget view for the current selector state."""
@@ -5213,9 +5265,23 @@ class StatsPage(Page):
         tick_entry = ttk.Entry(controls, textvariable=self.tick_var, width=8)
         tick_entry.pack(side="left", padx=(4, 4))
         tick_entry.bind("<Return>", lambda _e: self._jump_to_tick())
-        ttk.Button(controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick).pack(
-            side="left"
+        ttk.Button(
+            controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick
+        ).pack(side="left")
+        self.play_button = ttk.Button(
+            controls, text="▶ Play", style="Ghost.TButton", command=self._toggle_replay_playback
         )
+        self.play_button.pack(side="left", padx=(8, 4))
+        self.play_speed_var = tk.StringVar(value="1x")
+        ttk.Combobox(
+            controls,
+            textvariable=self.play_speed_var,
+            values=("1x", "2x", "4x"),
+            state="readonly",
+            width=4,
+        ).pack(side="left")
+        self._playing_replay = False
+        self._radar_trails: dict[int, list[tuple[float, float]]] = {}
         self.tick_label = ttk.Label(controls, text="no replay selected", style="CardLabel.TLabel")
         self.tick_label.pack(side="left", padx=(12, 0))
         self.summary_label = ttk.Label(
@@ -5361,6 +5427,16 @@ class StatsPage(Page):
             self.submit_poll("replays", self.adapter.list_replays, self._on_replays)
         if not self._evidence_loaded:
             self.submit_poll("ttk-evidence", self.adapter.ttk_evidence, self._on_evidence)
+        if getattr(self, "_playing_replay", False) and self._replay is not None:
+            speed_str = str(getattr(self, "play_speed_var", tk.StringVar(value="1x")).get() or "1x")
+            step_delta = {"1x": 1, "2x": 2, "4x": 4}.get(speed_str, 1)
+            count = int(self._replay.get("tick_count") or 0)
+            if self._tick + step_delta < count:
+                self._step_tick(step_delta)
+            else:
+                self._playing_replay = False
+                if hasattr(self, "play_button"):
+                    self.play_button.configure(text="▶ Play")
 
     def _rescan_replays(self) -> None:
         self._scan_requested = True
@@ -5614,6 +5690,16 @@ class StatsPage(Page):
                 ex = cx + int(radius * dist_val * math.sin(angle))
                 ey = cy - int(radius * dist_val * math.cos(angle))
                 color = self.palette.ok if state == "visible" else self.palette.warn
+                trails = getattr(self, "_radar_trails", None)
+                if isinstance(trails, dict):
+                    history = trails.setdefault(idx, [])
+                    if not history or history[-1] != (float(ex), float(ey)):
+                        history.append((float(ex), float(ey)))
+                        if len(history) > 12:
+                            del history[:-12]
+                    if len(history) >= 2:
+                        flat_pts = [coord for pt in history for coord in pt]
+                        radar.create_line(*flat_pts, fill=color, width=1, dash=(2, 2))
                 radar.create_oval(
                     ex - 5,
                     ey - 5,
@@ -5653,6 +5739,11 @@ class StatsPage(Page):
                 fill=self.palette.text_muted,
                 font=self.app.font("micro", mono=True),
             )
+
+    def _toggle_replay_playback(self) -> None:
+        self._playing_replay = not getattr(self, "_playing_replay", False)
+        if hasattr(self, "play_button"):
+            self.play_button.configure(text="⏸ Pause" if self._playing_replay else "▶ Play")
 
     def _step_tick(self, delta: int) -> None:
         if self._replay is None:
