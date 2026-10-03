@@ -221,17 +221,22 @@ class WindowsHostBridgeTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
+        from sandboxai.wsl import windows_to_wsl_path
+
         def run(command: list[str], *, timeout: float) -> tuple[int, str]:
             del timeout
             self.calls.append(list(command))
             # Stand in for the Windows host: create the file PowerShell would
-            # have written, at the path the script was handed.
+            # have written, at the path the script was handed. A
+            # ``wsl.localhost`` UNC target is not a POSIX filename,
+            # so translate it back before simulating the host write.
             script = command[-1]
             marker = "$bmp.Save('"
             start = script.index(marker) + len(marker)
             end = script.index("',", start)
             target = script[start:end].replace("''", "'")
-            Path(target).write_bytes(b"\x89PNG")
+            host_target = target if Path(target).is_absolute() else windows_to_wsl_path(target)
+            Path(host_target).write_bytes(b"\x89PNG")
             return 0, target
 
         self._patchers["run"].stop()
