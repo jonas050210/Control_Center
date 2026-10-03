@@ -24,7 +24,7 @@ from __future__ import annotations
 import csv
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +55,26 @@ DEFAULT_ENVIRONMENT_COUNTS: tuple[int, ...] = (
 ## always measured first so every multi-process number has a baseline in
 ## the same report.
 DEFAULT_WORKER_COUNTS: tuple[int, ...] = (1,)
+
+
+def frames_per_second(row: Mapping[str, Any]) -> float | None:
+    """How fast one environment advances, in simulation steps per second.
+
+    ``steps_per_second`` is the throughput of the whole topology - the number
+    that sizes a training run - and it grows with the environment count even
+    when every individual environment is getting slower. This is the other
+    half of the same measurement: the per-environment step rate, i.e. how
+    many simulation ticks a single agent lives through per second. It is
+    derived from two numbers that were both measured (never from a declared
+    frame budget), and it is ``None`` when either of them is missing.
+    """
+    environments = row.get("environments")
+    steps_per_second = row.get("steps_per_second")
+    if not isinstance(environments, (int, float)) or not isinstance(steps_per_second, (int, float)):
+        return None
+    if float(environments) <= 0.0:
+        return None
+    return float(steps_per_second) / float(environments)
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -109,6 +129,7 @@ def _emit_step_progress(
         "elapsed_seconds": elapsed_seconds,
         "max_seconds_per_config": max_seconds_per_config,
         "steps_per_second": sps,
+        "frames_per_second": (sps / environment_count) if sps and environment_count else None,
         "episodes": episode_count,
         "episodes_per_second": eps,
         "vector_step_latency_p50_ms": p50_ms,
@@ -229,7 +250,7 @@ def _measure_single_config(
                 break
         elapsed = max(time.perf_counter() - started, 1e-9)
         resources = resource_snapshot()
-        row = {
+        row: dict[str, Any] = {
             "environments": environment_count,
             "workers": worker_count,
             "environments_per_worker": environment_count / worker_count,
@@ -248,6 +269,7 @@ def _measure_single_config(
             "warmup_steps": warmup_steps,
             "warmup_seconds": warmup_seconds,
         }
+        row["frames_per_second"] = frames_per_second(row)
         return row
     finally:
         client.close()

@@ -808,7 +808,61 @@ class SandboxAIAdapter:
                 "psutil",
             )
         }
+        status.update(self.training_dependency_status())
         return status
+
+    def training_dependency_status(self) -> dict[str, Any]:
+        """Whether training can start on this interpreter, and the fix if not.
+
+        A missing optional extra used to surface as a traceback from inside
+        ``train_ppo``. The window needs the answer *before* an operator presses
+        Launch, and it needs the exact command, because "install the training
+        extras" is not a string anybody should have to reconstruct.
+        """
+        from .ppo import TRAINING_INSTALL_HINT, missing_training_dependencies
+
+        missing = missing_training_dependencies()
+        return {
+            "training_ready": not missing,
+            "training_missing": list(missing),
+            "training_install_hint": TRAINING_INSTALL_HINT,
+        }
+
+    def install_training_extras(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
+        """Run ``pip install -e '.[training]'`` in this checkout.
+
+        Deliberately not a silent repair: it is the operator's own button, it
+        runs in their interpreter, and its whole output comes back so the
+        window can show what actually happened instead of a success flag.
+        """
+        command = [sys.executable, "-m", "pip", "install", "-e", ".[training]"]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(self.project_root),
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "ok": False,
+                "command": " ".join(command),
+                "returncode": None,
+                "error": str(exc),
+                "output": "",
+            }
+        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+        return {
+            "ok": completed.returncode == 0,
+            "command": " ".join(command),
+            "returncode": completed.returncode,
+            "error": None
+            if completed.returncode == 0
+            else f"pip exited with {completed.returncode}",
+            "output": output[-4000:],
+        }
 
     # ------------------------------------------------------------------
     # Hardware profile / first-start wizard

@@ -69,7 +69,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .benchmark import benchmark_simulation
+from .benchmark import benchmark_simulation, frames_per_second
 from .sharded_env import (
     physical_core_estimate,
     worker_compatibility,
@@ -79,11 +79,14 @@ PIPELINE_FORMAT = "sandboxai.benchmark_pipeline/v1"
 RECOMMENDATION_FORMAT = "sandboxai.recommended_config/v1"
 PIPELINE_REPORT_NAME = "pipeline.json"
 
-#: Default wall-clock budget for time mode: the middle of the 10-30 minute
-#: range the Control Center offers.
-DEFAULT_TIME_BUDGET_MINUTES = 15.0
+#: Default wall-clock budget for time mode. It has to carry
+#: :data:`MIN_SCREEN_CONFIGS` measurements plus validation, which 15 minutes
+#: did not once the sweep went from ~50 candidates to well over a hundred:
+#: at the 3 s floor plus ~2 s of process startup per configuration, 100
+#: configurations are already ~8 minutes of screening.
+DEFAULT_TIME_BUDGET_MINUTES = 30.0
 MIN_TIME_BUDGET_MINUTES = 1.0
-MAX_TIME_BUDGET_MINUTES = 60.0
+MAX_TIME_BUDGET_MINUTES = 120.0
 
 #: Steps mode: per-configuration screening target (per environment).
 DEFAULT_SCREEN_STEPS = 2_000
@@ -112,6 +115,13 @@ SCREEN_TIME_SHARE = 0.55
 #: Bounds for the per-configuration screening cap in time mode.
 MIN_SCREEN_SECONDS_PER_CONFIG = 3.0
 MAX_SCREEN_SECONDS_PER_CONFIG = 30.0
+#: How many configurations a sweep must still measure after the budget has
+#: thinned the grid. The point of the sweep is to find the best topology, and
+#: a grid thinned to twenty rows answers "which of these twenty" - it cannot
+#: find a knee in the scaling curve that sits between two surviving rows.
+#: Below this the pipeline keeps the configurations and lets the run take as
+#: long as it takes rather than pretending it measured enough.
+MIN_SCREEN_CONFIGS = 100
 #: Estimated per-configuration process startup/warmup overhead that is not
 #: part of the measurement itself (planning only).
 ESTIMATED_STARTUP_SECONDS_PER_CONFIG = 2.0
@@ -214,8 +224,42 @@ def available_runtime(
 # ---------------------------------------------------------------------------
 
 
+#: The environment rungs the sweep measures, widest first. ``12`` and the
+#: 96..258 range are in it because the knee of the scaling curve is not a
+#: power of two: a sweep that only probes doublings reports the knee as
+#: "somewhere between 64 and 128" and then recommends a guess. The ladder
+#: ends at 258 - the widest count this project is asked to sweep - with the
+#: power of two below it kept as its own rung.
+DEFAULT_ENVIRONMENT_LADDER: tuple[int, ...] = (
+    1,
+    2,
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48,
+    64,
+    96,
+    128,
+    160,
+    192,
+    224,
+    256,
+    258,
+)
+
+#: Widest environment count the default sweep will probe.
+MAX_DEFAULT_ENVIRONMENTS = 258
+
+#: Floor for the ladder: every host measures up to at least this many
+#: environments, however few cores it has.
+MIN_DEFAULT_ENVIRONMENTS = 128
+
+
 def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
-    """Environment ladder scaled to the host (64 to 128 environments).
+    """Environment ladder scaled to the host (128 to 258 environments).
 
     Not a recommendation — it is the sweep the pipeline will *measure*, and
     the screening budget thins it (``fit_candidates_to_budget``), so the
@@ -225,14 +269,13 @@ def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
     never tried the wider topologies.
     """
     physical = physical_core_estimate(cpu_count)
-    # Floor of 64: environments are sharded across workers, so a wide
-    # environment count is cheap - the workers are what consume cores. A
-    # modest host therefore still gets to *measure* the wide topologies
-    # instead of never trying them, and the screening budget decides how
-    # many of these rungs actually get run.
-    cap = max(64, min(128, physical * 8))
-    ladder = (1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128)
-    counts = [value for value in ladder if value <= cap]
+    # Environments are sharded across workers, so a wide environment count is
+    # cheap - the workers are what consume cores. A modest host therefore
+    # still gets to *measure* the wide topologies instead of never trying
+    # them (floor of 128), while anything from a 20-thread desktop up reaches
+    # the full 258 and lets the screening budget decide what actually runs.
+    cap = max(MIN_DEFAULT_ENVIRONMENTS, min(MAX_DEFAULT_ENVIRONMENTS, physical * 32))
+    counts = [value for value in DEFAULT_ENVIRONMENT_LADDER if value <= cap]
     if cap not in counts:
         counts.append(cap)
     return tuple(sorted(counts))
@@ -243,9 +286,15 @@ def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
 #: grid only gets more expensive to screen.
 MAX_DEFAULT_WORKERS = 32
 
+#: The worker rungs for one environment count. Powers of two alone left the
+#: sweep guessing between doublings, and the whole point of measuring is to
+#: not guess: 3/6/12/20/24 fill the gaps where a sharded topology actually
+#: turns over.
+DEFAULT_WORKER_LADDER: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
+
 
 def default_worker_counts(environment_count: int, cpu_count: int | None = None) -> tuple[int, ...]:
-    """Worker ladder for one environment count: 1, powers of two, and the host's own step.
+    """Worker ladder for one environment count, up to :data:`MAX_DEFAULT_WORKERS`.
 
     The ladder deliberately reaches past the conservative ``auto`` worker
     count (``recommended_worker_count``, which reserves cores for the
@@ -256,12 +305,15 @@ def default_worker_counts(environment_count: int, cpu_count: int | None = None) 
     environments would be collapsed anyway) and by
     :data:`MAX_DEFAULT_WORKERS`.
     """
-    ceiling = min(MAX_DEFAULT_WORKERS, max(2, physical_core_estimate(cpu_count) * 2))
-    ceiling = min(ceiling, int(environment_count))
-    counts = {1}
-    for power in (2, 4, 8, 16, 32):
-        if power <= ceiling:
-            counts.add(power)
+    # The host's core count no longer caps the ladder. It used to, and that
+    # is why a sweep on this project's own machine never probed past 20
+    # workers: the ceiling was a guess about what *should* win, and a guess
+    # is not a measurement. Oversubscribed rows are slower, which is exactly
+    # what the sweep is for - and ``worker_compatibility`` still warns about
+    # every one of them, so the report says which rows are oversubscribed.
+    ceiling = min(MAX_DEFAULT_WORKERS, int(environment_count))
+    counts = {value for value in DEFAULT_WORKER_LADDER if value <= ceiling}
+    counts.add(1)
     if ceiling > 1:
         counts.add(ceiling)
     return tuple(sorted(counts))
@@ -337,6 +389,7 @@ def fit_candidates_to_budget(
     *,
     min_seconds_per_config: float = MIN_SCREEN_SECONDS_PER_CONFIG,
     max_seconds_per_config: float = MAX_SCREEN_SECONDS_PER_CONFIG,
+    min_configs: int = MIN_SCREEN_CONFIGS,
 ) -> tuple[list[dict[str, Any]], float]:
     """Thin the candidate grid until it fits the screening time budget.
 
@@ -345,6 +398,12 @@ def fit_candidates_to_budget(
     density: worker variants are dropped first (the single-process baseline
     and the largest worker count survive longest), then the environment
     ladder is decimated evenly with its endpoints preserved.
+
+    It stops at ``min_configs``. Thinning past that point protects the clock
+    by destroying the measurement: a sweep of twenty rows cannot locate a
+    knee, and the caller would still report its answer as "the best
+    configuration". Below the floor the configurations win and the run takes
+    as long as it takes, at the per-configuration minimum.
     """
     current = list(candidates)
 
@@ -361,7 +420,8 @@ def fit_candidates_to_budget(
             screen_budget_seconds // (min_seconds_per_config + ESTIMATED_STARTUP_SECONDS_PER_CONFIG)
         ),
     )
-    while len(current) > max_configs:
+    floor = max(1, min(min_configs, len(candidates)))
+    while len(current) > max(max_configs, floor):
         environments = sorted({row["environments"] for row in current})
         worker_counts = sorted({row["workers"] for row in current})
         if len(worker_counts) > 2:
@@ -378,7 +438,10 @@ def fit_candidates_to_budget(
                 for row in current
                 if row["workers"] == 1 or row["environments"] == environments[-1]
             ]
-        if len(thinned) == len(current):
+        # A step that would take the grid under the floor is refused rather
+        # than applied and undone: one thinning pass drops several rows at
+        # once, so "stop at 100" cannot be checked after the fact.
+        if len(thinned) == len(current) or len(thinned) < floor:
             break
         current = thinned
     return current, cap_for(len(current))
@@ -1049,6 +1112,7 @@ def _run_screening(
                 configuration=dict(_cand),
                 live=dict(live_payload),
                 steps_per_second=live_payload.get("steps_per_second"),
+                frames_per_second=live_payload.get("frames_per_second"),
                 completed_rows=[dict(r, stage="screening") for r in rows],
                 stage_elapsed_seconds=time.monotonic() - started,
             )
@@ -1080,6 +1144,7 @@ def _run_screening(
             configuration=dict(candidate),
             row=dict(row),
             steps_per_second=row.get("steps_per_second"),
+            frames_per_second=row.get("frames_per_second"),
             completed_rows=[dict(r, stage="screening") for r in rows],
             stage_elapsed_seconds=time.monotonic() - started,
         )
@@ -1329,6 +1394,7 @@ def _run_validation(
                 )
             validation_row.update(measurement.to_dict())
             validation_row["status"] = "measured" if measurement.ok else measurement.status
+            validation_row["frames_per_second"] = frames_per_second(validation_row)
             if measurement.error:
                 validation_row["error"] = measurement.error
         except Exception as exc:  # a failed slice is data, not a crash
@@ -1344,6 +1410,7 @@ def _run_validation(
             configuration=dict(validation_row),
             row=dict(validation_row),
             steps_per_second=validation_row.get("steps_per_second"),
+            frames_per_second=validation_row.get("frames_per_second"),
             completed_rows=prior_rows + [dict(r, stage="validation") for r in rows],
             stage_elapsed_seconds=time.monotonic() - started,
         )

@@ -20,8 +20,13 @@ import pytest
 
 from sandboxai.benchmark_pipeline import (
     DEFAULT_TIME_BUDGET_MINUTES,
+    ESTIMATED_STARTUP_SECONDS_PER_CONFIG,
     JITTER_THRESHOLD,
+    MAX_DEFAULT_ENVIRONMENTS,
     MAX_TIME_BUDGET_MINUTES,
+    MIN_DEFAULT_ENVIRONMENTS,
+    MIN_SCREEN_CONFIGS,
+    MIN_SCREEN_SECONDS_PER_CONFIG,
     MIN_TIME_BUDGET_MINUTES,
     NEAR_BEST_FRACTION,
     PIPELINE_FORMAT,
@@ -79,8 +84,16 @@ class TestPipelineBudget:
         with pytest.raises(ValueError):
             PipelineBudget.for_time(MAX_TIME_BUDGET_MINUTES + 1)
 
-    def test_default_budget_is_the_middle_of_the_offered_range(self):
-        assert DEFAULT_TIME_BUDGET_MINUTES == 15.0
+    def test_default_budget_can_carry_the_minimum_sweep(self):
+        # Screening buys configurations at roughly the per-configuration
+        # floor plus process startup. A default that cannot pay for
+        # MIN_SCREEN_CONFIGS of them would quietly thin the sweep to
+        # something that can no longer locate the knee.
+        affordable = (DEFAULT_TIME_BUDGET_MINUTES * 60.0 * 0.55) / (
+            MIN_SCREEN_SECONDS_PER_CONFIG + ESTIMATED_STARTUP_SECONDS_PER_CONFIG
+        )
+        assert affordable >= MIN_SCREEN_CONFIGS
+        assert MIN_TIME_BUDGET_MINUTES < DEFAULT_TIME_BUDGET_MINUTES < MAX_TIME_BUDGET_MINUTES
 
     def test_invalid_mode_is_rejected(self):
         with pytest.raises(ValueError):
@@ -88,23 +101,53 @@ class TestPipelineBudget:
 
 
 class TestCandidatePlanning:
-    def test_environment_ladder_is_host_scaled_not_hardcoded(self):
-        # Every host probes at least the 64 rung: environments are sharded
-        # across workers, so the cheap side of the sweep must not be
-        # host-scaled away. The screening budget thins the rest.
-        assert default_environment_counts(2) == (1, 2, 4, 8, 16, 24, 32, 48, 64)
-        # A large host reaches the raised ceiling.
-        assert default_environment_counts(32)[-1] == 128
-        assert default_environment_counts(32)[-3:] == (64, 96, 128)
+    def test_environment_ladder_reaches_the_wide_topologies(self):
+        # Every host probes to at least 128 environments: they are sharded
+        # across workers, so the wide side of the sweep must not be
+        # host-scaled away. A desktop reaches the full 258.
+        assert default_environment_counts(2)[-1] == 128
+        assert default_environment_counts(20)[-1] == MAX_DEFAULT_ENVIRONMENTS
+        assert default_environment_counts(32)[-3:] == (224, 256, 258)
+        # The rungs between the powers of two are in the ladder: a knee
+        # reported as "somewhere between 64 and 128" is not a measurement.
+        assert 12 in default_environment_counts(32)
+        assert 160 in default_environment_counts(32)
+
+    def test_the_default_sweep_measures_at_least_the_minimum_configurations(self):
+        # 100 configurations is the floor the pipeline promises; below it a
+        # sweep cannot find the best topology, only the best of the few it
+        # tried. Checked on hosts from a laptop to a workstation.
+        for logical in (4, 8, 12, 20, 32):
+            plan = plan_candidates(None, None, cpu_count=logical)
+            assert len(plan) >= MIN_SCREEN_CONFIGS, (logical, len(plan))
+            assert max(row["environments"] for row in plan) >= MIN_DEFAULT_ENVIRONMENTS
 
     def test_worker_ladder_reaches_past_the_conservative_recommendation(self):
         # 2 environments can never be fed by more than 2 workers.
         assert default_worker_counts(2, cpu_count=32) == (1, 2)
-        # The ladder is bounded by the environment count ...
-        assert default_worker_counts(16, cpu_count=32) == (1, 2, 4, 8, 16)
-        # ... and includes the host's own step, not just powers of two.
-        assert default_worker_counts(64, cpu_count=32) == (1, 2, 4, 8, 16, 32)
-        assert default_worker_counts(128, cpu_count=64) == (1, 2, 4, 8, 16, 32)
+        # The ladder is bounded by the environment count, not by this host's
+        # core count: capping it there was a guess about what should win,
+        # and it is why this project's own 20-thread machine never measured
+        # more than 20 workers.
+        assert default_worker_counts(16, cpu_count=32) == (1, 2, 3, 4, 5, 6, 8, 10, 12, 16)
+        assert default_worker_counts(64, cpu_count=32) == (
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            8,
+            10,
+            12,
+            16,
+            20,
+            24,
+            32,
+        )
+        # A small host gets the same rungs: oversubscribed rows measure as
+        # slow, which is the answer, not a reason to skip the question.
+        assert default_worker_counts(64, cpu_count=8) == default_worker_counts(64, cpu_count=32)
         # Never above the module's own ceiling.
         assert max(default_worker_counts(512, cpu_count=256)) == 32
 
@@ -132,12 +175,32 @@ class TestCandidatePlanning:
 
     def test_budget_thinning_keeps_the_sweep_spread(self):
         candidates = plan_candidates([1, 2, 4, 8, 16], [1, 2, 4, 8], cpu_count=16)
-        thinned, cap = fit_candidates_to_budget(candidates, 60.0)
+        thinned, cap = fit_candidates_to_budget(candidates, 60.0, min_configs=4)
         assert len(thinned) < len(candidates)
         assert 3.0 <= cap <= 30.0
         # Endpoints of the environment ladder survive thinning.
         environments = {row["environments"] for row in thinned}
         assert 1 in environments and 16 in environments
+
+    def test_budget_thinning_never_drops_below_the_configuration_floor(self):
+        """A short budget must not quietly turn a sweep into a handful of rows.
+
+        Thinning protects the clock by destroying the measurement: twenty
+        rows cannot locate a knee, and the report would still present its
+        winner as "the best configuration". Below the floor the sweep keeps
+        its configurations and takes as long as it takes.
+        """
+        candidates = plan_candidates(None, None, cpu_count=20)
+        assert len(candidates) >= MIN_SCREEN_CONFIGS
+        # Two minutes cannot pay for 100 configurations at the 3 s floor.
+        thinned, cap = fit_candidates_to_budget(candidates, 120.0)
+        assert len(thinned) >= MIN_SCREEN_CONFIGS
+        assert cap == MIN_SCREEN_SECONDS_PER_CONFIG
+        # An empty budget still thins a grid that is smaller than the floor
+        # down to something, rather than looping forever.
+        small = plan_candidates([1, 2, 4], [1, 2], cpu_count=16)
+        kept, small_cap = fit_candidates_to_budget(small, 0.0)
+        assert kept and small_cap == MIN_SCREEN_SECONDS_PER_CONFIG
 
 
 class TestAllocateTimeBudget:

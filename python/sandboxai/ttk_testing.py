@@ -16,6 +16,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from .wsl import is_wsl, normalize_host_path, wsl_to_windows_path
+
 __all__ = [
     "DEFAULT_ROBLOX_SHORTCUT",
     "EvidenceStatus",
@@ -538,8 +540,189 @@ def _find_roblox_hwnd(user32: Any) -> tuple[int, str]:
     return found_hwnd, found_title
 
 
+# ---------------------------------------------------------------------------
+# Reaching the Windows desktop: Win32 directly, or PowerShell from WSL
+# ---------------------------------------------------------------------------
+
+#: What this interpreter can use to talk to the Windows desktop.
+#: ``"win32"`` means ctypes straight into user32; ``"powershell"`` means a
+#: WSL process shelling out to the Windows host's PowerShell - the same
+#: interop ``launch_roblox_ttk_testing`` already relies on.
+HOST_BRIDGE_WIN32 = "win32"
+HOST_BRIDGE_POWERSHELL = "powershell"
+
+
+def host_bridge() -> str:
+    """How this interpreter can reach the Windows desktop (``""``: not at all).
+
+    The three window helpers (focus, probe, screenshot) are the only parts of
+    this module that need a *desktop* rather than a filesystem, and they used
+    to give up on anything that was not native Windows. That is exactly the
+    configuration the maintainer runs: WSL driving a Windows Roblox client,
+    where launching works (it goes through ``cmd.exe``) but focusing and
+    photographing the window did nothing at all.
+    """
+    if sys.platform.startswith("win"):
+        return HOST_BRIDGE_WIN32
+    if is_wsl() and _powershell() is not None:
+        return HOST_BRIDGE_POWERSHELL
+    return ""
+
+
+def _powershell(*arguments: str) -> list[str] | None:
+    """A PowerShell command line for the Windows host, or ``None``.
+
+    ``powershell.exe`` (Windows PowerShell, present on every supported
+    Windows) is tried before ``pwsh.exe`` because the scripts below use
+    ``Add-Type``/``System.Drawing``, which both provide, and the older
+    interpreter is the one guaranteed to exist.
+    """
+    for candidate in ("powershell.exe", "powershell", "pwsh.exe"):
+        found = shutil.which(candidate)
+        if found:
+            return [found, "-NoProfile", "-NonInteractive", "-Command", *arguments]
+    return None
+
+
+def _run_host_command(command: list[str], *, timeout: float) -> tuple[int, str]:
+    """Run a Windows-host command and return ``(returncode, combined output)``."""
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    output = "\n".join(
+        part.strip() for part in (completed.stdout, completed.stderr) if part.strip()
+    )
+    return int(completed.returncode), output
+
+
+def _quote_powershell(text: str) -> str:
+    """Single-quote ``text`` for a PowerShell command line."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+#: Finds the Roblox client window, restores it and brings it to the front.
+#: Prints ``OK``, or ``NO_WINDOW`` / ``FOCUS_REFUSED`` and exits non-zero.
+_POWERSHELL_FOCUS = (
+    "$ErrorActionPreference = 'Stop'; "
+    "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;"
+    "public class SandboxFocus {"
+    '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);'
+    '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);'
+    "}'; "
+    "$p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -like 'Roblox*' }"
+    " | Select-Object -First 1; "
+    "if ($null -eq $p) { Write-Output 'NO_WINDOW'; exit 1 }; "
+    "[SandboxFocus]::ShowWindow($p.MainWindowHandle, 9) | Out-Null; "
+    "if ([SandboxFocus]::SetForegroundWindow($p.MainWindowHandle)) { Write-Output 'OK'; exit 0 }; "
+    "Write-Output 'FOCUS_REFUSED'; exit 1"
+)
+
+#: Reports the Roblox window as ``WINDOW|<pid>|<l,t,r,b>|<focused 0|1>|<title>``
+#: or ``NONE``. A window rectangle is what a screenshot needs to capture the
+#: client instead of the whole desktop.
+_POWERSHELL_PROBE = (
+    "$ErrorActionPreference = 'Stop'; "
+    "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;"
+    "public struct SandboxRect { public int Left; public int Top; public int Right; public int Bottom; }"
+    "public class SandboxProbe {"
+    '[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out SandboxRect r);'
+    '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();'
+    "}'; "
+    "$p = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -like 'Roblox*' }"
+    " | Select-Object -First 1; "
+    "if ($null -eq $p) { Write-Output 'NONE'; exit 0 }; "
+    "$r = New-Object SandboxRect; "
+    "[SandboxProbe]::GetWindowRect($p.MainWindowHandle, [ref]$r) | Out-Null; "
+    "$f = 0; if ($p.MainWindowHandle -eq [SandboxProbe]::GetForegroundWindow()) { $f = 1 }; "
+    "Write-Output ('WINDOW|' + $p.Id + '|' + $r.Left + ',' + $r.Top + ',' + $r.Right + ',' + $r.Bottom"
+    " + '|' + $f + '|' + $p.MainWindowTitle)"
+)
+
+
+def _powershell_capture_script(target: str, rect: tuple[int, int, int, int] | None) -> str:
+    """A capture script for the window rectangle, or the whole screen."""
+    region = "SCREEN" if rect is None else ",".join(str(int(value)) for value in rect)
+    return (
+        "$ErrorActionPreference = 'Stop'; "
+        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
+        f"$region = {_quote_powershell(region)}; "
+        "if ($region -eq 'SCREEN') { "
+        "$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+        "$x = $b.X; $y = $b.Y; $w = $b.Width; $h = $b.Height "
+        "} else { "
+        "$v = $region -split ','; "
+        "$x = [int]$v[0]; $y = [int]$v[1]; $w = [int]$v[2] - $x; $h = [int]$v[3] - $y "
+        "}; "
+        "if ($w -le 0 -or $h -le 0) { Write-Output 'EMPTY_RECT'; exit 1 }; "
+        "$bmp = New-Object System.Drawing.Bitmap($w, $h); "
+        "$g = [System.Drawing.Graphics]::FromImage($bmp); "
+        "$g.CopyFromScreen($x, $y, 0, 0, $bmp.Size); "
+        f"$bmp.Save({_quote_powershell(target)}, [System.Drawing.Imaging.ImageFormat]::Png); "
+        "$g.Dispose(); $bmp.Dispose(); "
+        f"Write-Output {_quote_powershell(target)}"
+    )
+
+
+def _parse_window_probe(output: str) -> dict[str, Any]:
+    """Turn the probe's ``WINDOW|...`` line into the shape callers expect."""
+    empty: dict[str, Any] = {
+        "window_found": False,
+        "window_title": None,
+        "window_width": None,
+        "window_height": None,
+        "window_focused": False,
+        "window_pid": None,
+    }
+    line = ""
+    for candidate in output.splitlines():
+        if candidate.strip().startswith("WINDOW|"):
+            line = candidate.strip()
+            break
+    if not line:
+        return empty
+    parts = line.split("|")
+    if len(parts) < 5:
+        return empty
+    rect_parts = [value.strip() for value in parts[2].split(",")]
+    if len(rect_parts) != 4:
+        return empty
+    try:
+        left, top, right, bottom = (int(value) for value in rect_parts)
+        pid = int(parts[1].strip())
+    except ValueError:
+        return empty
+    return {
+        "window_found": True,
+        # The title is last because it is free text and may contain the
+        # separator (window titles do).
+        "window_title": "|".join(parts[4:]).strip() or "Roblox",
+        "window_width": max(0, right - left),
+        "window_height": max(0, bottom - top),
+        "window_rect": [left, top, right, bottom],
+        "window_focused": parts[3].strip() == "1",
+        "window_pid": pid or None,
+    }
+
+
 def _probe_roblox_window() -> dict[str, Any]:
-    """Read the live Roblox client window geometry and PID on Windows via Win32 user32."""
+    """Read the live Roblox client window geometry and PID.
+
+    On Windows this goes straight into user32. Under WSL there is no
+    ``ctypes.windll``, so the same question is asked of the Windows host
+    through PowerShell - which is how the launch helpers already reach it.
+    """
+    if host_bridge() == HOST_BRIDGE_POWERSHELL:
+        command = _powershell(_POWERSHELL_PROBE)
+        if command is not None:
+            try:
+                _code, output = _run_host_command(command, timeout=15.0)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                output = ""
+            return _parse_window_probe(output)
     if not sys.platform.startswith("win"):
         return {
             "window_found": False,
@@ -757,7 +940,10 @@ def connect_roblox_live_session(custom_shortcut: str | Path | None = None) -> di
         "connected": False,
         "running": False,
         "live_session": session,
-        "message": "Roblox Player is not running yet — click 'Launch TTK Testing' or 'Open Shortcut' to start it.",
+        "message": (
+            "Roblox Player is not running yet — click 'Launch TTK Testing' to start it, "
+            "or set a shortcut under Settings -> Roblox TTK Testing."
+        ),
     }
 
 
@@ -826,56 +1012,67 @@ def launch_roblox_ttk_testing(
 
 
 def capture_roblox_screenshot(project_root: str | Path) -> dict[str, Any]:
-    """Capture a screenshot of the active Roblox window (or primary screen) for calibration."""
-    captures_dir = Path(project_root) / ".sandboxai" / "ttk_captures"
+    """Capture the Roblox window (or the primary screen) into ``ttk_captures``.
+
+    Three routes, tried in order of fidelity:
+
+    * Pillow's ``ImageGrab`` on native Windows, which can crop to the window
+      rectangle this module already knows how to read;
+    * the Windows host's PowerShell, which is the only route that works from
+      WSL - the script writes to the **Windows form of the captures
+      directory**, so the file lands where Python expects it without a copy;
+    * nothing, reported as such.
+
+    The WSL path is why this function translates the output path at all:
+    ``/mnt/c/...`` is meaningless to PowerShell and ``C:\\...`` is meaningless
+    to ``Path.open`` on the Linux side, and a capture that silently writes to
+    the wrong one of the two is worse than an error.
+    """
+    captures_dir = Path(normalize_host_path(project_root)) / ".sandboxai" / "ttk_captures"
     captures_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     out_path = captures_dir / f"ttk_capture_{stamp}.png"
     win = _probe_roblox_window()
     bbox = tuple(win["window_rect"]) if win.get("window_rect") else None
-    try:
-        from PIL import ImageGrab  # type: ignore
-
-        image = ImageGrab.grab(bbox=bbox)
-        image.save(out_path)
-        return {
-            "ok": True,
-            "path": str(out_path),
-            "window_captured": bool(bbox),
-            "resolution": f"{image.width}x{image.height}",
-        }
-    except Exception:
-        pass
     if sys.platform.startswith("win"):
-        ps_script = (
-            "Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
-            "$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
-            "$bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height); "
-            "$g = [System.Drawing.Graphics]::FromImage($bmp); "
-            "$g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); "
-            f"$bmp.Save('{str(out_path).replace(chr(39), chr(39) * 2)}'); "
-            "$g.Dispose(); $bmp.Dispose();"
-        )
         try:
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_script],
-                check=True,
-                timeout=8.0,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if out_path.is_file():
+            from PIL import ImageGrab  # type: ignore
+
+            image = ImageGrab.grab(bbox=bbox)
+            image.save(out_path)
+            return {
+                "ok": True,
+                "path": str(out_path),
+                "window_captured": bool(bbox),
+                "resolution": f"{image.width}x{image.height}",
+            }
+        except Exception:
+            pass
+    if host_bridge():
+        target = wsl_to_windows_path(out_path)
+        command = _powershell(_powershell_capture_script(target, bbox))
+        if command is not None:
+            try:
+                code, output = _run_host_command(command, timeout=30.0)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                return {"ok": False, "error": f"screenshot capture failed: {exc}"}
+            if code == 0 and out_path.is_file():
                 return {
                     "ok": True,
                     "path": str(out_path),
                     "window_captured": bool(bbox),
-                    "resolution": "screen",
+                    "resolution": "window" if bbox else "screen",
                 }
-        except Exception as exc:
-            return {"ok": False, "error": f"screenshot capture failed: {exc}"}
+            return {
+                "ok": False,
+                "error": f"screenshot capture failed: {output or 'PowerShell wrote no file'}",
+            }
     return {
         "ok": False,
-        "error": "Screenshot capture requires Windows or Pillow (PIL.ImageGrab).",
+        "error": (
+            "Screenshot capture needs Pillow (PIL.ImageGrab) or a Windows host "
+            "whose PowerShell can be reached from WSL."
+        ),
     }
 
 
@@ -927,12 +1124,50 @@ def save_ttk_calibration_entry(
 
 
 def focus_roblox_window() -> dict[str, Any]:
-    """Bring the active Windows Roblox client window to the foreground."""
+    """Bring the Roblox client window to the foreground.
+
+    Native Windows uses user32 directly. Under WSL the same Win32 calls are
+    made by the Windows host's PowerShell, so the button does what it says on
+    the setup the project actually runs on instead of reporting that a
+    platform it cannot use is missing.
+    """
+    if host_bridge() == HOST_BRIDGE_POWERSHELL:
+        command = _powershell(_POWERSHELL_FOCUS)
+        if command is None:
+            return {
+                "ok": False,
+                "focused": False,
+                "message": "Window focus needs a Windows PowerShell reachable from WSL.",
+            }
+        try:
+            code, output = _run_host_command(command, timeout=15.0)
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "focused": False, "message": f"Focus failed: {exc}"}
+        if code == 0 and "OK" in output:
+            return {
+                "ok": True,
+                "focused": True,
+                "message": "Roblox window restored and brought to the foreground.",
+            }
+        if "NO_WINDOW" in output:
+            return {
+                "ok": False,
+                "focused": False,
+                "message": "Roblox window not found. Start Roblox Player first.",
+            }
+        return {
+            "ok": False,
+            "focused": False,
+            "message": output or "Focus failed: PowerShell reported no reason.",
+        }
     if not sys.platform.startswith("win"):
         return {
             "ok": False,
             "focused": False,
-            "message": "Window focus control requires Windows (Win32 user32).",
+            "message": (
+                "Window focus control needs Windows (Win32 user32) or a WSL host "
+                "whose PowerShell can be reached."
+            ),
         }
     try:
         import ctypes
@@ -1171,7 +1406,10 @@ def analyze_roblox_ttk_screenshot(
     if target is None or not target.is_file():
         return {
             "ok": False,
-            "error": "No Roblox TTK screenshot found in .sandboxai/ttk_screenshots yet.",
+            "error": (
+                "No Roblox TTK screenshot yet. Press Screenshot with the Roblox "
+                "window open; captures land in .sandboxai/ttk_captures."
+            ),
             "path": None,
         }
     dims = _read_png_dimensions(target)

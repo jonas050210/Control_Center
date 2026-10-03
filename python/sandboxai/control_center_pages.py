@@ -28,7 +28,6 @@ from .control_center_layout import (
 )
 from .control_center_theme import (
     DENSITIES,
-    LAYOUT_MODES,
     MOTION_LEVELS,
     THEME_NAMES,
     THEMES,
@@ -558,7 +557,7 @@ class DashboardPage(Page):
         "state",
         "run id",
         "progress",
-        "fps",
+        "steps/s",
         "elapsed / eta",
         "envs / workers",
         "agents",
@@ -566,6 +565,13 @@ class DashboardPage(Page):
         "reward",
     )
 
+    #: Two cards used to sit here and were cut for cause. "Telemetry charts"
+    #: duplicated the run's own charts one page over (Runs / Checkpoints
+    #: plots the same series against the run you actually selected) while
+    #: polling telemetry for a dashboard nobody was reading, and "Run
+    #: insight" listed checkpoints and PPO diagnostics - which is what the
+    #: Runs / Checkpoints page is for. What is left is the state you need
+    #: before you decide where to click next.
     widgets = (
         WidgetSpec(
             "kpis",
@@ -575,20 +581,18 @@ class DashboardPage(Page):
             max_span=3,
             removable=False,
         ),
-        WidgetSpec("workflow", "Workflow", "Roblox/TTK bridge plus the one-click run chain."),
         WidgetSpec(
-            "run_insight", "Run insight", "Checkpoints, PPO health and convergence.", default_span=2
+            "workflow",
+            "Roblox",
+            "Roblox/TTK bridge: launch, connect, focus, capture, analyse.",
+            default_span=2,
         ),
+        WidgetSpec("quick_actions", "Quick actions", "Open folders, resume, evaluate."),
         WidgetSpec(
-            "charts",
-            "Telemetry charts",
-            "Reward, throughput and PPO KL history.",
+            "active_runs",
+            "Active processes",
+            "Everything running besides this window.",
             default_span=3,
-            max_span=3,
-        ),
-        WidgetSpec("active_runs", "Active processes", "Everything running besides this window."),
-        WidgetSpec(
-            "quick_actions", "Quick actions", "Open folders, resume, evaluate.", default_span=2
         ),
     )
 
@@ -616,10 +620,8 @@ class DashboardPage(Page):
         board = self.board(area.body)
         board.add("kpis", self._build_kpis)
         board.add("workflow", self._build_workflow)
-        board.add("run_insight", self._build_run_insight)
-        board.add("charts", self._build_charts)
-        board.add("active_runs", self._build_active_runs)
         board.add("quick_actions", self._build_quick_actions)
+        board.add("active_runs", self._build_active_runs)
         board.rebuild()
         self._last_run_dir: str | None = None
 
@@ -636,8 +638,18 @@ class DashboardPage(Page):
         self.stats.pack(fill="x")
         return self.stats
 
+    #: Actions that need a live Roblox window. They are disabled until one
+    #: exists instead of failing when pressed: "Focus window" on a host with
+    #: no client used to answer with a platform error the operator could not
+    #: do anything about.
+    WINDOW_ACTIONS = ("Focus window", "Screenshot", "Analyze HUD")
+
     def _build_workflow(self, parent: tk.Misc) -> tk.Widget:
-        card = self.card(parent, "Workflow", "1. TTK bridge   ·   2. benchmark   ·   3. training")
+        card = self.card(
+            parent,
+            "Roblox",
+            "TTK Testing — open, focus and photograph the client; the human plays it",
+        )
         self.roblox_bridge_label = ttk.Label(
             card.body,
             text="Probing Roblox Player & TTK Testing…",
@@ -657,71 +669,72 @@ class DashboardPage(Page):
         buttons.pack(fill="x")
         buttons.columnconfigure(0, weight=1, uniform="wfbtn")
         buttons.columnconfigure(1, weight=1, uniform="wfbtn")
-        workflow_actions = (
-            ("Launch TTK Testing", self._launch_roblox_ttk, "Primary.TButton"),
-            ("Connect Roblox", self._connect_roblox_ttk, "TButton"),
-            ("Open Shortcut (.lnk)", self._launch_roblox_shortcut, "Ghost.TButton"),
-            ("Focus window", self._focus_roblox_window, "Ghost.TButton"),
-            ("Screenshot", self._capture_roblox_window, "Ghost.TButton"),
-            ("Analyze HUD", self._analyze_roblox_screenshot, "Ghost.TButton"),
-            ("Export TTK profile", self._export_roblox_ttk_profile, "Ghost.TButton"),
-            ("CPU turbo", self._enable_ubuntu_cpu_turbo, "Ghost.TButton"),
-            ("Start benchmark", self._start_benchmark_from_dashboard, "Primary.TButton"),
-            ("Run benchmark", lambda: self.app.show_page("Benchmarks"), "TButton"),
-            ("Open training", lambda: self.app.show_page("Training"), "TButton"),
+        roblox_actions = (
+            (
+                "Launch TTK Testing",
+                self._launch_roblox_ttk,
+                "Primary.TButton",
+                "Join TTK Testing through the public deep link (or your configured shortcut)",
+            ),
+            (
+                "Connect Roblox",
+                self._connect_roblox_ttk,
+                "TButton",
+                "Probe the running Roblox Player and report which place it is in",
+            ),
+            (
+                "Focus window",
+                self._focus_roblox_window,
+                "Ghost.TButton",
+                "Bring the Roblox window to the foreground — needs a running client",
+            ),
+            (
+                "Screenshot",
+                self._capture_roblox_window,
+                "Ghost.TButton",
+                "Capture the Roblox window into .sandboxai/ttk_captures for calibration",
+            ),
+            (
+                "Analyze HUD",
+                self._analyze_roblox_screenshot,
+                "Ghost.TButton",
+                "Read resolution, aspect ratio and HUD layout from the newest capture",
+            ),
+            (
+                "Export TTK profile",
+                self._export_roblox_ttk_profile,
+                "Ghost.TButton",
+                "Write the TTK combat profile for the mechanics calibrated so far",
+            ),
         )
-        for idx, (label, command, style) in enumerate(workflow_actions):
-            r, c = divmod(idx, 2)
-            ttk.Button(buttons, text=label, command=command, style=style).grid(
-                row=r,
-                column=c,
+        # "CPU turbo" used to be the seventh button here. It is a host
+        # setting, not a Roblox action, and Settings -> Host already owns it
+        # (with the live governor state next to it), so it was a second
+        # control for the same thing in a card about the game client.
+        self.roblox_action_buttons: dict[str, ttk.Button] = {}
+        for idx, (label, command, style, tip) in enumerate(roblox_actions):
+            row, column = divmod(idx, 2)
+            button = ttk.Button(buttons, text=label, command=command, style=style)
+            button.grid(
+                row=row,
+                column=column,
                 sticky="ew",
-                padx=(0 if c == 0 else self.app.px(4, minimum=2), 0),
+                padx=(0 if column == 0 else self.app.px(4, minimum=2), 0),
                 pady=self.app.px(2, minimum=1),
             )
+            ToolTip(button, tip, bus=self.app.bus)
+            self.roblox_action_buttons[label] = button
+        # Launch is the one action that works without a client; the three
+        # window helpers start disabled and the status probe enables them.
+        self._set_roblox_window_actions(False)
         return card
 
-    def _build_run_insight(self, parent: tk.Misc) -> tk.Widget:
-        card = self.card(parent, "Checkpoints, PPO diagnostics & convergence")
-        self.checkpoints_label = ttk.Label(
-            card.body, text="Waiting for run data…", justify="left", style="CardLabel.TLabel"
-        )
-        self.checkpoints_label.pack(anchor="w")
-        self.convergence_label = ttk.Label(
-            card.body,
-            text="Convergence radar: waiting for telemetry",
-            justify="left",
-            style="FieldHelp.TLabel",
-        )
-        self.convergence_label.pack(anchor="w", pady=(self.app.px(6, minimum=3), 0))
-        return card
-
-    def _build_charts(self, parent: tk.Misc) -> tk.Widget:
-        card = self.card(parent, "Live telemetry", "Bounded history, nothing estimated")
-        grid = ttk.Frame(card.body, style="CardInner.TFrame")
-        grid.pack(fill="both", expand=True)
-        self.reward_chart = LineChart(
-            grid, "Mean episode reward vs. timesteps", bus=self.app.bus, color=self.app.color("ok")
-        )
-        self.fps_chart = LineChart(
-            grid, "Steps/second vs. timesteps", bus=self.app.bus, color=self.app.color("accent")
-        )
-        self.kl_chart = LineChart(
-            grid, "PPO approx. KL vs. timesteps", bus=self.app.bus, color=self.app.color("warn")
-        )
-        for index, chart in enumerate((self.reward_chart, self.fps_chart, self.kl_chart)):
-            chart.grid(
-                row=index // 2,
-                column=index % 2,
-                sticky="nsew",
-                padx=self.app.px(5, minimum=2),
-                pady=self.app.px(5, minimum=2),
-            )
-        grid.columnconfigure(0, weight=1)
-        grid.columnconfigure(1, weight=1)
-        grid.rowconfigure(0, weight=1)
-        grid.rowconfigure(1, weight=1)
-        return card
+    def _set_roblox_window_actions(self, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        for label in self.WINDOW_ACTIONS:
+            button = self.roblox_action_buttons.get(label)
+            if button is not None:
+                button.configure(state=state)
 
     def _build_active_runs(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(parent, "Active processes", "Benchmarks & evaluations")
@@ -780,6 +793,7 @@ class DashboardPage(Page):
             if tview["connected"]
             else (self.app.color("warn") if tview["roblox_running"] else self.app.color("text")),
         )
+        self._set_roblox_window_actions(bool(tview["roblox_running"]))
 
     def _launch_roblox_ttk(self) -> None:
         if not hasattr(self.adapter, "launch_roblox_ttk_testing"):
@@ -799,24 +813,6 @@ class DashboardPage(Page):
             lambda: self.adapter.launch_roblox_ttk_testing(shortcut, direct_place=True), _done
         )
 
-    def _launch_roblox_shortcut(self) -> None:
-        if not hasattr(self.adapter, "launch_roblox_ttk_testing"):
-            return
-        shortcut = self._configured_roblox_shortcut()
-
-        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
-            if error is not None or not result or not result.get("ok"):
-                self.app.set_status(
-                    f"Shortcut launch failed: {error or (result or {}).get('error')}", error=True
-                )
-            else:
-                self.app.set_status(str(result.get("message") or "Launched Roblox shortcut"))
-            self.refresh()
-
-        self.app.background.submit(
-            lambda: self.adapter.launch_roblox_ttk_testing(shortcut, direct_place=False), _done
-        )
-
     def _connect_roblox_ttk(self) -> None:
         if not hasattr(self.adapter, "connect_roblox_ttk_testing"):
             return
@@ -834,12 +830,6 @@ class DashboardPage(Page):
 
         self.app.background.submit(lambda: self.adapter.connect_roblox_ttk_testing(shortcut), _done)
 
-    def _start_benchmark_from_dashboard(self) -> None:
-        self.app.show_page("Benchmarks")
-        bench_page = self.app.pages.get("Benchmarks")
-        if bench_page is not None and hasattr(bench_page, "_start"):
-            bench_page._start()
-
     def _focus_roblox_window(self) -> None:
         if not hasattr(self.adapter, "focus_roblox_window"):
             return
@@ -853,19 +843,6 @@ class DashboardPage(Page):
                 self.app.set_status(str(result.get("message") or "Roblox window focused"))
 
         self.app.background.submit(self.adapter.focus_roblox_window, _done)
-
-    def _enable_ubuntu_cpu_turbo(self) -> None:
-        if not hasattr(self.adapter, "enable_ubuntu_cpu_turbo"):
-            return
-
-        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
-            if error is not None or not result:
-                self.app.set_status(f"CPU Turbo failed: {error}", error=True)
-                return
-            uview = vm.ubuntu_cpu_turbo_view(result)
-            self.app.set_status(f"Activated {uview['badge']} — {uview['summary']}")
-
-        self.app.background.submit(self.adapter.enable_ubuntu_cpu_turbo, _done)
 
     def _capture_roblox_window(self) -> None:
         if not hasattr(self.adapter, "capture_roblox_screenshot"):
@@ -908,18 +885,9 @@ class DashboardPage(Page):
         self.set_hint(
             ""
             if view["run_id"]
-            else (
-                "No runs yet. The workflow card starts the TTK bridge, a benchmark "
-                "and a training run - in that order."
-            )
+            else ("No runs yet. The Roblox card opens the TTK client; Training launches a run.")
         )
-        previous_run_dir = self._last_run_dir
         self._last_run_dir = view.get("run_dir")
-        if self._last_run_dir != previous_run_dir:
-            # Never temporarily chart a prior run while the next telemetry
-            # read is still in flight for the newly discovered run.
-            for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
-                chart.set_points([])
         state = view["state"] or ""
         state_color = state_colors(self.palette).get(state)
         progress_text = (
@@ -933,7 +901,7 @@ class DashboardPage(Page):
                 "state": (view["state"] or "no runs yet", state_color),
                 "run id": (view["run_id"] or "n/a", None),
                 "progress": (progress_text, None),
-                "fps": (vm.format_number(view["fps"], 1), None),
+                "steps/s": (vm.format_number(view["steps_per_second"], 1), None),
                 "elapsed / eta": (
                     f"{vm.format_duration(view['elapsed_seconds'])} / {vm.format_duration(view['eta_seconds'])}",
                     None,
@@ -946,13 +914,13 @@ class DashboardPage(Page):
                 "reward": (vm.format_number(view["reward"], 3), None),
             },
             numeric={
-                "fps": (
-                    float(view["fps"]) if isinstance(view["fps"], (int, float)) else 0.0,
-                    vm.format_number(view["fps"], 1),
+                "steps/s": (
+                    float(view["steps_per_second"]),
+                    vm.format_number(view["steps_per_second"], 1),
                     lambda value: vm.format_number(value, 1),
                 )
             }
-            if isinstance(view["fps"], (int, float))
+            if isinstance(view["steps_per_second"], (int, float))
             else None,
         )
         self.set_heading_pill(
@@ -974,66 +942,6 @@ class DashboardPage(Page):
             )
         else:
             self.warning_banner.configure(text="")
-
-        checkpoint_lines = [
-            f"current: {view['current_checkpoint'] or 'n/a'}",
-            f"final: {view['final_checkpoint'] or 'n/a'}",
-        ]
-        if view["best_checkpoint"]:
-            best = view["best_checkpoint"]
-            checkpoint_lines.append(
-                "best evaluation: reward="
-                + vm.format_number(best.get("mean_episode_reward"), 3)
-                + f", win rate={vm.format_fraction_as_percent(best.get('win_rate'))}"
-            )
-        else:
-            checkpoint_lines.append("best evaluation: n/a")
-        if view["ppo_diagnostics"]:
-            diag = view["ppo_diagnostics"]
-            health = vm.ppo_health_view(diag)
-            checkpoint_lines.append(
-                f"PPO diagnostics [{health['status']}]: approx_kl="
-                + vm.format_number(diag.get("approx_kl"), 4)
-                + f", clip_fraction={vm.format_number(diag.get('clip_fraction'), 3)}"
-                + f", explained_variance={vm.format_number(diag.get('explained_variance'), 3)}"
-                + f", entropy={vm.format_number(diag.get('entropy'), 3)}"
-            )
-        self.checkpoints_label.configure(text="\n".join(checkpoint_lines))
-
-        run_dir = self._last_run_dir
-        if run_dir:
-            self.submit_poll(
-                "telemetry",
-                lambda: self.adapter.telemetry_series(run_dir),
-                lambda series, error: self._on_telemetry(run_dir, series, error),
-            )
-        else:
-            for chart in (self.reward_chart, self.fps_chart, self.kl_chart):
-                chart.set_points([])
-
-    def _on_telemetry(
-        self, run_dir: str, series: dict[str, Any] | None, error: BaseException | None
-    ) -> None:
-        if (
-            run_dir != self._last_run_dir
-            or error is not None
-            or series is None
-            or not series.get("available")
-        ):
-            return
-        data = series.get("series", {})
-        reward_pts = data.get("mean_episode_reward", [])
-        self.reward_chart.set_points(reward_pts)
-        self.fps_chart.set_points(data.get("steps_per_second", []))
-        self.kl_chart.set_points(data.get("approx_kl", []))
-        conv = vm.training_convergence_view(reward_pts)
-        conv_kind = {"IMPROVING": "ok", "PLATEAU": "warn", "REGRESSING": "error"}.get(
-            conv["state"], ""
-        )
-        self.convergence_label.configure(
-            text=f"Convergence radar: [{conv['badge']}] — {conv['recommendation']}",
-            foreground=self.app.color(conv_kind) if conv_kind else self.palette.text_dim,
-        )
 
     def _open_run_folder(self) -> None:
         if self._last_run_dir:
@@ -1679,6 +1587,23 @@ class TrainingPage(Page):
         slot = getattr(self, "_launch_slot", None)
         if not slot or slot["state"] != "AVAILABLE":
             return
+        # The cheapest failure to prevent: without the training extras, the
+        # launch would fail several seconds later inside train_ppo with an
+        # import error. Ask the interpreter first and show the exact fix.
+        if hasattr(self.adapter, "training_dependency_status"):
+            deps = self.adapter.training_dependency_status() or {}
+            missing = list(deps.get("training_missing") or [])
+            if missing:
+                hint = str(deps.get("training_install_hint") or "").strip()
+                messagebox.showerror(
+                    "Training extras missing",
+                    "Training cannot start; this interpreter is missing "
+                    + ", ".join(missing)
+                    + "."
+                    + (f"\n\nInstall them with:\n{hint}" if hint else "")
+                    + "\n\nThe System page can run that command for you.",
+                )
+                return
         values = self.current_values()
         # Time is a trainer-enforced budget, not just a window-side request:
         # the launch config carries the minutes so the run stops itself at
@@ -2082,6 +2007,7 @@ class BenchmarkPage(Page):
         ("device", "Device", 55),
         ("steps", "Steps", 80),
         ("steps_per_second", "Steps/s", 85),
+        ("frames_per_second", "FPS/env", 78),
         ("speedup", "Speedup", 70),
         ("p50_ms", "p50 ms", 65),
         ("p95_ms", "p95 ms", 65),
@@ -2095,6 +2021,7 @@ class BenchmarkPage(Page):
         "stage / progress",
         "active config",
         "Steps/s",
+        "FPS / env",
         "live steps",
         "latency (p50 / p95)",
         "stability (jitter)",
@@ -2147,6 +2074,19 @@ class BenchmarkPage(Page):
             intro_desc.configure(wraplength=max(240, int(getattr(event, "width", 800) or 800) - 20))
 
         intro.bind("<Configure>", resize_intro_description, add=True)
+
+        # What is about to happen, in numbers, before anything is measured.
+        # A sweep of 175 configurations is a long-running action and the
+        # operator is entitled to know its size before pressing Start.
+        self.plan_label = ttk.Label(
+            intro,
+            text="",
+            justify="left",
+            style="CardLabel.TLabel",
+            foreground=self.palette.accent,
+        )
+        self.plan_label.pack(anchor="w", fill="x", pady=(self.app.px(6, minimum=3), 0))
+        self._refresh_plan_label()
 
         run_bar = ttk.Frame(intro, style="Surface.TFrame")
         run_bar.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
@@ -2226,7 +2166,7 @@ class BenchmarkPage(Page):
         """The measurement table, as a full-width card.
 
         It used to share one card with the chart in a 3:2 split. The table
-        declares 1125 px of columns (14 of them) and the 3:2 left half of a
+        declares 1203 px of columns (15 of them) and the 3:2 left half of a
         1920x1080 window is only about 900 px, so the project's marquee table
         opened with a horizontal scrollbar on the very screens that have room
         to spare. Full width gives it ~1450 px and the overlay bar disappears;
@@ -2245,8 +2185,17 @@ class BenchmarkPage(Page):
         return card
 
     def _build_scaling_card(self, parent: tk.Misc) -> tk.Widget:
+        """Two curves: the topology's throughput, and what one env gets of it.
+
+        Steps/s and FPS/env answer different questions and they do not move
+        together — the first keeps climbing after the second has already
+        turned over, which is exactly how a sweep finds the point where
+        adding environments stops helping the individual agent.
+        """
         card = self.card(
-            parent, "Throughput scaling", "Steps per second across the measured configurations"
+            parent,
+            "Throughput & FPS scaling",
+            "Steps per second, and simulation steps per second per environment",
         )
         self.throughput_chart = LineChart(
             card.body,
@@ -2255,6 +2204,13 @@ class BenchmarkPage(Page):
             bus=self.app.bus,
         )
         self.throughput_chart.pack(fill="both", expand=True)
+        self.fps_chart = LineChart(
+            card.body,
+            "Per-environment rate (FPS/env)",
+            color=self.palette.ok,
+            bus=self.app.bus,
+        )
+        self.fps_chart.pack(fill="both", expand=True, pady=(self.app.px(8, minimum=4), 0))
         return card
 
     # -- workflow ----------------------------------------------------------
@@ -2268,6 +2224,25 @@ class BenchmarkPage(Page):
         )
         self._refresh_workflow_labels()
         self._update_buttons()
+
+    def _refresh_plan_label(self) -> None:
+        """Describe the sweep this machine is about to get, from the plan."""
+        plan = self.current_plan()
+        if plan["errors"]:
+            self.plan_label.configure(text="; ".join(plan["errors"]), foreground=self.palette.error)
+            return
+        minutes = plan.get("minutes")
+        per_config = plan.get("per_config_seconds")
+        self.plan_label.configure(
+            text=(
+                f"{plan['expected_configurations']} configurations   ·   "
+                f"up to {max(plan['environments'])} environments   ·   "
+                f"up to {max(plan['workers'])} workers   ·   "
+                f"~{vm.format_number(per_config, 1)} s each   ·   "
+                f"budget {vm.format_number(minutes, 0)} min"
+            ),
+            foreground=self.palette.accent,
+        )
 
     def _update_buttons(self) -> None:
         """Keep the idle view to one action; expose Cancel only while running."""
@@ -2323,6 +2298,11 @@ class BenchmarkPage(Page):
                 steps_text += f" ({vm.format_number(live_view['steps_per_env'])}/env)"
         else:
             steps_text = "n/a"
+        fps_text = (
+            f"{vm.format_number(live_view['frames_per_second'], 1)} fps"
+            if live_view["frames_per_second"] is not None
+            else "n/a"
+        )
         latency_text = (
             f"{vm.format_number(live_view['p50_ms'], 2)} / "
             f"{vm.format_number(live_view['p95_ms'], 2)} ms"
@@ -2351,6 +2331,10 @@ class BenchmarkPage(Page):
                     steps_per_second_text,
                     self.palette.ok if live_view["steps_per_second"] is not None else None,
                 ),
+                "FPS / env": (
+                    fps_text,
+                    self.palette.accent if live_view["frames_per_second"] is not None else None,
+                ),
                 "live steps": (steps_text, None),
                 "latency (p50 / p95)": (latency_text, None),
                 "stability (jitter)": (jitter_text, jitter_color),
@@ -2367,6 +2351,14 @@ class BenchmarkPage(Page):
             next_idx = len(chart_points) + 1
             chart_points.append((next_idx, float(live_view["steps_per_second"])))
         self.throughput_chart.set_points(chart_points)
+        fps_points = list(live_view.get("fps_chart_points") or [])
+        if (
+            self._running
+            and isinstance(live_view["frames_per_second"], (int, float))
+            and live_view["frames_per_second"] is not None
+        ):
+            fps_points.append((len(fps_points) + 1, float(live_view["frames_per_second"])))
+        self.fps_chart.set_points(fps_points)
 
     def current_plan(self) -> dict[str, Any]:
         """Build the automatic host-scaled plan; no tuning fields are exposed in the UI."""
@@ -2392,6 +2384,7 @@ class BenchmarkPage(Page):
             self._latest_progress = None
         self.tree.delete(*self.tree.get_children())
         self.throughput_chart.set_points([])
+        self.fps_chart.set_points([])
         self._update_buttons()
         self.progress_label.configure(text="starting...", foreground=self.palette.text_dim)
         self.app.set_status("Automatic benchmark started", toast=True)
@@ -3494,6 +3487,22 @@ class SystemPage(Page):
         "cuda",
     )
 
+    #: The optional extras, as ``(module, label)``. The label is what the
+    #: operator reads; the module is what ``system_status`` reports.
+    DEPENDENCY_LABELS = (
+        ("numpy", "numpy"),
+        ("torch", "torch"),
+        ("gymnasium", "gymnasium"),
+        ("stable_baselines3", "stable-baselines3"),
+        ("tensorboard", "tensorboard"),
+        ("psutil", "psutil"),
+    )
+
+    #: The subset ``train_ppo`` actually imports. Kept here (not guessed at
+    #: paint time) so the "training cannot start" line never blames an extra
+    #: the trainer does not need.
+    TRAINING_REQUIRED = ("numpy", "torch", "gymnasium", "stable_baselines3")
+
     def build(self) -> None:
         area = ScrollArea(self, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
         area.pack(fill="both", expand=True)
@@ -3502,15 +3511,47 @@ class SystemPage(Page):
         self.stats = StatRow(host, self.STAT_LABELS, max_columns=4, bus=self.app.bus)
         self.stats.pack(fill="x")
 
-        deps_card = self.card(host, "Optional dependencies & runtime capabilities")
-        deps_card.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
-        self.deps_label = ttk.Label(
-            deps_card.body,
-            text="Probing runtime capabilities…",
-            justify="left",
-            style="CardLabel.TLabel",
+        deps_card = self.card(
+            host,
+            "Training dependencies & runtime capabilities",
+            "Reported from this interpreter — training cannot start on a missing extra",
         )
-        self.deps_label.pack(anchor="w")
+        deps_card.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
+        deps_grid = ttk.Frame(deps_card.body, style="CardInner.TFrame")
+        deps_grid.pack(fill="x")
+        self.dependency_values: dict[str, ttk.Label] = {}
+        for row, (module, label) in enumerate(self.DEPENDENCY_LABELS):
+            ttk.Label(deps_grid, text=label, style="FieldHelp.TLabel").grid(
+                row=row, column=0, sticky="w", pady=(0, self.app.px(2, minimum=1))
+            )
+            value = ttk.Label(deps_grid, text="probing…", style="CardLabel.TLabel")
+            value.grid(row=row, column=1, sticky="w", padx=(self.app.px(10, minimum=6), 0))
+            self.dependency_values[module] = value
+        deps_grid.columnconfigure(1, weight=1)
+
+        # One action, shown only when it would do something. The hint comes
+        # from the backend (ppo.TRAINING_INSTALL_HINT) so the window never
+        # retypes a command it could get wrong.
+        self.deps_fix_row = ttk.Frame(deps_card.body, style="CardInner.TFrame")
+        self.deps_fix_hint = ttk.Label(
+            self.deps_fix_row,
+            text="",
+            justify="left",
+            style="FieldHelp.TLabel",
+            foreground=self.palette.warn,
+        )
+        self.deps_fix_hint.pack(side="left", fill="x", expand=True)
+        self.deps_install_button = ttk.Button(
+            self.deps_fix_row,
+            text="Install training extras",
+            command=self._install_training_extras,
+        )
+        self.deps_install_button.pack(side="right", padx=(self.app.px(8, minimum=4), 0))
+        ToolTip(
+            self.deps_install_button,
+            "Runs pip install -e '.[training]' in the project root; the output is shown afterwards",
+            bus=self.app.bus,
+        )
 
         chart_card = self.card(
             host,
@@ -3605,12 +3646,7 @@ class SystemPage(Page):
                 ),
             }
         )
-        deps = status.get("dependencies", {})
-        self.deps_label.configure(
-            text="   ".join(
-                f"{name}: {'yes' if available else 'no'}" for name, available in deps.items()
-            )
-        )
+        self._update_dependencies(status)
         self._sample_index += 1.0
         if status.get("cpu_percent") is not None:
             self._cpu_series.append((self._sample_index, float(status["cpu_percent"])))
@@ -3618,6 +3654,67 @@ class SystemPage(Page):
             self._rss_series.append((self._sample_index, float(status["process_rss_mb"])))
         self.cpu_chart.set_points(list(self._cpu_series))
         self.rss_chart.set_points(list(self._rss_series))
+
+    def _update_dependencies(self, status: dict[str, Any]) -> None:
+        """Paint the dependency table and expose the fix only when one is needed."""
+        deps = status.get("dependencies", {})
+        for module, label in self.dependency_values.items():
+            available = bool(deps.get(module))
+            label.configure(
+                text="installed" if available else "missing",
+                foreground=self.palette.ok if available else self.palette.warn,
+            )
+        missing = list(status.get("training_missing") or [])
+        if not missing and not status.get("training_ready", True):
+            # An interpreter that reported no training status at all is not one
+            # we may call ready, and the four modules PPO imports are the ones
+            # that block a launch (tensorboard and psutil are optional friends).
+            missing = [module for module in self.TRAINING_REQUIRED if not deps.get(module)]
+        if missing:
+            hint = str(status.get("training_install_hint") or "").strip()
+            self.deps_fix_hint.configure(
+                text=(
+                    f"Training cannot start — missing {', '.join(missing)}."
+                    + (f" Fix: {hint}" if hint else "")
+                )
+            )
+            if self.deps_fix_row.winfo_manager() != "pack":
+                self.deps_fix_row.pack(fill="x", pady=(self.app.px(10, minimum=5), 0))
+        else:
+            self.deps_fix_row.pack_forget()
+
+    def _install_training_extras(self) -> None:
+        """Run the documented install command and report exactly what happened."""
+        if not hasattr(self.adapter, "install_training_extras"):
+            self.app.set_status(
+                "This adapter cannot install packages; run the command shown above in a terminal",
+                error=True,
+            )
+            return
+        self.deps_install_button.configure(state="disabled", text="Installing…")
+        self.app.set_status(
+            "Installing training extras — this can take several minutes", toast=True
+        )
+
+        def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            self.deps_install_button.configure(state="normal", text="Install training extras")
+            if error is not None or not result:
+                self.app.set_status(f"Install failed: {error or 'no result'}", error=True)
+                return
+            if result.get("ok"):
+                self.app.set_status("Training extras installed — training is available now")
+            else:
+                self.app.set_status(
+                    f"Install failed ({result.get('error') or 'unknown error'})", error=True
+                )
+            output = str(result.get("output") or "").strip()
+            if output:
+                last = output.splitlines()[-1]
+                self.deps_fix_hint.configure(
+                    text=f"{'Installed.' if result.get('ok') else 'Failed.'} {last[:160]}"
+                )
+
+        self.app.background.submit(self.adapter.install_training_extras, _done)
 
 
 class SettingsPage(Page):
@@ -3736,7 +3833,6 @@ class SettingsPage(Page):
         row = ttk.Frame(card.body, style="CardInner.TFrame")
         row.pack(fill="x")
         self.theme_var = tk.StringVar(value=self.app.palette.label)
-        self.layout_var = tk.StringVar(value=LAYOUT_MODES[self.app.prefs.layout])
         self.density_var = tk.StringVar(value=self.app.bus.density.label)
         self.motion_var = tk.StringVar(value=MOTION_LEVELS[self.app.motion.level])
         fields = (
@@ -3745,12 +3841,6 @@ class SettingsPage(Page):
                 self.theme_var,
                 tuple(THEMES[name].label for name in THEME_NAMES),
                 self._on_theme_selected,
-            ),
-            (
-                "Shell layout",
-                self.layout_var,
-                tuple(LAYOUT_MODES.values()),
-                self._on_layout_selected,
             ),
             (
                 "Density",
@@ -3884,12 +3974,6 @@ class SettingsPage(Page):
             if not self.app.prefs.accent:
                 self.accent_var.set(self.app.palette.accent)
             self._refresh_accent_hint()
-
-    def _on_layout_selected(self, _event: object = None) -> None:
-        modes = {label: key for key, label in LAYOUT_MODES.items()}
-        picked = modes.get(str(self.layout_var.get()))
-        if picked:
-            self.app.set_layout_mode(picked)
 
     def _on_density_selected(self, _event: object = None) -> None:
         names = {density.label: name for name, density in DENSITIES.items()}
@@ -4055,9 +4139,7 @@ class SettingsPage(Page):
     # -- presets ----------------------------------------------------------
 
     def _build_preset_section(self, parent: tk.Misc) -> None:
-        card = self.card(
-            parent, "Presets", "Theme, shell layout, density, motion and every card position"
-        )
+        card = self.card(parent, "Presets", "Theme, density, motion and every card position")
         card.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
         row = ttk.Frame(card.body, style="CardInner.TFrame")
         row.pack(fill="x")
@@ -4182,7 +4264,6 @@ class SettingsPage(Page):
         self.theme_var.set(self.app.palette.label)
         self.density_var.set(self.app.bus.density.label)
         self.motion_var.set(MOTION_LEVELS[self.app.motion.level])
-        self.layout_var.set(LAYOUT_MODES[self.app.prefs.layout])
 
     def _rename_preset(self) -> None:
         """Rename the selected preset to the name in the entry (both required)."""

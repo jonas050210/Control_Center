@@ -160,14 +160,28 @@ class PreferencesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store = PreferencesStore(root)
-            store.save(
-                UiPreferences(theme="light", density="compact", layout="topbar", motion="off")
-            )
+            store.save(UiPreferences(theme="light", density="compact", layout="rail", motion="off"))
             restored = PreferencesStore(root).load()
         self.assertEqual(restored.theme, "light")
         self.assertEqual(restored.density, "compact")
-        self.assertEqual(restored.layout, "topbar")
+        self.assertEqual(restored.layout, "rail")
         self.assertEqual(restored.motion, "off")
+
+    def test_a_removed_shell_preference_loads_as_the_rail(self) -> None:
+        """The switchable shells are gone; an old file naming one must migrate.
+
+        Building the shell from a name no longer in ``LAYOUT_MODES`` used to
+        be possible, so the value has to be repaired on load rather than
+        trusted - otherwise a two-year-old preferences file opens the window
+        with a navigation the build no longer has.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = PreferencesStore(root)
+            store.save(UiPreferences(layout="topbar"))
+            restored = PreferencesStore(root).load()
+        self.assertEqual(restored.layout, "rail")
+        self.assertEqual(tuple(LAYOUT_MODES), ("rail",))
 
     def test_unknown_values_fall_back_instead_of_crashing(self) -> None:
         """A hand-edited or older preferences file must not break the window."""

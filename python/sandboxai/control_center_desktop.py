@@ -54,7 +54,6 @@ from .control_center_layout import (
 from .control_center_pages import PAGE_CLASSES, PAGE_WIDGETS, Page
 from .control_center_theme import (
     DENSITIES,
-    LAYOUT_MODES,
     MOTION_LEVELS,
     THEMES,
     FontSpec,
@@ -77,7 +76,13 @@ from .control_center_ui import (
 )
 from .control_center_widgets import BackgroundRunner, ToolTip
 
-__all__ = ["ControlCenter", "PAGE_CLASSES", "PAGE_WIDGETS", "main", "messagebox"]
+__all__ = ["ControlCenter", "NAV_WIDTH_PX", "PAGE_CLASSES", "PAGE_WIDGETS", "main", "messagebox"]
+
+#: The rail's width as ``(preferred, minimum)``. It is fixed: a collapsible
+#: rail has to be narrower than its own page titles, and the window has room
+#: for the titles. One constant for the build and every later rescale keeps
+#: the rail from twitching the first time the window is resized.
+NAV_WIDTH_PX: tuple[int, int] = (238, 180)
 
 
 def _palette_matches(pages: Iterable[str], query: str) -> list[str]:
@@ -172,8 +177,6 @@ class ControlCenter(tk.Tk):
         self._nav_buttons: dict[str, ttk.Button] = {}
         self._nav_group_widgets: list[tk.Widget] = []
         self._nav_footnote: tk.Widget | None = None
-        self._sidebar_toggle_btn: ttk.Button | None = None
-        self.sidebar_collapsed: bool = False
         self._nav_indicator: tk.Frame | None = None
         self._layouter: tk.Misc | None = None
         self.toasts = ToastHost(self, self.bus, self.motion, width=self.bus.px(380, minimum=280))
@@ -181,8 +184,6 @@ class ControlCenter(tk.Tk):
         self.bind("<Configure>", self._on_root_configure, add="+")
         self.bind("<Control-k>", lambda _event: self.open_command_palette())
         self.bind("<Control-K>", lambda _event: self.open_command_palette())
-        self.bind("<Control-b>", lambda _event: self.toggle_sidebar())
-        self.bind("<Control-B>", lambda _event: self.toggle_sidebar())
         self.bind("<F11>", lambda _event: self.toggle_zoom())
         self.after(self.POLL_MS, self._tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -391,24 +392,6 @@ class ControlCenter(tk.Tk):
             self.save_preferences()
         self.notify(f"Motion: {MOTION_LEVELS[level]}", kind="info", timeout_ms=2000)
 
-    def set_layout_mode(self, name: str, *, persist: bool = True) -> None:
-        """Switch between the rail, topbar and command-board shells.
-
-        Rebuilding the shell recreates every page, which drops live page
-        state (a selected run, a scrolled log). It therefore only happens
-        when the mode actually changes: re-picking the current layout is a
-        no-op instead of an expensive, state-destroying one.
-        """
-        mode = name if name in LAYOUT_MODES else "rail"
-        changed = mode != self.prefs.layout
-        self.prefs.layout = mode
-        if changed:
-            self._rebuild_shell()
-        if persist:
-            self.save_preferences()
-        if changed:
-            self.notify(f"Layout: {LAYOUT_MODES[mode]}", kind="info", timeout_ms=2200)
-
     def set_layout_state(self, state: LayoutState, *, persist: bool = True) -> None:
         """Publish a new movable-card layout to every page board."""
         self.layout_bus.set_state(normalize(state, PAGE_WIDGETS))
@@ -447,7 +430,6 @@ class ControlCenter(tk.Tk):
         state = deserialize(layout, PAGE_WIDGETS) if isinstance(layout, dict) else None
         if state is None:
             return False
-        previous_mode = self.prefs.layout
         appearance = document.get("appearance")
         if isinstance(appearance, dict):
             before = (self.prefs.theme, self.prefs.accent, self.prefs.density)
@@ -467,20 +449,18 @@ class ControlCenter(tk.Tk):
                 # means nothing to repaint - a preset that only rearranges
                 # cards must not restyle the window.
                 self._reapply_appearance(rebuild=before[2] != self.prefs.density)
-            mode = appearance.get("layout")
-            if isinstance(mode, str) and mode in LAYOUT_MODES:
-                self.prefs.layout = mode
+            # A preset written by an older build carries a shell choice; the
+            # shell is fixed now, so it is read past rather than applied.
             motion = appearance.get("motion")
             if isinstance(motion, str) and motion in MOTION_LEVELS:
                 self.motion.set_level(motion)
                 self.prefs.motion = motion
         self.prefs.active_preset = safe_preset_name(name)
-        mode_changed = self.prefs.layout != previous_mode
         self.layout_bus.set_state(state)
-        if mode_changed:
-            # Only a different shell needs new widgets; a preset that keeps
-            # the current shell must not throw away live page state.
-            self._rebuild_shell()
+        # A preset's card arrangement applies to the shell that is on screen.
+        # The shell itself is not switchable any more, so a preset that came
+        # from an older build keeps its cards and drops its shell choice
+        # instead of tearing down every page to rebuild an identical rail.
         self.save_preferences()
         self.notify(f"Preset applied: {self.prefs.active_preset}", kind="ok")
         return True
@@ -555,32 +535,6 @@ class ControlCenter(tk.Tk):
         self._build_body()
         self.show_page(self.prefs.last_page if self.prefs.last_page in self.pages else "Dashboard")
 
-    def _rebuild_shell(self) -> None:
-        """Recreate the body for a different shell layout.
-
-        Tk cannot reparent a widget, so the pages are rebuilt from their
-        classes. That is deliberate: a shell change is a rare, explicit
-        action, and rebuilding is the only way to guarantee that no widget
-        is left in a destroyed parent (which would show up as a frozen or
-        half-drawn window).
-        """
-        current_title = self._current.title if self._current is not None else None
-        for page in list(self.pages.values()):
-            with contextlib.suppress(tk.TclError):
-                page.destroy()
-        self.pages.clear()
-        self._current = None
-        if self._nav_host is not None:
-            with contextlib.suppress(tk.TclError):
-                self._nav_host.destroy()
-        if self._content_host is not None:
-            with contextlib.suppress(tk.TclError):
-                self._content_host.destroy()
-        self._nav_buttons.clear()
-        self._build_body()
-        target = current_title if current_title in self.pages else "Dashboard"
-        self.show_page(target)
-
     def _build_header(self, parent: tk.Misc) -> ttk.Frame:
         theme = self.bus.theme
         header = ttk.Frame(parent, style="Header.TFrame", padding=(self.px(22), self.px(11)))
@@ -629,17 +583,13 @@ class ControlCenter(tk.Tk):
             self.preset_label.configure(text=text)
 
     def _build_body(self) -> None:
-        mode = self.prefs.layout
         body = ttk.Frame(self.outer, style="Shell.TFrame")
         body.pack(fill="both", expand=True)
-        if mode == "topbar":
-            self._build_topbar(body)
-            return
         nav = ttk.Frame(
             body,
             style="Nav.TFrame",
-            width=self.px(238, minimum=180),
-            padding=(self.px(12), self.px(16)),
+            width=self.px(NAV_WIDTH_PX[0], minimum=NAV_WIDTH_PX[1]),
+            padding=(self.px(12, minimum=6), self.px(16, minimum=8)),
         )
         nav.pack(side="left", fill="y")
         nav.pack_propagate(False)
@@ -650,46 +600,28 @@ class ControlCenter(tk.Tk):
         )
         self._nav_host = nav
         self._nav_indicator = tk.Frame(nav, height=2, background=self.bus.theme.accent)
-        self._build_nav_items(nav, vertical=True)
+        self._build_nav_items(nav)
         content = ttk.Frame(body, style="Content.TFrame", padding=(self.px(24), self.px(18)))
         content.pack(side="left", fill="both", expand=True)
         self._content_host = content
         self._layouter = content
         self._build_pages(content)
 
-    def _build_topbar(self, body: ttk.Frame) -> None:
-        bar = ttk.Frame(body, style="Nav.TFrame", padding=(self.px(14), self.px(8)))
-        bar.pack(fill="x")
-        self._nav_host = bar
-        self._build_nav_items(bar, vertical=False)
-        tk.Frame(body, height=1, background=self.bus.theme.border, borderwidth=0).pack(fill="x")
-        content = ttk.Frame(body, style="Content.TFrame", padding=(self.px(24), self.px(18)))
-        content.pack(fill="both", expand=True)
-        self._content_host = content
-        self._layouter = content
-        self._build_pages(content)
+    def _build_nav_items(self, host: tk.Misc) -> None:
+        """Fill the rail with one button per page, under its group heading.
 
-    def _build_nav_items(self, host: tk.Misc, *, vertical: bool) -> None:
+        The rail is the only shell and it keeps its full width and its full
+        page titles. A collapsed rail used to trade the titles for two-letter
+        codes (``DB``, ``TR``, ``BM``) to win back ~160 px, which is a bad
+        trade for a window with eight pages: it needs a shortcut sheet at the
+        bottom to stay readable, and it makes every page look identical until
+        the pointer is over it.
+        """
         self._nav_group_widgets.clear()
         self._nav_footnote = None
-        self._sidebar_toggle_btn = None
-        if vertical:
-            rail_bar = ttk.Frame(host, style="Nav.TFrame")
-            rail_bar.pack(fill="x", pady=(0, self.px(6, minimum=3)))
-            self._sidebar_toggle_btn = ttk.Button(
-                rail_bar,
-                text="▶" if self.sidebar_collapsed else "◀ Rail",
-                style="Ghost.TButton",
-                command=self.toggle_sidebar,
-            )
-            self._sidebar_toggle_btn.pack(side="right")
-            ToolTip(
-                self._sidebar_toggle_btn,
-                "Collapse / expand navigation rail (Ctrl+B) to free horizontal workspace",
-            )
         groups = {0: "OVERVIEW", 1: "WORKFLOWS", 4: "ARTIFACTS", 5: "SYSTEM"}
         for index, page_class in enumerate(PAGE_CLASSES):
-            if vertical and index in groups:
+            if index in groups:
                 if index:
                     sep = ttk.Separator(host)
                     sep.pack(fill="x", pady=(self.px(14), self.px(8)))
@@ -703,92 +635,34 @@ class ControlCenter(tk.Tk):
                 self._nav_group_widgets.append(grp_lbl)
             button = ttk.Button(
                 host,
-                text=self._nav_label(page_class.title),
+                text=page_class.title,
                 style="Nav.TButton",
                 command=lambda name=page_class.title: self.show_page(name),  # type: ignore[misc]
             )
-            if vertical:
-                button.pack(fill="x", pady=1)
+            button.pack(fill="x", pady=1)
 
-                def on_nav_button_configure(
-                    _event: tk.Event[tk.Misc], name: str = page_class.title
-                ) -> None:
-                    self._on_nav_button_configure(name)
+            def on_nav_button_configure(
+                _event: tk.Event[tk.Misc], name: str = page_class.title
+            ) -> None:
+                self._on_nav_button_configure(name)
 
-                button.bind("<Configure>", on_nav_button_configure, add=True)
-            else:
-                button.pack(side="left", padx=(0, self.px(4, minimum=2)))
-            ToolTip(button, f"Open {page_class.title}   ·   Ctrl+{index + 1}")
+            button.bind("<Configure>", on_nav_button_configure, add=True)
+            ToolTip(button, f"Open {page_class.title}")
             self._nav_buttons[page_class.title] = button
             self.bind(
                 f"<Control-Key-{index + 1}>",
                 lambda _evt, name=page_class.title: self.show_page(name),  # type: ignore[misc]
             )
-        if vertical:
-            sep_bottom = ttk.Separator(host)
-            sep_bottom.pack(fill="x", pady=self.px(14))
-            self._nav_group_widgets.append(sep_bottom)
-            self._nav_footnote = ttk.Label(
-                host,
-                text=(
-                    "Ctrl+K  command palette\n"
-                    "Ctrl+B  collapse rail\n"
-                    f"Ctrl+1 .. Ctrl+{len(PAGE_CLASSES)}  pages\n"
-                    "F11  maximize / restore\n"
-                    "Headless Godot Bridge v3"
-                ),
-                style="NavFootnote.TLabel",
-                justify="left",
-            )
-            self._nav_footnote.pack(anchor="w", padx=self.px(10))
-
-    @staticmethod
-    def _nav_short_code(title: str) -> str:
-        short_map = {
-            "Dashboard": "DB",
-            "Training": "TR",
-            "Benchmarks": "BM",
-            "Evaluations": "EV",
-            "Runs / Checkpoints": "RN",
-            "Stats": "ST",
-            "System / Logs": "SY",
-            "Settings": "CF",
-        }
-        return short_map.get(title, title[:2].upper())
-
-    def _nav_label(self, title: str) -> str:
-        if self.sidebar_collapsed and self.prefs.layout != "topbar":
-            return self._nav_short_code(title)
-        return title
-
-    def toggle_sidebar(self) -> None:
-        """Toggle the left navigation sidebar between full labels and compact icon rail."""
-        if self.prefs.layout == "topbar" or self._nav_host is None:
-            return
-        self.sidebar_collapsed = not self.sidebar_collapsed
-        with contextlib.suppress(tk.TclError):
-            if self.sidebar_collapsed:
-                self._nav_host.configure(
-                    width=self.px(68, minimum=56),
-                    padding=(self.px(6, minimum=4), self.px(10, minimum=6)),
-                )
-                if self._sidebar_toggle_btn is not None:
-                    self._sidebar_toggle_btn.configure(text="▶")
-                if self._nav_footnote is not None:
-                    self._nav_footnote.pack_forget()
-            else:
-                self._nav_host.configure(
-                    width=self.px(232, minimum=154),
-                    padding=(self.px(12, minimum=6), self.px(14, minimum=8)),
-                )
-                if self._sidebar_toggle_btn is not None:
-                    self._sidebar_toggle_btn.configure(text="◀ Rail")
-                if self._nav_footnote is not None:
-                    self._nav_footnote.pack(anchor="w", padx=self.px(10))
-            for title, button in self._nav_buttons.items():
-                button.configure(text=self._nav_label(title))
-            if self._current is not None:
-                self._move_nav_indicator(self._current.title, animate=False)
+        sep_bottom = ttk.Separator(host)
+        sep_bottom.pack(fill="x", pady=self.px(14))
+        self._nav_group_widgets.append(sep_bottom)
+        self._nav_footnote = ttk.Label(
+            host,
+            text="Headless Godot Bridge v3",
+            style="NavFootnote.TLabel",
+            justify="left",
+        )
+        self._nav_footnote.pack(anchor="w", padx=self.px(10))
 
     def _set_nav_hover(self, hovering: bool) -> None:
         # Subtle affordance: the shell surface lifts slightly under the pointer,
@@ -884,17 +758,11 @@ class ControlCenter(tk.Tk):
                     self._header.configure(
                         padding=(self.px(20, minimum=10), self.px(10, minimum=5))
                     )
-                if self._nav_host is not None and self.prefs.layout != "topbar":
-                    if self.sidebar_collapsed:
-                        self._nav_host.configure(
-                            width=self.px(68, minimum=56),
-                            padding=(self.px(6, minimum=4), self.px(10, minimum=6)),
-                        )
-                    else:
-                        self._nav_host.configure(
-                            width=self.px(232, minimum=154),
-                            padding=(self.px(12, minimum=6), self.px(14, minimum=8)),
-                        )
+                if self._nav_host is not None:
+                    self._nav_host.configure(
+                        width=self.px(NAV_WIDTH_PX[0], minimum=NAV_WIDTH_PX[1]),
+                        padding=(self.px(12, minimum=6), self.px(16, minimum=8)),
+                    )
                 if self._content_host is not None:
                     self._content_host.configure(
                         padding=(self.px(22, minimum=10), self.px(16, minimum=8))
