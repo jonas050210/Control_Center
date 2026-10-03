@@ -763,8 +763,8 @@ def test_benchmark_live_telemetry_view_tracks_live_step_events():
         ],
     }
     view = vm.benchmark_live_telemetry_view(running=True, event=live_event, report=None)
-    assert view["live_fps"] == 960.0
-    assert view["peak_fps"] == 960.0
+    assert view["steps_per_second"] == 960.0
+    assert "peak_fps" not in view
     assert view["live_steps"] == 1920.0
     assert view["steps_per_env"] == 120.0
     assert view["p50_ms"] == 1.4
@@ -1225,21 +1225,13 @@ def test_resolve_run_checkpoint_prefers_best_eval_and_periodic_steps(tmp_path):
     assert vm.resolve_run_checkpoint(run_dir, prefer_best=False) == ckpt_dir / "latest.zip"
 
 
-def test_optimizer_field_specs_and_ppo_efficiency_presets():
-    opt_names = [spec.name for spec in vm.optimizer_field_specs()]
-    assert "learning_rate" in opt_names
-    assert "batch_size" in opt_names
-    assert "ppo_epochs" in opt_names
-    for preset_id, preset in vm.PPO_EFFICIENCY_PRESETS.items():
-        values = vm.default_training_values()
-        for k, v in preset.items():
-            if k != "label":
-                values[k] = v
-        slot = vm.launch_slot_view(values)
-        assert slot["state"] == "AVAILABLE", preset_id
-        assert slot["summary"]["learning_rate"] == float(preset["learning_rate"])
-    rec = vm.recommend_ppo_hyperparameters(environment_count=32, env_workers=4, device="cpu")
-    assert float(rec["learning_rate"]) > 3e-4
-    assert int(rec["batch_size"]) >= 512
-
-
+def test_hidden_optimizer_fields_keep_the_training_config_defaults():
+    defaults = vm.default_training_values()
+    config = vm.parse_training_form(defaults)
+    expected = TrainingConfig()
+    assert config.learning_rate == expected.learning_rate
+    assert config.batch_size == expected.batch_size
+    assert config.ppo_epochs == expected.ppo_epochs
+    assert config.entropy_coefficient == expected.entropy_coefficient
+    assert config.rollout_length == expected.rollout_length
+    assert "learning_rate" not in {spec.name for spec in vm.launch_field_specs()}

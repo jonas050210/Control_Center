@@ -504,7 +504,9 @@ def _find_roblox_hwnd(user32: Any) -> tuple[int, str]:
     found_hwnd = 0
     found_title = "Roblox"
 
-    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    WNDENUMPROC = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(
+        wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+    )
 
     def _callback(hwnd: int, _lparam: int) -> bool:
         nonlocal found_hwnd, found_title
@@ -1197,4 +1199,3 @@ def analyze_roblox_ttk_screenshot(
         "size_bytes": size_bytes,
         "summary": summary,
     }
-

@@ -575,6 +575,7 @@ class SandboxAIAdapter:
         training, agent quick-start, and benchmark workflows always run out of the box.
         """
         import stat as _stat
+
         from .contract import ACTION_NVEC, GODOT_VERSION, OBSERVATION_FIELD_COUNT
 
         runtime_dir = self.output_root / ".runtime"
@@ -1417,8 +1418,12 @@ class SandboxAIAdapter:
                 reverse=True,
             )[:limit]
             if not candidates:
-                direct = list((root / "replays").glob("*.jsonl")) if (root / "replays").is_dir() else []
-                nested = [p for p in root.glob("*/replays/*.jsonl") if p.parent.parent.name != "runs"]
+                direct = (
+                    list((root / "replays").glob("*.jsonl")) if (root / "replays").is_dir() else []
+                )
+                nested = [
+                    p for p in root.glob("*/replays/*.jsonl") if p.parent.parent.name != "runs"
+                ]
                 candidates = sorted(
                     [*direct, *nested],
                     key=lambda path: path.stat().st_mtime,

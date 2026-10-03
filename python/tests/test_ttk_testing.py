@@ -86,15 +86,16 @@ class EvidenceManifestTests(unittest.TestCase):
 
     def test_probe_latest_roblox_log_parses_json_place_id_and_large_log_head(self) -> None:
         from pathlib import Path
+
         from sandboxai.ttk_testing import TTK_TESTING_PLACE_ID, _probe_latest_roblox_log
 
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "0.600.0_Player_20261002.log"
             head = (
-                f'[FLog::Output] ! Joining game \'abc\' place {TTK_TESTING_PLACE_ID} at 10.0.0.1\n'
+                f"[FLog::Output] ! Joining game 'abc' place {TTK_TESTING_PLACE_ID} at 10.0.0.1\n"
                 f'[DFLog::GameJoinLoadTime] {{"placeId":{TTK_TESTING_PLACE_ID},"universeId":9292879893}}\n'
             )
-            filler = ("FLog::Network telemetry tick\n" * 25000)
+            filler = "FLog::Network telemetry tick\n" * 25000
             log_path.write_text(head + filler, encoding="utf-8")
             info = _probe_latest_roblox_log(tmp)
             self.assertEqual(info["detected_place_id"], TTK_TESTING_PLACE_ID)
@@ -118,6 +119,7 @@ class CliTests(unittest.TestCase):
         import struct
         import tempfile
         from pathlib import Path
+
         from sandboxai.ttk_testing import analyze_roblox_ttk_screenshot
 
         with tempfile.TemporaryDirectory() as tmp:

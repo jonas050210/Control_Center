@@ -139,17 +139,14 @@ It provides:
   topology, backend metrics, and the full action set: Launch,
   Pause/Resume, Stop, Restart (resuming from the run's latest
   checkpoint), Force stop, Stop all
-- **Benchmarks** - the staged benchmark pipeline that *measures* this
-  machine's runtime (environment count x worker count x device, startup,
-  warmup, throughput, latency percentiles, errors, stability) under an
-  **Auto**, **Push** or **Custom** plan: Auto scales from 64 to 128
-  environment processes and probes workers up to 32 (past the conservative
-  `--env-workers auto` recommendation) on a large host, Push widens the ladder
-  to 256 environments to find where throughput saturates. It then
-  recommends a configuration with its reasoning - never a hard-coded
-  guess. The recommendation is applied to the launch deck by itself, and
-  both it and the full report are persisted; a Custom configuration gets
-  the same validation verdict the launcher enforces
+- **Benchmarks** - one **Start Benchmark** action runs the automatic,
+  host-scaled measurement pipeline: it checks runtime capabilities, compares
+  environment/worker/device candidates, validates the strongest results, and
+  applies the fastest stable recommendation to the launch deck. Live telemetry
+  reports **Steps/s** (not a duplicate peak-FPS counter), latency, stability
+  and progress; the measured configurations and full report remain available
+  for review and are persisted. Advanced sweep controls remain available to
+  scripted callers, not in the GUI.
 - **Evaluations** - win/loss/timeout, combat, accuracy and
   action-head/zero-shot diagnostics plus multi-run comparison
 - **Runs / Checkpoints** - a browser over the on-disk run artifacts
@@ -164,10 +161,11 @@ It provides:
   bounded live telemetry charts; unavailable metrics are shown as such,
   never estimated
 - **Settings** - theme, shell layout (rail/topbar/board), density,
-  motion, a free **accent colour** (nine swatches or any `#rrggbb`) that
-  any theme can wear, accent effects, the **Layout studio** (move, span and
-  hide cards), savable **presets** that can also be exported to a file and
-  imported back, project/output roots and the Godot executable
+  motion, a free **accent colour** (enter any `#rrggbb`) that any theme can
+  wear, accent effects, the **Layout studio** (move, span and
+  hide cards), savable **layout presets** that can also be exported to a
+  file and imported back, project/output roots and the Godot executable.
+  Theme and layout changes live here, not in the top-right header.
 
 The desktop suite runs with `python3 tools/desktop_tests.py`: it uses the
 real Tk window when the machine has Tkinter and a display (or `xvfb-run`),

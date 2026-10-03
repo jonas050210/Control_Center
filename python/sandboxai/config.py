@@ -159,86 +159,104 @@ def save_godot_executable_setting(executable: str) -> Path | None:
     return settings
 
 
-def _discover_local_godot_binary() -> str | None:
-    """Search common user/desktop/download folders for a Godot 4 executable."""
+def _local_godot_search_dirs() -> list[Path]:
+    """Ordered, deduplicated user locations to scan for a local Godot binary."""
     search_dirs: list[Path] = []
     seen_dirs: set[str] = set()
 
-    def _add_dir(path: Path) -> None:
+    def add_dir(path: Path) -> None:
         key = str(path)
         if key and key not in seen_dirs:
             seen_dirs.add(key)
             search_dirs.append(path)
 
-    roots: list[Path] = [Path.home()]
+    roots = [Path.home()]
     userprofile = os.environ.get("USERPROFILE")
     if userprofile:
         roots.append(Path(userprofile))
     roots.append(Path(r"C:\Users\jonas"))
-
     for root in roots:
-        _add_dir(root / "OneDrive" / "Desktop")
-        _add_dir(root / "Desktop")
-        _add_dir(root / "Downloads")
-        _add_dir(root / "OneDrive" / "Downloads")
-        _add_dir(root / "scoop" / "apps" / "godot" / "current")
+        for relative in (
+            Path("OneDrive") / "Desktop",
+            Path("Desktop"),
+            Path("Downloads"),
+            Path("OneDrive") / "Downloads",
+            Path("scoop") / "apps" / "godot" / "current",
+        ):
+            add_dir(root / relative)
 
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
-        _add_dir(Path(local_appdata) / "Programs" / "Godot")
-        _add_dir(Path(local_appdata) / "Microsoft" / "WinGet" / "Links")
-    _add_dir(Path(r"C:\Program Files\Godot"))
+        add_dir(Path(local_appdata) / "Programs" / "Godot")
+        add_dir(Path(local_appdata) / "Microsoft" / "WinGet" / "Links")
+    add_dir(Path(r"C:\Program Files\Godot"))
 
     if is_wsl():
-        wsl_users = Path("/mnt/c/Users")
         try:
+            wsl_users = Path("/mnt/c/Users")
             if wsl_users.is_dir():
                 for user_dir in wsl_users.iterdir():
                     if user_dir.is_dir():
-                        _add_dir(user_dir / "OneDrive" / "Desktop")
-                        _add_dir(user_dir / "Desktop")
-                        _add_dir(user_dir / "Downloads")
+                        for relative in (
+                            Path("OneDrive") / "Desktop",
+                            Path("Desktop"),
+                            Path("Downloads"),
+                        ):
+                            add_dir(user_dir / relative)
         except OSError:
             pass
+    return search_dirs
 
+
+def _discover_local_godot_in_directory(directory: Path) -> str | None:
+    """Return the preferred Godot executable within one search location."""
     preferred_exact = (
         f"Godot_v{GODOT_VERSION}-stable_win64_console.exe",
         f"Godot_v{GODOT_VERSION}-stable_win64.exe",
         f"Godot_v{GODOT_VERSION}-stable_linux.x86_64",
     )
+    patterns = (
+        "Godot_v*_console.exe",
+        "Godot_v*.exe",
+        "Godot_v*.x86_64",
+        "Godot_v*/*.exe",
+        "Godot_v*/*.x86_64",
+        "godot*.exe",
+    )
+    excluded_suffixes = (".zip", ".txt", ".import", ".uid")
+    try:
+        if not directory.is_dir():
+            return None
+        for exact_name in preferred_exact:
+            candidate = directory / exact_name
+            if candidate.is_file():
+                return str(candidate)
+        matches: list[Path] = []
+        for pattern in patterns:
+            for item in directory.glob(pattern):
+                if item.is_file() and not item.name.lower().endswith(excluded_suffixes):
+                    matches.append(item)
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda path: (
+                GODOT_VERSION in path.name,
+                "console" in path.name.lower(),
+                path.name.lower(),
+            ),
+            reverse=True,
+        )
+        return str(matches[0])
+    except OSError:
+        return None
 
-    for directory in search_dirs:
-        try:
-            if not directory.is_dir():
-                continue
-            for exact_name in preferred_exact:
-                candidate = directory / exact_name
-                if candidate.is_file():
-                    return str(candidate)
-            matches: list[Path] = []
-            for pattern in (
-                "Godot_v*_console.exe",
-                "Godot_v*.exe",
-                "Godot_v*.x86_64",
-                "Godot_v*/*.exe",
-                "Godot_v*/*.x86_64",
-                "godot*.exe",
-            ):
-                for item in directory.glob(pattern):
-                    if item.is_file() and not item.name.lower().endswith((".zip", ".txt", ".import", ".uid")):
-                        matches.append(item)
-            if matches:
-                matches.sort(
-                    key=lambda p: (
-                        GODOT_VERSION in p.name,
-                        "console" in p.name.lower(),
-                        p.name.lower(),
-                    ),
-                    reverse=True,
-                )
-                return str(matches[0])
-        except OSError:
-            continue
+
+def _discover_local_godot_binary() -> str | None:
+    """Search common user/desktop/download folders for a Godot 4 executable."""
+    for directory in _local_godot_search_dirs():
+        candidate = _discover_local_godot_in_directory(directory)
+        if candidate is not None:
+            return candidate
     return None
 
 

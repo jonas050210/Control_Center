@@ -1380,9 +1380,7 @@ def _sortable_table(
         def _rescale_columns(_theme: Theme) -> None:
             cur_vp = bus.scale.viewport_scale
             for col_key, _col_title, base_width in columns:
-                scaled_w = (
-                    max(32, int(round(base_width * cur_vp))) if cur_vp < 1.0 else base_width
-                )
+                scaled_w = max(32, int(round(base_width * cur_vp))) if cur_vp < 1.0 else base_width
                 with contextlib.suppress(tk.TclError):
                     tree.column(
                         col_key,

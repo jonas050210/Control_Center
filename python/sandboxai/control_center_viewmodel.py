@@ -946,21 +946,13 @@ def _format_live_benchmark_cards(
     else:
         active_config = "n/a"
 
-    # Live & Peak FPS
-    live_fps = _finite_number(
+    # One clearly labelled throughput value: bridge steps per second.
+    steps_per_second = _finite_number(
         live.get("steps_per_second")
         or (event or {}).get("steps_per_second")
         or (rec or {}).get("expected_steps_per_second")
         or (best_row or {}).get("steps_per_second")
     )
-    peak_candidates = [
-        float(r["steps_per_second"])
-        for r in rows
-        if _finite_number(r.get("steps_per_second")) is not None
-    ]
-    if live_fps is not None:
-        peak_candidates.append(live_fps)
-    peak_fps = max(peak_candidates) if peak_candidates else None
 
     # Live Steps
     if running and live.get("total_steps") is not None:
@@ -1022,12 +1014,13 @@ def _format_live_benchmark_cards(
 
     return {
         "active_config": active_config,
-        "live_fps": live_fps,
+        "steps_per_second": steps_per_second,
         "live_phase": live.get("phase"),
-        "live_fps_text": f"{format_number(live_fps, 1)} steps/s" if live_fps is not None else "n/a",
-        "peak_fps": peak_fps,
-        "peak_speedup": (best_row or {}).get("speedup"),
-        "peak_fps_text": f"{format_number(peak_fps, 1)} steps/s" if peak_fps is not None else "n/a",
+        "steps_per_second_text": (
+            f"{format_number(steps_per_second, 1)} steps/s"
+            if steps_per_second is not None
+            else "n/a"
+        ),
         "live_steps": _finite_number(live.get("total_steps"))
         if running and live.get("total_steps") is not None
         else (
@@ -1058,7 +1051,7 @@ def benchmark_live_telemetry_view(
 ) -> dict[str, Any]:
     """Full live HUD model for the Benchmark tab.
 
-    Combines stage progression, real-time step/FPS/latency/jitter readouts,
+    Combines stage progression, real-time steps/s, latency and jitter readouts,
     the current leading configuration, streaming table rows and throughput
     chart coordinates without inventing a single number.
     """
@@ -1120,8 +1113,12 @@ def benchmark_live_telemetry_view(
         sps = _finite_number(row.get("steps_per_second"))
         if sps is not None and sps > 0.0:
             chart_points.append((float(idx_row), sps))
-    if running and cards["live_fps"] is not None and (event or {}).get("status") == "running":
-        chart_points.append((float(len(chart_points) + 1), float(cards["live_fps"])))
+    if (
+        running
+        and cards["steps_per_second"] is not None
+        and (event or {}).get("status") == "running"
+    ):
+        chart_points.append((float(len(chart_points) + 1), float(cards["steps_per_second"])))
 
     return {
         **workflow,
@@ -1233,10 +1230,10 @@ TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
     ),
     TrainingFieldSpec(
         "total_training_steps",
-        "Total timesteps",
+        "Training steps",
         "int",
         "basic",
-        help="Total environment transitions collected during training.",
+        help="How many simulation steps to run before stopping.",
     ),
     TrainingFieldSpec(
         "device",
@@ -1440,122 +1437,6 @@ def training_field_groups() -> dict[str, list[TrainingFieldSpec]]:
 def launch_field_specs() -> list[TrainingFieldSpec]:
     """The streamlined fields exposed on the Training launch deck."""
     return training_field_groups()["basic"]
-
-
-#: Curated PPO hyperparameter profiles for maximum training efficiency:
-#: - standard: balanced SB3 defaults (LR 3e-4, 256 batch, 10 epochs)
-#: - fast_convergence: linear-scaled LR (5e-4) + 512 minibatch + 6 epochs for
-#:   ~40% faster PPO update wall-time on multi-worker rollouts
-#: - max_turbo: aggressive early exploration (LR 8e-4, 512 batch, 4 epochs,
-#:   entropy 0.02) for rapid initial policy climb
-#: - fine_tune: low-KL late-stage refinement (LR 1e-4, 256 batch, 8 epochs,
-#:   entropy 0.005) when resuming best_eval.zip or latest.zip
-PPO_EFFICIENCY_PRESETS: dict[str, dict[str, str]] = {
-    "standard": {
-        "label": "Standard (LR 3e-4)",
-        "learning_rate": "0.0003",
-        "batch_size": "256",
-        "ppo_epochs": "10",
-        "entropy_coefficient": "0.01",
-        "rollout_length": "0",
-    },
-    "fast_convergence": {
-        "label": "Fast Climb (LR 5e-4 · 6 Ep)",
-        "learning_rate": "0.0005",
-        "batch_size": "512",
-        "ppo_epochs": "6",
-        "entropy_coefficient": "0.015",
-        "rollout_length": "0",
-    },
-    "max_turbo": {
-        "label": "Max Efficiency (LR 8e-4 · 4 Ep)",
-        "learning_rate": "0.0008",
-        "batch_size": "512",
-        "ppo_epochs": "4",
-        "entropy_coefficient": "0.02",
-        "rollout_length": "0",
-    },
-    "fine_tune": {
-        "label": "Fine-Tune Peak (LR 1e-4)",
-        "learning_rate": "0.0001",
-        "batch_size": "256",
-        "ppo_epochs": "8",
-        "entropy_coefficient": "0.005",
-        "rollout_length": "0",
-    },
-}
-
-
-def optimizer_field_specs() -> list[TrainingFieldSpec]:
-    """PPO optimizer & rollout efficiency fields exposed in the Training deck."""
-    wanted = (
-        "learning_rate",
-        "batch_size",
-        "ppo_epochs",
-        "entropy_coefficient",
-        "rollout_length",
-    )
-    by_name = {spec.name: spec for spec in TRAINING_FIELDS}
-    return [by_name[name] for name in wanted if name in by_name]
-
-
-def recommend_ppo_hyperparameters(
-    environment_count: int = 8,
-    env_workers: int = 2,
-    device: str = "auto",
-    total_steps: int = 100_000,
-) -> dict[str, Any]:
-    """Compute topology-aware PPO hyperparameters using square-root batch scaling.
-
-    Wider environment topologies collect lower-variance gradient estimates per
-    rollout, allowing a proportionally higher learning rate (`3e-4 * sqrt(scale)`)
-    and larger minibatches with fewer optimizer epochs per rollout — maximizing
-    both sample efficiency and wall-clock steps/second.
-    """
-    envs = max(1, int(environment_count))
-    workers = max(1, min(envs, int(env_workers or 1)))
-    steps = max(1_000, int(total_steps or 100_000))
-    if envs >= 32:
-        batch_size = 1024 if device == "cuda" else 512
-        ppo_epochs = 4 if device == "cpu" else 6
-        lr = 0.00075 if steps <= 150_000 else 0.0006
-        entropy = 0.015
-    elif envs >= 12:
-        batch_size = 512
-        ppo_epochs = 6
-        lr = 0.00055 if steps <= 150_000 else 0.00045
-        entropy = 0.015
-    elif envs >= 4:
-        batch_size = 256
-        ppo_epochs = 8
-        lr = 0.0004
-        entropy = 0.012
-    else:
-        batch_size = 256
-        ppo_epochs = 10
-        lr = 0.0003
-        entropy = 0.01
-    config = TrainingConfig(
-        environment_count=envs,
-        env_workers=workers,
-        batch_size=batch_size,
-        rollout_length=0,
-    )
-    resolved_rollout = config.resolved_rollout_length()
-    rollout_transitions = envs * resolved_rollout
-    return {
-        "learning_rate": f"{lr:g}",
-        "batch_size": str(batch_size),
-        "ppo_epochs": str(ppo_epochs),
-        "entropy_coefficient": f"{entropy:g}",
-        "rollout_length": "0",
-        "resolved_rollout_length": resolved_rollout,
-        "rollout_transitions": rollout_transitions,
-        "rationale": (
-            f"Auto-tuned for {envs}e/{workers}w ({rollout_transitions} transitions/rollout): "
-            f"LR={lr:g}, batch={batch_size}, epochs={ppo_epochs}, entropy={entropy:g}"
-        ),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -2141,12 +2022,14 @@ def benchmark_mode_view(
     cpu_count: int | None = None,
     measured_steps_per_second: float | None = None,
 ) -> dict[str, Any]:
-    """Plan a benchmark run for the Auto, Push or Custom selector.
+    """Build the host-scaled plan for a benchmark strategy.
 
-    This is a *plan*: which environment/worker topologies will be measured
-    and with which budget. Every number the pipeline later reports comes
-    from the real bridge benchmark; the plan only decides what to try, which
-    is why it is safe to scale it from the host's core count.
+    The GUI uses the automatic strategy; the lower-level planner also keeps
+    its push/custom variants for scripted callers and tests. This is a *plan*:
+    which environment/worker topologies will be measured and with which
+    budget. Every number the pipeline later reports comes from the real
+    bridge benchmark; the plan only decides what to try, which is why it is
+    safe to scale it from the host's core count.
     """
     chosen = str(mode) if str(mode) in {key for key, _ in BENCHMARK_MODES} else "auto"
     physical = _physical_cores(cpu_count)
@@ -2834,4 +2717,3 @@ def resolve_run_checkpoint(run_dir: str | Path, *, prefer_best: bool = False) ->
         if item is not None and item.is_file():
             return item
     return None
-

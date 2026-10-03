@@ -353,21 +353,6 @@ THEMES: dict[str, Theme] = {
 
 THEME_NAMES: tuple[str, ...] = tuple(THEMES)
 
-#: Accent colours an operator can pick without typing a hex value. Kept
-#: deliberately few: an accent colour is a taste decision, and every one of
-#: these keeps its label text readable (see :func:`readable_on`).
-ACCENT_PRESETS: tuple[tuple[str, str], ...] = (
-    ("#4F7CFF", "Corz Blue"),
-    ("#22D3EE", "Cyan"),
-    ("#34D399", "Mint"),
-    ("#A3E635", "Lime"),
-    ("#F5A524", "Amber"),
-    ("#F26D6D", "Coral"),
-    ("#EC4899", "Pink"),
-    ("#8B5CF6", "Violet"),
-    ("#E5E7EB", "Silver"),
-)
-
 
 def get_theme(name: str | None, accent: str = "") -> Theme:
     """Return a theme by name, falling back to the default instead of raising.
