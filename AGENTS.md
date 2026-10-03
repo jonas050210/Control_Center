@@ -85,11 +85,19 @@ gdformat --check scripts tests
 PYTHONPATH=python python -m pytest -q
 python3 tools/control_center_smoke.py   # all smoke steps passed
 python3 tools/desktop_tests.py          # real-Tk suite, or the fallback + how to enable it
+python3 tools/control_center_ui_report.py   # needs Tk + a display: measures the real window
 ```
 
-The last line is the headless GUI run: it builds every page, cycles every
-theme/density/motion/layout, drives the layout studio and the presets and
-drains the background callbacks. It needs no display and no Tk, so it runs
+The `control_center_ui_report.py` line is the only one of the three that
+needs Tkinter *and* a display, so it is not a gate - it is how a machine
+that has both reports what the headless runs cannot see (clipped labels,
+text under the font floor, table headers wider than their column, a leak of
+theme listeners across rebuilds). Run it when the complaint is about how the
+window looks and paste `.sandboxai/ui_report/report.md`.
+
+The headless GUI run is `control_center_smoke.py`: it builds every page, cycles every
+theme, density and motion level, drives the layout studio and the presets,
+and drains the background callbacks. It needs no display and no Tk, so it runs
 anywhere the pytest suite can. CI runs it in the `desktop-ui-tests` job
 next to the real-Tk pytest file; locally it is the only way to execute the
 GUI at all when `python3-tk` is unavailable (see the Tk row above). It

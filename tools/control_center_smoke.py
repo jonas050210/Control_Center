@@ -9,8 +9,9 @@ would otherwise never be executed at all before it reaches a user.
 It installs a deliberately small fake ``tkinter`` (geometry is bookkeeping,
 ``after`` callbacks never fire, unknown widget methods are no-ops) and then
 builds the real application, shows and refreshes every page, cycles every
-theme, density, motion level and shell layout, drives the Settings layout
-studio and presets, and exercises the Training and Benchmark plan logic.
+theme, density and motion level, drives the Settings layout studio and
+presets, and exercises the Training and Benchmark plan logic. It also fails
+if switchable shell layouts come back: the window has one rail now.
 
 What it does **not** verify: pixels, colours, fonts, DPI, real geometry,
 real event dispatch, or that a native Tk build accepts every option. A pass

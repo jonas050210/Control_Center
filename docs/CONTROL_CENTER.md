@@ -497,6 +497,22 @@ pixels, geometry or event dispatch — the `desktop-ui-tests` CI job runs it
 next to the real-Tk pytest file, and it is a development aid, not a
 substitute for that suite.
 
+**What the smoke harness cannot see.** It proves the window builds; it
+cannot say whether it *looks* right, and "the text is cut off" is a report
+only a human can make - badly, over chat. `python3
+tools/control_center_ui_report.py` opens the real window instead, walks
+every page and writes `.sandboxai/ui_report/report.md` (plus the same
+findings as `report.json`) with the things a screenshot does not explain:
+labels that need more room than they have, text under the 11 px floor, table
+headers wider than their column, buttons that are disabled and why, the
+theme-listener count across three density changes, what a `refresh()` costs
+per page, and whether any widget still carries a foreign theme bus. Where
+Pillow can reach the display it saves one PNG per page; where it cannot, the
+report says so instead of inventing an image. It needs Tkinter and a display,
+it is a measuring instrument rather than a gate, and it always exits `0`
+unless the prerequisites are missing (`2`) or the window failed to build
+(`1`).
+
 **Polling.** One timer drives the window (600 ms). Each tick refreshes the
 **visible page only** - every page's `refresh()` submits background reads
 (run directories, benchmark history, the replay list), so running all eight
