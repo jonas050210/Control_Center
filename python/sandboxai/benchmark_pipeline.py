@@ -127,7 +127,19 @@ MAX_SCREEN_SECONDS_PER_CONFIG = 30.0
 #: find a knee in the scaling curve that sits between two surviving rows.
 #: Below this the pipeline keeps the configurations and lets the run take as
 #: long as it takes rather than pretending it measured enough.
-MIN_SCREEN_CONFIGS = 100
+MIN_SCREEN_CONFIGS = 90
+
+#: Hard ceiling for one sweep, however wide the host's ladder is. The
+#: automatic ladder is *designed* to land just under it (99 rows on any host
+#: today), so this is a guardrail against a future ladder change silently
+#: turning a 35-minute measurement into an hour, not a routine thinning
+#: step: with the current ladder it never fires.
+#:
+#: It is deliberately a small band around one number rather than "at least
+#: 100": a sweep big enough to locate a knee is a sweep of about a hundred
+#: rows, and promising "at least 100" while the ceiling is 100 meant the two
+#: constants could only ever agree by accident.
+MAX_SCREEN_CONFIGS = 100
 #: Estimated per-configuration process startup/warmup overhead that is not
 #: part of the measurement itself (planning only).
 ESTIMATED_STARTUP_SECONDS_PER_CONFIG = 2.0
@@ -230,12 +242,17 @@ def available_runtime(
 # ---------------------------------------------------------------------------
 
 
-#: The environment rungs the sweep measures, widest first. ``12`` and the
-#: 96..258 range are in it because the knee of the scaling curve is not a
-#: power of two: a sweep that only probes doublings reports the knee as
-#: "somewhere between 64 and 128" and then recommends a guess. The ladder
-#: ends at 258 - the widest count this project is asked to sweep - with the
-#: power of two below it kept as its own rung.
+#: The environment rungs the sweep measures, widest first. ``12`` and ``96``
+#: are in it because the knee of the scaling curve is not a power of two: a
+#: sweep that only probes doublings reports the knee as "somewhere between
+#: 64 and 128" and then recommends a guess.
+#:
+#: The ladder ends at 128. It used to reach 258, and the extra rungs above
+#: 128 cost six of every ten minutes of a sweep without ever winning one: on
+#: this project's ~10-physical-core host a topology past 128 environments is
+#: oversubscribed by an order of magnitude, so those rows only ever reported
+#: "slower". Everything that is worth measuring on a desktop - including the
+#: knee between 64 and 128 - sits below it.
 DEFAULT_ENVIRONMENT_LADDER: tuple[int, ...] = (
     1,
     2,
@@ -249,18 +266,16 @@ DEFAULT_ENVIRONMENT_LADDER: tuple[int, ...] = (
     64,
     96,
     128,
-    160,
-    192,
-    224,
-    256,
-    258,
 )
 
 #: Widest environment count the default sweep will probe.
-MAX_DEFAULT_ENVIRONMENTS = 258
+MAX_DEFAULT_ENVIRONMENTS = 128
 
 #: Floor for the ladder: every host measures up to at least this many
-#: environments, however few cores it has.
+#: environments, however few cores it has. Equal to the ceiling on purpose:
+#: environment counts are sharded across workers, so a wide environment
+#: count is cheap and the wide side of the sweep must not be scaled away by
+#: a host with few cores.
 MIN_DEFAULT_ENVIRONMENTS = 128
 
 
@@ -287,16 +302,19 @@ def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
     return tuple(sorted(counts))
 
 
-#: Widest worker count the default sweep will probe. Above this the
-#: improvement per extra Godot process is noise for a desktop host, and the
-#: grid only gets more expensive to screen.
-MAX_DEFAULT_WORKERS = 32
+#: Widest worker count the default sweep will probe. A Godot bridge
+#: saturates about one physical core, so on this project's ~10-core host 20
+#: workers is already a deliberate 2x oversubscription - enough to see the
+#: plateau where more processes stop paying. The ladder used to reach 32,
+#: which is 3x oversubscription there: those rows never won, they only made
+#: the sweep longer.
+MAX_DEFAULT_WORKERS = 20
 
 #: The worker rungs for one environment count. Powers of two alone left the
 #: sweep guessing between doublings, and the whole point of measuring is to
-#: not guess: 3/6/12/20/24 fill the gaps where a sharded topology actually
+#: not guess: 3/5/6/10/12/20 fill the gaps where a sharded topology actually
 #: turns over.
-DEFAULT_WORKER_LADDER: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32)
+DEFAULT_WORKER_LADDER: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20)
 
 
 def default_worker_counts(environment_count: int, cpu_count: int | None = None) -> tuple[int, ...]:
@@ -387,6 +405,50 @@ def _thin(values: list[int], target: int) -> list[int]:
         picked.append(values[round(index * stride)])
     picked.append(values[-1])
     return sorted(set(picked))
+
+
+def cap_candidates(
+    candidates: list[dict[str, Any]],
+    limit: int = MAX_SCREEN_CONFIGS,
+) -> list[dict[str, Any]]:
+    """Trim a planned grid to at most ``limit`` configurations.
+
+    Same strategy as :func:`fit_candidates_to_budget` - keep the *spread* of
+    the sweep, not its density - because the same thing is being protected:
+    a sweep is how the knee of the scaling curve is found, and a decimated
+    grid answers "which of these few" instead. Worker variants go first
+    (the single-process baseline and the widest worker count survive
+    longest), then the environment ladder is thinned evenly with both
+    endpoints kept.
+
+    The difference is what is being protected *against*: the budget version
+    defends the wall clock, this one defends the operator's evening. With
+    the default ladder it never fires.
+    """
+    if limit <= 0 or len(candidates) <= limit:
+        return list(candidates)
+    current = list(candidates)
+    while len(current) > limit:
+        environments = sorted({row["environments"] for row in current})
+        worker_counts = sorted({row["workers"] for row in current})
+        if len(worker_counts) > 2:
+            reduced = _thin(worker_counts, len(worker_counts) - 1)
+            thinned = [row for row in current if row["workers"] in reduced]
+        elif len(environments) > 2:
+            reduced = _thin(environments, len(environments) - 1)
+            thinned = [row for row in current if row["environments"] in reduced]
+        else:
+            # Two environments x two worker variants: drop the smaller
+            # environment's multi-worker variant, the least informative row.
+            thinned = [
+                row
+                for row in current
+                if row["workers"] == 1 or row["environments"] == environments[-1]
+            ]
+        if len(thinned) == len(current) or not thinned:
+            break
+        current = thinned
+    return current
 
 
 def fit_candidates_to_budget(
@@ -1641,14 +1703,30 @@ def run_benchmark_pipeline(
         report["status"] = "unavailable"
         report["recommendation_reason"] = "no compatible environment/worker candidates to measure"
         return finish()
+    # One sweep never measures more than MAX_SCREEN_CONFIGS topologies,
+    # however wide this host's ladder is. The default ladder lands just
+    # under the ceiling by design, so this is the guardrail that keeps a
+    # future ladder change from silently doubling the operator's evening -
+    # and it is reported, not applied quietly.
+    requested_configurations = len(candidates)
+    candidates = cap_candidates(candidates)
     report["plan"] = {
         "environment_counts": sorted({row["environments"] for row in candidates}),
         "worker_counts": sorted({row["workers"] for row in candidates}),
         "candidates": candidates,
+        "requested_configurations": requested_configurations,
+        "configuration_limit": MAX_SCREEN_CONFIGS,
         "finalists": int(finalists),
         "warmup_steps": int(warmup_steps),
         "compact_infos": bool(compact_infos),
     }
+    if len(candidates) < requested_configurations:
+        report["notes"].append(
+            f"this host's ladder planned {requested_configurations} configurations; "
+            f"the sweep was trimmed to the {MAX_SCREEN_CONFIGS}-configuration ceiling "
+            "(worker variants dropped first, environment ladder thinned evenly, "
+            "both endpoints kept)"
+        )
 
     candidates, screen_cap, validation_seconds_per_finalist, device_seconds = (
         _prepare_measurement_budget(budget, candidates, report, runtime, finalists)

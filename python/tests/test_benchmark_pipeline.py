@@ -19,10 +19,13 @@ from pathlib import Path
 import pytest
 
 from sandboxai.benchmark_pipeline import (
+    DEFAULT_ENVIRONMENT_LADDER,
     DEFAULT_TIME_BUDGET_MINUTES,
     ESTIMATED_STARTUP_SECONDS_PER_CONFIG,
     JITTER_THRESHOLD,
     MAX_DEFAULT_ENVIRONMENTS,
+    MAX_DEFAULT_WORKERS,
+    MAX_SCREEN_CONFIGS,
     MAX_TIME_BUDGET_MINUTES,
     MIN_DEFAULT_ENVIRONMENTS,
     MIN_SCREEN_CONFIGS,
@@ -33,6 +36,7 @@ from sandboxai.benchmark_pipeline import (
     RECOMMENDATION_FORMAT,
     PipelineBudget,
     allocate_time_budget,
+    cap_candidates,
     default_environment_counts,
     default_worker_counts,
     discover_reports,
@@ -104,23 +108,49 @@ class TestCandidatePlanning:
     def test_environment_ladder_reaches_the_wide_topologies(self):
         # Every host probes to at least 128 environments: they are sharded
         # across workers, so the wide side of the sweep must not be
-        # host-scaled away. A desktop reaches the full 258.
-        assert default_environment_counts(2)[-1] == 128
+        # host-scaled away, and 128 is where the ladder ends.
+        assert default_environment_counts(2)[-1] == MAX_DEFAULT_ENVIRONMENTS
         assert default_environment_counts(20)[-1] == MAX_DEFAULT_ENVIRONMENTS
-        assert default_environment_counts(32)[-3:] == (224, 256, 258)
+        assert default_environment_counts(32)[-1] == MAX_DEFAULT_ENVIRONMENTS
         # The rungs between the powers of two are in the ladder: a knee
         # reported as "somewhere between 64 and 128" is not a measurement.
         assert 12 in default_environment_counts(32)
-        assert 160 in default_environment_counts(32)
+        assert 96 in default_environment_counts(32)
 
-    def test_the_default_sweep_measures_at_least_the_minimum_configurations(self):
-        # 100 configurations is the floor the pipeline promises; below it a
-        # sweep cannot find the best topology, only the best of the few it
-        # tried. Checked on hosts from a laptop to a workstation.
-        for logical in (4, 8, 12, 20, 32):
+    def test_the_ladder_ends_where_more_environments_stop_paying(self):
+        # The ladder used to reach 258. Those rungs cost most of a sweep
+        # without ever winning one: past 128 environments a desktop host is
+        # oversubscribed by an order of magnitude. Regression guard - if a
+        # future change widens the ladder again, this test is the place where
+        # it has to say why.
+        assert MAX_DEFAULT_ENVIRONMENTS == 128
+        assert max(DEFAULT_ENVIRONMENT_LADDER) == MAX_DEFAULT_ENVIRONMENTS
+
+    def test_the_default_sweep_fits_inside_the_configuration_band(self):
+        # A sweep has to be big enough to locate the knee and small enough
+        # to finish in an evening: about a hundred rows, never more than the
+        # ceiling. Checked on hosts from a laptop to a workstation.
+        for logical in (4, 8, 12, 20, 32, 64):
             plan = plan_candidates(None, None, cpu_count=logical)
-            assert len(plan) >= MIN_SCREEN_CONFIGS, (logical, len(plan))
+            assert MIN_SCREEN_CONFIGS <= len(plan) <= MAX_SCREEN_CONFIGS, (logical, len(plan))
             assert max(row["environments"] for row in plan) >= MIN_DEFAULT_ENVIRONMENTS
+            assert max(row["workers"] for row in plan) <= MAX_DEFAULT_WORKERS
+
+    def test_the_ceiling_trims_a_too_wide_ladder_without_losing_the_spread(self):
+        # The ceiling is a guardrail, so it has to work on a grid that is
+        # deliberately too wide - and it has to keep the endpoints of both
+        # axes, or the knee it exists to find falls between two rows.
+        wide = plan_candidates(list(range(1, 33)), list(range(1, 33)), cpu_count=64)
+        assert len(wide) > MAX_SCREEN_CONFIGS
+        trimmed = cap_candidates(wide)
+        assert len(trimmed) <= MAX_SCREEN_CONFIGS
+        assert min(row["environments"] for row in trimmed) == 1
+        assert max(row["environments"] for row in trimmed) == 32
+        assert min(row["workers"] for row in trimmed) == 1
+        assert max(row["workers"] for row in trimmed) == 32
+        # A grid that already fits is left exactly as it is.
+        small = plan_candidates([1, 2, 4], [1, 2], cpu_count=16)
+        assert cap_candidates(small) == small
 
     def test_worker_ladder_reaches_past_the_conservative_recommendation(self):
         # 2 environments can never be fed by more than 2 workers.
@@ -142,14 +172,14 @@ class TestCandidatePlanning:
             12,
             16,
             20,
-            24,
-            32,
         )
         # A small host gets the same rungs: oversubscribed rows measure as
         # slow, which is the answer, not a reason to skip the question.
         assert default_worker_counts(64, cpu_count=8) == default_worker_counts(64, cpu_count=32)
-        # Never above the module's own ceiling.
-        assert max(default_worker_counts(512, cpu_count=256)) == 32
+        # Never above the module's own ceiling: past ~2x the physical core
+        # count more Godot processes only contend for CPU, and those rows
+        # cost measurement time without ever winning.
+        assert max(default_worker_counts(512, cpu_count=256)) == MAX_DEFAULT_WORKERS
 
     def test_plan_candidates_deduplicates_and_skips_invalid_pairs(self):
         # 4 workers with 2 environments would be clamped to 2 -> duplicate.

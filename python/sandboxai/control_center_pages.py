@@ -2126,8 +2126,8 @@ class BenchmarkPage(Page):
         intro.bind("<Configure>", resize_intro_description, add=True)
 
         # What is about to happen, in numbers, before anything is measured.
-        # A sweep of 175 configurations is a long-running action and the
-        # operator is entitled to know its size before pressing Start.
+        # A sweep of a hundred configurations is a long-running action and
+        # the operator is entitled to know its size before pressing Start.
         self.plan_label = ttk.Label(
             intro,
             text="",
@@ -2292,7 +2292,8 @@ class BenchmarkPage(Page):
             text=(
                 f"{plan['expected_configurations']} configurations   ·   "
                 f"up to {max(plan['environments'])} environments   ·   "
-                f"up to {max(plan['workers'])} workers\n"
+                f"up to {max(plan['workers'])} workers   ·   "
+                f"ceiling {plan.get('configuration_limit', 100)}\n"
                 f"Fixed {vm.format_number(per_config, 0)} s per configuration   ·   "
                 f"at least {vm.format_duration(plan['screening_measurement_seconds'])} screening "
                 "+ startup/warmup + PPO validation"
