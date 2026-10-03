@@ -53,6 +53,7 @@ __all__ = [
     "columns_for_width",
     "default_layout",
     "fit_window_geometry",
+    "fit_table_column_widths",
     "deserialize",
     "layout_dir",
     "move",
@@ -66,6 +67,25 @@ __all__ = [
 ]
 
 LAYOUT_VERSION = 1
+
+
+def fit_table_column_widths(preferred: list[int], minimum: list[int], available: int) -> list[int]:
+    """Shrink spare column space, never measured header minima.
+
+    When even the minima cannot fit, overflow is intentional and the table
+    keeps its horizontal scrollbar. Integer rounding cannot exceed the
+    available viewport, including the few pixels that triggered Windows CI.
+    """
+    if len(preferred) != len(minimum):
+        raise ValueError("each table column needs a preferred and minimum width")
+    floors = [max(1, int(width)) for width in minimum]
+    widths = [max(floor, int(width)) for floor, width in zip(floors, preferred)]
+    spare = sum(width - floor for width, floor in zip(widths, floors))
+    room = max(0, int(available) - sum(floors))
+    if spare <= room:
+        return widths
+    return [floor + (width - floor) * room // spare for width, floor in zip(widths, floors)]
+
 
 #: Preset names become file names; this is the length limit after sanitising.
 PRESET_MAX_NAME = 48

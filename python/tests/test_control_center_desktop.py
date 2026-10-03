@@ -453,7 +453,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
     def test_the_widest_table_shows_every_column_on_a_1920x1080_window(self):
         """The marquee table must not scroll horizontally on a wide screen.
 
-        The benchmark measurements table declares 14 columns (1125 px). It
+        The benchmark measurements table must keep every column reachable. It
         used to share a 3:2 split with the throughput chart, which left it
         about 900 px on a 1920x1080 window - a horizontal overlay bar on the
         very screens that have room to spare. It is a full-width card now, and
@@ -787,7 +787,8 @@ class ControlCenterConstructionTests(unittest.TestCase):
             self.assertNotIn(name, vars(page), f"obsolete benchmark control remains: {name}")
         self.assertEqual(page.run_button.cget("text"), "Start Benchmark")
         self.assertFalse(page.cancel_button.winfo_manager(), "Cancel is hidden while idle")
-        self.assertEqual(page.LIVE_CARD_NAMES.count("Steps/s"), 1)
+        self.assertEqual(page.LIVE_CARD_NAMES.count("Simulation Steps/s"), 1)
+        self.assertEqual(page.LIVE_CARD_NAMES.count("PPO Training Steps/s"), 1)
         self.assertNotIn("peak fps", page.LIVE_CARD_NAMES)
         plan = page.current_plan()
         self.assertEqual(plan["mode"], "auto")
@@ -827,8 +828,9 @@ class ControlCenterConstructionTests(unittest.TestCase):
         # Auto mode plans the host-scaled sweep itself and passes no
         # user-entered budget, grid or finalist parameters.
         self.assertEqual(kwargs["budget_mode"], plan["budget_mode"])
-        self.assertIn(kwargs["budget_mode"], {"steps", "time"})
-        self.assertEqual(kwargs["minutes"], plan["minutes"])
+        self.assertEqual(kwargs["budget_mode"], "fixed")
+        self.assertNotIn("minutes", kwargs)
+        self.assertNotIn("steps", kwargs)
         self.assertEqual(sorted(kwargs["environment_counts"]), sorted(plan["environments"]))
         self.assertEqual(sorted(kwargs["worker_counts"]), sorted(plan["workers"]))
         self.assertEqual(
@@ -1057,6 +1059,8 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.assertIn("configurations", label)
         self.assertIn("workers", label)
         self.assertIn("environments", label)
+        self.assertIn("Fixed 20 s", label)
+        self.assertNotIn("budget 30", label)
 
     def test_the_measurements_table_reports_fps_per_environment(self):
         from sandboxai import control_center_viewmodel as vm
@@ -1451,7 +1455,8 @@ class TrainingAndBenchmarkPlanTests(unittest.TestCase):
         self.assertEqual(page.run_button.cget("text"), "Start Benchmark")
         self.assertNotEqual(str(page.run_button.cget("state")), "disabled")
         self.assertEqual(page.cancel_button.winfo_manager(), "")
-        self.assertEqual(page.LIVE_CARD_NAMES.count("Steps/s"), 1)
+        self.assertEqual(page.LIVE_CARD_NAMES.count("Simulation Steps/s"), 1)
+        self.assertEqual(page.LIVE_CARD_NAMES.count("PPO Training Steps/s"), 1)
         self.assertNotIn("peak fps", page.LIVE_CARD_NAMES)
 
         page._running = True

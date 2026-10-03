@@ -320,39 +320,38 @@ one place.
 ### Benchmarks
 
 The GUI offers one automatic benchmark and one idle action: **Start Benchmark**.
-It builds a host-scaled candidate ladder, uses the pipeline's automatic time
-budget, validates the strongest measurements with real training slices, and
-applies the fastest stable recommendation. There are no visible mode, step,
-minute, environment, or worker inputs; **Cancel** appears only while a run is
-active and disables after cancellation has been requested. Before Start is
-pressed the card states the sweep it is about to run — *175 configurations ·
-up to 258 environments · up to 32 workers · ~8 s each · budget 30 min* —
-counted with the pipeline's own planner, so the promise and the report cannot
-disagree.
+It builds the full host-scaled candidate ladder and measures every topology
+for a fixed **20-second wall-clock window**, after separate startup/warmup.
+There is no duration, mode, step, minute, environment or worker input in the
+GUI. Fast topologies cannot finish early at a step target, and an overall
+budget does not shorten windows or thin the candidate grid. **Cancel** is
+available while running; screening checks it between vector steps.
 
-The sweep is deliberately large. It measures at least 100 configurations on
-any host, rungs the environment count up to 258 (with rungs between the
-powers of two, because a knee reported as "somewhere between 64 and 128" is
-a guess) and the worker count up to 32 regardless of how many cores this
-machine has: capping the ladder by core count was a guess about what should
-win, and a guess is not a measurement. Oversubscribed rows measure as slow
-and are labelled as oversubscribed. Budget thinning refuses to go below 100
-configurations — a grid thinned to twenty rows cannot locate a knee, and the
-report would still present its winner as "the best configuration".
+The plan states its size and minimum screening duration before Start. For
+175 configurations, the measurement windows alone total **58 minutes
+20 seconds**, plus startup/warmup, device checks and PPO validation. This is
+not the former 30-minute overall budget. Actual elapsed time is reported;
+a vector step or PPO update finishes safely if it crosses a window boundary.
 
-The phase strip reports discovery, screening, device comparison, validation,
-recommendation and application. Live telemetry includes the active test,
-**Steps/s**, **FPS / env**, live steps, latency percentiles, jitter and
-elapsed host data. **FPS / env** is not a second peak-FPS counter: it is the
-same measurement divided by the environments that produced it, i.e. how many
-simulation ticks one agent lives through per second. Steps/s keeps climbing
-after the per-environment rate has already turned over, and the two curves
-usually peak at different configurations, so the page charts both. After a
-run, the measurements table provides its recorded environment, worker, step,
-device, speed, FPS, latency, stability and error details; these are results,
-not setup controls. The table and the charts occupy separate full-width cards
-so the table can show all 15 columns on a wide display without a permanent
-horizontal scrollbar.
+The sweep keeps the existing wide environment/worker ladder. Oversubscribed
+rows remain measured and labelled, rather than being silently dropped.
+
+**Simulation Steps/s** and **PPO Training Steps/s** have separate live cards
+and curves. Simulation screening does not run a policy or optimizer. PPO
+validation includes rollout collection and optimizer updates, but excludes
+model/bridge startup, periodic evaluation/checkpoints and final saves from
+its measured training-loop rate; total wall time remains in the report.
+A timed slice without a completed PPO update cannot recommend a training
+configuration. Real training can still be slower at harder curriculum levels
+or with evaluation/recording enabled. **FPS / env** is simulation ticks per
+second per environment, not render FPS; its curve contains simulation rows
+only. Leaders and speedups are compared within one measurement path.
+
+The table reports all tested topologies with actual measured duration,
+throughput, per-environment rate, latency, stability and failures. Column
+fitting uses measured heading-font minima and the available viewport; narrow
+windows retain scrolling. Missing Godot is reported as unavailable, never
+silently replaced by a synthetic Python benchmark.
 
 The pipeline runs these stages:
 
@@ -361,21 +360,22 @@ The pipeline runs these stages:
    the command to fix it, never a fabricated number.
 2. **Screening** — the real bridge benchmark
    (`benchmark.benchmark_simulation`) across the planned
-   `(environments, workers)` pairs, each configuration time-capped:
-   startup, warmup, throughput, p50/p95 vector-step latency, episodes,
+   `(environments, workers)` pairs, each with the same fixed measurement window:
+   separate startup/warmup, throughput, p50/p95 vector-step latency, episodes,
    resources and errors.
 3. **Devices** — compare available devices when there is more than one
    candidate and no usable hardware profile is persisted; this reuses
    `hardware_profile`, the single device-comparison implementation.
-4. **Validation** — run a short *real training slice* per surviving
-   finalist, on the selected device, so the recommendation reflects the
-   training path, not just bridge stepping.
-5. **Recommendation** — choose from validated throughput when available,
+4. **Validation** — run a separate fixed *real PPO training window* per
+   surviving finalist on the selected device, preserving the standard rollout
+   geometry and requiring at least one optimizer update.
+5. **Recommendation** — automatic mode requires validated PPO throughput,
    within a near-best band of the best measurement, preferring stability
    (low latency jitter, no errors, fewer workers) over an unstable peak.
    The `rationale` and `warnings` quote only measured numbers.
 
-Planning estimates size the time slices; only measured values are reported.
+Planning estimates describe overhead, not throughput. Fixed measurement
+windows are never resized from an estimated rate; only measured rates are reported.
 The full report is persisted under
 `training/benchmarks/pipelines/<timestamp>/` (`pipeline.json` plus
 benchmark-history-shaped `benchmark.json`), the recommendation is stored
@@ -388,7 +388,8 @@ Advanced budget and grid options remain available for scripted benchmark
 sweeps through the CLI; they are not exposed as GUI setup fields:
 
 ```bash
-sandboxai benchmark-pipeline --budget-mode time --minutes 15
+sandboxai benchmark-pipeline              # fixed automatic windows
+sandboxai benchmark-pipeline --budget-mode time --minutes 15  # legacy scripted mode
 sandboxai benchmark-pipeline --budget-mode steps --steps 2000
 sandboxai benchmark-pipeline --show        # print the persisted recommendation
 ```

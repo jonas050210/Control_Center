@@ -40,12 +40,13 @@ candidate for the whole time:
    available, preferring stability (latency jitter, no errors) over an
    unstable peak, with the reasoning spelled out in ``rationale``.
 
-Budget modes: **steps** (screen until a configured step count per
-configuration) or **time** (approximately N minutes total, split across
-the stages; the candidate grid is thinned to fit). Planning may *predict*
-how long a slice will take, but only measured values are reported, and a
-stage that could not run is recorded with a status and a reason instead
-of a fabricated number.
+The automatic **fixed** mode measures each planned topology for the same
+20-second window after startup/warmup, without a step cutoff or grid
+thinning. Finalists get separate fixed real PPO windows; a rollout without
+an optimizer update is not a validated training measurement. There is no
+operator duration setting in the GUI and no 30-minute overall cutoff.
+Legacy **steps** and **time** budgets remain for scripted callers. Planning
+may predict duration, but reported rates always use measured elapsed time.
 
 Persistence
 -----------
@@ -69,7 +70,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .benchmark import benchmark_simulation, frames_per_second
+from .benchmark import BenchmarkCancelled, benchmark_simulation, frames_per_second
 from .sharded_env import (
     physical_core_estimate,
     worker_compatibility,
@@ -77,6 +78,11 @@ from .sharded_env import (
 
 PIPELINE_FORMAT = "sandboxai.benchmark_pipeline/v1"
 RECOMMENDATION_FORMAT = "sandboxai.recommended_config/v1"
+
+#: The automatic benchmark has one fixed wall-clock measurement window.
+#: Startup/warmup are separate; neither a step target nor an overall time
+#: budget may shorten a configuration or thin the host-scaled candidate grid.
+FIXED_MEASUREMENT_SECONDS = 20.0
 PIPELINE_REPORT_NAME = "pipeline.json"
 
 #: Default wall-clock budget for time mode. It has to carry
@@ -454,10 +460,11 @@ def fit_candidates_to_budget(
 
 @dataclass(frozen=True)
 class PipelineBudget:
-    """What the pipeline may spend, in one of two modes.
+    """Fixed automatic windows, or a legacy scripted step/time budget.
 
-    ``steps`` mode screens every configuration until ``steps`` steps per
-    environment (with a wall-clock safety cap). ``time`` mode targets
+    ``fixed`` mode always uses :data:`FIXED_MEASUREMENT_SECONDS`, without
+    an operator duration, step cutoff or candidate thinning. ``steps`` mode
+    screens until ``steps`` steps per environment (with a safety time cap). ``time`` mode targets
     approximately ``minutes`` minutes of total measurement and derives
     per-stage caps; the actual elapsed time of every stage is recorded in
     the report, because a plan is a plan, not a measurement.
@@ -471,8 +478,8 @@ class PipelineBudget:
     validation_steps: int = DEFAULT_VALIDATION_STEPS
 
     def __post_init__(self) -> None:
-        if self.mode not in ("steps", "time"):
-            raise ValueError("budget mode must be 'steps' or 'time'")
+        if self.mode not in ("fixed", "steps", "time"):
+            raise ValueError("budget mode must be 'fixed', 'steps' or 'time'")
         if self.mode == "steps" and self.steps < 1:
             raise ValueError("steps must be positive in steps mode")
         if self.mode == "time" and not (
@@ -482,6 +489,11 @@ class PipelineBudget:
                 f"time budget must be between {MIN_TIME_BUDGET_MINUTES:g} and "
                 f"{MAX_TIME_BUDGET_MINUTES:g} minutes"
             )
+
+    @classmethod
+    def fixed(cls) -> PipelineBudget:
+        """Automatic mode: a fixed window, with no operator duration input."""
+        return cls(mode="fixed")
 
     @classmethod
     def for_steps(
@@ -507,6 +519,9 @@ class PipelineBudget:
             "mode": self.mode,
             "steps": self.steps if self.mode == "steps" else None,
             "minutes": round(self.minutes, 2) if self.mode == "time" else None,
+            "seconds_per_configuration": (
+                FIXED_MEASUREMENT_SECONDS if self.mode == "fixed" else None
+            ),
             "device_steps": self.device_steps,
             "validation_steps": self.validation_steps,
         }
@@ -711,6 +726,7 @@ def recommend(
     near_best_fraction: float = NEAR_BEST_FRACTION,
     jitter_threshold: float = JITTER_THRESHOLD,
     cpu_count: int | None = None,
+    require_training_validation: bool = False,
 ) -> dict[str, Any] | None:
     """Pick the recommended configuration from real measurements only.
 
@@ -738,6 +754,8 @@ def recommend(
     eligible = [
         row for row in screen_rows if _row_is_measured(row) and float(row["steps_per_second"]) > 0.0
     ]
+    if require_training_validation and not validated:
+        return None
     if validated:
         eligible = [row for row in eligible if _row_key(row) in validated]
         basis = "validated_training_slice"
@@ -1011,6 +1029,7 @@ def _measure_screen_row(
     warmup_steps: int,
     screen: Callable[..., list[dict[str, Any]]] | None,
     on_step_progress: Callable[[dict[str, Any]], None] | None = None,
+    cancel: CancelFn | None = None,
 ) -> dict[str, Any]:
     """Measure one ``(environments, workers)`` configuration. Never raises."""
     environment_count = int(candidate["environments"])
@@ -1022,16 +1041,27 @@ def _measure_screen_row(
                 godot_executable=executable,
                 environment_counts=[environment_count],
                 worker_counts=[worker_count],
-                steps=budget.steps if budget.mode == "steps" else 10**9,
+                steps=(
+                    None
+                    if budget.mode == "fixed"
+                    else budget.steps
+                    if budget.mode == "steps"
+                    else None
+                ),
                 enemy_count=enemy_count,
                 seed=seed,
                 curriculum_level=curriculum_level,
                 max_seconds_per_config=(
-                    budget.screen_cap_seconds if budget.mode == "steps" else screen_cap
+                    FIXED_MEASUREMENT_SECONDS
+                    if budget.mode == "fixed"
+                    else budget.screen_cap_seconds
+                    if budget.mode == "steps"
+                    else screen_cap
                 ),
                 compact_infos=compact_infos,
                 warmup_steps=warmup_steps,
                 on_step_progress=on_step_progress,
+                cancel=cancel,
             )
         else:
             measured = screen(environments=environment_count, workers=worker_count)
@@ -1040,6 +1070,13 @@ def _measure_screen_row(
         if not measured:
             row["error"] = "measurement returned no rows"
         row["candidate_warnings"] = list(candidate.get("warnings", []))
+    except BenchmarkCancelled as exc:
+        row = {
+            "environments": environment_count,
+            "workers": worker_count,
+            "status": "cancelled",
+            "error": str(exc),
+        }
     except Exception as exc:  # one broken configuration must not sink the sweep
         row = {
             "environments": environment_count,
@@ -1131,10 +1168,14 @@ def _run_screening(
                 warmup_steps=warmup_steps,
                 screen=screen,
                 on_step_progress=_on_live_step if on_progress is not None else None,
+                cancel=cancel,
             )
         )
         _annotate_screening_rows(rows)
         row = rows[-1]
+        if row["status"] == "cancelled":
+            cancelled = True
+            break
         _emit(
             on_progress,
             stage="screening",
@@ -1339,6 +1380,7 @@ def _run_validation(
             break
         environment_count = int(row["environments"])
         worker_count = int(row["workers"])
+        measurement_seconds = FIXED_MEASUREMENT_SECONDS if budget.mode == "fixed" else None
         steps = (
             estimate_validation_steps(row, validation_seconds_per_finalist)
             if budget.mode == "time"
@@ -1354,7 +1396,8 @@ def _run_validation(
                 "environments": environment_count,
                 "workers": worker_count,
                 "device": device,
-                "steps": steps,
+                "steps": steps if measurement_seconds is None else None,
+                "measurement_seconds": measurement_seconds,
             },
             completed_rows=prior_rows + [dict(r, stage="validation") for r in rows],
             stage_elapsed_seconds=time.monotonic() - started,
@@ -1364,7 +1407,8 @@ def _run_validation(
             "workers": worker_count,
             "device": device,
             "inference_device": inference_device,
-            "steps": steps,
+            "steps": steps if measurement_seconds is None else None,
+            "measurement_seconds": measurement_seconds,
         }
         try:
             if validate_training is None:
@@ -1384,6 +1428,7 @@ def _run_validation(
                     env_workers=worker_count,
                     enemy_count=enemy_count,
                     seed=seed,
+                    measurement_seconds=measurement_seconds,
                 )
             else:
                 measurement = validate_training(
@@ -1391,6 +1436,7 @@ def _run_validation(
                     workers=worker_count,
                     device=device,
                     steps=steps,
+                    **({"measurement_seconds": measurement_seconds} if measurement_seconds else {}),
                 )
             validation_row.update(measurement.to_dict())
             validation_row["status"] = "measured" if measurement.ok else measurement.status
@@ -1419,7 +1465,59 @@ def _run_validation(
     if cancelled:
         stage["status"] = "cancelled"
         stage["reason"] = "cancelled by operator"
+    elif rows and not any(row.get("status") == "measured" for row in rows):
+        stage["status"] = "failed"
+        stage["reason"] = "no finalist produced a valid PPO training measurement"
     return rows, stage, cancelled
+
+
+def _prepare_measurement_budget(
+    budget: PipelineBudget,
+    candidates: list[dict[str, Any]],
+    report: dict[str, Any],
+    runtime: dict[str, Any],
+    finalists: int,
+) -> tuple[list[dict[str, Any]], float, float, float]:
+    """Set measurement limits; automatic windows never thin the full grid."""
+    # ---- Time-mode budget allocation ------------------------------------
+    screen_cap = budget.screen_cap_seconds
+    validation_seconds_per_finalist = 0.0
+    device_seconds = 0.0
+    if budget.mode == "fixed":
+        screen_cap = FIXED_MEASUREMENT_SECONDS
+        report["budget"]["screen_cap_seconds_per_config"] = screen_cap
+        report["budget"]["validation_seconds_per_finalist"] = FIXED_MEASUREMENT_SECONDS
+        report["plan"]["screening_measurement_seconds"] = len(candidates) * screen_cap
+        report["notes"].append(
+            "Automatic screening measures every planned configuration for a fixed 20-second "
+            "window after startup/warmup. The full sweep is not capped at 30 minutes. "
+            "PPO validation uses separate fixed windows; evaluations and final saves are "
+            "not included in its measured training-loop throughput."
+        )
+    if budget.mode == "time":
+        from .hardware_profile import available_candidates
+
+        allocation = allocate_time_budget(
+            budget.minutes,
+            candidate_count=len(candidates),
+            finalist_count=max(1, finalists),
+            device_candidate_count=len(
+                available_candidates(has_cuda=runtime.get("cuda_available"))
+            ),
+            has_training_runtime=bool(runtime.get("torch_available")),
+        )
+        candidates, screen_cap = fit_candidates_to_budget(candidates, allocation["screen_seconds"])
+        report["plan"]["candidates"] = candidates
+        report["plan"]["environment_counts"] = sorted({row["environments"] for row in candidates})
+        report["plan"]["worker_counts"] = sorted({row["workers"] for row in candidates})
+        report["budget"]["screen_cap_seconds_per_config"] = screen_cap
+        report["budget"]["validation_seconds_per_finalist"] = allocation[
+            "validation_seconds_per_finalist"
+        ]
+        validation_seconds_per_finalist = allocation["validation_seconds_per_finalist"]
+        device_seconds = allocation["device_seconds"]
+
+    return candidates, screen_cap, validation_seconds_per_finalist, device_seconds
 
 
 def run_benchmark_pipeline(
@@ -1451,9 +1549,8 @@ def run_benchmark_pipeline(
     The stage functions (``screen``, ``measure_device``, ``validate_training``)
     and the ``runtime`` facts are injectable so the orchestration is testable
     without a Godot binary; the defaults are the real measurers and a real
-    runtime probe. Cancellation is honoured between configurations and
-    between finalists — an in-flight slice always finishes, exactly like the
-    hardware wizard.
+    runtime probe. Screening checks cancellation between vector steps;
+    PPO validation finishes its bounded slice before moving to a finalist.
 
     ``recommendation_project_root`` anchors the machine-local
     ``.sandboxai/recommended_config.json``; it defaults to ``project_path``
@@ -1461,7 +1558,7 @@ def run_benchmark_pipeline(
     recommendation next to its project.
     """
     started = time.monotonic()
-    budget = budget or PipelineBudget.for_time()
+    budget = budget or PipelineBudget.fixed()
     project = Path(project_path)
     report: dict[str, Any] = {
         "format": PIPELINE_FORMAT,
@@ -1553,32 +1650,9 @@ def run_benchmark_pipeline(
         "compact_infos": bool(compact_infos),
     }
 
-    # ---- Time-mode budget allocation ------------------------------------
-    screen_cap = budget.screen_cap_seconds
-    validation_seconds_per_finalist = 0.0
-    device_seconds = 0.0
-    if budget.mode == "time":
-        from .hardware_profile import available_candidates
-
-        allocation = allocate_time_budget(
-            budget.minutes,
-            candidate_count=len(candidates),
-            finalist_count=max(1, finalists),
-            device_candidate_count=len(
-                available_candidates(has_cuda=runtime.get("cuda_available"))
-            ),
-            has_training_runtime=bool(runtime.get("torch_available")),
-        )
-        candidates, screen_cap = fit_candidates_to_budget(candidates, allocation["screen_seconds"])
-        report["plan"]["candidates"] = candidates
-        report["plan"]["environment_counts"] = sorted({row["environments"] for row in candidates})
-        report["plan"]["worker_counts"] = sorted({row["workers"] for row in candidates})
-        report["budget"]["screen_cap_seconds_per_config"] = screen_cap
-        report["budget"]["validation_seconds_per_finalist"] = allocation[
-            "validation_seconds_per_finalist"
-        ]
-        validation_seconds_per_finalist = allocation["validation_seconds_per_finalist"]
-        device_seconds = allocation["device_seconds"]
+    candidates, screen_cap, validation_seconds_per_finalist, device_seconds = (
+        _prepare_measurement_budget(budget, candidates, report, runtime, finalists)
+    )
 
     # ---- Stage 2: screening ----------------------------------------------
     screening = _run_screening(
@@ -1631,7 +1705,7 @@ def run_benchmark_pipeline(
         validation_stage["status"] = "skipped"
         validation_stage["reason"] = (
             "torch is not installed, so the real training path cannot be measured; "
-            "the recommendation will be based on bridge throughput only"
+            "simulation throughput is not evidence of PPO training speed"
         )
     else:
         validation_rows, validation_stage, validation_cancelled = _run_validation(
@@ -1664,13 +1738,19 @@ def run_benchmark_pipeline(
         device=device,
         inference_device=inference_device,
         cpu_count=cpu_count,
+        require_training_validation=budget.mode == "fixed",
     )
     if recommendation is None:
         report["recommendation_reason"] = (
-            "no configuration produced a usable measurement; inspect the stage "
-            "errors in this report"
+            "No usable PPO validation was measured; simulation throughput alone is not "
+            "a training recommendation. Inspect the validation errors or install the "
+            "training extras."
+            if budget.mode == "fixed"
+            else "no configuration produced a usable measurement; inspect the stage errors in this report"
         )
     else:
         report["recommendation"] = recommendation
-    report["status"] = "completed"
+    report["status"] = (
+        "incomplete" if budget.mode == "fixed" and recommendation is None else "completed"
+    )
     return finish()

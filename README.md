@@ -146,9 +146,12 @@ It provides:
   environment/worker/device candidates, validates the strongest results, and
   applies the fastest stable recommendation to the launch deck. The sweep
   measures at least 100 configurations per run, up to 258 environments and
-  32 workers, and states its size before it starts. Live telemetry reports
-  **Steps/s** and **FPS / env** (the same measurement per environment, not a
-  duplicate peak-FPS counter), latency, stability and progress; the measured
+  32 workers, with a fixed **20-second measurement window per configuration**
+  after startup/warmup. No duration control or 30-minute total cutoff is
+  exposed: 175 configurations need 58 minutes 20 seconds of screening alone.
+  Live telemetry separates **Simulation Steps/s** from **PPO Training Steps/s**;
+  **FPS / env** is the simulation rate per environment, not render FPS.
+  Separate charts, latency, stability and progress accompany the measured
   configurations and full report remain available for review and are
   persisted. Advanced sweep controls remain available to scripted callers,
   not in the GUI.

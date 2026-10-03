@@ -757,7 +757,7 @@ def _format_pipeline_row(stage_name: str | None, row: dict[str, Any]) -> dict[st
         "environments": row.get("environments"),
         "workers": row.get("workers"),
         "device": row.get("device"),
-        "steps": row.get("steps") or row.get("total_steps"),
+        "steps": row.get("steps_completed") or row.get("total_steps") or row.get("steps"),
         "steps_per_second": row.get("steps_per_second"),
         "frames_per_second": row.get("frames_per_second"),
         "speedup": row.get("speedup_vs_baseline"),
@@ -774,7 +774,14 @@ def _format_pipeline_row(stage_name: str | None, row: dict[str, Any]) -> dict[st
 
 
 def _enrich_pipeline_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Populate speedup and bottleneck for any rows that do not yet carry them."""
+    """Compare like measurements only: simulation is not PPO training."""
+    for stage in {row.get("stage") for row in rows}:
+        _enrich_measurement_rows([row for row in rows if row.get("stage") == stage])
+    return rows
+
+
+def _enrich_measurement_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Populate speedup and bottleneck within one measurement path."""
     measured = [
         r
         for r in rows
@@ -850,6 +857,8 @@ def benchmark_recommendation_view(recommendation: dict[str, Any] | None) -> dict
         "device": recommendation.get("device"),
         "inference_device": recommendation.get("inference_device"),
         "expected_steps_per_second": recommendation.get("expected_steps_per_second"),
+        "simulation_steps_per_second": recommendation.get("screened_steps_per_second"),
+        "training_steps_per_second": recommendation.get("validated_steps_per_second"),
         "basis": recommendation.get("basis"),
         "created_utc": recommendation.get("created_utc"),
         "applied_utc": recommendation.get("applied_utc"),
@@ -860,7 +869,12 @@ def benchmark_recommendation_view(recommendation: dict[str, Any] | None) -> dict
             f"{recommendation.get('environment_count')} environments / "
             f"{recommendation.get('env_workers')} workers on "
             f"{recommendation.get('device')} — "
-            f"{format_number(recommendation.get('expected_steps_per_second'), 1)} steps/s"
+            f"{format_number(recommendation.get('expected_steps_per_second'), 1)} "
+            + (
+                "PPO training steps/s"
+                if recommendation.get("basis") == "validated_training_slice"
+                else "simulation steps/s (not PPO-validated)"
+            )
         ),
     }
 
@@ -892,16 +906,18 @@ def pipeline_progress_view(event: dict[str, Any] | None) -> dict[str, Any]:
             time_frac = (elapsed / cap) if cap > 0.0 else 0.0
             step_frac = (done_steps / target_steps) if (0.0 < target_steps < 10**8) else 0.0
             sub_fraction = min(0.99, max(time_frac, step_frac))
-        fraction = (
-            ((index + sub_fraction) / total)
-            if event.get("status") == "running"
-            else ((index + 1) / total)
-        )
+        finished = event.get("status") in ("completed", "failed")
+        fraction = (index + (1.0 if finished else sub_fraction)) / total
         text = f"{stage}: {index + 1}/{total}{label} ({event.get('status', '')})"
         if live and live.get("steps_per_second") is not None:
             text += (
                 f" • {format_number(live.get('steps_per_second'), 1)} steps/s "
                 f"({format_number(live.get('total_steps'))} steps)"
+            )
+        if live.get("phase") == "stepping" and live.get("target_steps") is None:
+            text += (
+                f" • {format_number(live.get('elapsed_seconds'), 1)}/"
+                f"{format_number(live.get('max_seconds_per_config'), 0)} s measuring"
             )
     else:
         fraction = None
@@ -921,6 +937,71 @@ def _extract_best_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not measured:
         return None
     return max(measured, key=lambda item: float(item["steps_per_second"]))
+
+
+def _benchmark_rate_values(
+    *,
+    running: bool,
+    event: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Keep simulation and PPO values tied to their own path and topology."""
+    config = (event or {}).get("configuration") or {}
+    rec = (report or {}).get("recommendation") or {}
+    target = (
+        config
+        if running
+        else {"environments": rec.get("environment_count"), "workers": rec.get("env_workers")}
+    )
+
+    def measured_row(stage: str) -> dict[str, Any] | None:
+        matching = [row for row in rows if row.get("stage") == stage]
+        if target.get("environments") is not None:
+            matching = [
+                row
+                for row in matching
+                if (row.get("environments"), row.get("workers"))
+                == (target.get("environments"), target.get("workers"))
+            ]
+        return _extract_best_row(matching)
+
+    simulation = measured_row("screening") or {}
+    training = measured_row("validation") or {}
+    simulation_sps = _finite_number(simulation.get("steps_per_second"))
+    training_sps = _finite_number(training.get("steps_per_second"))
+    if rec and not running:
+        simulation_sps = _finite_number(rec.get("screened_steps_per_second")) or simulation_sps
+        if rec.get("basis") == "validated_training_slice":
+            training_sps = _finite_number(
+                rec.get("validated_steps_per_second") or rec.get("expected_steps_per_second")
+            )
+    stage = (event or {}).get("stage")
+    if running and stage in ("screening", "validation"):
+        live = (event or {}).get("live") or {}
+        active_sps = _finite_number(live.get("steps_per_second"))
+        if active_sps is None and (event or {}).get("status") == "completed":
+            active_sps = _finite_number((event or {}).get("steps_per_second"))
+        if stage == "screening":
+            simulation_sps = active_sps
+        else:
+            training_sps = active_sps
+    simulation_envs = _finite_number(
+        config.get("environments") if running else rec.get("environment_count")
+    ) or _finite_number(simulation.get("environments"))
+    simulation_fps = (
+        simulation_sps / simulation_envs if simulation_sps is not None and simulation_envs else None
+    )
+    return {
+        "simulation_steps_per_second": simulation_sps,
+        "training_steps_per_second": training_sps,
+        "simulation_frames_per_second": simulation_fps,
+        "active_steps_per_second": (
+            training_sps
+            if stage == "validation" or (rec and rec.get("basis") == "validated_training_slice")
+            else simulation_sps
+        ),
+    }
 
 
 def _format_live_benchmark_cards(
@@ -951,29 +1032,10 @@ def _format_live_benchmark_cards(
     else:
         active_config = "n/a"
 
-    # One clearly labelled throughput value: bridge steps per second.
-    steps_per_second = _finite_number(
-        live.get("steps_per_second")
-        or (event or {}).get("steps_per_second")
-        or (rec or {}).get("expected_steps_per_second")
-        or (best_row or {}).get("steps_per_second")
-    )
-
-    # And its per-environment counterpart: how many simulation ticks one
-    # agent lives through per second. Measured, not declared - it comes from
-    # the same payload as steps_per_second, and it is the number that says
-    # whether widening the topology starved the individual environments.
-    frames_per_second = _finite_number(
-        live.get("frames_per_second")
-        or (event or {}).get("frames_per_second")
-        or (best_row or {}).get("frames_per_second")
-    )
-    if frames_per_second is None and steps_per_second is not None:
-        environments = _finite_number(config.get("environments"))
-        if environments is None and best_row is not None:
-            environments = _finite_number(best_row.get("environments"))
-        if environments and environments > 0:
-            frames_per_second = steps_per_second / environments
+    rates = _benchmark_rate_values(running=running, event=event, report=report, rows=rows)
+    steps_per_second = rates["active_steps_per_second"]
+    # The per-environment card/curve belongs to simulation screening only.
+    frames_per_second = rates["simulation_frames_per_second"]
 
     # Live Steps
     if running and live.get("total_steps") is not None:
@@ -1035,6 +1097,7 @@ def _format_live_benchmark_cards(
 
     return {
         "active_config": active_config,
+        **rates,
         "steps_per_second": steps_per_second,
         "frames_per_second": frames_per_second,
         "frames_per_second_text": (
@@ -1069,6 +1132,22 @@ def _format_live_benchmark_cards(
     }
 
 
+def _benchmark_chart_points(
+    rows: list[dict[str, Any]], stage: str, metric: str
+) -> list[tuple[float, float]]:
+    """Separate curves; failed/partial measurements never become chart points."""
+    points: list[tuple[float, float]] = []
+    for row in rows:
+        value = _finite_number(row.get(metric))
+        if (
+            row.get("stage") == stage
+            and row.get("status", "ok") in ("ok", "measured")
+            and value is not None
+        ):
+            points.append((float(len(points) + 1), value))
+    return points
+
+
 def benchmark_live_telemetry_view(
     *,
     running: bool,
@@ -1085,7 +1164,9 @@ def benchmark_live_telemetry_view(
     workflow = benchmark_workflow_view(running=running, event=event, report=report, applied=applied)
     live_rows = (event or {}).get("completed_rows") if running else None
     rows = benchmark_pipeline_rows(report, live_rows=live_rows)
-    best_row = _extract_best_row(rows)
+    best_row = _extract_best_row([row for row in rows if row.get("stage") == "validation"])
+    if best_row is None:
+        best_row = _extract_best_row([row for row in rows if row.get("stage") == "screening"])
     cards = _format_live_benchmark_cards(
         running=running, event=event, report=report, rows=rows, best_row=best_row
     )
@@ -1115,7 +1196,8 @@ def benchmark_live_telemetry_view(
         leader_summary = (
             f"{best_row.get('environments')} environments / "
             f"{best_row.get('workers')} workers — "
-            f"{format_number(best_row.get('steps_per_second'), 1)} steps/s "
+            f"{format_number(best_row.get('steps_per_second'), 1)} "
+            f"{'PPO training' if best_row.get('stage') == 'validation' else 'simulation'} steps/s "
             f"(p50 {format_number(best_row.get('p50_ms'), 2)} ms, "
             f"jitter {format_number(best_row.get('jitter'), 2)}x{speedup_suffix})"
         )
@@ -1135,24 +1217,22 @@ def benchmark_live_telemetry_view(
         leader_summary = "awaiting benchmark telemetry"
         leader_text = ""
 
-    chart_points: list[tuple[float, float]] = []
-    fps_chart_points: list[tuple[float, float]] = []
-    for idx_row, row in enumerate(rows, start=1):
-        sps = _finite_number(row.get("steps_per_second"))
-        if sps is not None and sps > 0.0:
-            chart_points.append((float(idx_row), sps))
-        fps = _finite_number(row.get("frames_per_second"))
-        if fps is not None and fps > 0.0:
-            fps_chart_points.append((float(idx_row), fps))
-    if (
-        running
-        and cards["steps_per_second"] is not None
-        and (event or {}).get("status") == "running"
-    ):
-        chart_points.append((float(len(chart_points) + 1), float(cards["steps_per_second"])))
-        if cards["frames_per_second"] is not None:
-            fps_chart_points.append(
-                (float(len(fps_chart_points) + 1), float(cards["frames_per_second"]))
+    chart_points = _benchmark_chart_points(rows, "screening", "steps_per_second")
+    training_chart_points = _benchmark_chart_points(rows, "validation", "steps_per_second")
+    fps_chart_points = _benchmark_chart_points(rows, "screening", "frames_per_second")
+    if running and (event or {}).get("status") == "running":
+        stage = (event or {}).get("stage")
+        if stage == "screening" and cards["simulation_steps_per_second"] is not None:
+            chart_points.append(
+                (float(len(chart_points) + 1), cards["simulation_steps_per_second"])
+            )
+            if cards["frames_per_second"] is not None:
+                fps_chart_points.append(
+                    (float(len(fps_chart_points) + 1), cards["frames_per_second"])
+                )
+        if stage == "validation" and cards["training_steps_per_second"] is not None:
+            training_chart_points.append(
+                (float(len(training_chart_points) + 1), cards["training_steps_per_second"])
             )
 
     return {
@@ -1170,6 +1250,7 @@ def benchmark_live_telemetry_view(
             (best_row.get("environments"), best_row.get("workers")) if best_row else None
         ),
         "chart_points": chart_points,
+        "training_chart_points": training_chart_points,
         "fps_chart_points": fps_chart_points,
     }
 
@@ -1605,6 +1686,8 @@ def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
 #: them two ways ("FPS/env" in the table, "FPS / env" in the cards). A
 #: constant plus a static test is cheaper than remembering which is which.
 UNIT_STEPS_PER_SECOND = "Steps/s"
+UNIT_SIMULATION_STEPS_PER_SECOND = "Simulation Steps/s"
+UNIT_PPO_STEPS_PER_SECOND = "PPO Training Steps/s"
 UNIT_FPS_PER_ENV = "FPS / env"
 
 
@@ -2044,11 +2127,10 @@ def _automatic_benchmark_plan(
     how a run could stop at four workers while the window advertised more.
     """
     from .benchmark_pipeline import (
-        DEFAULT_TIME_BUDGET_MINUTES,
+        FIXED_MEASUREMENT_SECONDS,
         MAX_DEFAULT_ENVIRONMENTS,
         default_environment_counts,
         default_worker_counts,
-        fit_candidates_to_budget,
         plan_candidates,
     )
 
@@ -2080,29 +2162,21 @@ def _automatic_benchmark_plan(
         )
     view["environments"] = environments
     view["workers"] = workers
-    view["budget_mode"] = "time"
-    try:
-        view["minutes"] = (
-            float(str(minutes_raw).strip())
-            if str(minutes_raw).strip()
-            else DEFAULT_TIME_BUDGET_MINUTES
-        )
-    except ValueError:
-        view["minutes"] = DEFAULT_TIME_BUDGET_MINUTES
+    view["budget_mode"] = "fixed"
+    view["minutes"] = None
     # Counted with the pipeline's own planner, not with a second
     # ``worker <= environment`` rule of our own: the pipeline also drops
     # pairs the launcher would refuse, and a plan that promises 175
     # configurations while the sweep measures 150 is how the window's plan
     # and the run's report stopped agreeing.
     planned = plan_candidates(environments, workers, cpu_count=logical)
-    minutes = float(view["minutes"] or DEFAULT_TIME_BUDGET_MINUTES)
-    _kept, per_config = fit_candidates_to_budget(planned, minutes * 60.0 * 0.55)
     view["expected_configurations"] = len(planned)
-    view["per_config_seconds"] = per_config
+    view["per_config_seconds"] = FIXED_MEASUREMENT_SECONDS
+    view["screening_measurement_seconds"] = len(planned) * FIXED_MEASUREMENT_SECONDS
     view["summary"] = (
         f"{mode} sweep scaled to {logical} logical / {physical} physical cores: "
         f"{len(planned)} configurations up to {max(environments)} environments "
-        f"and {max(workers)} workers, ~{format_number(per_config, 1)} s each"
+        f"and {max(workers)} workers, fixed {format_number(FIXED_MEASUREMENT_SECONDS, 0)} s each"
     )
     if measured_steps_per_second:
         view["summary"] += f" (last measured {format_number(measured_steps_per_second, 1)} steps/s)"

@@ -327,6 +327,25 @@ class DefaultMeasureEndToEndTests(unittest.TestCase):
         assert measurement.steps_completed is not None
         self.assertGreater(measurement.steps_completed, 0)
 
+    def test_timed_window_runs_real_ppo_updates_on_the_fake_bridge(self):
+        cpu = next(c for c in hp._ALL_CANDIDATES if c.label == hp.DEVICE_CPU)
+        measurement = hp.default_measure(
+            cpu,
+            project_path=PROJECT_ROOT,
+            godot_executable=self.executable,
+            steps=64,
+            environment_count=2,
+            measurement_seconds=20.0,
+        )
+        self.assertTrue(measurement.ok, measurement.error)
+        self.assertGreaterEqual(measurement.wall_seconds, 20.0)
+        self.assertGreater(measurement.ppo_updates_completed, 0)
+        self.assertGreaterEqual(measurement.total_wall_seconds, measurement.wall_seconds)
+        self.assertAlmostEqual(
+            measurement.steps_per_second,
+            measurement.steps_completed / measurement.wall_seconds,
+        )
+
     def test_wizard_selects_cpu_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = hp.run_hardware_wizard(
@@ -340,6 +359,59 @@ class DefaultMeasureEndToEndTests(unittest.TestCase):
         self.assertFalse(profile.fallback)
         self.assertEqual(profile.selected_device, hp.DEVICE_CPU)
         self.assertTrue(profile.godot_available)
+
+
+class TrainingWindowTimingTests(unittest.TestCase):
+    def measurement(self, *, updates=10, seconds=20.0):
+        from unittest.mock import patch
+
+        captured = []
+
+        def train(config):
+            captured.append(config)
+            return {
+                "training_steps_completed": 1000,
+                "training_wall_seconds": 20.0,
+                "ppo_updates_completed": updates,
+            }
+
+        with (
+            patch("sandboxai.ppo.train_ppo", side_effect=train),
+            patch("sandboxai.hardware_profile.time.monotonic", side_effect=[100.0, 170.0]),
+        ):
+            result = hp.default_measure(
+                hp._ALL_CANDIDATES[0],
+                project_path=PROJECT_ROOT,
+                godot_executable="godot",
+                steps=100,
+                measurement_seconds=seconds,
+            )
+        return result, captured[0]
+
+    def test_ppo_rate_excludes_model_startup_and_final_saves(self):
+        result, config = self.measurement()
+        self.assertEqual(result.steps_per_second, 50.0)
+        self.assertEqual(result.wall_seconds, 20.0)
+        self.assertEqual(result.total_wall_seconds, 70.0)
+        self.assertEqual(config.max_train_minutes, 20.0 / 60.0)
+        self.assertGreater(config.total_training_steps, 100)
+        self.assertGreater(
+            config.evaluation_frequency, config.rollout_schedule()["scheduled_timesteps"]
+        )
+        self.assertGreater(
+            config.checkpoint_frequency, config.rollout_schedule()["scheduled_timesteps"]
+        )
+
+    def test_rollout_only_is_not_reported_as_ppo_training(self):
+        result, _ = self.measurement(updates=0)
+        self.assertFalse(result.ok)
+        self.assertIsNone(result.steps_per_second)
+        self.assertIn("no PPO update", result.error)
+
+    def test_timing_provenance_round_trips(self):
+        result, _ = self.measurement()
+        restored = hp.DeviceMeasurement.from_dict(result.to_dict())
+        self.assertEqual(restored.to_dict(), result.to_dict())
 
 
 if __name__ == "__main__":
