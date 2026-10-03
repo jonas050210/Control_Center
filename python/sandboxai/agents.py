@@ -489,6 +489,9 @@ class AgentManager:
         best = run_dir / "checkpoints" / "best_eval.zip"
         if best.is_file():
             return str(best)
+        best_alt = run_dir / "checkpoints" / "best.zip"
+        if best_alt.is_file():
+            return str(best_alt)
         final = run_dir / "final.zip"
         return str(final) if final.is_file() else None
 
@@ -506,12 +509,14 @@ class AgentManager:
         return {"ok": True, "error": None, "agent_id": agent_id}
 
     def clear_finished(self) -> int:
-        """Forget every agent whose process has exited. Returns the count."""
+        """Forget every agent whose process has exited or failed to launch. Returns the count."""
         removed = 0
         with self._lock:
             records = list(self._records.values())
         for record in records:
-            if record.process_id is not None and self._live_process(record) is None:
+            if (record.process_id is not None and self._live_process(record) is None) or (
+                record.process_id is None and record.error is not None
+            ):
                 with self._lock:
                     self._records.pop(record.agent_id, None)
                 removed += 1

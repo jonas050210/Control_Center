@@ -685,6 +685,16 @@ class WindowGeometryTests(unittest.TestCase):
         self.assertGreaterEqual(x, 0)
         self.assertGreaterEqual(y, 0)
 
+    def test_viewport_scale_shrinks_elements_proportionally_below_1080p(self) -> None:
+        from sandboxai.control_center_theme import compute_viewport_scale
+
+        full_scale = UiScale(dpi=96.0).with_viewport(1800, 980)
+        small_scale = UiScale(dpi=96.0).with_viewport(1024, 600)
+        self.assertEqual(compute_viewport_scale(1800, 980), 1.0)
+        self.assertLess(small_scale.viewport_scale, 1.0)
+        self.assertLess(small_scale.px(238, minimum=180), full_scale.px(238, minimum=180))
+        self.assertLess(small_scale.font("h1")[1], full_scale.font("h1")[1])
+
 
 if __name__ == "__main__":
     unittest.main()

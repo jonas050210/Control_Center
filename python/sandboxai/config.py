@@ -145,7 +145,7 @@ def save_godot_executable_setting(executable: str) -> Path | None:
     install must never scatter config files outside the repository.
     """
     resolved = _resolve_executable(executable)
-    if resolved is None:
+    if resolved is None or "simulated_godot_bridge" in str(resolved):
         return None
     settings = _settings_path()
     # Only a real checkout owns a settings file.
@@ -159,6 +159,89 @@ def save_godot_executable_setting(executable: str) -> Path | None:
     return settings
 
 
+def _discover_local_godot_binary() -> str | None:
+    """Search common user/desktop/download folders for a Godot 4 executable."""
+    search_dirs: list[Path] = []
+    seen_dirs: set[str] = set()
+
+    def _add_dir(path: Path) -> None:
+        key = str(path)
+        if key and key not in seen_dirs:
+            seen_dirs.add(key)
+            search_dirs.append(path)
+
+    roots: list[Path] = [Path.home()]
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        roots.append(Path(userprofile))
+    roots.append(Path(r"C:\Users\jonas"))
+
+    for root in roots:
+        _add_dir(root / "OneDrive" / "Desktop")
+        _add_dir(root / "Desktop")
+        _add_dir(root / "Downloads")
+        _add_dir(root / "OneDrive" / "Downloads")
+        _add_dir(root / "scoop" / "apps" / "godot" / "current")
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        _add_dir(Path(local_appdata) / "Programs" / "Godot")
+        _add_dir(Path(local_appdata) / "Microsoft" / "WinGet" / "Links")
+    _add_dir(Path(r"C:\Program Files\Godot"))
+
+    if is_wsl():
+        wsl_users = Path("/mnt/c/Users")
+        try:
+            if wsl_users.is_dir():
+                for user_dir in wsl_users.iterdir():
+                    if user_dir.is_dir():
+                        _add_dir(user_dir / "OneDrive" / "Desktop")
+                        _add_dir(user_dir / "Desktop")
+                        _add_dir(user_dir / "Downloads")
+        except OSError:
+            pass
+
+    preferred_exact = (
+        f"Godot_v{GODOT_VERSION}-stable_win64_console.exe",
+        f"Godot_v{GODOT_VERSION}-stable_win64.exe",
+        f"Godot_v{GODOT_VERSION}-stable_linux.x86_64",
+    )
+
+    for directory in search_dirs:
+        try:
+            if not directory.is_dir():
+                continue
+            for exact_name in preferred_exact:
+                candidate = directory / exact_name
+                if candidate.is_file():
+                    return str(candidate)
+            matches: list[Path] = []
+            for pattern in (
+                "Godot_v*_console.exe",
+                "Godot_v*.exe",
+                "Godot_v*.x86_64",
+                "Godot_v*/*.exe",
+                "Godot_v*/*.x86_64",
+                "godot*.exe",
+            ):
+                for item in directory.glob(pattern):
+                    if item.is_file() and not item.name.lower().endswith((".zip", ".txt", ".import", ".uid")):
+                        matches.append(item)
+            if matches:
+                matches.sort(
+                    key=lambda p: (
+                        GODOT_VERSION in p.name,
+                        "console" in p.name.lower(),
+                        p.name.lower(),
+                    ),
+                    reverse=True,
+                )
+                return str(matches[0])
+        except OSError:
+            continue
+    return None
+
+
 def find_godot_executable(preferred: str = "godot") -> str:
     """Find a usable Godot executable across explicit paths, environment variables, the remembered local setting and common platform locations.
 
@@ -169,7 +252,8 @@ def find_godot_executable(preferred: str = "godot") -> str:
     3. the remembered executable in ``.sandboxai/settings.json`` (written by
        the CLI whenever an explicit ``--godot-executable`` resolves).
     4. well-known candidate names on PATH (``godot4``, ``godot.exe``, ...).
-    5. ``preferred`` unchanged (the documented default is ``godot`` on PATH).
+    5. common user locations (``OneDrive/Desktop``, ``Desktop``, ``Downloads``).
+    6. ``preferred`` unchanged (the documented default is ``godot`` on PATH).
     """
     explicit = _resolve_executable(preferred)
     if explicit:
@@ -192,6 +276,10 @@ def find_godot_executable(preferred: str = "godot") -> str:
         found = _resolve_executable(candidate)
         if found:
             return found
+    if _GODOT_CANDIDATES:
+        discovered = _discover_local_godot_binary()
+        if discovered:
+            return discovered
     return preferred or "godot"
 
 

@@ -142,6 +142,12 @@ class ControlCenter(tk.Tk):
         self.title("SandboxAI Studio")
         self.adapter = adapter or SandboxAIAdapter()
         self.scale = UiScale.from_root(self)
+        # Normalize Tk's internal point-to-pixel font scaling to 1.0 after
+        # measuring the display DPI in UiScale.from_root(self), so UiScale
+        # font sizes map 1:1 to pixels and are never double-scaled on
+        # Windows 125%/150% DPI displays.
+        with contextlib.suppress(Exception):
+            self.tk.call("tk", "scaling", 1.0)
         self.prefs_store = PreferencesStore(self.adapter.project_root)
         self.prefs: UiPreferences = self.prefs_store.load()
         self.bus = ThemeBus(
@@ -153,6 +159,9 @@ class ControlCenter(tk.Tk):
         self.preset_store = PresetStore(self.adapter.project_root)
         self.layout_bus = LayoutBus(self._load_layout())
         self.background = BackgroundRunner(self)
+        self._viewport_resize_job: str | None = None
+        self._last_viewport_size: tuple[int, int] = (0, 0)
+        self._compact_header: bool = False
 
         self._apply_window_geometry()
         self.style = apply_ttk_styles(
@@ -162,12 +171,19 @@ class ControlCenter(tk.Tk):
         self.pages: dict[str, Page] = {}
         self._current: Page | None = None
         self._nav_buttons: dict[str, ttk.Button] = {}
+        self._nav_group_widgets: list[tk.Widget] = []
+        self._nav_footnote: tk.Widget | None = None
+        self._sidebar_toggle_btn: ttk.Button | None = None
+        self.sidebar_collapsed: bool = False
         self._nav_indicator: tk.Frame | None = None
         self._layouter: tk.Misc | None = None
         self.toasts = ToastHost(self, self.bus, self.motion, width=self.bus.px(380, minimum=280))
         self._build_shell()
+        self.bind("<Configure>", self._on_root_configure, add="+")
         self.bind("<Control-k>", lambda _event: self.open_command_palette())
         self.bind("<Control-K>", lambda _event: self.open_command_palette())
+        self.bind("<Control-b>", lambda _event: self.toggle_sidebar())
+        self.bind("<Control-B>", lambda _event: self.toggle_sidebar())
         self.bind("<F11>", lambda _event: self.toggle_zoom())
         self.after(self.POLL_MS, self._tick)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -220,18 +236,24 @@ class ControlCenter(tk.Tk):
 
     def _apply_window_geometry(self) -> None:
         screen_w, screen_h = self.screen_size()
-        self.geometry(
-            fit_window_geometry(
-                self.prefs.geometry,
-                screen_width=screen_w,
-                screen_height=screen_h,
-                preferred_width=self.px(1800, minimum=1400),
-                preferred_height=self.px(980, minimum=820),
-                min_width=self.px(1280, minimum=1000),
-                min_height=self.px(800, minimum=640),
-            )
+        fitted = fit_window_geometry(
+            self.prefs.geometry,
+            screen_width=screen_w,
+            screen_height=screen_h,
+            preferred_width=min(screen_w - 40, self.px(1800, minimum=1200)),
+            preferred_height=min(screen_h - 60, self.px(980, minimum=700)),
+            min_width=min(screen_w - 40, 960),
+            min_height=min(screen_h - 60, 600),
         )
-        self.minsize(self.px(1280, minimum=1000), self.px(800, minimum=640))
+        self.geometry(fitted)
+        # Allow resizing well below 1920x1080 so smaller displays or split-screen
+        # windows can shrink smoothly while UiScale scales elements down.
+        self.minsize(min(820, max(640, screen_w - 80)), min(520, max(440, screen_h - 80)))
+        with contextlib.suppress(ValueError, IndexError):
+            size_part = fitted.split("+", 1)[0].split("-", 1)[0]
+            w_str, h_str = size_part.lower().split("x", 1)
+            self.scale = self.scale.with_viewport(int(w_str), int(h_str))
+            self.bus.scale = self.scale
         if self.prefs.zoomed:
             # Restore a maximized window as maximized; `state("zoomed")` is
             # the Tk spelling on Windows and on X11 alike, and a window
@@ -686,24 +708,50 @@ class ControlCenter(tk.Tk):
         self._build_pages(content)
 
     def _build_nav_items(self, host: tk.Misc, *, vertical: bool) -> None:
+        self._nav_group_widgets.clear()
+        self._nav_footnote = None
+        self._sidebar_toggle_btn = None
+        if vertical:
+            rail_bar = ttk.Frame(host, style="Nav.TFrame")
+            rail_bar.pack(fill="x", pady=(0, self.px(6, minimum=3)))
+            self._sidebar_toggle_btn = ttk.Button(
+                rail_bar,
+                text="▶" if self.sidebar_collapsed else "◀ Rail",
+                style="Ghost.TButton",
+                command=self.toggle_sidebar,
+            )
+            self._sidebar_toggle_btn.pack(side="right")
+            ToolTip(
+                self._sidebar_toggle_btn,
+                "Collapse / expand navigation rail (Ctrl+B) to free horizontal workspace",
+            )
         groups = {0: "OVERVIEW", 1: "WORKFLOWS", 4: "ARTIFACTS", 5: "SYSTEM"}
         for index, page_class in enumerate(PAGE_CLASSES):
             if vertical and index in groups:
                 if index:
-                    ttk.Separator(host).pack(fill="x", pady=(self.px(14), self.px(8)))
-                ttk.Label(
+                    sep = ttk.Separator(host)
+                    sep.pack(fill="x", pady=(self.px(14), self.px(8)))
+                    self._nav_group_widgets.append(sep)
+                grp_lbl = ttk.Label(
                     host,
                     text=groups[index],
                     style="NavGroup.TLabel",
-                ).pack(fill="x", padx=self.px(10), pady=(0, self.px(4)))
+                )
+                grp_lbl.pack(fill="x", padx=self.px(10), pady=(0, self.px(4)))
+                self._nav_group_widgets.append(grp_lbl)
             button = ttk.Button(
                 host,
-                text=page_class.title,
+                text=self._nav_label(page_class.title),
                 style="Nav.TButton",
                 command=lambda name=page_class.title: self.show_page(name),  # type: ignore[misc]
             )
             if vertical:
                 button.pack(fill="x", pady=1)
+                button.bind(
+                    "<Configure>",
+                    lambda _evt, name=page_class.title: self._on_nav_button_configure(name),
+                    add="+",
+                )
             else:
                 button.pack(side="left", padx=(0, self.px(4, minimum=2)))
             ToolTip(button, f"Open {page_class.title}   ·   Ctrl+{index + 1}")
@@ -713,18 +761,70 @@ class ControlCenter(tk.Tk):
                 lambda _evt, name=page_class.title: self.show_page(name),  # type: ignore[misc]
             )
         if vertical:
-            ttk.Separator(host).pack(fill="x", pady=self.px(14))
-            ttk.Label(
+            sep_bottom = ttk.Separator(host)
+            sep_bottom.pack(fill="x", pady=self.px(14))
+            self._nav_group_widgets.append(sep_bottom)
+            self._nav_footnote = ttk.Label(
                 host,
                 text=(
                     "Ctrl+K  command palette\n"
+                    "Ctrl+B  collapse rail\n"
                     f"Ctrl+1 .. Ctrl+{len(PAGE_CLASSES)}  pages\n"
                     "F11  maximize / restore\n"
                     "Headless Godot Bridge v3"
                 ),
                 style="NavFootnote.TLabel",
                 justify="left",
-            ).pack(anchor="w", padx=self.px(10))
+            )
+            self._nav_footnote.pack(anchor="w", padx=self.px(10))
+
+    @staticmethod
+    def _nav_short_code(title: str) -> str:
+        short_map = {
+            "Dashboard": "DB",
+            "Training": "TR",
+            "Benchmarks": "BM",
+            "Evaluations": "EV",
+            "Runs / Checkpoints": "RN",
+            "Stats": "ST",
+            "System / Logs": "SY",
+            "Settings": "CF",
+        }
+        return short_map.get(title, title[:2].upper())
+
+    def _nav_label(self, title: str) -> str:
+        if self.sidebar_collapsed and self.prefs.layout != "topbar":
+            return self._nav_short_code(title)
+        return title
+
+    def toggle_sidebar(self) -> None:
+        """Toggle the left navigation sidebar between full labels and compact icon rail."""
+        if self.prefs.layout == "topbar" or self._nav_host is None:
+            return
+        self.sidebar_collapsed = not self.sidebar_collapsed
+        with contextlib.suppress(tk.TclError):
+            if self.sidebar_collapsed:
+                self._nav_host.configure(
+                    width=self.px(68, minimum=56),
+                    padding=(self.px(6, minimum=4), self.px(10, minimum=6)),
+                )
+                if self._sidebar_toggle_btn is not None:
+                    self._sidebar_toggle_btn.configure(text="▶")
+                if self._nav_footnote is not None:
+                    self._nav_footnote.pack_forget()
+            else:
+                self._nav_host.configure(
+                    width=self.px(232, minimum=154),
+                    padding=(self.px(12, minimum=6), self.px(14, minimum=8)),
+                )
+                if self._sidebar_toggle_btn is not None:
+                    self._sidebar_toggle_btn.configure(text="◀ Rail")
+                if self._nav_footnote is not None:
+                    self._nav_footnote.pack(anchor="w", padx=self.px(10))
+            for title, button in self._nav_buttons.items():
+                button.configure(text=self._nav_label(title))
+            if self._current is not None:
+                self._move_nav_indicator(self._current.title, animate=False)
 
     def _set_nav_hover(self, hovering: bool) -> None:
         # Subtle affordance: the shell surface lifts slightly under the pointer,
@@ -768,31 +868,112 @@ class ControlCenter(tk.Tk):
         self.prefs.last_page = name
         self.set_status(f"{name}  ·  ready")
 
-    def _move_nav_indicator(self, name: str) -> None:
+    def _on_nav_button_configure(self, name: str) -> None:
+        if self._current is not None and self._current.title == name:
+            self._move_nav_indicator(name, animate=False)
+
+    def _on_root_configure(self, event: object = None) -> None:
+        if getattr(event, "widget", None) is not self:
+            return
+        try:
+            width = int(getattr(event, "width", 0) or self.winfo_width() or 0)
+            height = int(getattr(event, "height", 0) or self.winfo_height() or 0)
+        except (tk.TclError, TypeError, ValueError):
+            return
+        if width < 320 or height < 240:
+            return
+        if (width, height) == self._last_viewport_size:
+            return
+        self._last_viewport_size = (width, height)
+        if self._viewport_resize_job is not None:
+            with contextlib.suppress(tk.TclError):
+                self.after_cancel(self._viewport_resize_job)
+        with contextlib.suppress(tk.TclError):
+            self._viewport_resize_job = self.after(65, self._apply_viewport_scale)
+
+    def _apply_viewport_scale(self) -> None:
+        self._viewport_resize_job = None
+        width, height = self._last_viewport_size
+        if width < 320 or height < 240:
+            return
+        compact = width < 1220
+        if compact != self._compact_header:
+            self._compact_header = compact
+            with contextlib.suppress(tk.TclError):
+                if compact:
+                    self.telemetry_badge.pack_forget()
+                    self.preset_label.pack_forget()
+                    self.brand_sub.pack_forget()
+                else:
+                    self.brand_sub.pack(side="left", pady=(self.px(4), 0))
+                    self.telemetry_badge.pack(side="left", padx=(self.px(8, minimum=4), 0))
+                    self.preset_label.pack(side="left", padx=(self.px(8, minimum=4), 0))
+        new_scale = self.scale.with_viewport(width, height)
+        if new_scale != self.scale:
+            self.scale = new_scale
+            theme = self.bus.theme
+            density = self.bus.density
+            self.bus.set_theme(theme, scale=self.scale, density=density)
+            self.style = apply_ttk_styles(self, theme, density=density, scale=self.scale)
+            with contextlib.suppress(tk.TclError):
+                if self._header is not None:
+                    self._header.configure(padding=(self.px(20, minimum=10), self.px(10, minimum=5)))
+                if self._nav_host is not None and self.prefs.layout != "topbar":
+                    if self.sidebar_collapsed:
+                        self._nav_host.configure(
+                            width=self.px(68, minimum=56),
+                            padding=(self.px(6, minimum=4), self.px(10, minimum=6)),
+                        )
+                    else:
+                        self._nav_host.configure(
+                            width=self.px(232, minimum=154),
+                            padding=(self.px(12, minimum=6), self.px(14, minimum=8)),
+                        )
+                if self._content_host is not None:
+                    self._content_host.configure(
+                        padding=(self.px(22, minimum=10), self.px(16, minimum=8))
+                    )
+        if self._current is not None:
+            self._move_nav_indicator(self._current.title, animate=False)
+
+    def _move_nav_indicator(self, name: str, *, animate: bool = True) -> None:
         button = self._nav_buttons.get(name)
         indicator = self._nav_indicator
         if indicator is None or button is None or not indicator.winfo_exists():
             return
         try:
-            y = button.winfo_y()
-            height = button.winfo_height()
+            height = int(button.winfo_height())
+            if height <= 4 and self._nav_host is not None:
+                with contextlib.suppress(tk.TclError):
+                    self._nav_host.update_idletasks()
+                height = int(button.winfo_height())
+            y = int(button.winfo_y())
+            x = int(button.winfo_x())
         except tk.TclError:  # pragma: no cover - layout race during rebuild
             return
-        target = y + max(1, height - 2)
+        ind_w = self.px(3, minimum=2)
+        ind_h = self.px(18, minimum=12)
+        if height > 4:
+            ind_h = min(ind_h, max(10, height - 8))
+            target = y + max(0, (height - ind_h) // 2)
+        else:
+            target = y + max(1, height - 2)
+        x_pos = max(2, x - self.px(6, minimum=4)) if x > 4 else self.px(4, minimum=2)
         start = int(indicator.place_info().get("y", target) or target)
-        animate = abs(target - start) > 4
+        do_animate = animate and abs(target - start) > 4 and height > 4
 
         def place_at(value: float) -> None:
             with contextlib.suppress(tk.TclError):
                 indicator.place(
-                    x=self.px(10),
+                    x=x_pos,
                     y=int(value),
-                    width=self.px(3, minimum=2),
-                    height=self.px(18, minimum=10),
+                    width=ind_w,
+                    height=ind_h,
+                    bordermode="outside",
                 )
                 indicator.lift()
 
-        if animate:
+        if do_animate:
             self.motion.tween(140, lambda progress: place_at(start + (target - start) * progress))
         else:
             place_at(target)

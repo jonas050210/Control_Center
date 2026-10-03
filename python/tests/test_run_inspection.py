@@ -235,6 +235,26 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(index["run_count"], 2)
         self.assertEqual(index["runs"][-1]["run_id"], "20260103-000000")
 
+    def test_stamp_cache_avoids_reparsing_unchanged_run_and_invalidates_on_change(self):
+        from sandboxai import run_inspection
+
+        with TemporaryDirectory() as tmp:
+            run = _make_run(Path(tmp), "cached-run", finished=False)
+            first = inspect_run(run)
+            self.assertEqual(first["status"]["state"], "incomplete")
+            second = inspect_run(run)
+            self.assertEqual(second["run_id"], "cached-run")
+            # Mutating the returned dict must not corrupt the cached entry.
+            second["status"]["state"] = "mutated"
+            self.assertEqual(inspect_run(run)["status"]["state"], "incomplete")
+            # Writing run_summary.json changes the directory/file stamp and invalidates cache.
+            _write(run / "run_summary.json", {"timesteps": 1000, "stopped": False, "device": "cpu"})
+            updated = inspect_run(run)
+            self.assertEqual(updated["status"]["state"], "finished")
+            ckpt_only = run_inspection.inspect_run_checkpoints(run)
+            self.assertEqual(ckpt_only["run_id"], "cached-run")
+            self.assertEqual(ckpt_only["checkpoints"]["count"], 2)
+
 
 class LineCountTests(unittest.TestCase):
     """Log line counts are memoised, and only extended for grown files."""

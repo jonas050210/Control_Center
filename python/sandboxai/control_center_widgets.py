@@ -427,7 +427,12 @@ class StatCard(ttk.Frame):
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
         with contextlib.suppress(tk.TclError):
-            self._value.configure(background=theme.card)
+            padding = self._bus.px(16, minimum=8)
+            self._body.configure(padding=(padding, self._bus.px(11, minimum=6)))
+            self._value.configure(
+                background=theme.card,
+                font=self._bus.font("h2", bold=True, mono=True),
+            )
             self._accent_bar.configure(background=self._current_color or theme.border)
 
     def set(
@@ -712,9 +717,15 @@ class LineChart(tk.Canvas):
         self._bus = bus or _DEFAULT_BUS
         self._cc_bus = self._bus
         self._theme = self._bus.theme
+        self._base_height = height
+        eff_height = (
+            max(96, int(round(height * self._bus.scale.viewport_scale)))
+            if self._bus.scale.viewport_scale < 1.0
+            else height
+        )
         super().__init__(
             parent,
-            height=height,
+            height=eff_height,
             background=self._theme.card,
             highlightthickness=1,
             highlightbackground=self._theme.border,
@@ -722,6 +733,7 @@ class LineChart(tk.Canvas):
         self._title = title
         self._color_override = color
         self._points: list[tuple[float, float]] = []
+        self._points_sig: tuple[Any, ...] | None = None
         self._hover_x: int | None = None
         #: Size of the last paint; see :attr:`PhaseStepper._painted_size`.
         self._painted_size: tuple[int, int] | None = None
@@ -737,11 +749,29 @@ class LineChart(tk.Canvas):
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
         with contextlib.suppress(tk.TclError):
-            self.configure(background=theme.card, highlightbackground=theme.border)
+            eff_height = (
+                max(96, int(round(self._base_height * self._bus.scale.viewport_scale)))
+                if self._bus.scale.viewport_scale < 1.0
+                else self._base_height
+            )
+            self.configure(
+                background=theme.card,
+                highlightbackground=theme.border,
+                height=eff_height,
+            )
             self._redraw(force=True)
 
     def set_points(self, points: list[tuple[float, float]]) -> None:
+        sig = (
+            len(points),
+            points[0] if points else None,
+            points[-1] if points else None,
+            points[len(points) // 2] if points else None,
+        )
         self._points = points
+        if sig == self._points_sig and self._painted_size is not None:
+            return
+        self._points_sig = sig
         self._redraw(force=True)
 
     def point_count(self) -> int:
@@ -827,7 +857,10 @@ class LineChart(tk.Canvas):
         self.delete("all")
         theme = self._theme
         width, height = size
-        pad_left, pad_right, pad_top, pad_bottom = 64, 16, 32, 20
+        pad_left = self._bus.px(60, minimum=42)
+        pad_right = self._bus.px(14, minimum=8)
+        pad_top = self._bus.px(30, minimum=22)
+        pad_bottom = self._bus.px(18, minimum=12)
         clean_title = self._title[:1].upper() + self._title[1:] if self._title else ""
         self.create_text(
             self._bus.px(12, minimum=6),
@@ -871,7 +904,29 @@ class LineChart(tk.Canvas):
         poly_coords = [coords[0], baseline_y, *coords, coords[-2], baseline_y]
         area_color = lerp_color(theme.card, self._color, 0.18)
         self.create_polygon(*poly_coords, fill=area_color, outline="")
+        if len(points) >= 4:
+            ema_coords: list[float] = []
+            ema_val = points[0][1]
+            alpha = 0.25
+            for idx, (_px, py) in enumerate(points):
+                ema_val = py if idx == 0 else (alpha * py + (1.0 - alpha) * ema_val)
+                ex = coords[2 * idx]
+                ey = pad_top + (1.0 - (ema_val - y_min) / (y_max - y_min)) * plot_h
+                ema_coords.extend((ex, ey))
+            ema_color = lerp_color(self._color, theme.text, 0.45)
+            self.create_line(*ema_coords, fill=ema_color, width=1, dash=(4, 2), smooth=False)
         self.create_line(*coords, fill=self._color, width=2, smooth=False)
+        peak_idx = max(range(len(ys)), key=lambda idx: ys[idx])
+        peak_x, peak_y = coords[2 * peak_idx], coords[2 * peak_idx + 1]
+        self.create_oval(
+            peak_x - 4,
+            peak_y - 4,
+            peak_x + 4,
+            peak_y + 4,
+            fill="",
+            outline=theme.ok,
+            width=1,
+        )
         last_x, last_y = coords[-2], coords[-1]
         self.create_oval(
             last_x - 3,
@@ -1001,6 +1056,7 @@ class LogPanel(ttk.Frame):
                 background=theme.panel,
                 foreground=theme.text,
                 insertbackground=theme.text,
+                font=self._bus.font("small", mono=True),
             )
             self.text.tag_configure("stderr", foreground=theme.error)
             self.text.tag_configure("meta", foreground=theme.text_muted)
@@ -1193,9 +1249,9 @@ def _scrollable_table(
     """
     frame = ttk.Frame(parent)
     frame.pack(fill="both", expand=expand)
-    tree = _sortable_table(frame, columns)
-    tree.pack(fill="both", expand=True)
     active_bus = bus or _DEFAULT_BUS
+    tree = _sortable_table(frame, columns, bus=active_bus)
+    tree.pack(fill="both", expand=True)
     attach_overlay_scrollbars(frame, tree, active_bus, scale_px=active_bus.px)
     if empty_text:
         tree.empty_state = TableEmptyState(tree, active_bus, empty_text)  # type: ignore[attr-defined]
@@ -1268,7 +1324,12 @@ class TableEmptyState:
                 self._label.place_forget()
 
 
-def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) -> ttk.Treeview:
+def _sortable_table(
+    parent: tk.Misc,
+    columns: tuple[tuple[str, str, int], ...],
+    *,
+    bus: ThemeBus | None = None,
+) -> ttk.Treeview:
     """Builds a Treeview with click-to-sort columns (ascending/descending)."""
     tree = ttk.Treeview(
         parent, columns=tuple(c[0] for c in columns), show="headings", selectmode="extended"
@@ -1298,14 +1359,38 @@ def _sortable_table(parent: tk.Misc, columns: tuple[tuple[str, str, int], ...]) 
         "reward",
         "mean_episode_reward",
     }
+    vp = bus.scale.viewport_scale if bus is not None else 1.0
     for key, title, width in columns:
         anchor = "e" if key in numeric_columns else "w"
+        eff_w = max(32, int(round(width * vp))) if vp < 1.0 else width
         # typeshed types anchor as a literal enum; "e"/"w" are valid tk
         # anchors and are what the rest of this module already uses.
         tree.heading(  # type: ignore[call-overload]
             key, text=title, anchor=anchor, command=lambda k=key: _sort_tree(tree, k, False)
         )
-        tree.column(key, width=width, anchor=anchor, stretch=True)  # type: ignore[call-overload]
+        tree.column(  # type: ignore[call-overload]
+            key,
+            width=eff_w,
+            minwidth=max(28, min(eff_w, 48)),
+            anchor=anchor,
+            stretch=True,
+        )
+    if bus is not None:
+
+        def _rescale_columns(_theme: Theme) -> None:
+            cur_vp = bus.scale.viewport_scale
+            for col_key, _col_title, base_width in columns:
+                scaled_w = (
+                    max(32, int(round(base_width * cur_vp))) if cur_vp < 1.0 else base_width
+                )
+                with contextlib.suppress(tk.TclError):
+                    tree.column(
+                        col_key,
+                        width=scaled_w,
+                        minwidth=max(28, min(scaled_w, 48)),
+                    )
+
+        bus.subscribe(_rescale_columns, owner=tree)
     return tree
 
 

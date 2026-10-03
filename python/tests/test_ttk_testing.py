@@ -84,6 +84,23 @@ class EvidenceManifestTests(unittest.TestCase):
             self.assertIn("weapon_damage_and_rpm_ttk_curve", cal)
             self.assertIn("160.0 ms TTK", cal["weapon_damage_and_rpm_ttk_curve"]["measured_value"])
 
+    def test_probe_latest_roblox_log_parses_json_place_id_and_large_log_head(self) -> None:
+        from pathlib import Path
+        from sandboxai.ttk_testing import TTK_TESTING_PLACE_ID, _probe_latest_roblox_log
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "0.600.0_Player_20261002.log"
+            head = (
+                f'[FLog::Output] ! Joining game \'abc\' place {TTK_TESTING_PLACE_ID} at 10.0.0.1\n'
+                f'[DFLog::GameJoinLoadTime] {{"placeId":{TTK_TESTING_PLACE_ID},"universeId":9292879893}}\n'
+            )
+            filler = ("FLog::Network telemetry tick\n" * 25000)
+            log_path.write_text(head + filler, encoding="utf-8")
+            info = _probe_latest_roblox_log(tmp)
+            self.assertEqual(info["detected_place_id"], TTK_TESTING_PLACE_ID)
+            self.assertTrue(info["in_ttk_testing"])
+            self.assertEqual(info["session_state"], "in_ttk_testing")
+
 
 class CliTests(unittest.TestCase):
     def test_ttk_status_prints_text_and_json(self) -> None:

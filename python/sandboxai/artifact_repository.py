@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from .control_center_schema import DashboardSnapshot, ProcessSnapshot
-from .run_inspection import discover_run_directories, inspect_run, inspect_runs
+from .run_inspection import (
+    discover_run_directories,
+    inspect_run,
+    inspect_run_checkpoints,
+    inspect_runs,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,13 +76,17 @@ class ArtifactRepository:
     def checkpoints(self, limit: int = 300) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
         for run_dir in self.run_directories():
-            report = inspect_run(run_dir)
+            report = inspect_run_checkpoints(run_dir)
             checkpoints = report.get("checkpoints", {})
             run_id = report.get("run_id") or run_dir.name
             directory = Path(checkpoints.get("directory", run_dir / "checkpoints"))
             for item in checkpoints.get("entries", []):
                 name = item.get("name", "")
-                kind = {"latest.zip": "latest", "best_eval.zip": "best"}.get(name, "checkpoint")
+                kind = {
+                    "latest.zip": "latest",
+                    "best_eval.zip": "best",
+                    "best.zip": "best",
+                }.get(name, "checkpoint")
                 entries.append(
                     {
                         "run_id": run_id,

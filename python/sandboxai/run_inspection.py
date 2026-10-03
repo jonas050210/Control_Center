@@ -22,6 +22,7 @@ carry a ``format`` field and new fields are additive.
 
 from __future__ import annotations
 
+import copy
 import json
 import threading
 import time
@@ -144,6 +145,79 @@ _LINE_COUNTS: dict[str, tuple[int, int]] = {}
 _LINE_COUNTS_LIMIT = 512
 _line_counts_lock = threading.Lock()
 
+#: Stamp-keyed memo cache for ``inspect_run`` so 600ms GUI poll ticks do not
+#: re-open and re-parse unchanged JSON manifests/configs/summaries across runs.
+_INSPECT_RUN_CACHE: dict[tuple[str, int], tuple[tuple[Any, ...], str]] = {}
+_INSPECT_RUN_CACHE_LIMIT = 256
+_inspect_run_cache_lock = threading.Lock()
+
+_INSPECT_CKPT_CACHE: dict[str, tuple[tuple[Any, ...], dict[str, Any]]] = {}
+_INSPECT_CKPT_CACHE_LIMIT = 256
+
+
+def _stat_sig(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _scandir_zip_sigs(directory: Path) -> tuple[tuple[str, int, int], ...]:
+    import os
+
+    if not directory.is_dir():
+        return ()
+    items: list[tuple[str, int, int]] = []
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if entry.name.endswith(".zip"):
+                    st = entry.stat()
+                    items.append((entry.name, st.st_mtime_ns, st.st_size))
+    except OSError:
+        return ()
+    items.sort()
+    return tuple(items)
+
+
+def _scandir_eval_steps(directory: Path) -> tuple[str, ...]:
+    import os
+
+    if not directory.is_dir():
+        return ()
+    items: list[str] = []
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if entry.name.startswith("step_") and entry.is_dir():
+                    items.append(entry.name)
+    except OSError:
+        return ()
+    items.sort()
+    return tuple(items)
+
+
+def _run_dir_stamp(path: Path, event_limit: int) -> tuple[Any, ...] | None:
+    root_sig = _stat_sig(path)
+    if root_sig is None:
+        return None
+    tracked_files = (
+        "run_manifest.json",
+        "config.json",
+        "run_summary.json",
+        "status.json",
+        "final.zip",
+        "evaluations/latest.json",
+        "evaluations/best.json",
+        "logs/training.jsonl",
+        "events.jsonl",
+    )
+    file_sigs = tuple((rel, _stat_sig(path / rel)) for rel in tracked_files)
+    ckpt_sig = _stat_sig(path / "checkpoints")
+    eval_sig = _stat_sig(path / "evaluations")
+    return (root_sig, int(event_limit), file_sigs, ckpt_sig, eval_sig)
+
 
 def _count_lines_cached(path: Path) -> int | None:
     """Line count of a log, counting only what was appended since last time.
@@ -248,7 +322,7 @@ def _checkpoint_inventory(run_dir: Path) -> dict[str, Any]:
         "count": len(entries),
         "entries": entries,
         "has_latest": (directory / "latest.zip").is_file(),
-        "has_best": (directory / "best_eval.zip").is_file(),
+        "has_best": (directory / "best_eval.zip").is_file() or (directory / "best.zip").is_file(),
         "has_final": (run_dir / "final.zip").is_file() or (directory / "final.zip").is_file(),
     }
 
@@ -447,9 +521,49 @@ def _picked(document: Any, keys: Sequence[str]) -> dict[str, Any]:
     return {key: document.get(key) for key in keys if key in document}
 
 
+def inspect_run_checkpoints(run_dir: str | Path) -> dict[str, Any]:
+    """Fast checkpoint-only inventory for ``run_dir`` without scanning JSONL logs."""
+    path = Path(run_dir).expanduser()
+    key = str(path)
+    stamp = (
+        _stat_sig(path / "checkpoints"),
+        _stat_sig(path / "final.zip"),
+        _stat_sig(path / "run_manifest.json"),
+        _stat_sig(path / "config.json"),
+    )
+    with _inspect_run_cache_lock:
+        cached = _INSPECT_CKPT_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    checkpoints = _checkpoint_inventory(path)
+    run_id = path.name
+    for filename in ("run_manifest.json", "config.json"):
+        doc, _ = read_json(path / filename)
+        if isinstance(doc, dict) and doc.get("run_id"):
+            run_id = str(doc["run_id"])
+            break
+    result = {
+        "run_id": run_id,
+        "run_dir": str(path),
+        "checkpoints": checkpoints,
+    }
+    with _inspect_run_cache_lock:
+        _INSPECT_CKPT_CACHE[key] = (stamp, result)
+        while len(_INSPECT_CKPT_CACHE) > _INSPECT_CKPT_CACHE_LIMIT:
+            _INSPECT_CKPT_CACHE.pop(next(iter(_INSPECT_CKPT_CACHE)))
+    return result
+
+
 def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
     """Read-only report for one run directory."""
     path = Path(run_dir).expanduser()
+    cache_key = (str(path), int(event_limit))
+    stamp = _run_dir_stamp(path, event_limit)
+    if stamp is not None:
+        with _inspect_run_cache_lock:
+            cached = _INSPECT_RUN_CACHE.get(cache_key)
+        if cached is not None and cached[0] == stamp:
+            return json.loads(cached[1])
     problems: list[str] = []
 
     documents = _read_run_documents(path, problems)
@@ -514,6 +628,11 @@ def inspect_run(run_dir: str | Path, event_limit: int = 0) -> dict[str, Any]:
             path / "logs" / "training.jsonl", event_limit
         )
     report["warnings"] = _warnings(manifest, config, checkpoints, status)
+    if stamp is not None:
+        with _inspect_run_cache_lock:
+            _INSPECT_RUN_CACHE[cache_key] = (stamp, json.dumps(report))
+            while len(_INSPECT_RUN_CACHE) > _INSPECT_RUN_CACHE_LIMIT:
+                _INSPECT_RUN_CACHE.pop(next(iter(_INSPECT_RUN_CACHE)))
     return report
 
 

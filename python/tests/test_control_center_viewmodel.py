@@ -1209,3 +1209,34 @@ def test_ttk_evidence_view_and_rows_mirror_the_manifest():
     assert {"mechanic", "status", "rule", "source"} <= set(rows[0])
     assert vm.ttk_evidence_rows(None) == []
     assert vm.ttk_evidence_view(None)["available"] is False
+
+
+def test_resolve_run_checkpoint_prefers_best_eval_and_periodic_steps(tmp_path):
+    run_dir = tmp_path / "run_ckpt"
+    ckpt_dir = run_dir / "checkpoints"
+    ckpt_dir.mkdir(parents=True)
+    (ckpt_dir / "best_eval.zip").write_bytes(b"best")
+    (ckpt_dir / "ppo_2000_steps.zip").write_bytes(b"p2")
+    (ckpt_dir / "ppo_10000_steps.zip").write_bytes(b"p10")
+
+    assert vm.resolve_run_checkpoint(run_dir, prefer_best=True) == ckpt_dir / "best_eval.zip"
+    assert vm.resolve_run_checkpoint(run_dir, prefer_best=False) == ckpt_dir / "ppo_10000_steps.zip"
+    (ckpt_dir / "latest.zip").write_bytes(b"latest")
+    assert vm.resolve_run_checkpoint(run_dir, prefer_best=False) == ckpt_dir / "latest.zip"
+
+
+def test_optimizer_field_specs_and_ppo_efficiency_presets():
+    opt_names = [spec.name for spec in vm.optimizer_field_specs()]
+    assert "learning_rate" in opt_names
+    assert "batch_size" in opt_names
+    assert "ppo_epochs" in opt_names
+    for preset_id, preset in vm.PPO_EFFICIENCY_PRESETS.items():
+        values = vm.default_training_values()
+        for k, v in preset.items():
+            if k != "label":
+                values[k] = v
+        slot = vm.launch_slot_view(values)
+        assert slot["state"] == "AVAILABLE", preset_id
+        assert slot["summary"]["learning_rate"] == float(preset["learning_rate"])
+
+

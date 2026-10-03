@@ -172,7 +172,12 @@ class ThemeBus:
         """Resolve a font role, honouring the active density preset."""
         family, size, *rest = self.scale.font(role, bold=bold, mono=mono)
         if self.density.font_delta:
-            size = max(11, int(size) + self.density.font_delta)
+            floor = (
+                11
+                if self.scale.viewport_scale >= 1.0
+                else max(9, int(round(11 * self.scale.viewport_scale)))
+            )
+            size = max(floor, int(size) + self.density.font_delta)
         return (family, size, *rest)
 
     def px(self, value: float, *, minimum: int = 0) -> int:
@@ -953,7 +958,12 @@ class RoundedPanel(tk.Frame):
         self._cc_bus = self._bus
         self._theme = bus.theme
         self._radius = radius
-        self._padding = padding
+        self._base_padding = padding
+        self._padding = (
+            max(8, int(round(padding * bus.scale.viewport_scale)))
+            if bus.scale.viewport_scale < 1.0
+            else padding
+        )
         self._title = title
         self._subtitle = subtitle
         self._accent = accent
@@ -971,8 +981,8 @@ class RoundedPanel(tk.Frame):
         self.body.pack(
             fill="both",
             expand=True,
-            padx=padding,
-            pady=(padding + header, padding),
+            padx=self._padding,
+            pady=(self._padding + header, self._padding),
         )
         self._surface = tk.Canvas(
             self,
@@ -1002,6 +1012,16 @@ class RoundedPanel(tk.Frame):
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
         with contextlib.suppress(tk.TclError):
+            self._padding = (
+                max(8, int(round(self._base_padding * self._bus.scale.viewport_scale)))
+                if self._bus.scale.viewport_scale < 1.0
+                else self._base_padding
+            )
+            header = self._header_height()
+            self.body.pack_configure(
+                padx=self._padding,
+                pady=(self._padding + header, self._padding),
+            )
             self.configure(background=theme.color(self._background_role))
             self._surface.configure(background=theme.color(self._background_role))
             self._redraw(force=True)
@@ -1013,7 +1033,11 @@ class RoundedPanel(tk.Frame):
         self._redraw(force=True)
 
     def _header_height(self) -> int:
-        return self._bus.px(34, minimum=26) if self._title else 0
+        if self._title and self._subtitle:
+            return self._bus.px(50, minimum=36)
+        if self._title or self._subtitle:
+            return self._bus.px(34, minimum=24)
+        return 0
 
     def _redraw(self, *, force: bool = False) -> None:
         width = max(1, self._surface.winfo_width())
@@ -1051,22 +1075,26 @@ class RoundedPanel(tk.Frame):
                 outline=self._theme.accent,
                 tags="surface",
             )
+        text_width = max(60, width - self._padding * 2)
         if self._title:
             canvas.create_text(
                 self._padding,
                 self._padding,
                 text=self._title,
                 anchor="nw",
+                width=text_width,
                 fill=self._theme.text,
                 font=self._bus.font("h2", bold=True),
                 tags="surface",
             )
         if self._subtitle:
+            sub_y = self._padding + (self._bus.px(22, minimum=16) if self._title else 0)
             canvas.create_text(
                 self._padding,
-                self._padding + self._bus.px(21, minimum=17),
+                sub_y,
                 text=self._subtitle,
                 anchor="nw",
+                width=text_width,
                 fill=self._theme.text_muted,
                 font=self._bus.font("micro"),
                 tags="surface",
@@ -1677,7 +1705,12 @@ class LayoutBoard(ttk.Frame):
         self._applying = True
         try:
             for index in range(self._max_columns):
-                self.columnconfigure(index, weight=1 if index < target else 0, uniform="board")
+                active = index < target
+                self.columnconfigure(
+                    index,
+                    weight=1 if active else 0,
+                    uniform="board" if active else "",
+                )
         finally:
             self._applying = False
         self.rebuild()
