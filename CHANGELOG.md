@@ -10,6 +10,32 @@ records what changed and why.
 
 ### Control Center
 
+- **`python3 tools/control_center_ui_report.py` measures the real window.**
+  Every UI complaint so far had to be translated into words by whoever was
+  looking at the screen, because the headless harness proves the window
+  *builds* and nothing about how it looks. The new tool opens the real Tk
+  window, walks every page and writes `.sandboxai/ui_report/report.md` (plus
+  the same findings as `report.json`): cards, buttons with their state,
+  labels that need more room than they have, text under the 11 px floor,
+  table headers wider than their column, what a `refresh()` costs per page,
+  the theme-listener count across three density changes, and one PNG per
+  page where Pillow can reach the display. It never estimates what it could
+  not measure and never claims a screenshot it did not take - no Tk, no
+  Pillow or no `$DISPLAY` is written into the report as the reason.
+- **The Roblox card keeps what its actions answered.** Focus, Screenshot and
+  Analyze HUD reported through the status bar, which the next poll
+  overwrites a second later, so a successful HUD analysis could leave the
+  operator none the wiser. The card now carries a result line (coloured by
+  the outcome, path included where there is one) and an *Open Captures*
+  button; one viewmodel helper decides what that line says, so a missing
+  result is not dressed up as a success. "CPU turbo" left the card: it is a
+  host setting and Settings -> Host already owns it.
+- **The benchmark spells its units once.** The measurements table said
+  `FPS/env` while the live cards and the chart said `FPS / env` - one
+  quantity, two names, and an operator comparing them was comparing
+  strings. Both come from `vm.UNIT_FPS_PER_ENV` now, and a static test
+  fails if a second spelling appears.
+
 - **One shell: a fixed rail that names its pages.** The three switchable
   shell layouts (rail, topbar, command board) are gone, and so is the rail's
   collapse state. "Command Board" built the rail anyway - the branch was

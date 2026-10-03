@@ -370,6 +370,25 @@ class PageSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("fps", labels)
 
+    def test_the_benchmark_units_are_spelled_once(self) -> None:
+        # The table said "FPS/env" while the live cards and the chart said
+        # "FPS / env". Same quantity, two names, one operator comparing them.
+        source = (PACKAGE / "control_center_pages.py").read_text(encoding="utf-8")
+        self.assertNotIn(
+            '"FPS/env"',
+            source,
+            "the FPS column header must come from vm.UNIT_FPS_PER_ENV, not a second spelling",
+        )
+        viewmodel = (PACKAGE / "control_center_viewmodel.py").read_text(encoding="utf-8")
+        self.assertIn('UNIT_STEPS_PER_SECOND = "Steps/s"', viewmodel)
+        self.assertIn('UNIT_FPS_PER_ENV = "FPS / env"', viewmodel)
+
+    def test_the_roblox_card_offers_the_captures_folder(self) -> None:
+        # Screenshots are the evidence of a calibration session; a card that
+        # takes them has to be able to open the folder they land in.
+        source = (PACKAGE / "control_center_pages.py").read_text(encoding="utf-8")
+        self.assertIn('"Open Captures"', source)
+
     def test_host_settings_live_on_settings_not_in_the_roblox_card(self) -> None:
         # The Roblox card is about the game client. A CPU-governor button there
         # was a second control for something Settings already owns - and the

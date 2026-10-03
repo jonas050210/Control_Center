@@ -461,6 +461,13 @@ class Page(ttk.Frame):
         self.app.set_status(f"{context}: {error}", error=True)
 
 
+def roblox_captures_dir(project_root: Path | str) -> Path:
+    """Where the TTK captures live - the one path both pages open."""
+    directory = Path(project_root) / ".sandboxai" / "ttk_captures"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 class ActiveRunStrip(ttk.Frame):
     """Compact list of live processes with a Stop button, shown on the Dashboard.
 
@@ -658,6 +665,17 @@ class DashboardPage(Page):
             justify="left",
         )
         self.roblox_bridge_label.pack(anchor="w", fill="x", pady=(0, self.app.px(8, minimum=4)))
+        # What the last action did. The status bar is a bad home for it: the
+        # next poll overwrites it, so "Analyze HUD" could read a HUD and the
+        # operator would still be guessing whether it worked.
+        self.roblox_result_label = ttk.Label(
+            card.body,
+            text="",
+            style="FieldHelp.TLabel",
+            wraplength=self.app.px(320, minimum=200),
+            justify="left",
+        )
+        self.roblox_result_label.pack(anchor="w", fill="x", pady=(0, self.app.px(8, minimum=4)))
         card.body.bind(
             "<Configure>",
             lambda evt: self.roblox_bridge_label.configure(
@@ -706,6 +724,12 @@ class DashboardPage(Page):
                 "Ghost.TButton",
                 "Write the TTK combat profile for the mechanics calibrated so far",
             ),
+            (
+                "Open Captures",
+                self._open_captures_folder,
+                "Ghost.TButton",
+                "Open .sandboxai/ttk_captures in the file manager",
+            ),
         )
         # "CPU turbo" used to be the seventh button here. It is a host
         # setting, not a Roblox action, and Settings -> Host already owns it
@@ -728,6 +752,21 @@ class DashboardPage(Page):
         # window helpers start disabled and the status probe enables them.
         self._set_roblox_window_actions(False)
         return card
+
+    def _set_roblox_result(
+        self, label: str, result: dict[str, Any] | None, error: BaseException | None = None
+    ) -> None:
+        """Show (and colour) what a Roblox helper answered."""
+        if getattr(self, "roblox_result_label", None) is None:
+            return
+        view = vm.ttk_action_result_view(label, result, error)
+        self.roblox_result_label.configure(
+            text=view["text"], foreground=self.app.color(view["role"])
+        )
+
+    def _open_captures_folder(self) -> None:
+        """Open the captures directory - the file manager is the right tool."""
+        _open_in_file_manager(roblox_captures_dir(self.adapter.project_root))
 
     def _set_roblox_window_actions(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
@@ -801,6 +840,7 @@ class DashboardPage(Page):
         shortcut = self._configured_roblox_shortcut()
 
         def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            self._set_roblox_result("Launch", result, error)
             if error is not None or not result or not result.get("ok"):
                 self.app.set_status(
                     f"Roblox launch failed: {error or (result or {}).get('error')}", error=True
@@ -819,6 +859,7 @@ class DashboardPage(Page):
         shortcut = self._configured_roblox_shortcut()
 
         def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            self._set_roblox_result("Connect", result, error)
             if error is not None or not result:
                 self.app.set_status(f"Roblox probe failed: {error}", error=True)
             else:
@@ -835,6 +876,7 @@ class DashboardPage(Page):
             return
 
         def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            self._set_roblox_result("Focus window", result, error)
             if error is not None or not result or not result.get("ok"):
                 self.app.set_status(
                     f"Focus Roblox window: {error or (result or {}).get('message')}", error=True
@@ -849,6 +891,7 @@ class DashboardPage(Page):
             return
 
         def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            self._set_roblox_result("Screenshot", result, error)
             if error is not None or not result or not result.get("ok"):
                 self.app.set_status(
                     f"Screenshot failed: {error or (result or {}).get('error')}", error=True
@@ -1003,8 +1046,10 @@ class DashboardPage(Page):
         try:
             res = self.adapter.export_ttk_combat_profile()
         except Exception as exc:
+            self._set_roblox_result("Export TTK profile", None, exc)
             self.app.set_status(f"TTK profile export failed: {exc}", error=True)
             return
+        self._set_roblox_result("Export TTK profile", res)
         self.app.set_status(f"Exported TTK combat profile: {res.get('path')}", toast=True)
 
     def _analyze_roblox_screenshot(self) -> None:
@@ -1013,8 +1058,10 @@ class DashboardPage(Page):
         try:
             res = self.adapter.analyze_roblox_screenshot()
         except Exception as exc:
+            self._set_roblox_result("Analyze HUD", None, exc)
             self.app.set_status(f"HUD analysis failed: {exc}", error=True)
             return
+        self._set_roblox_result("Analyze HUD", res)
         if not res.get("ok"):
             self.app.set_status(str(res.get("error") or "No screenshot found"), error=True)
             return
@@ -2006,8 +2053,8 @@ class BenchmarkPage(Page):
         ("workers", "Workers", 60),
         ("device", "Device", 55),
         ("steps", "Steps", 80),
-        ("steps_per_second", "Steps/s", 85),
-        ("frames_per_second", "FPS/env", 78),
+        ("steps_per_second", vm.UNIT_STEPS_PER_SECOND, 85),
+        ("frames_per_second", vm.UNIT_FPS_PER_ENV, 78),
         ("speedup", "Speedup", 70),
         ("p50_ms", "p50 ms", 65),
         ("p95_ms", "p95 ms", 65),
@@ -2020,8 +2067,8 @@ class BenchmarkPage(Page):
     LIVE_CARD_NAMES = (
         "stage / progress",
         "active config",
-        "Steps/s",
-        "FPS / env",
+        vm.UNIT_STEPS_PER_SECOND,
+        vm.UNIT_FPS_PER_ENV,
         "live steps",
         "latency (p50 / p95)",
         "stability (jitter)",
@@ -2206,7 +2253,7 @@ class BenchmarkPage(Page):
         self.throughput_chart.pack(fill="both", expand=True)
         self.fps_chart = LineChart(
             card.body,
-            "Per-environment rate (FPS/env)",
+            f"Per-environment rate ({vm.UNIT_FPS_PER_ENV})",
             color=self.palette.ok,
             bus=self.app.bus,
         )
@@ -2327,11 +2374,11 @@ class BenchmarkPage(Page):
                     self.palette.accent if self._running else None,
                 ),
                 "active config": (live_view["active_config"], None),
-                "Steps/s": (
+                vm.UNIT_STEPS_PER_SECOND: (
                     steps_per_second_text,
                     self.palette.ok if live_view["steps_per_second"] is not None else None,
                 ),
-                "FPS / env": (
+                vm.UNIT_FPS_PER_ENV: (
                     fps_text,
                     self.palette.accent if live_view["frames_per_second"] is not None else None,
                 ),
@@ -4518,9 +4565,7 @@ class SettingsPage(Page):
         self.app.background.submit(self.adapter.focus_roblox_window, _done)
 
     def _open_captures_folder(self) -> None:
-        captures_dir = Path(self.adapter.project_root) / ".sandboxai" / "ttk_captures"
-        captures_dir.mkdir(parents=True, exist_ok=True)
-        _open_in_file_manager(captures_dir)
+        _open_in_file_manager(roblox_captures_dir(self.adapter.project_root))
 
     def _recalc_ttk_lab(self) -> None:
         try:

@@ -243,6 +243,13 @@ here plays the game: the human plays, the tool opens and photographs, which
 is the whole of the bounded helper surface described in
 [TTK_TESTING_REFERENCE.md](TTK_TESTING_REFERENCE.md).
 
+Every action answers **in the card**: the line under the status says what it
+did - `Screenshot - .sandboxai/ttk_captures/roblox_….png`, `Analyze HUD -
+16:9, minimap top right` - and is coloured by whether it worked. The status
+bar alone was not enough: the next poll overwrites it, so an action could
+succeed and the operator would still be guessing. *Open Captures* opens the
+folder the screenshots land in.
+
 Focus, Screenshot and Analyze HUD are disabled until a Roblox client is
 running, because pressing them without one used to answer with a platform
 error nobody could act on. They work under WSL as well as on native

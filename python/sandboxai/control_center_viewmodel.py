@@ -1600,6 +1600,40 @@ def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+#: Canonical unit labels. The benchmark table, its live cards and its two
+#: charts all measure the same two quantities, and they used to spell one of
+#: them two ways ("FPS/env" in the table, "FPS / env" in the cards). A
+#: constant plus a static test is cheaper than remembering which is which.
+UNIT_STEPS_PER_SECOND = "Steps/s"
+UNIT_FPS_PER_ENV = "FPS / env"
+
+
+def ttk_action_result_view(
+    label: str,
+    result: dict[str, Any] | None,
+    error: BaseException | None = None,
+) -> dict[str, Any]:
+    """One line describing what a Roblox helper just did.
+
+    The card used to send every answer to the status bar, where it was
+    replaced by the next poll a second later - so "Analyze HUD" could finish
+    and the operator would never learn what it read. The card keeps the
+    result now, and this is the one place that decides what it says:
+    ``role`` picks the colour, ``text`` is the whole sentence, and a missing
+    result is not dressed up as a success.
+    """
+    if error is not None:
+        return {"ok": False, "role": "error", "text": f"{label} failed: {error}"}
+    if not result:
+        return {"ok": False, "role": "error", "text": f"{label}: the helper returned nothing"}
+    ok = bool(result.get("ok"))
+    message = str(result.get("message") or result.get("error") or ("done" if ok else "failed"))
+    detail = str(result.get("path") or "")
+    if detail:
+        message = f"{message} - {detail}"
+    return {"ok": ok, "role": "ok" if ok else "warn", "text": message}
+
+
 def ubuntu_cpu_turbo_view(profile: dict[str, Any] | None) -> dict[str, Any]:
     """Presentation model for the Ubuntu CPU Performance Turbo engine."""
     if not profile or not isinstance(profile, dict):

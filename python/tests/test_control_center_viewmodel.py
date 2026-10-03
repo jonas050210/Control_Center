@@ -1273,3 +1273,38 @@ def test_hidden_optimizer_fields_keep_the_training_config_defaults():
     assert config.entropy_coefficient == expected.entropy_coefficient
     assert config.rollout_length == expected.rollout_length
     assert "learning_rate" not in {spec.name for spec in vm.launch_field_specs()}
+
+
+def test_ttk_action_result_view_reports_a_failure_as_one():
+    # The card shows one line; a traceback or an empty string there reads as
+    # "nothing happened", which is the complaint this replaced.
+    view = vm.ttk_action_result_view("Focus window", None, RuntimeError("no client"))
+    assert view["ok"] is False
+    assert view["role"] == "error"
+    assert "Focus window" in view["text"]
+    assert "no client" in view["text"]
+
+
+def test_ttk_action_result_view_does_not_dress_up_a_missing_result():
+    view = vm.ttk_action_result_view("Analyze HUD", {})
+    assert view["ok"] is False
+    assert view["role"] == "error"
+    assert "returned nothing" in view["text"]
+
+
+def test_ttk_action_result_view_appends_the_path_it_wrote():
+    view = vm.ttk_action_result_view(
+        "Screenshot", {"ok": True, "message": "captured", "path": "/tmp/roblox_1.png"}
+    )
+    assert view["ok"] is True
+    assert view["role"] == "ok"
+    assert view["text"] == "captured - /tmp/roblox_1.png"
+
+
+def test_ttk_action_result_view_reports_a_refusal_without_crashing():
+    # "Roblox Player is not running yet" is not an exception; the card must
+    # still say so instead of claiming success.
+    view = vm.ttk_action_result_view("Connect", {"ok": False, "message": "not running yet"})
+    assert view["ok"] is False
+    assert view["role"] == "warn"
+    assert view["text"] == "not running yet"
