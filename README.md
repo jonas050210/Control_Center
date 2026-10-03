@@ -163,8 +163,9 @@ It provides:
 - **Settings** - theme, shell layout (rail/topbar/board), density,
   motion, a free **accent colour** (enter any `#rrggbb`) that any theme can
   wear, accent effects, the **Layout studio** (move, span and
-  hide cards), savable **presets** that can also be exported to a file and
-  imported back, project/output roots and the Godot executable
+  hide cards), savable **layout presets** that can also be exported to a
+  file and imported back, project/output roots and the Godot executable.
+  Theme and layout changes live here, not in the top-right header.
 
 The desktop suite runs with `python3 tools/desktop_tests.py`: it uses the
 real Tk window when the machine has Tkinter and a display (or `xvfb-run`),

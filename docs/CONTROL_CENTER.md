@@ -72,10 +72,9 @@ operator can keep the Corz surfaces with a mint accent. The label colour
 *on* the accent is derived (`Theme.with_accent`), never guessed: white
 when it keeps the 3:1 contrast a bold UI label needs, dark ink otherwise.
 An override that matches the theme's own accent preserves
-the designed pair (Cyan with its deep-teal ink) exactly. The header's
-Theme and Layout selectors also have explicit readonly, focus and disabled
-colors, preventing the platform-default white fields that could appear in
-the top-right header.
+the designed pair (Cyan with its deep-teal ink) exactly. The header stays
+free of theme and layout selectors; those less-frequent choices live on the
+Settings page instead of competing with run status in the top-right corner.
 
 A theme change only repaints (ttk styles, canvas colours and the table tag
 roles are re-applied). Every widget that draws itself subscribes to the
@@ -221,16 +220,23 @@ exactly as `run_inspection.py` reports it.
 The operational core: the launch deck plus the training-run registry in
 one place.
 
-- **Launch form** — basic and advanced fields over the same
-  `TrainingConfig` the CLI validates. The launch slot under it shows the
-  resolved configuration before anything starts: environment count,
-  resolved worker count (`0 = auto` becomes the concrete number), the
-  shard topology (`12+12+12+12`), device and step count — or every reason
+- **Launch form** — five plainly scoped controls (environments,
+  Godot workers, training steps, device and difficulty progression) over
+  the same `TrainingConfig` the CLI validates. PPO optimizer settings,
+  including learning rate, stay on the config's standard defaults in the
+  desktop form; the CLI remains available for deliberate advanced tuning.
+  The launch slot shows the resolved setup before anything starts:
+  environment count, resolved worker count (`0 = auto` becomes the
+  concrete number), shard topology, device and step count — or every reason
   the current values are invalid (parse errors, worker/environment
   incompatibilities, a CUDA request on a host without CUDA). The verdict
   comes from `benchmark_pipeline.validate_configuration`, the same check
   the benchmark plan uses, so the launcher and the benchmark can never
   disagree.
+- **No hidden quick presets** — the training-step count is entered
+  directly, and the launch slot explains that standard PPO settings are
+  selected automatically. Benchmark recommendations populate the topology
+  when applied; there is no separate sync button or one-click smoke run.
 - **Budget: Steps or Time** — both modes are validated before launch.
   *Steps* ends exactly at the configured step count. *Time* is a
   **trainer-enforced** budget: the minutes travel into the run's

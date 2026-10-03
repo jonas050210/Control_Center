@@ -1230,10 +1230,10 @@ TRAINING_FIELDS: tuple[TrainingFieldSpec, ...] = (
     ),
     TrainingFieldSpec(
         "total_training_steps",
-        "Total timesteps",
+        "Training steps",
         "int",
         "basic",
-        help="Total environment transitions collected during training.",
+        help="How many simulation steps to run before stopping.",
     ),
     TrainingFieldSpec(
         "device",
@@ -1437,122 +1437,6 @@ def training_field_groups() -> dict[str, list[TrainingFieldSpec]]:
 def launch_field_specs() -> list[TrainingFieldSpec]:
     """The streamlined fields exposed on the Training launch deck."""
     return training_field_groups()["basic"]
-
-
-#: Curated PPO hyperparameter profiles for maximum training efficiency:
-#: - standard: balanced SB3 defaults (LR 3e-4, 256 batch, 10 epochs)
-#: - fast_convergence: linear-scaled LR (5e-4) + 512 minibatch + 6 epochs for
-#:   ~40% faster PPO update wall-time on multi-worker rollouts
-#: - max_turbo: aggressive early exploration (LR 8e-4, 512 batch, 4 epochs,
-#:   entropy 0.02) for rapid initial policy climb
-#: - fine_tune: low-KL late-stage refinement (LR 1e-4, 256 batch, 8 epochs,
-#:   entropy 0.005) when resuming best_eval.zip or latest.zip
-PPO_EFFICIENCY_PRESETS: dict[str, dict[str, str]] = {
-    "standard": {
-        "label": "Standard (LR 3e-4)",
-        "learning_rate": "0.0003",
-        "batch_size": "256",
-        "ppo_epochs": "10",
-        "entropy_coefficient": "0.01",
-        "rollout_length": "0",
-    },
-    "fast_convergence": {
-        "label": "Fast Climb (LR 5e-4 · 6 Ep)",
-        "learning_rate": "0.0005",
-        "batch_size": "512",
-        "ppo_epochs": "6",
-        "entropy_coefficient": "0.015",
-        "rollout_length": "0",
-    },
-    "max_turbo": {
-        "label": "Max Efficiency (LR 8e-4 · 4 Ep)",
-        "learning_rate": "0.0008",
-        "batch_size": "512",
-        "ppo_epochs": "4",
-        "entropy_coefficient": "0.02",
-        "rollout_length": "0",
-    },
-    "fine_tune": {
-        "label": "Fine-Tune Peak (LR 1e-4)",
-        "learning_rate": "0.0001",
-        "batch_size": "256",
-        "ppo_epochs": "8",
-        "entropy_coefficient": "0.005",
-        "rollout_length": "0",
-    },
-}
-
-
-def optimizer_field_specs() -> list[TrainingFieldSpec]:
-    """PPO optimizer & rollout efficiency fields exposed in the Training deck."""
-    wanted = (
-        "learning_rate",
-        "batch_size",
-        "ppo_epochs",
-        "entropy_coefficient",
-        "rollout_length",
-    )
-    by_name = {spec.name: spec for spec in TRAINING_FIELDS}
-    return [by_name[name] for name in wanted if name in by_name]
-
-
-def recommend_ppo_hyperparameters(
-    environment_count: int = 8,
-    env_workers: int = 2,
-    device: str = "auto",
-    total_steps: int = 100_000,
-) -> dict[str, Any]:
-    """Compute topology-aware PPO hyperparameters using square-root batch scaling.
-
-    Wider environment topologies collect lower-variance gradient estimates per
-    rollout, allowing a proportionally higher learning rate (`3e-4 * sqrt(scale)`)
-    and larger minibatches with fewer optimizer epochs per rollout — maximizing
-    both sample efficiency and wall-clock steps/second.
-    """
-    envs = max(1, int(environment_count))
-    workers = max(1, min(envs, int(env_workers or 1)))
-    steps = max(1_000, int(total_steps or 100_000))
-    if envs >= 32:
-        batch_size = 1024 if device == "cuda" else 512
-        ppo_epochs = 4 if device == "cpu" else 6
-        lr = 0.00075 if steps <= 150_000 else 0.0006
-        entropy = 0.015
-    elif envs >= 12:
-        batch_size = 512
-        ppo_epochs = 6
-        lr = 0.00055 if steps <= 150_000 else 0.00045
-        entropy = 0.015
-    elif envs >= 4:
-        batch_size = 256
-        ppo_epochs = 8
-        lr = 0.0004
-        entropy = 0.012
-    else:
-        batch_size = 256
-        ppo_epochs = 10
-        lr = 0.0003
-        entropy = 0.01
-    config = TrainingConfig(
-        environment_count=envs,
-        env_workers=workers,
-        batch_size=batch_size,
-        rollout_length=0,
-    )
-    resolved_rollout = config.resolved_rollout_length()
-    rollout_transitions = envs * resolved_rollout
-    return {
-        "learning_rate": f"{lr:g}",
-        "batch_size": str(batch_size),
-        "ppo_epochs": str(ppo_epochs),
-        "entropy_coefficient": f"{entropy:g}",
-        "rollout_length": "0",
-        "resolved_rollout_length": resolved_rollout,
-        "rollout_transitions": rollout_transitions,
-        "rationale": (
-            f"Auto-tuned for {envs}e/{workers}w ({rollout_transitions} transitions/rollout): "
-            f"LR={lr:g}, batch={batch_size}, epochs={ppo_epochs}, entropy={entropy:g}"
-        ),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -2833,4 +2717,3 @@ def resolve_run_checkpoint(run_dir: str | Path, *, prefer_best: bool = False) ->
         if item is not None and item.is_file():
             return item
     return None
-

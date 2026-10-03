@@ -962,37 +962,6 @@ def apply_ttk_styles(
         bordercolor=theme.border,
         padding=(row_pad, max(4, row_pad - 1), row_pad, max(4, row_pad - 1)),
     )
-    # Header selectors sit on the shell surface. Tk's readonly combobox
-    # element can otherwise fall back to a platform-default white field even
-    # when the base TCombobox colors are themed; map its readonly, focus and
-    # disabled states explicitly so it remains a compact dark control.
-    style.configure(
-        "Header.TCombobox",
-        background=theme.shell,
-        fieldbackground=theme.shell,
-        foreground=theme.text,
-        arrowcolor=theme.text_dim,
-        bordercolor=theme.border,
-        lightcolor=theme.border,
-        darkcolor=theme.border,
-        relief="flat",
-        padding=(row_pad, max(4, row_pad - 1), row_pad, max(4, row_pad - 1)),
-    )
-    style.map(
-        "Header.TCombobox",
-        background=[
-            ("disabled", theme.shell),
-            ("readonly", theme.shell),
-            ("active", theme.card_hover),
-        ],
-        fieldbackground=[
-            ("disabled", theme.shell),
-            ("readonly", theme.shell),
-            ("focus", theme.shell),
-        ],
-        foreground=[("disabled", theme.text_muted)],
-        arrowcolor=[("disabled", theme.text_muted), ("active", theme.text)],
-    )
     style.configure("TSeparator", background=theme.border)
     style.configure(
         "TCheckbutton", background=theme.panel, foreground=theme.text, font=font("small")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -1047,6 +1048,61 @@ def kl_adaptive_learning_rate(
     return cur
 
 
+def _ppo_stats_payload(
+    values: dict[str, Any], keys: tuple[str, ...], timesteps: int
+) -> dict[str, Any]:
+    """Copy Stable-Baselines3's logged diagnostics into a telemetry row."""
+    payload: dict[str, Any] = {"event": "ppo_update", "timesteps": timesteps}
+    for key in keys:
+        if key in values:
+            payload[key.split("/", 1)[1]] = float(values[key])
+    if "entropy_loss" in payload:
+        # SB3 logs the negated mean policy entropy; the sign flip here is
+        # traceable to the same measured optimizer value.
+        payload["entropy"] = -payload["entropy_loss"]
+    return payload
+
+
+def _adapt_ppo_learning_rate(
+    model: Any, payload: dict[str, Any], base_lr: float | None
+) -> float | None:
+    """Apply the measured-KL learning-rate guard and return its base rate."""
+    current_lr = payload.get("learning_rate")
+    if isinstance(current_lr, (int, float)) and base_lr is None:
+        base_lr = float(current_lr)
+    if base_lr is None or "approx_kl" not in payload:
+        return base_lr
+
+    next_lr = kl_adaptive_learning_rate(
+        float(current_lr if isinstance(current_lr, (int, float)) else base_lr),
+        float(payload["approx_kl"]),
+        base_lr,
+    )
+    model.learning_rate = next_lr
+    model.lr_schedule = lambda _progress, lr=next_lr: lr
+    optimizer = getattr(getattr(model, "policy", None), "optimizer", None)
+    for group in getattr(optimizer, "param_groups", ()) or ():
+        if isinstance(group, dict):
+            group["lr"] = next_lr
+    payload["learning_rate"] = round(next_lr, 7)
+    return base_lr
+
+
+def _publish_ppo_stats(
+    telemetry: Any, run_control: RunControl | None, payload: dict[str, Any]
+) -> None:
+    """Write one optimizer row to the JSONL stream and optional live status."""
+    telemetry.write(payload)
+    if run_control is not None:
+        run_control.update(
+            **{
+                f"ppo_{key}": value
+                for key, value in payload.items()
+                if key not in ("event", "timesteps")
+            }
+        )
+
+
 def _make_ppo_stats_callback(
     BaseCallback: Any, *, telemetry: Any, run_control: RunControl | None
 ) -> Any:
@@ -1091,40 +1147,9 @@ def _make_ppo_stats_callback(
             n_updates = values.get("train/n_updates")
             if n_updates is not None and n_updates == self._last_n_updates:
                 return  # train() has not run again since the last flush.
-            payload: dict[str, Any] = {"event": "ppo_update", "timesteps": self.num_timesteps}
-            for key in self._KEYS:
-                if key in values:
-                    payload[key.split("/", 1)[1]] = float(values[key])
-            if "entropy_loss" in payload:
-                # SB3 logs the negated mean policy entropy; the sign flip
-                # here is the only arithmetic this callback performs, and
-                # it stays traceable to the exact same measured value.
-                payload["entropy"] = -payload["entropy_loss"]
-            cur_lr = payload.get("learning_rate")
-            if isinstance(cur_lr, (int, float)) and self._base_lr is None:
-                self._base_lr = float(cur_lr)
-            if self._base_lr is not None and "approx_kl" in payload:
-                next_lr = kl_adaptive_learning_rate(
-                    float(cur_lr if isinstance(cur_lr, (int, float)) else self._base_lr),
-                    float(payload["approx_kl"]),
-                    self._base_lr,
-                )
-                self.model.learning_rate = next_lr
-                self.model.lr_schedule = lambda _progress, lr=next_lr: lr
-                optimizer = getattr(getattr(self.model, "policy", None), "optimizer", None)
-                for group in getattr(optimizer, "param_groups", ()) or ():
-                    if isinstance(group, dict):
-                        group["lr"] = next_lr
-                payload["learning_rate"] = round(next_lr, 7)
-            telemetry.write(payload)
-            if run_control is not None:
-                run_control.update(
-                    **{
-                        f"ppo_{key}": value
-                        for key, value in payload.items()
-                        if key not in ("event", "timesteps")
-                    }
-                )
+            payload = _ppo_stats_payload(values, self._KEYS, self.num_timesteps)
+            self._base_lr = _adapt_ppo_learning_rate(self.model, payload, self._base_lr)
+            _publish_ppo_stats(telemetry, run_control, payload)
             self._last_n_updates = n_updates
 
         def _on_rollout_start(self) -> None:

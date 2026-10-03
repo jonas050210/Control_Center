@@ -120,8 +120,8 @@ class ThemeTests(unittest.TestCase):
         self.assertIn("off", MOTION_LEVELS)
         self.assertEqual(MOTION_LEVELS["off"], "Off")
 
-    def test_header_combobox_states_use_the_shell_palette(self) -> None:
-        """Readonly ttk fields must not fall back to the platform's white fill."""
+    def test_settings_combobox_uses_the_theme_surface(self) -> None:
+        """Settings dropdowns stay themed after header-only selectors are removed."""
 
         class RecordingStyle:
             def __init__(self, _root):
@@ -151,17 +151,8 @@ class ThemeTests(unittest.TestCase):
         with patch.dict("sys.modules", {"tkinter": tkinter, "tkinter.ttk": ttk}):
             style = apply_ttk_styles(Root(), THEMES["corz"])
 
-        self.assertEqual(
-            style.configured["Header.TCombobox"]["fieldbackground"], THEMES["corz"].shell
-        )
-        self.assertEqual(
-            style.mapped["Header.TCombobox"]["fieldbackground"],
-            [
-                ("disabled", THEMES["corz"].shell),
-                ("readonly", THEMES["corz"].shell),
-                ("focus", THEMES["corz"].shell),
-            ],
-        )
+        self.assertEqual(style.configured["TCombobox"]["fieldbackground"], THEMES["corz"].card)
+        self.assertEqual(style.configured["TCombobox"]["foreground"], THEMES["corz"].text)
 
 
 class PreferencesTests(unittest.TestCase):

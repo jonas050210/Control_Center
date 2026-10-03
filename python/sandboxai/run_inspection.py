@@ -22,7 +22,6 @@ carry a ``format`` field and new fields are additive.
 
 from __future__ import annotations
 
-import copy
 import json
 import threading
 import time

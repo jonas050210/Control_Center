@@ -841,4 +841,3 @@ def test_export_run_report_and_ttk_combat_profile(tmp_path):
     payload = json.loads(Path(ttk_res["path"]).read_text(encoding="utf-8"))
     assert payload["format"] == "sandboxai.ttk_combat_profile/v1"
     assert payload["preset_id"] == "assault_rifle_standard"
-

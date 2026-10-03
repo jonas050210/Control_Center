@@ -184,13 +184,13 @@ class Page(ttk.Frame):
                 wraplength=self.app.px(1180, minimum=360),
             )
             sub_lbl.pack(anchor="w", fill="x", pady=(self.app.px(4, minimum=2), 0))
-            header.bind(
-                "<Configure>",
-                lambda evt, lbl=sub_lbl: lbl.configure(
-                    wraplength=max(240, int(getattr(evt, "width", 600) or 600) - 24)
-                ),
-                add="+",
-            )
+
+            def resize_subtitle(event: tk.Event[tk.Misc]) -> None:
+                sub_lbl.configure(
+                    wraplength=max(240, int(getattr(event, "width", 600) or 600) - 24)
+                )
+
+            header.bind("<Configure>", resize_subtitle, add=True)
         tk.Frame(header, height=1, background=self.palette.border, borderwidth=0).pack(
             fill="x", pady=(self.app.px(10, minimum=6), 0)
         )
@@ -667,7 +667,6 @@ class DashboardPage(Page):
             ("Export TTK profile", self._export_roblox_ttk_profile, "Ghost.TButton"),
             ("CPU turbo", self._enable_ubuntu_cpu_turbo, "Ghost.TButton"),
             ("Start benchmark", self._start_benchmark_from_dashboard, "Primary.TButton"),
-            ("Quick start agent", self._quick_start_agent_from_dashboard, "Primary.TButton"),
             ("Run benchmark", lambda: self.app.show_page("Benchmarks"), "TButton"),
             ("Open training", lambda: self.app.show_page("Training"), "TButton"),
         )
@@ -833,21 +832,13 @@ class DashboardPage(Page):
                 )
             self.refresh()
 
-        self.app.background.submit(
-            lambda: self.adapter.connect_roblox_ttk_testing(shortcut), _done
-        )
+        self.app.background.submit(lambda: self.adapter.connect_roblox_ttk_testing(shortcut), _done)
 
     def _start_benchmark_from_dashboard(self) -> None:
         self.app.show_page("Benchmarks")
         bench_page = self.app.pages.get("Benchmarks")
         if bench_page is not None and hasattr(bench_page, "_start"):
             bench_page._start()
-
-    def _quick_start_agent_from_dashboard(self) -> None:
-        self.app.show_page("Training")
-        train_page = self.app.pages.get("Training")
-        if train_page is not None and hasattr(train_page, "_quick_launch_agent"):
-            train_page._quick_launch_agent()
 
     def _focus_roblox_window(self) -> None:
         if not hasattr(self.adapter, "focus_roblox_window"):
@@ -1253,32 +1244,6 @@ class TrainingPage(Page):
         basic_frame.pack(fill="x")
         self._build_fields(basic_frame, vm.launch_field_specs(), defaults)
 
-        # ---- PPO Optimizer & Learning Rate Efficiency ------------------
-        optimizer_header = ttk.Frame(form_frame, style="CardInner.TFrame")
-        optimizer_header.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
-        ttk.Label(
-            optimizer_header,
-            text="PPO Optimizer & Learning Rate Efficiency:",
-            style="FieldTitle.TLabel",
-        ).pack(side="left", padx=(0, 8))
-        for preset_key, preset_data in vm.PPO_EFFICIENCY_PRESETS.items():
-            ttk.Button(
-                optimizer_header,
-                text=preset_data["label"],
-                style="Ghost.TButton",
-                command=lambda k=preset_key: self._apply_ppo_efficiency_preset(k),  # type: ignore[misc]
-            ).pack(side="left", padx=(0, 4))
-        ttk.Button(
-            optimizer_header,
-            text="⚡ Auto-tune LR for topology",
-            style="Primary.TButton",
-            command=self._auto_tune_ppo_hyperparameters,
-        ).pack(side="left", padx=(4, 0))
-
-        optimizer_frame = ttk.Frame(form_frame, style="CardInner.TFrame")
-        optimizer_frame.pack(fill="x", pady=(self.app.px(4, minimum=2), 0))
-        self._build_fields(optimizer_frame, vm.optimizer_field_specs(), defaults)
-
         # ---- Budget: Steps | Time -------------------------------------
         budget_row = ttk.Frame(form_frame, style="CardInner.TFrame")
         budget_row.pack(fill="x", pady=(self.app.px(10, minimum=6), 0))
@@ -1310,35 +1275,6 @@ class TrainingPage(Page):
         self.budget_hint.pack(side="left", padx=(self.app.px(12, minimum=6), 0))
         self.budget_minutes_var.trace_add("write", lambda *_args: self._on_budget_values_changed())
 
-        presets_bar = ttk.Frame(form_frame, style="CardInner.TFrame")
-        presets_bar.pack(fill="x", pady=(self.app.px(10, minimum=6), 0))
-        ttk.Label(presets_bar, text="Presets:", style="FieldTitle.TLabel").pack(
-            side="left", padx=(0, 8)
-        )
-        for label, steps_val in (
-            ("25k Smoke", "25000"),
-            ("100k Standard", "100000"),
-            ("500k Deep", "500000"),
-        ):
-            ttk.Button(
-                presets_bar,
-                text=label,
-                style="Ghost.TButton",
-                command=lambda s=steps_val: self._apply_step_preset(s),  # type: ignore[misc]
-            ).pack(side="left", padx=(0, 6))
-        ttk.Button(
-            presets_bar,
-            text="Sync benchmark topology",
-            style="Ghost.TButton",
-            command=self._sync_optimal_benchmark,
-        ).pack(side="left", padx=(6, 0))
-        ttk.Button(
-            presets_bar,
-            text="Ubuntu CPU turbo",
-            style="Ghost.TButton",
-            command=self._apply_ubuntu_cpu_turbo,
-        ).pack(side="left", padx=(6, 0))
-
         resume_bar = ttk.Frame(form_frame, style="CardInner.TFrame")
         resume_bar.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
         ttk.Label(resume_bar, text="Resume checkpoint (optional):", style="FieldTitle.TLabel").pack(
@@ -1367,13 +1303,6 @@ class TrainingPage(Page):
             launch_bar, text="Launch training", command=self._launch, style="Primary.TButton"
         )
         self.launch_button.pack(side="right", padx=(self.app.px(6, minimum=4), 0))
-        self.quick_agent_button = ttk.Button(
-            launch_bar,
-            text="Quick Smoke Agent (25k)",
-            command=self._quick_launch_agent,
-            style="TButton",
-        )
-        self.quick_agent_button.pack(side="right", padx=(self.app.px(6, minimum=4), 0))
         self.launch_status_label = ttk.Label(
             launch_bar,
             text="",
@@ -1399,9 +1328,7 @@ class TrainingPage(Page):
             table_frame,
             self.COLUMNS,
             bus=self.app.bus,
-            empty_text=(
-                "No training agents yet.\nSet the topology above and press Launch training."
-            ),
+            empty_text=("No training runs yet. Set the options above and press Launch training."),
         )
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self._apply_lifecycle_tags()
@@ -1416,9 +1343,7 @@ class TrainingPage(Page):
             "Pause the training agent at its next safe boundary",
             bus=self.app.bus,
         )
-        self.resume_button = ttk.Button(
-            row1, text="Resume", command=self._resume, state="disabled"
-        )
+        self.resume_button = ttk.Button(row1, text="Resume", command=self._resume, state="disabled")
         self.resume_button.pack(side="left", padx=(6, 0))
         self.stop_button = ttk.Button(row1, text="Stop", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=(6, 0))
@@ -1434,19 +1359,11 @@ class TrainingPage(Page):
             style="Danger.TButton",
         )
         self.force_stop_button.pack(side="left", padx=(10, 0))
-        self.remove_button = ttk.Button(
-            row1, text="Remove", command=self._remove, state="disabled"
-        )
+        self.remove_button = ttk.Button(row1, text="Remove", command=self._remove, state="disabled")
         self.remove_button.pack(side="left", padx=(6, 0))
 
         row2 = ttk.Frame(actions, style="CardInner.TFrame")
         row2.pack(fill="x", pady=(self.app.px(6, minimum=3), 0))
-        ttk.Button(
-            row2,
-            text="+ Start New Agent",
-            command=self._quick_launch_agent,
-            style="Primary.TButton",
-        ).pack(side="left")
         self.stop_all_button = ttk.Button(
             row2, text="Stop all", command=self._stop_all, state="disabled"
         )
@@ -1508,56 +1425,6 @@ class TrainingPage(Page):
     def _on_budget_values_changed(self) -> None:
         self._last_slot_values = None
 
-    def _apply_step_preset(self, steps: str) -> None:
-        if self.budget_mode.get() != "steps":
-            self.budget_mode.set("steps")
-            self._on_budget_mode("steps")
-        self.field_vars["total_training_steps"].set(steps)
-        self._update_launch_slot(self.current_values())
-
-    def _apply_ppo_efficiency_preset(self, preset_key: str) -> None:
-        preset = vm.PPO_EFFICIENCY_PRESETS.get(preset_key)
-        if not preset:
-            return
-        self.apply_launch_values(
-            {k: v for k, v in preset.items() if k != "label"}
-        )
-        self.app.set_status(
-            f"Applied PPO efficiency preset: {preset['label']} (LR={preset['learning_rate']}, batch={preset['batch_size']}, epochs={preset['ppo_epochs']})"
-        )
-
-    def _auto_tune_ppo_hyperparameters(self) -> None:
-        values = self.current_values()
-        try:
-            envs = int(values.get("environment_count") or 8)
-        except ValueError:
-            envs = 8
-        try:
-            workers = int(values.get("env_workers") or 2)
-        except ValueError:
-            workers = 2
-        try:
-            steps = int(values.get("total_training_steps") or 100_000)
-        except ValueError:
-            steps = 100_000
-        device = str(values.get("device") or "auto")
-        rec = vm.recommend_ppo_hyperparameters(
-            environment_count=envs,
-            env_workers=workers,
-            device=device,
-            total_steps=steps,
-        )
-        self.apply_launch_values(
-            {
-                "learning_rate": str(rec["learning_rate"]),
-                "batch_size": str(rec["batch_size"]),
-                "ppo_epochs": str(rec["ppo_epochs"]),
-                "entropy_coefficient": str(rec["entropy_coefficient"]),
-                "rollout_length": str(rec["rollout_length"]),
-            }
-        )
-        self.app.set_status(str(rec["rationale"]), toast=True)
-
     def current_budget(self) -> dict[str, Any]:
         """Validated budget view for the current selector state."""
         steps_var = self.field_vars.get("total_training_steps")
@@ -1580,7 +1447,12 @@ class TrainingPage(Page):
             cell = ttk.Frame(
                 parent,
                 style="Surface.TFrame",
-                padding=(0, self.app.px(2, minimum=1), self.app.px(12, minimum=6), self.app.px(4, minimum=2)),
+                padding=(
+                    0,
+                    self.app.px(2, minimum=1),
+                    self.app.px(12, minimum=6),
+                    self.app.px(4, minimum=2),
+                ),
             )
             cell.grid(row=row_index, column=col_index, sticky="nsew")
             ttk.Label(cell, text=spec.label, style="FieldTitle.TLabel").pack(anchor="w")
@@ -1634,49 +1506,6 @@ class TrainingPage(Page):
         if applied and hasattr(self, "launch_status_label"):
             self._update_launch_slot(self.current_values())
         return applied
-
-    def _sync_optimal_benchmark(self) -> None:
-        """Apply the persisted benchmark recommendation directly to the launch form."""
-        try:
-            recommendation = self.adapter.recommended_configuration()
-        except OSError:
-            recommendation = None
-        if not recommendation or not isinstance(recommendation.get("environment_count"), int):
-            self.app.set_status("No benchmark recommendation persisted yet", error=True)
-            return
-        if isinstance(recommendation.get("expected_steps_per_second"), (int, float)):
-            self._measured_sps = float(recommendation["expected_steps_per_second"])
-        self.apply_launch_values(
-            {
-                "environment_count": str(recommendation["environment_count"]),
-                "env_workers": str(recommendation.get("env_workers", 1)),
-                "device": str(recommendation.get("device") or "auto"),
-                "inference_device": str(recommendation.get("inference_device") or "auto"),
-            }
-        )
-        self.app.set_status("Synced optimal benchmark topology to launch form")
-
-    def _apply_ubuntu_cpu_turbo(self) -> None:
-        """Activate Ubuntu CPU Turbo mode and populate optimal CPU shard topology."""
-        if not hasattr(self.adapter, "enable_ubuntu_cpu_turbo"):
-            return
-        try:
-            profile = self.adapter.enable_ubuntu_cpu_turbo()
-        except Exception as exc:
-            self.app.set_status(f"Ubuntu CPU Turbo failed: {exc}", error=True)
-            return
-        uview = vm.ubuntu_cpu_turbo_view(profile)
-        self.apply_launch_values(
-            {
-                "environment_count": str(uview["recommended_envs"]),
-                "env_workers": str(uview["recommended_workers"]),
-                "device": "cpu",
-                "inference_device": "cpu",
-            }
-        )
-        self.app.set_status(
-            f"Ubuntu CPU Turbo active: {uview['recommended_envs']} Envs x {uview['recommended_workers']} Workers on CPU (OMP/MKL=1)"
-        )
 
     def refresh(self) -> None:
         self.submit_poll("agents", self.adapter.agents.views, self._on_agents)
@@ -1780,10 +1609,9 @@ class TrainingPage(Page):
                 budget_hint += f"   ·   {estimate}"
             text = (
                 f"AVAILABLE — {summary['environment_count']} environments / "
-                f"{summary['env_workers']} workers ({topology}) on {summary['device']}   ·   "
-                f"LR {summary.get('learning_rate', 3e-4):g}  ·  batch {summary.get('batch_size', 256)}  ·  "
-                f"epochs {summary.get('ppo_epochs', 10)}  ·  rollout {summary.get('resolved_rollout_length', 'auto')}\n"
-                f"Budget: {budget_hint}   ·   step cap {vm.format_number(summary['total_training_steps'])}"
+                f"{summary['env_workers']} workers ({topology}) on {summary['device']}\n"
+                f"Standard PPO settings are applied automatically. "
+                f"Budget: {budget_hint}   ·   total steps {vm.format_number(summary['total_training_steps'])}"
             )
             for warning in slot["warnings"]:
                 text += f"\nwarning: {warning}"
@@ -1825,9 +1653,7 @@ class TrainingPage(Page):
         godot_override = (values.get("godot_executable") or "").strip()
         raw_errors = list(validation.get("errors") or [])
         if raw_errors and not godot_override:
-            non_godot_errors = [
-                err for err in raw_errors if "Godot executable" not in str(err)
-            ]
+            non_godot_errors = [err for err in raw_errors if "Godot executable" not in str(err)]
             if len(non_godot_errors) < len(raw_errors):
                 warnings = list(validation.get("warnings") or [])
                 warnings.append(
@@ -1848,20 +1674,6 @@ class TrainingPage(Page):
             or previous.get("warnings") != validation.get("warnings")
         ):
             self._update_launch_slot(values)
-
-    def _quick_launch_agent(self) -> None:
-        """One-click quick-start for a 25k smoke training agent."""
-        if self._launching:
-            return
-        slot = getattr(self, "_launch_slot", None)
-        if not slot or slot.get("state") != "AVAILABLE":
-            self._apply_step_preset("25000")
-            self.field_vars["environment_count"].set("4")
-            self.field_vars["env_workers"].set("1")
-            self.field_vars["device"].set("cpu")
-            self._compatibility = None
-            self._update_launch_slot(self.current_values())
-        self._launch()
 
     def _launch(self) -> None:
         slot = getattr(self, "_launch_slot", None)
@@ -1978,7 +1790,7 @@ class TrainingPage(Page):
             ""
             if rows
             else (
-                "No training agents yet. Check the topology and budget above, "
+                "No training runs yet. Check the options and budget above, "
                 "then press Launch training."
             )
         )
@@ -2330,13 +2142,11 @@ class BenchmarkPage(Page):
             foreground=self.palette.text_dim,
         )
         intro_desc.pack(anchor="w", fill="x")
-        intro.bind(
-            "<Configure>",
-            lambda evt, lbl=intro_desc: lbl.configure(
-                wraplength=max(240, int(getattr(evt, "width", 800) or 800) - 20)
-            ),
-            add="+",
-        )
+
+        def resize_intro_description(event: tk.Event[tk.Misc]) -> None:
+            intro_desc.configure(wraplength=max(240, int(getattr(event, "width", 800) or 800) - 20))
+
+        intro.bind("<Configure>", resize_intro_description, add=True)
 
         run_bar = ttk.Frame(intro, style="Surface.TFrame")
         run_bar.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
@@ -2464,9 +2274,7 @@ class BenchmarkPage(Page):
         self.run_button.configure(state="disabled" if self._running else "normal")
         if self._running:
             if self.cancel_button.winfo_manager() != "pack":
-                self.cancel_button.pack(
-                    side="left", padx=(8, 0), before=self.progress_label
-                )
+                self.cancel_button.pack(side="left", padx=(8, 0), before=self.progress_label)
             cancelled = self._cancel_event is not None and self._cancel_event.is_set()
             self.cancel_button.configure(state="disabled" if cancelled else "normal")
         else:
@@ -3607,7 +3415,9 @@ class RunsPage(Page):
 
     def _export_selected_run_report(self) -> None:
         if not self._selected_run_dir:
-            messagebox.showinfo("No run selected", "Select a training run first to export its report.")
+            messagebox.showinfo(
+                "No run selected", "Select a training run first to export its report."
+            )
             return
         if not hasattr(self.adapter, "export_run_report"):
             return
@@ -4024,9 +3834,7 @@ class SettingsPage(Page):
         """Offer a direct hex override without a row of preset colour swatches."""
         row = ttk.Frame(parent, style="CardInner.TFrame")
         row.pack(fill="x", pady=(self.app.px(10, minimum=5), 0))
-        ttk.Label(row, text="Accent hex", style="FieldTitle.TLabel").pack(
-            side="left", padx=(0, 8)
-        )
+        ttk.Label(row, text="Accent hex", style="FieldTitle.TLabel").pack(side="left", padx=(0, 8))
         self.accent_var = tk.StringVar(value=self.app.prefs.accent or self.app.palette.accent)
         entry = ttk.Entry(row, textvariable=self.accent_var, width=10)
         entry.pack(side="left", padx=(0, 4))
@@ -5117,9 +4925,9 @@ class StatsPage(Page):
         tick_entry = ttk.Entry(controls, textvariable=self.tick_var, width=8)
         tick_entry.pack(side="left", padx=(4, 4))
         tick_entry.bind("<Return>", lambda _e: self._jump_to_tick())
-        ttk.Button(
-            controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick
-        ).pack(side="left")
+        ttk.Button(controls, text="Go", style="Ghost.TButton", command=self._jump_to_tick).pack(
+            side="left"
+        )
         self.play_button = ttk.Button(
             controls, text="▶ Play", style="Ghost.TButton", command=self._toggle_replay_playback
         )

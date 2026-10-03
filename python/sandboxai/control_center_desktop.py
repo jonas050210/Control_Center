@@ -56,7 +56,6 @@ from .control_center_theme import (
     DENSITIES,
     LAYOUT_MODES,
     MOTION_LEVELS,
-    THEME_NAMES,
     THEMES,
     FontSpec,
     PreferencesStore,
@@ -595,31 +594,6 @@ class ControlCenter(tk.Tk):
         )
         self.brand_sub.pack(side="left", pady=(self.px(4), 0))
 
-        # Quick switches live in the header so switching a theme/layout is
-        # always one click, never a trip to Settings.
-        self.quick = ttk.Frame(header, style="Header.TFrame")
-        self.quick.pack(side="right", padx=(self.px(12), 0))
-        self.theme_picker = ttk.Combobox(
-            self.quick,
-            values=tuple(THEMES[name].label for name in THEME_NAMES),
-            state="readonly",
-            width=14,
-            style="Header.TCombobox",
-        )
-        self.theme_picker.set(theme.label)
-        self.theme_picker.pack(side="right", padx=(self.px(6), 0))
-        self.theme_picker.bind("<<ComboboxSelected>>", self._on_theme_picked)
-        self.layout_picker = ttk.Combobox(
-            self.quick,
-            values=tuple(LAYOUT_MODES.values()),
-            state="readonly",
-            width=14,
-            style="Header.TCombobox",
-        )
-        self.layout_picker.set(LAYOUT_MODES[self.prefs.layout])
-        self.layout_picker.pack(side="right", padx=(self.px(6), 0))
-        self.layout_picker.bind("<<ComboboxSelected>>", self._on_layout_picked)
-
         status = ttk.Frame(header, style="Header.TFrame")
         status.pack(side="right", padx=(self.px(12), 0))
         self.status_dot = StatusDot(status, self.bus, size=self.px(10, minimum=8))
@@ -644,8 +618,6 @@ class ControlCenter(tk.Tk):
         """Repaint everything that caches a colour outside the ttk styles."""
         theme = self.bus.theme
         self.configure(background=theme.bg)
-        self.theme_picker.set(theme.label)
-        self.layout_picker.set(LAYOUT_MODES[self.prefs.layout])
         self._refresh_preset_label()
         if self._nav_indicator is not None:
             with contextlib.suppress(tk.TclError):
@@ -655,18 +627,6 @@ class ControlCenter(tk.Tk):
         text = f"Preset: {self.prefs.active_preset}" if self.prefs.active_preset else "No preset"
         with contextlib.suppress(tk.TclError):
             self.preset_label.configure(text=text)
-
-    def _on_theme_picked(self, _event: object = None) -> None:
-        labels = {THEMES[name].label: name for name in THEME_NAMES}
-        picked = labels.get(str(self.theme_picker.get()))
-        if picked is not None:
-            self.set_theme(picked)
-
-    def _on_layout_picked(self, _event: object = None) -> None:
-        modes = {label: key for key, label in LAYOUT_MODES.items()}
-        picked = modes.get(str(self.layout_picker.get()))
-        if picked is not None:
-            self.set_layout_mode(picked)
 
     def _build_body(self) -> None:
         mode = self.prefs.layout
@@ -749,11 +709,13 @@ class ControlCenter(tk.Tk):
             )
             if vertical:
                 button.pack(fill="x", pady=1)
-                button.bind(
-                    "<Configure>",
-                    lambda _evt, name=page_class.title: self._on_nav_button_configure(name),
-                    add="+",
-                )
+
+                def on_nav_button_configure(
+                    _event: tk.Event[tk.Misc], name: str = page_class.title
+                ) -> None:
+                    self._on_nav_button_configure(name)
+
+                button.bind("<Configure>", on_nav_button_configure, add=True)
             else:
                 button.pack(side="left", padx=(0, self.px(4, minimum=2)))
             ToolTip(button, f"Open {page_class.title}   ·   Ctrl+{index + 1}")
@@ -919,7 +881,9 @@ class ControlCenter(tk.Tk):
             self.style = apply_ttk_styles(self, theme, density=density, scale=self.scale)
             with contextlib.suppress(tk.TclError):
                 if self._header is not None:
-                    self._header.configure(padding=(self.px(20, minimum=10), self.px(10, minimum=5)))
+                    self._header.configure(
+                        padding=(self.px(20, minimum=10), self.px(10, minimum=5))
+                    )
                 if self._nav_host is not None and self.prefs.layout != "topbar":
                     if self.sidebar_collapsed:
                         self._nav_host.configure(

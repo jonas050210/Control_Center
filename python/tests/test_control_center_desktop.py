@@ -79,6 +79,21 @@ def _rounded_panels(widget: "tk.Misc") -> list["RoundedPanel"]:
     return found
 
 
+def _widget_texts(widget: "tk.Misc") -> list[str]:
+    """Visible text values under a widget; non-text Tk widgets are ignored."""
+    texts: list[str] = []
+    pending = [widget]
+    while pending:
+        current = pending.pop()
+        with contextlib.suppress(tk.TclError):
+            text = str(current.cget("text") or "").strip()
+            if text:
+                texts.append(text)
+        with contextlib.suppress(tk.TclError):
+            pending.extend(current.winfo_children())
+    return texts
+
+
 def _geometry_snapshot(root: "tk.Misc") -> dict[str, tuple[int, int, int, int]]:
     """Size and position of every widget, keyed by class and Tk path.
 
@@ -293,16 +308,20 @@ class ControlCenterConstructionTests(unittest.TestCase):
         }
         assert "Agents" not in titles, "the Agents page is replaced by Training"
 
-    def test_header_selectors_keep_readonly_fields_on_the_shell_palette(self):
-        theme = self.app.bus.theme
-        self.assertEqual(self.app.theme_picker.cget("style"), "Header.TCombobox")
-        self.assertEqual(self.app.layout_picker.cget("style"), "Header.TCombobox")
-        for state in (("readonly",), ("focus",), ("disabled",)):
-            with self.subTest(state=state):
-                self.assertEqual(
-                    self.app.style.lookup("Header.TCombobox", "fieldbackground", state),
-                    theme.shell,
-                )
+    def test_header_has_no_theme_or_layout_switchers(self):
+        """The top-right header stays clean and has no native selector fields."""
+        from tkinter import ttk
+
+        for name in ("quick", "theme_picker", "layout_picker"):
+            self.assertNotIn(name, vars(self.app), f"obsolete header control remains: {name}")
+        pending = [self.app._header]
+        comboboxes = []
+        while pending:
+            widget = pending.pop()
+            if isinstance(widget, ttk.Combobox):
+                comboboxes.append(str(widget))
+            pending.extend(widget.winfo_children())
+        self.assertEqual(comboboxes, [], "header must not contain readonly selector fields")
 
     def test_every_page_builds_and_refreshes_without_raising(self):
         for page_class in PAGE_CLASSES:
@@ -1296,14 +1315,43 @@ class TrainingAndBenchmarkPlanTests(unittest.TestCase):
         page.budget_minutes_var.set("1441")
         self.assertTrue(page.current_budget()["errors"], "an absurd budget is refused")
 
-    def test_steps_preset_button_fills_the_step_field(self):
+    def test_training_uses_standard_ppo_defaults_without_confusing_controls(self):
+        from sandboxai import control_center_viewmodel as vm
+
         self.app.show_page("Training")
         page = self.app.pages["Training"]
-        page.budget_mode.set("steps")
-        page._on_budget_mode("steps")
-        page.field_vars["total_training_steps"].set("1")
-        page._apply_step_preset("25000")
-        self.assertEqual(page.field_vars["total_training_steps"].get(), "25000")
+        defaults = vm.default_training_values()
+        self.assertEqual(page.field_vars["learning_rate"].get(), defaults["learning_rate"])
+        config = vm.parse_training_form(page.current_values())
+        self.assertEqual(config.learning_rate, TrainingConfig().learning_rate)
+        self.assertTrue(page.launch_button.winfo_exists())
+
+        visible = [text.casefold() for text in _widget_texts(page)]
+        removed_controls = (
+            "ppo optimizer",
+            "learning rate",
+            "fast climb",
+            "max efficiency",
+            "fine-tune peak",
+            "auto-tune lr",
+            "25k smoke",
+            "100k standard",
+            "500k deep",
+            "sync benchmark topology",
+            "ubuntu cpu turbo",
+            "quick smoke agent",
+            "start new agent",
+        )
+        for label in removed_controls:
+            self.assertFalse(
+                any(label in text for text in visible),
+                f"unclear or duplicate Training control is still visible: {label}",
+            )
+
+    def test_dashboard_does_not_launch_an_opaque_smoke_run(self):
+        self.app.show_page("Dashboard")
+        texts = [text.casefold() for text in _widget_texts(self.app.pages["Dashboard"])]
+        self.assertFalse(any("quick start agent" in text for text in texts))
 
     def test_benchmark_exposes_only_auto_start_and_transient_cancel(self):
         from threading import Event

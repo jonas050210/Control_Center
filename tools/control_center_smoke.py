@@ -1164,6 +1164,9 @@ def _step(failures: list[str], name: str, fn: Callable[[], object]) -> None:
 
 
 def _exercise_shell(app: object, page_classes: tuple[type, ...]) -> None:
+    for name in ("quick", "theme_picker", "layout_picker"):
+        if name in vars(app):
+            raise AssertionError(f"obsolete header selector remains: {name}")
     for mode in ("topbar", "board", "rail"):
         app.set_layout_mode(mode)  # type: ignore[attr-defined]
         for page_class in page_classes:
@@ -1310,6 +1313,9 @@ def _exercise_appearance(page: object) -> None:
 
 
 def _exercise_training(page: object) -> None:
+    from sandboxai import control_center_viewmodel as vm
+    from sandboxai.config import TrainingConfig
+
     page.budget_mode.set("time")  # type: ignore[attr-defined]
     page._on_budget_mode("time")  # type: ignore[attr-defined]
     page.refresh()  # type: ignore[attr-defined]
@@ -1317,13 +1323,47 @@ def _exercise_training(page: object) -> None:
     page.refresh()  # type: ignore[attr-defined]
     page.budget_mode.set("steps")  # type: ignore[attr-defined]
     page._on_budget_mode("steps")  # type: ignore[attr-defined]
-    page._apply_step_preset("25000")  # type: ignore[attr-defined]
+    page.field_vars["total_training_steps"].set("25000")  # type: ignore[attr-defined]
     page.refresh()  # type: ignore[attr-defined]
     page.field_vars["environment_count"].set("8")  # type: ignore[attr-defined]
     page.refresh()  # type: ignore[attr-defined]
     page.field_vars["environment_count"].set("oops")  # type: ignore[attr-defined]
     page.refresh()  # type: ignore[attr-defined]
     page.field_vars["environment_count"].set("8")  # type: ignore[attr-defined]
+
+    values = page.current_values()  # type: ignore[attr-defined]
+    config = vm.parse_training_form(values)
+    if config.learning_rate != TrainingConfig().learning_rate:
+        raise AssertionError("the Training UI must preserve the safe PPO learning-rate default")
+    if "quick_agent_button" in vars(page):
+        raise AssertionError("the Training page must not expose an opaque quick-agent shortcut")
+    visible_texts: list[str] = []
+    pending = [page]
+    while pending:
+        widget = pending.pop()
+        if isinstance(widget, _Base):
+            text = str(widget.cget("text") or "").casefold()
+            if text:
+                visible_texts.append(text)
+            pending.extend(widget.winfo_children())
+    removed_controls = (
+        "ppo optimizer",
+        "learning rate",
+        "fast climb",
+        "max efficiency",
+        "fine-tune peak",
+        "auto-tune lr",
+        "25k smoke",
+        "100k standard",
+        "500k deep",
+        "sync benchmark topology",
+        "ubuntu cpu turbo",
+        "quick smoke agent",
+        "start new agent",
+    )
+    present = [label for label in removed_controls if any(label in text for text in visible_texts)]
+    if present:
+        raise AssertionError(f"unclear Training controls are still visible: {present}")
 
 
 def _exercise_benchmarks(page: object) -> None:
@@ -1371,7 +1411,6 @@ def _exercise_benchmarks(page: object) -> None:
     page._update_buttons()  # type: ignore[attr-defined]
     if page.cancel_button.winfo_manager():  # type: ignore[attr-defined]
         raise AssertionError("Cancel must hide when the benchmark finishes")
-
 
 
 def _exercise_board_resize(app: object, host: object) -> None:
