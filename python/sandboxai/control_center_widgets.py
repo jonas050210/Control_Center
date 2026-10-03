@@ -1017,7 +1017,7 @@ class LogPanel(ttk.Frame):
             height=16,
             wrap="word",
             state="disabled",
-            background=self._theme.panel,
+            background=self._text_surface(),
             foreground=self._theme.text,
             insertbackground=self._theme.text,
             relief="flat",
@@ -1050,11 +1050,20 @@ class LogPanel(ttk.Frame):
         self.text.bind("<Enter>", lambda _e: self._reveal_scrollbars(), add="+")
         self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
 
+    def _text_surface(self) -> str:
+        """The log surface: inset, like every other field on a card.
+
+        It used to be ``panel``, which on the dark themes is *darker* than the
+        card the log sits in - the opposite of the inset reading a text area
+        wants, and one more black rectangle on the Settings and Runs pages.
+        """
+        return self._theme.field_surface()[0]
+
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
         with contextlib.suppress(tk.TclError):
             self.text.configure(
-                background=theme.panel,
+                background=self._text_surface(),
                 foreground=theme.text,
                 insertbackground=theme.text,
                 font=self._bus.font("small", mono=True),

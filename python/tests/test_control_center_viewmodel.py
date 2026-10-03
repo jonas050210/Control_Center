@@ -937,8 +937,8 @@ def test_auto_benchmark_plan_reaches_the_wide_ladder():
 
 def test_auto_benchmark_plan_is_the_pipeline_ladder():
     from sandboxai.benchmark_pipeline import (
-        default_environment_counts,
         cap_candidates,
+        default_environment_counts,
         default_worker_counts,
         plan_candidates,
     )

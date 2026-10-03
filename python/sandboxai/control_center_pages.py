@@ -3930,7 +3930,10 @@ class SettingsPage(Page):
             command=lambda _value: self._on_radius_changed(),
             background=self.palette.card,
             foreground=self.palette.text,
-            troughcolor=self.palette.panel,
+            troughcolor=self.palette.field_surface()[0],
+            # Without this the slider turns Tk's default light grey while it
+            # is being dragged, which is the brightest thing on a dark page.
+            activebackground=self.palette.accent,
             highlightthickness=0,
             showvalue=True,
             length=self.app.px(150, minimum=110),

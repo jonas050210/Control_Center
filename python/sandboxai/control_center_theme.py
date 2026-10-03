@@ -121,6 +121,14 @@ def _lighten(color: str, amount: float) -> str:
     return "#" + "".join(f"{channel:02x}" for channel in mixed)
 
 
+def _darken(color: str, amount: float) -> str:
+    """Mix a ``#rrggbb`` colour towards black by ``amount`` (0..1)."""
+    color = color.lstrip("#")
+    channels = [int(color[index : index + 2], 16) for index in (0, 2, 4)]
+    mixed = [max(0, round(channel * (1.0 - amount))) for channel in channels]
+    return "#" + "".join(f"{channel:02x}" for channel in mixed)
+
+
 def _relative_luminance(color: str) -> float:
     """WCAG relative luminance of a ``#rrggbb`` colour."""
 
@@ -134,6 +142,18 @@ def _relative_luminance(color: str) -> float:
         + 0.7152 * linear(int(color[2:4], 16))
         + 0.0722 * linear(int(color[4:6], 16))
     )
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """WCAG contrast ratio between two ``#rrggbb`` colours.
+
+    Always ``>= 1``: the brighter colour is the numerator. Used by the
+    derived surfaces (an input fill has to be separable from the card it
+    sits on, whatever the operator picked as an accent) and by the theme's
+    own token-named method below.
+    """
+    darker, lighter = sorted((_relative_luminance(first), _relative_luminance(second)))
+    return (lighter + 0.05) / (darker + 0.05)
 
 
 def normalize_accent(value: str | None) -> str:
@@ -228,18 +248,36 @@ class Theme:
             on_accent=readable_on(color),
         )
 
+    def field_surface(self) -> tuple[str, str]:
+        """The input surface for a control sitting on a ``card``, and its border.
+
+        Inputs are drawn *inset*: on a dark theme the field is darker than the
+        card it sits on, on a light theme it is the lightest thing on the page.
+        Either way the difference alone was never what made a field readable -
+        a 5 % luminance step does not survive a 1 px border on a dim screen -
+        so the border is derived to carry the contrast, and ``focus`` repaints
+        it in the accent (see :func:`apply_theme`).
+
+        This is derived rather than hand-listed per theme because a theme is
+        ``with_accent``-able: an operator who picks a new accent gets a new
+        ``Theme``, and a second, separately maintained field colour is exactly
+        the kind of duplicate fact that drifts.
+        """
+        if _relative_luminance(self.card) < 0.18:
+            return _darken(self.card, 0.45), _lighten(self.card, 0.38)
+        return _lighten(self.card, 0.85), _darken(self.card, 0.32)
+
     def contrast_ratio(self, first: str, second: str) -> float:
         """WCAG contrast ratio between two of this theme's own tokens.
 
         Always ``>= 1``: the brighter colour is the numerator. (The first
         version of this helper unpacked ``sorted(...)`` the wrong way round,
         so it reported the reciprocal - a contrast of 3.7:1 came back as
-        0.27. It had no caller at the time, which is how it survived.)
+        0.27. It had no caller at the time, which is how it survived.) For
+        two colours that are not tokens of this theme, use the module-level
+        :func:`contrast_ratio`.
         """
-        darker, lighter = sorted(
-            (_relative_luminance(self.color(first)), _relative_luminance(self.color(second)))
-        )
-        return (lighter + 0.05) / (darker + 0.05)
+        return contrast_ratio(self.color(first), self.color(second))
 
 
 def _theme(
@@ -651,6 +689,19 @@ def apply_ttk_styles(
             return (family, size, *rest)
         return resolved
 
+    # Inputs (entries, comboboxes, spinboxes) are drawn inset, and their
+    # border - not the fill - is what makes them findable on a page. They
+    # used to take ``theme.card``, which is exactly the colour of the card
+    # they sit on: on the dark themes that is a black rectangle with a 1 px
+    # border a few percent off the background, which is why the Settings page
+    # read as a row of holes.
+    field, field_border = theme.field_surface()
+    focus_ring = [
+        ("focus", theme.accent),
+        ("active", field_border),
+        ("!focus", field_border),
+    ]
+
     root.configure(background=theme.bg)
     root.option_add("*TCombobox*Listbox.background", theme.card)
     root.option_add("*TCombobox*Listbox.foreground", theme.text)
@@ -713,13 +764,17 @@ def apply_ttk_styles(
             "foreground": theme.text,
             "font": font("h2", bold=True),
         },
+        # Field labels sit on a card body (every caller puts them in a
+        # ``CardInner.TFrame``), so their background has to be the card - at
+        # ``panel`` they painted a darker rectangle around the text on every
+        # dark theme.
         "FieldTitle.TLabel": {
-            "background": theme.panel,
+            "background": theme.card,
             "foreground": theme.text,
             "font": font("small", bold=True),
         },
         "FieldHelp.TLabel": {
-            "background": theme.panel,
+            "background": theme.card,
             "foreground": theme.text_muted,
             "font": font("micro"),
         },
@@ -732,10 +787,10 @@ def apply_ttk_styles(
             "font": font("small"),
         },
         # The overlay a table shows while it has no rows. Its background has
-        # to be the table's own field background (``theme.panel``) or the hint
-        # would sit in a visible rectangle on top of the empty table.
+        # to be the table's own field background (the inset input surface) or
+        # the hint would sit in a visible rectangle on top of the empty table.
         "Empty.TLabel": {
-            "background": theme.panel,
+            "background": field,
             "foreground": theme.text_dim,
             "font": font("small"),
             "padding": (scale.px(14), scale.px(10, minimum=6)),
@@ -930,8 +985,8 @@ def apply_ttk_styles(
 
     style.configure(
         "Treeview",
-        background=theme.panel,
-        fieldbackground=theme.panel,
+        background=field,
+        fieldbackground=field,
         foreground=theme.text,
         rowheight=scale.px(density.row_height, minimum=24),
         borderwidth=0,
@@ -952,27 +1007,67 @@ def apply_ttk_styles(
     )
     style.configure(
         "TEntry",
-        fieldbackground=theme.card,
+        fieldbackground=field,
         foreground=theme.text,
         insertcolor=theme.text,
-        bordercolor=theme.border,
+        bordercolor=field_border,
+        lightcolor=field_border,
+        darkcolor=field_border,
         padding=(row_pad, max(4, row_pad - 1)),
+    )
+    style.map(
+        "TEntry",
+        bordercolor=focus_ring,
+        lightcolor=focus_ring,
+        darkcolor=focus_ring,
+        foreground=[("disabled", theme.text_muted)],
     )
     style.configure(
         "TCombobox",
-        fieldbackground=theme.card,
+        fieldbackground=field,
         foreground=theme.text,
         arrowcolor=theme.text_dim,
-        bordercolor=theme.border,
+        bordercolor=field_border,
+        lightcolor=field_border,
+        darkcolor=field_border,
         padding=(row_pad, max(4, row_pad - 1), row_pad, max(4, row_pad - 1)),
+    )
+    style.map(
+        "TCombobox",
+        bordercolor=focus_ring,
+        lightcolor=focus_ring,
+        darkcolor=focus_ring,
+        arrowcolor=[("disabled", theme.text_muted)],
+        foreground=[("disabled", theme.text_muted)],
+    )
+    # Spinboxes are not used by every page yet; they get the same treatment
+    # as the entries so the first control that needs them does not reintroduce
+    # a field that disappears into its card.
+    style.configure(
+        "TSpinbox",
+        fieldbackground=field,
+        foreground=theme.text,
+        insertcolor=theme.text,
+        bordercolor=field_border,
+        lightcolor=field_border,
+        darkcolor=field_border,
+        arrowcolor=theme.text_dim,
+        padding=(row_pad, max(4, row_pad - 1)),
+    )
+    style.map(
+        "TSpinbox",
+        bordercolor=focus_ring,
+        lightcolor=focus_ring,
+        darkcolor=focus_ring,
+        foreground=[("disabled", theme.text_muted)],
     )
     style.configure("TSeparator", background=theme.border)
     style.configure(
-        "TCheckbutton", background=theme.panel, foreground=theme.text, font=font("small")
+        "TCheckbutton", background=theme.card, foreground=theme.text, font=font("small")
     )
     style.map(
         "TCheckbutton",
-        background=[("active", theme.panel)],
+        background=[("active", theme.card)],
         foreground=[("disabled", theme.text_muted)],
     )
     style.configure("TNotebook", background=theme.bg, borderwidth=0)
