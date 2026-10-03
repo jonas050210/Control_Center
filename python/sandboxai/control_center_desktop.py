@@ -603,7 +603,8 @@ class ControlCenter(tk.Tk):
             self.quick,
             values=tuple(THEMES[name].label for name in THEME_NAMES),
             state="readonly",
-            width=self.px(14, minimum=10),
+            width=14,
+            style="Header.TCombobox",
         )
         self.theme_picker.set(theme.label)
         self.theme_picker.pack(side="right", padx=(self.px(6), 0))
@@ -612,7 +613,8 @@ class ControlCenter(tk.Tk):
             self.quick,
             values=tuple(LAYOUT_MODES.values()),
             state="readonly",
-            width=self.px(14, minimum=10),
+            width=14,
+            style="Header.TCombobox",
         )
         self.layout_picker.set(LAYOUT_MODES[self.prefs.layout])
         self.layout_picker.pack(side="right", padx=(self.px(6), 0))

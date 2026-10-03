@@ -293,6 +293,17 @@ class ControlCenterConstructionTests(unittest.TestCase):
         }
         assert "Agents" not in titles, "the Agents page is replaced by Training"
 
+    def test_header_selectors_keep_readonly_fields_on_the_shell_palette(self):
+        theme = self.app.bus.theme
+        self.assertEqual(self.app.theme_picker.cget("style"), "Header.TCombobox")
+        self.assertEqual(self.app.layout_picker.cget("style"), "Header.TCombobox")
+        for state in (("readonly",), ("focus",), ("disabled",)):
+            with self.subTest(state=state):
+                self.assertEqual(
+                    self.app.style.lookup("Header.TCombobox", "fieldbackground", state),
+                    theme.shell,
+                )
+
     def test_every_page_builds_and_refreshes_without_raising(self):
         for page_class in PAGE_CLASSES:
             self.app.show_page(page_class.title)
@@ -338,11 +349,11 @@ class ControlCenterConstructionTests(unittest.TestCase):
             _pump_events(self.app, 0.2)
             cards = _rounded_panels(self.app.pages[title])
             self.assertTrue(cards, f"{title}: the page renders no card at all")
-            slivers = [
-                f"{card.winfo_reqwidth()}x{card.winfo_reqheight()}"
-                for card in cards
-                if card.winfo_reqwidth() < 40 or card.winfo_reqheight() < 24
-            ]
+            slivers = []
+            for card in cards:
+                width, height = card.winfo_reqwidth(), card.winfo_reqheight()
+                if width < 40 or height < 24:
+                    slivers.append(f"{card._title or '<untitled>'}: {width}x{height}")
             self.assertEqual(slivers, [], f"{title}: cards request a sliver: {slivers}")
 
     def test_stats_page_renders_the_contract_and_a_recorded_tick(self):
@@ -473,15 +484,18 @@ class ControlCenterConstructionTests(unittest.TestCase):
                             offenders.append(f"{widget.winfo_class()}.{attribute}")
             self.assertEqual(offenders, [], f"{page_class.title}: {offenders}")
 
-    def test_accent_and_preset_transfer_work_on_the_real_window(self):
-        """Every page must repaint on the new accent, and presets must travel."""
+    def test_custom_accent_and_layout_preset_transfer_work_on_the_real_window(self):
+        """Hex accents and saved layout presets remain available without swatches."""
         import json
         import tempfile
 
         from sandboxai.control_center_theme import normalize_accent
 
         self.app.show_page("Settings")
-        self.assertTrue(self.app.set_accent("#F5A524"))
+        settings = self.app.pages["Settings"]
+        self.assertNotIn("_accent_swatches", vars(settings))
+        settings.accent_var.set("#F5A524")
+        settings._apply_accent()
         self.assertEqual(self.app.palette.accent.lower(), "#f5a524")
         self.assertEqual(normalize_accent(self.app.prefs.accent), "#f5a524")
         # Every page repaints against the new palette without raising.
@@ -733,10 +747,8 @@ class ControlCenterConstructionTests(unittest.TestCase):
         dialog.assert_not_called()
         launch.assert_not_called()
 
-    def test_benchmark_page_runs_the_planned_workflow_and_applies_the_winner(self):
-        """Auto is the default mode: Start plans a host-scaled sweep, hands
-        only that plan to the pipeline, and applies the winning
-        configuration automatically - there is no separate apply step."""
+    def test_benchmark_page_runs_the_automatic_workflow_and_applies_the_winner(self):
+        """The sole Start action runs the host-scaled plan and applies its winner."""
         from unittest import mock
 
         # Build the Training page first so the automatic apply step has a
@@ -744,10 +756,22 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.show_page("Training")
         self.app.show_page("Benchmarks")
         page = self.app.pages["Benchmarks"]
-        # No hidden budget/grid form: the mode selector drives the plan.
-        self.assertFalse(hasattr(page, "pipeline_vars"))
-        self.assertEqual(page.mode_control.get(), "auto")
+        # The UI intentionally has no mode or candidate/budget entry fields.
+        for name in (
+            "mode_control",
+            "custom_env_var",
+            "custom_worker_var",
+            "custom_steps_var",
+            "custom_minutes_var",
+            "auto_train_var",
+        ):
+            self.assertNotIn(name, vars(page), f"obsolete benchmark control remains: {name}")
+        self.assertEqual(page.run_button.cget("text"), "Start Benchmark")
+        self.assertFalse(page.cancel_button.winfo_manager(), "Cancel is hidden while idle")
+        self.assertEqual(page.LIVE_CARD_NAMES.count("Steps/s"), 1)
+        self.assertNotIn("peak fps", page.LIVE_CARD_NAMES)
         plan = page.current_plan()
+        self.assertEqual(plan["mode"], "auto")
         self.assertEqual(plan["errors"], [])
         self.assertTrue(plan["environments"])
         self.assertTrue(plan["workers"])
@@ -795,6 +819,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
         )
         apply_call.assert_called_once()
         self.assertIs(page._applied, True)
+        self.assertFalse(page.cancel_button.winfo_manager(), "Cancel hides after the run")
         # The Training launch form mirrors the applied topology.
         agents = self.app.pages["Training"]
         self.assertEqual(agents.field_vars["environment_count"].get(), "8")
@@ -1226,7 +1251,7 @@ class BackgroundRunnerOwnsGarbageCollectionTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TKINTER, TKINTER_REASON)
 class TrainingAndBenchmarkPlanTests(unittest.TestCase):
-    """The reworked launch path: Time|Steps on Training, Auto|Push|Custom on Benchmarks."""
+    """Training keeps its budget controls; Benchmarks exposes one automatic action."""
 
     def setUp(self):
         import tempfile
@@ -1280,32 +1305,21 @@ class TrainingAndBenchmarkPlanTests(unittest.TestCase):
         page._apply_step_preset("25000")
         self.assertEqual(page.field_vars["total_training_steps"].get(), "25000")
 
-    def test_benchmark_custom_mode_requires_valid_lists(self):
+    def test_benchmark_exposes_only_auto_start_and_transient_cancel(self):
+        from threading import Event
+
         self.app.show_page("Benchmarks")
         page = self.app.pages["Benchmarks"]
-        page.mode_control.set("custom")
-        page._on_mode_changed("custom")
-        self.assertEqual(page.current_plan()["errors"], [])
+        for name in (
+            "mode_control",
+            "custom_env_var",
+            "custom_worker_var",
+            "custom_steps_var",
+            "custom_minutes_var",
+            "auto_train_var",
+        ):
+            self.assertNotIn(name, vars(page), f"obsolete benchmark control remains: {name}")
 
-        page.custom_env_var.set("16, 32")
-        page.custom_worker_var.set("nonsense")
-        plan = page.current_plan()
-        self.assertTrue(plan["errors"])
-        self.assertEqual(str(page.run_button.cget("state")), "disabled")
-
-        page.custom_worker_var.set("8, 64")
-        plan = page.current_plan()
-        # worker > envs is dropped with a warning rather than erroring out.
-        self.assertEqual(plan["errors"], [])
-        self.assertEqual(plan["expected_configurations"], 2)
-        self.assertTrue(plan["warnings"])
-        self.assertNotEqual(str(page.run_button.cget("state")), "disabled")
-
-    def test_benchmark_auto_plan_covers_the_whole_host(self):
-        self.app.show_page("Benchmarks")
-        page = self.app.pages["Benchmarks"]
-        page.mode_control.set("auto")
-        page._on_mode_changed("auto")
         plan = page.current_plan()
         self.assertEqual(plan["mode"], "auto")
         self.assertEqual(plan["errors"], [])
@@ -1313,3 +1327,25 @@ class TrainingAndBenchmarkPlanTests(unittest.TestCase):
             self.skipTest("no environment ladder is available on this host")
         self.assertEqual(plan["environments"], sorted(plan["environments"]))
         self.assertLessEqual(max(plan["environments"]), 128 * 4)
+
+        self.assertEqual(page.run_button.cget("text"), "Start Benchmark")
+        self.assertNotEqual(str(page.run_button.cget("state")), "disabled")
+        self.assertEqual(page.cancel_button.winfo_manager(), "")
+        self.assertEqual(page.LIVE_CARD_NAMES.count("Steps/s"), 1)
+        self.assertNotIn("peak fps", page.LIVE_CARD_NAMES)
+
+        page._running = True
+        page._cancel_event = Event()
+        page._update_buttons()
+        self.assertEqual(page.cancel_button.winfo_manager(), "pack")
+        self.assertNotEqual(str(page.cancel_button.cget("state")), "disabled")
+        self.assertEqual(str(page.run_button.cget("state")), "disabled")
+
+        page._cancel()
+        self.assertTrue(page._cancel_event.is_set())
+        self.assertEqual(str(page.cancel_button.cget("state")), "disabled")
+        page._running = False
+        page._cancel_event = None
+        page._update_buttons()
+        self.assertEqual(page.cancel_button.winfo_manager(), "")
+        self.assertNotEqual(str(page.run_button.cget("state")), "disabled")

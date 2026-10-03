@@ -946,21 +946,13 @@ def _format_live_benchmark_cards(
     else:
         active_config = "n/a"
 
-    # Live & Peak FPS
-    live_fps = _finite_number(
+    # One clearly labelled throughput value: bridge steps per second.
+    steps_per_second = _finite_number(
         live.get("steps_per_second")
         or (event or {}).get("steps_per_second")
         or (rec or {}).get("expected_steps_per_second")
         or (best_row or {}).get("steps_per_second")
     )
-    peak_candidates = [
-        float(r["steps_per_second"])
-        for r in rows
-        if _finite_number(r.get("steps_per_second")) is not None
-    ]
-    if live_fps is not None:
-        peak_candidates.append(live_fps)
-    peak_fps = max(peak_candidates) if peak_candidates else None
 
     # Live Steps
     if running and live.get("total_steps") is not None:
@@ -1022,12 +1014,13 @@ def _format_live_benchmark_cards(
 
     return {
         "active_config": active_config,
-        "live_fps": live_fps,
+        "steps_per_second": steps_per_second,
         "live_phase": live.get("phase"),
-        "live_fps_text": f"{format_number(live_fps, 1)} steps/s" if live_fps is not None else "n/a",
-        "peak_fps": peak_fps,
-        "peak_speedup": (best_row or {}).get("speedup"),
-        "peak_fps_text": f"{format_number(peak_fps, 1)} steps/s" if peak_fps is not None else "n/a",
+        "steps_per_second_text": (
+            f"{format_number(steps_per_second, 1)} steps/s"
+            if steps_per_second is not None
+            else "n/a"
+        ),
         "live_steps": _finite_number(live.get("total_steps"))
         if running and live.get("total_steps") is not None
         else (
@@ -1058,7 +1051,7 @@ def benchmark_live_telemetry_view(
 ) -> dict[str, Any]:
     """Full live HUD model for the Benchmark tab.
 
-    Combines stage progression, real-time step/FPS/latency/jitter readouts,
+    Combines stage progression, real-time steps/s, latency and jitter readouts,
     the current leading configuration, streaming table rows and throughput
     chart coordinates without inventing a single number.
     """
@@ -1120,8 +1113,12 @@ def benchmark_live_telemetry_view(
         sps = _finite_number(row.get("steps_per_second"))
         if sps is not None and sps > 0.0:
             chart_points.append((float(idx_row), sps))
-    if running and cards["live_fps"] is not None and (event or {}).get("status") == "running":
-        chart_points.append((float(len(chart_points) + 1), float(cards["live_fps"])))
+    if (
+        running
+        and cards["steps_per_second"] is not None
+        and (event or {}).get("status") == "running"
+    ):
+        chart_points.append((float(len(chart_points) + 1), float(cards["steps_per_second"])))
 
     return {
         **workflow,
@@ -2141,12 +2138,14 @@ def benchmark_mode_view(
     cpu_count: int | None = None,
     measured_steps_per_second: float | None = None,
 ) -> dict[str, Any]:
-    """Plan a benchmark run for the Auto, Push or Custom selector.
+    """Build the host-scaled plan for a benchmark strategy.
 
-    This is a *plan*: which environment/worker topologies will be measured
-    and with which budget. Every number the pipeline later reports comes
-    from the real bridge benchmark; the plan only decides what to try, which
-    is why it is safe to scale it from the host's core count.
+    The GUI uses the automatic strategy; the lower-level planner also keeps
+    its push/custom variants for scripted callers and tests. This is a *plan*:
+    which environment/worker topologies will be measured and with which
+    budget. Every number the pipeline later reports comes from the real
+    bridge benchmark; the plan only decides what to try, which is why it is
+    safe to scale it from the host's core count.
     """
     chosen = str(mode) if str(mode) in {key for key, _ in BENCHMARK_MODES} else "auto"
     physical = _physical_cores(cpu_count)

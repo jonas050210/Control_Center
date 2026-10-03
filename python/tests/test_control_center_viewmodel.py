@@ -763,8 +763,8 @@ def test_benchmark_live_telemetry_view_tracks_live_step_events():
         ],
     }
     view = vm.benchmark_live_telemetry_view(running=True, event=live_event, report=None)
-    assert view["live_fps"] == 960.0
-    assert view["peak_fps"] == 960.0
+    assert view["steps_per_second"] == 960.0
+    assert "peak_fps" not in view
     assert view["live_steps"] == 1920.0
     assert view["steps_per_env"] == 120.0
     assert view["p50_ms"] == 1.4

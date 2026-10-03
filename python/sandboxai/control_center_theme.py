@@ -353,21 +353,6 @@ THEMES: dict[str, Theme] = {
 
 THEME_NAMES: tuple[str, ...] = tuple(THEMES)
 
-#: Accent colours an operator can pick without typing a hex value. Kept
-#: deliberately few: an accent colour is a taste decision, and every one of
-#: these keeps its label text readable (see :func:`readable_on`).
-ACCENT_PRESETS: tuple[tuple[str, str], ...] = (
-    ("#4F7CFF", "Corz Blue"),
-    ("#22D3EE", "Cyan"),
-    ("#34D399", "Mint"),
-    ("#A3E635", "Lime"),
-    ("#F5A524", "Amber"),
-    ("#F26D6D", "Coral"),
-    ("#EC4899", "Pink"),
-    ("#8B5CF6", "Violet"),
-    ("#E5E7EB", "Silver"),
-)
-
 
 def get_theme(name: str | None, accent: str = "") -> Theme:
     """Return a theme by name, falling back to the default instead of raising.
@@ -976,6 +961,37 @@ def apply_ttk_styles(
         arrowcolor=theme.text_dim,
         bordercolor=theme.border,
         padding=(row_pad, max(4, row_pad - 1), row_pad, max(4, row_pad - 1)),
+    )
+    # Header selectors sit on the shell surface. Tk's readonly combobox
+    # element can otherwise fall back to a platform-default white field even
+    # when the base TCombobox colors are themed; map its readonly, focus and
+    # disabled states explicitly so it remains a compact dark control.
+    style.configure(
+        "Header.TCombobox",
+        background=theme.shell,
+        fieldbackground=theme.shell,
+        foreground=theme.text,
+        arrowcolor=theme.text_dim,
+        bordercolor=theme.border,
+        lightcolor=theme.border,
+        darkcolor=theme.border,
+        relief="flat",
+        padding=(row_pad, max(4, row_pad - 1), row_pad, max(4, row_pad - 1)),
+    )
+    style.map(
+        "Header.TCombobox",
+        background=[
+            ("disabled", theme.shell),
+            ("readonly", theme.shell),
+            ("active", theme.card_hover),
+        ],
+        fieldbackground=[
+            ("disabled", theme.shell),
+            ("readonly", theme.shell),
+            ("focus", theme.shell),
+        ],
+        foreground=[("disabled", theme.text_muted)],
+        arrowcolor=[("disabled", theme.text_muted), ("active", theme.text)],
     )
     style.configure("TSeparator", background=theme.border)
     style.configure(

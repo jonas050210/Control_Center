@@ -17,6 +17,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import patch
 
 from optional_deps import HAS_TKINTER, TKINTER_REASON
 
@@ -39,7 +41,6 @@ from sandboxai.control_center_layout import (
     set_visible,
 )
 from sandboxai.control_center_theme import (
-    ACCENT_PRESETS,
     DENSITIES,
     FONT_ROLES,
     LAYOUT_MODES,
@@ -50,6 +51,7 @@ from sandboxai.control_center_theme import (
     PreferencesStore,
     UiPreferences,
     UiScale,
+    apply_ttk_styles,
     get_theme,
     normalize_accent,
     readable_on,
@@ -117,6 +119,49 @@ class ThemeTests(unittest.TestCase):
     def test_motion_levels_cover_off_to_cinematic(self) -> None:
         self.assertIn("off", MOTION_LEVELS)
         self.assertEqual(MOTION_LEVELS["off"], "Off")
+
+    def test_header_combobox_states_use_the_shell_palette(self) -> None:
+        """Readonly ttk fields must not fall back to the platform's white fill."""
+
+        class RecordingStyle:
+            def __init__(self, _root):
+                self.configured: dict[str, dict[str, object]] = {}
+                self.mapped: dict[str, dict[str, object]] = {}
+
+            def theme_use(self, _name):
+                return "clam"
+
+            def configure(self, name, **options):
+                self.configured.setdefault(name, {}).update(options)
+
+            def map(self, name, **options):
+                self.mapped.setdefault(name, {}).update(options)
+
+        class Root:
+            def configure(self, **_options):
+                pass
+
+            def option_add(self, *_args):
+                pass
+
+        tkinter = ModuleType("tkinter")
+        ttk = ModuleType("tkinter.ttk")
+        ttk.Style = RecordingStyle  # type: ignore[attr-defined]
+        tkinter.ttk = ttk  # type: ignore[attr-defined]
+        with patch.dict("sys.modules", {"tkinter": tkinter, "tkinter.ttk": ttk}):
+            style = apply_ttk_styles(Root(), THEMES["corz"])
+
+        self.assertEqual(
+            style.configured["Header.TCombobox"]["fieldbackground"], THEMES["corz"].shell
+        )
+        self.assertEqual(
+            style.mapped["Header.TCombobox"]["fieldbackground"],
+            [
+                ("disabled", THEMES["corz"].shell),
+                ("readonly", THEMES["corz"].shell),
+                ("focus", THEMES["corz"].shell),
+            ],
+        )
 
 
 class PreferencesTests(unittest.TestCase):
@@ -296,17 +341,6 @@ class AccentTests(unittest.TestCase):
         self.assertGreater(custom.contrast_ratio("accent", "on_accent"), 4.5)
         # An unusable override falls back to the theme's own accent.
         self.assertEqual(get_theme("corz", "nonsense"), base)
-
-    def test_every_offered_swatch_is_usable_and_readable(self) -> None:
-        for color, label in ACCENT_PRESETS:
-            with self.subTest(color=color, label=label):
-                self.assertEqual(normalize_accent(color), color.lower())
-                theme = get_theme("corz", color)
-                self.assertGreater(
-                    theme.contrast_ratio("accent", "on_accent"),
-                    3.0,
-                    f"{label} cannot carry readable label text",
-                )
 
     def test_contrast_ratio_is_a_ratio_and_symmetric(self) -> None:
         """It used to unpack `sorted()` the wrong way round and report 1/ratio.

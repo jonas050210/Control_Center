@@ -63,16 +63,19 @@ look. Everything below is chosen on the **Settings** page and persisted in
 | Shell layout | Rail, Topbar, Command Board | Where navigation lives and how much width the content gets |
 | Density | Comfort, Compact, Ultra | Row heights, paddings and one font step (never below the 11 px floor) |
 | Motion | Off, Reduced, Normal, Cinematic | Speed of the small transitions; **Off** renders final states immediately |
-| Accent | nine swatches or any `#rrggbb` | Replaces the accent of whichever theme is active; *Theme accent* restores the designed one |
+| Accent | any `#rrggbb` typed directly | Replaces the accent of whichever theme is active; *Theme accent* restores the designed one |
 | Corner radius, glow, grid | slider / toggles | Card rounding and the optional backdrop effects |
 
 The accent is one colour, not a sixth theme: it is stored in the
 preferences (`"accent": "#22d3ee"`) and every theme wears it, so an
 operator can keep the Corz surfaces with a mint accent. The label colour
 *on* the accent is derived (`Theme.with_accent`), never guessed: white
-while it keeps the 3:1 contrast a bold UI label needs, dark ink
-otherwise, and picking a theme's own accent is a no-op so the designed
-pair (Cyan with its deep-teal ink) is preserved exactly.
+when it keeps the 3:1 contrast a bold UI label needs, dark ink otherwise.
+An override that matches the theme's own accent preserves
+the designed pair (Cyan with its deep-teal ink) exactly. The header's
+Theme and Layout selectors also have explicit readonly, focus and disabled
+colors, preventing the platform-default white fields that could appear in
+the top-right header.
 
 A theme change only repaints (ttk styles, canvas colours and the table tag
 roles are re-applied). Every widget that draws itself subscribes to the
@@ -267,74 +270,56 @@ one place.
 
 ### Benchmarks
 
-The **automatic benchmark** with three explicit modes:
+The GUI offers one automatic benchmark and one idle action: **Start Benchmark**.
+It builds a host-scaled candidate ladder from the machine's available CPU and
+device capabilities, uses the pipeline's automatic time budget, validates the
+strongest measurements with real training slices, and applies the fastest
+stable recommendation. There are no visible mode, step, minute, environment,
+or worker inputs; **Cancel** appears only while a run is active and disables
+after cancellation has been requested.
 
-| Mode | Candidate ladders | When to use it |
-| --- | --- | --- |
-| **Auto** (default) | Host-scaled ladder from 64 up to 128 environment processes (1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128) and worker counts from 1 to the host's own step — it deliberately probes past the conservative `--env-workers auto` recommendation, up to twice the physical-core estimate, capped at 32 | The normal case — one click, plan computed for this machine |
-| **Push** | The Auto ladder plus the wide steps (96/128/192/256 envs), used to find where throughput saturates | Once per machine (or after a CPU/RAM change) to raise the ceiling |
-| **Custom** | Explicit `Environments`, `Workers`, `Steps / config` or `or minutes` lists — the same lists the CLI accepts | Reproducing a specific sweep or scripting a comparison |
+The phase strip reports discovery, screening, device comparison, validation,
+recommendation and application. Live telemetry includes the active test,
+**Steps/s**, live steps, latency percentiles, jitter and elapsed host data.
+The duplicate **Peak FPS** card is removed because it used the same underlying
+steps-per-second measurement. After a run, the measurements table still
+provides its recorded environment, worker, step, device, speed, latency,
+stability and error details; these are results, not setup controls. The table
+and throughput chart occupy separate full-width cards so the table can show
+all 14 columns on a wide display without a permanent horizontal scrollbar.
 
-The plan is validated before anything starts: unparseable lists, an
-impossible worker/environment pair or an empty candidate set disable
-*Start benchmark* and state the reason. Auto distributes its time budget
-across the planned configurations by itself; the mode line above the
-button always shows the resulting configuration count.
-
-The old grid capped the sweep at 64 environments and stopped the worker
-ladder at *physical cores - 2*, which is why a large run could sit at
-10-20 % CPU: the plan never asked for more than four workers on a machine
-that could feed more. Auto now always reaches the 64 rung and up to 128 on
-a large host, and its worker ladder includes the host's own step (up to 32)
-instead of only the powers of two below the recommendation. Push and
-Custom exist to measure the saturation point directly instead of guessing.
-
-Start runs the complete staged pipeline. The tab shows the live phase strip
-(discover → screen → devices → validate → pick → apply), the current
-measurement, every tested configuration, and the winning configuration. The
-measurements table and the throughput chart are separate full-width cards:
-the table declares 14 columns, and the 3:2 split it used to share with the
-chart left it about 900 px on a 1920x1080 window - a horizontal overlay bar
-on the one screen that has room to spare.
-when the pipeline completes, the recommendation is persisted and
-**applied automatically** to the launch configuration.
+The pipeline runs these stages:
 
 1. **Discovery** — probe the Godot executable/version, torch, CUDA, CPU
-   count, RAM. No Godot binary means an honest "unavailable" report with
+   count and RAM. No Godot binary means an honest "unavailable" report with
    the command to fix it, never a fabricated number.
 2. **Screening** — the real bridge benchmark
-   (`benchmark.benchmark_simulation`) across every planned
-   `(environments, workers)` pair, each configuration time-capped:
+   (`benchmark.benchmark_simulation`) across the planned
+   `(environments, workers)` pairs, each configuration time-capped:
    startup, warmup, throughput, p50/p95 vector-step latency, episodes,
-   resources, errors.
-3. **Devices** — only when more than one device candidate exists and no
-   usable hardware profile is persisted; reuses `hardware_profile`
-   (the single device-comparison implementation).
-4. **Validation** — a short *real training slice* per surviving
+   resources and errors.
+3. **Devices** — compare available devices when there is more than one
+   candidate and no usable hardware profile is persisted; this reuses
+   `hardware_profile`, the single device-comparison implementation.
+4. **Validation** — run a short *real training slice* per surviving
    finalist, on the selected device, so the recommendation reflects the
    training path, not just bridge stepping.
-5. **Recommendation** — from validated throughput when available, within
-   a near-best band of the best measurement, preferring stability (low
-   latency jitter, no errors, fewer workers) over an unstable peak. The
-   `rationale` and `warnings` quote only measured numbers.
+5. **Recommendation** — choose from validated throughput when available,
+   within a near-best band of the best measurement, preferring stability
+   (low latency jitter, no errors, fewer workers) over an unstable peak.
+   The `rationale` and `warnings` quote only measured numbers.
 
-Auto and Push use the pipeline's own time budget split across stages; in
-Custom mode the GUI passes the operator's explicit ladder and step or
-minute budget straight through. Planning estimates size the slices; only
-measured values are reported. The same budget/grid knobs remain
-available on the CLI for scripted sweeps.
-
-**Result:** the *Best configuration* card (config, expected steps/s,
-basis, rationale, warnings). After a completed run the tab marks the
-recommendation applied and mirrors it into the Training launch deck by
-itself; a not-yet-opened Training page picks the applied recommendation
-up when it is built. The full report is persisted under
-`training/benchmarks/pipelines/<timestamp>/` (`pipeline.json` +
-benchmark-history-shaped `benchmark.json`), the recommendation
+Planning estimates size the time slices; only measured values are reported.
+The full report is persisted under
+`training/benchmarks/pipelines/<timestamp>/` (`pipeline.json` plus
+benchmark-history-shaped `benchmark.json`), the recommendation is stored
 machine-locally in `.sandboxai/recommended_config.json`, and the latest
-persisted report is shown again on the next start.
+persisted report is shown on the next start. The recommendation is applied
+to the Training launch deck automatically; a not-yet-opened Training page
+picks it up when it is built.
 
-The same pipeline runs from the shell:
+Advanced budget and grid options remain available for scripted benchmark
+sweeps through the CLI; they are not exposed as GUI setup fields:
 
 ```bash
 sandboxai benchmark-pipeline --budget-mode time --minutes 15

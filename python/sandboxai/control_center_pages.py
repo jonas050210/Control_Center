@@ -27,7 +27,6 @@ from .control_center_layout import (
     set_visible,
 )
 from .control_center_theme import (
-    ACCENT_PRESETS,
     DENSITIES,
     LAYOUT_MODES,
     MOTION_LEVELS,
@@ -686,11 +685,14 @@ class DashboardPage(Page):
     def _build_run_insight(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(parent, "Checkpoints, PPO diagnostics & convergence")
         self.checkpoints_label = ttk.Label(
-            card.body, text="n/a", justify="left", style="CardLabel.TLabel"
+            card.body, text="Waiting for run data…", justify="left", style="CardLabel.TLabel"
         )
         self.checkpoints_label.pack(anchor="w")
         self.convergence_label = ttk.Label(
-            card.body, text="", justify="left", style="FieldHelp.TLabel"
+            card.body,
+            text="Convergence radar: waiting for telemetry",
+            justify="left",
+            style="FieldHelp.TLabel",
         )
         self.convergence_label.pack(anchor="w", pady=(self.app.px(6, minimum=3), 0))
         return card
@@ -2218,23 +2220,20 @@ class TrainingPage(Page):
 
 
 class BenchmarkPage(Page):
-    """The automatic benchmark with live hardware & bridge telemetry.
+    """One-click, host-scaled benchmark with live telemetry.
 
-    Auto runs the staged pipeline (runtime discovery, env/worker screening,
-    device comparison, real PPO validation slices) with the project's
-    host-scaled defaults; Push widens the host-scaled ladder towards the
-    saturation limit; Custom takes explicit candidate lists. Every candidate
-    streams live step/FPS/latency/resource telemetry, the fastest stable
-    configuration is chosen, and it is persisted and applied to the launch
-    configuration automatically.
+    The UI exposes no tuning controls: the pipeline chooses candidate
+    environment/worker pairs and its time budget from this machine, compares
+    available devices, validates the strongest candidates, and applies its
+    measured recommendation automatically.
     """
 
     title = "Benchmarks"
     widgets = (
         WidgetSpec(
             "plan",
-            "Benchmark plan",
-            "Auto / Push / Custom, candidate ladders and the start controls.",
+            "Automatic benchmark",
+            "One-click automatic measurement and recommendation.",
             default_span=3,
             max_span=3,
             removable=False,
@@ -2242,7 +2241,7 @@ class BenchmarkPage(Page):
         WidgetSpec(
             "live",
             "Live telemetry",
-            "Eight live counters plus the leading configuration.",
+            "Live throughput, current stage and stability.",
             default_span=3,
             max_span=3,
         ),
@@ -2261,10 +2260,7 @@ class BenchmarkPage(Page):
             max_span=3,
         ),
     )
-    subtitle = (
-        "Auto, Push or Custom sweeps — measures this machine, then applies the fastest "
-        "stable topology automatically."
-    )
+    subtitle = "Measures this machine and applies the best stable configuration automatically."
 
     RESULT_COLUMNS = (
         ("stage", "Stage", 85),
@@ -2286,8 +2282,7 @@ class BenchmarkPage(Page):
     LIVE_CARD_NAMES = (
         "stage / progress",
         "active config",
-        "live fps (steps/s)",
-        "peak fps",
+        "Steps/s",
         "live steps",
         "latency (p50 / p95)",
         "stability (jitter)",
@@ -2316,19 +2311,19 @@ class BenchmarkPage(Page):
     # -- cards -------------------------------------------------------------
 
     def _build_plan_card(self, parent: tk.Misc) -> tk.Widget:
-        intro_card = self.card(
-            parent, "Automatic benchmark", "Plan, run and apply the winning topology"
+        card = self.card(
+            parent,
+            "Automatic benchmark",
+            "One click to measure and apply the fastest stable configuration",
         )
-        intro = ttk.Frame(intro_card.body, style="CardInner.TFrame")
+        intro = ttk.Frame(card.body, style="CardInner.TFrame")
         intro.pack(fill="x")
         intro_desc = ttk.Label(
             intro,
             text=(
-                "Start measures the real runtime end to end: it screens a host-scaled "
-                "grid of environment/worker topologies through the actual bridge, compares "
-                "devices where more than one exists, validates the best candidates with "
-                "short real PPO training slices, then picks the fastest stable "
-                "configuration and applies it automatically."
+                "Start the benchmark to automatically discover runtime capabilities, "
+                "measure this machine, validate the strongest candidates, and apply "
+                "the fastest stable recommendation."
             ),
             wraplength=self.app.px(920, minimum=360),
             justify="left",
@@ -2343,94 +2338,23 @@ class BenchmarkPage(Page):
             add="+",
         )
 
-        mode_row = ttk.Frame(intro, style="Surface.TFrame")
-        mode_row.pack(fill="x", pady=(self.app.px(10, minimum=6), 0))
-        ttk.Label(mode_row, text="Mode", style="FieldTitle.TLabel").pack(side="left", padx=(0, 8))
-        self.mode_control = SegmentedControl(
-            mode_row,
-            self.app.bus,
-            vm.BENCHMARK_MODES,
-            value="auto",
-            on_change=self._on_mode_changed,
-            motion=self.app.motion,
-            height=self.app.px(30, minimum=24),
-            width=self.app.px(240, minimum=160),
-        )
-        self.mode_control.pack(side="left")
-        self.mode_plan_label = ttk.Label(
-            mode_row,
-            text="",
-            style="FieldHelp.TLabel",
-            wraplength=self.app.px(560, minimum=220),
-            justify="left",
-        )
-        self.mode_plan_label.pack(side="left", fill="x", expand=True, padx=(self.app.px(12, minimum=6), 0))
-        mode_row.bind(
-            "<Configure>",
-            lambda evt: self.mode_plan_label.configure(
-                wraplength=max(160, int(getattr(evt, "width", 640) or 640) - 310)
-            ),
-            add="+",
-        )
-
-        # Custom mode: the same candidate lists the CLI accepts. Auto and
-        # Push derive their ladders from this host and keep these disabled.
-        custom_row = ttk.Frame(intro, style="Surface.TFrame")
-        custom_row.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
-        custom_row.columnconfigure(1, weight=1)
-        custom_row.columnconfigure(3, weight=1)
-        self.custom_env_var = tk.StringVar(value="16,32,64,128")
-        self.custom_worker_var = tk.StringVar(value="4,8,16")
-        self.custom_steps_var = tk.StringVar(value="")
-        self.custom_minutes_var = tk.StringVar(value="5")
-        self._custom_fields: list[tk.Widget] = []
-        for idx, (label, var, width) in enumerate(
-            (
-                ("Environments", self.custom_env_var, 18),
-                ("Workers", self.custom_worker_var, 12),
-                ("Steps / config", self.custom_steps_var, 10),
-                ("or minutes", self.custom_minutes_var, 8),
-            )
-        ):
-            r, c_pair = divmod(idx, 2)
-            col_lbl = c_pair * 2
-            ttk.Label(custom_row, text=label, style="FieldHelp.TLabel").grid(
-                row=r, column=col_lbl, sticky="w", padx=(0 if col_lbl == 0 else 10, 4), pady=2
-            )
-            entry = ttk.Entry(custom_row, textvariable=var, width=width, state="disabled")
-            entry.grid(
-                row=r,
-                column=col_lbl + 1,
-                sticky="ew",
-                padx=(0, self.app.px(8, minimum=4)),
-                pady=2,
-            )
-            self._custom_fields.append(entry)
-
         run_bar = ttk.Frame(intro, style="Surface.TFrame")
-        run_bar.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
+        run_bar.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
         self.run_button = ttk.Button(
-            run_bar, text="Start benchmark", command=self._start, style="Primary.TButton"
+            run_bar, text="Start Benchmark", command=self._start, style="Primary.TButton"
         )
         self.run_button.pack(side="left")
         ToolTip(
             self.run_button,
-            "Run the complete automatic benchmark workflow",
+            "Run the automatic benchmark and apply its recommendation",
             bus=self.app.bus,
         )
         self.cancel_button = ttk.Button(
             run_bar, text="Cancel", command=self._cancel, state="disabled"
         )
-        self.cancel_button.pack(side="left", padx=(8, 0))
-        self.auto_train_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            run_bar,
-            text="Auto-launch Training on finish",
-            variable=self.auto_train_var,
-        ).pack(side="left", padx=(10, 0))
         self.progress_label = ttk.Label(
             run_bar,
-            text="idle",
+            text="Ready to benchmark",
             foreground=self.palette.text_dim,
             wraplength=self.app.px(620, minimum=240),
             justify="left",
@@ -2439,29 +2363,21 @@ class BenchmarkPage(Page):
         run_bar.bind(
             "<Configure>",
             lambda evt: self.progress_label.configure(
-                wraplength=max(160, int(getattr(evt, "width", 640) or 640) - 240)
+                wraplength=max(
+                    180,
+                    int(getattr(evt, "width", 640) or 640) - (220 if self._running else 140),
+                )
             ),
             add="+",
         )
 
         self.phase_stepper = PhaseStepper(intro, bus=self.app.bus)
-        self.phase_stepper.pack(fill="x", pady=(8, 2))
+        self.phase_stepper.pack(fill="x", pady=(10, 2))
         self.phase_label = ttk.Label(
             intro, text="", foreground=self.palette.text_dim, justify="left"
         )
         self.phase_label.pack(anchor="w", pady=(2, 0))
-
-        # Re-plan while typing: a malformed list must disable Start right
-        # away instead of failing only after the click.
-        for var in (
-            self.custom_env_var,
-            self.custom_worker_var,
-            self.custom_steps_var,
-            self.custom_minutes_var,
-        ):
-            var.trace_add("write", lambda *_args: self._update_mode_plan())
-
-        return intro_card
+        return card
 
     def _build_live_card(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(
@@ -2512,7 +2428,7 @@ class BenchmarkPage(Page):
             card.body,
             self.RESULT_COLUMNS,
             bus=self.app.bus,
-            empty_text=("No measurements yet.\nPress Start benchmark to measure this machine."),
+            empty_text=("No measurements yet.\nPress Start Benchmark to measure this machine."),
         )
         self.tag_style(self.tree, "failed", "error")
         self.tag_style(self.tree, "leader", "ok")
@@ -2534,7 +2450,6 @@ class BenchmarkPage(Page):
     # -- workflow ----------------------------------------------------------
 
     def refresh(self) -> None:
-        self._update_mode_plan()
         self.submit_poll(
             "pipeline-history", self.adapter.benchmark_pipeline_history, self._on_history
         )
@@ -2545,10 +2460,18 @@ class BenchmarkPage(Page):
         self._update_buttons()
 
     def _update_buttons(self) -> None:
-        """Start follows both the run state and the plan's validity."""
-        invalid = bool(self.current_plan()["errors"])
-        self.run_button.configure(state="disabled" if (self._running or invalid) else "normal")
-        self.cancel_button.configure(state="normal" if self._running else "disabled")
+        """Keep the idle view to one action; expose Cancel only while running."""
+        self.run_button.configure(state="disabled" if self._running else "normal")
+        if self._running:
+            if self.cancel_button.winfo_manager() != "pack":
+                self.cancel_button.pack(
+                    side="left", padx=(8, 0), before=self.progress_label
+                )
+            cancelled = self._cancel_event is not None and self._cancel_event.is_set()
+            self.cancel_button.configure(state="disabled" if cancelled else "normal")
+        else:
+            self.cancel_button.pack_forget()
+            self.cancel_button.configure(state="disabled")
 
     def _refresh_workflow_labels(self) -> None:
         with self._progress_lock:
@@ -2581,14 +2504,11 @@ class BenchmarkPage(Page):
         stage_text = live_view["stage_label"]
         if live_view["index"] and live_view["total"]:
             stage_text = f"{stage_text} ({live_view['index']}/{live_view['total']})"
-        fps_text = (
-            f"{vm.format_number(live_view['live_fps'], 1)} ({live_view['live_phase']})"
-            if live_view["live_fps"] is not None and live_view["live_phase"]
-            else vm.format_number(live_view["live_fps"], 1)
+        steps_per_second_text = (
+            f"{vm.format_number(live_view['steps_per_second'], 1)} ({live_view['live_phase']})"
+            if live_view["steps_per_second"] is not None and live_view["live_phase"]
+            else vm.format_number(live_view["steps_per_second"], 1)
         )
-        peak_text = vm.format_number(live_view["peak_fps"], 1)
-        if live_view.get("peak_speedup") is not None:
-            peak_text += f" ({vm.format_number(live_view['peak_speedup'], 2)}x)"
         if live_view["live_steps"] is not None:
             steps_text = vm.format_number(live_view["live_steps"])
             if live_view["steps_per_env"] is not None:
@@ -2619,13 +2539,9 @@ class BenchmarkPage(Page):
                     self.palette.accent if self._running else None,
                 ),
                 "active config": (live_view["active_config"], None),
-                "live fps (steps/s)": (
-                    fps_text,
-                    self.palette.ok if live_view["live_fps"] is not None else None,
-                ),
-                "peak fps": (
-                    peak_text,
-                    self.palette.accent if live_view["peak_fps"] is not None else None,
+                "Steps/s": (
+                    steps_per_second_text,
+                    self.palette.ok if live_view["steps_per_second"] is not None else None,
                 ),
                 "live steps": (steps_text, None),
                 "latency (p50 / p95)": (latency_text, None),
@@ -2637,60 +2553,21 @@ class BenchmarkPage(Page):
         chart_points = list(live_view["chart_points"])
         if (
             self._running
-            and live_view["live_fps"] is not None
-            and isinstance(live_view["live_fps"], (int, float))
+            and live_view["steps_per_second"] is not None
+            and isinstance(live_view["steps_per_second"], (int, float))
         ):
             next_idx = len(chart_points) + 1
-            chart_points.append((next_idx, float(live_view["live_fps"])))
+            chart_points.append((next_idx, float(live_view["steps_per_second"])))
         self.throughput_chart.set_points(chart_points)
 
-    def _on_mode_changed(self, mode: str) -> None:
-        """Enable the custom fields only in Custom mode and re-plan."""
-        custom = mode == "custom"
-        for field in getattr(self, "_custom_fields", []):
-            with contextlib.suppress(tk.TclError):
-                field.configure(state="normal" if custom else "disabled")
-        self._update_mode_plan()
-
     def current_plan(self) -> dict[str, Any]:
-        """The planned sweep for the selected mode (a plan, not a measurement)."""
+        """Build the automatic host-scaled plan; no tuning fields are exposed in the UI."""
         import os
 
-        return vm.benchmark_mode_view(
-            self.mode_control.get(),
-            environment_text=self.custom_env_var.get(),
-            worker_text=self.custom_worker_var.get(),
-            steps_raw=self.custom_steps_var.get(),
-            minutes_raw=self.custom_minutes_var.get(),
-            cpu_count=os.cpu_count(),
-        )
-
-    def _update_mode_plan(self) -> None:
-        plan = self.current_plan()
-        if plan["errors"]:
-            self.mode_plan_label.configure(
-                text="; ".join(plan["errors"]), foreground=self.palette.error
-            )
-            self.run_button.configure(state="disabled")
-            return
-        text = plan["summary"]
-        if plan["budget_mode"] == "steps" and plan["steps"]:
-            text += f"   ·   {vm.format_number(plan['steps'])} steps per configuration"
-        elif plan["minutes"]:
-            text += f"   ·   {vm.format_number(plan['minutes'], 1)} min total budget"
-        note = plan.get("environments_note")
-        if note:
-            text += f"\n{note}"
-        for warning in plan["warnings"]:
-            text += f"\nwarning: {warning}"
-        self.mode_plan_label.configure(
-            text=text, foreground=self.palette.warn if plan["warnings"] else self.palette.text_dim
-        )
-        if not self._running:
-            self.run_button.configure(state="normal")
+        return vm.benchmark_mode_view("auto", cpu_count=os.cpu_count())
 
     def _start(self) -> None:
-        """Run the staged workflow for the selected mode."""
+        """Run the automatic benchmark workflow."""
         if self._running:
             return
         plan = self.current_plan()
@@ -2709,7 +2586,7 @@ class BenchmarkPage(Page):
         self.throughput_chart.set_points([])
         self._update_buttons()
         self.progress_label.configure(text="starting...", foreground=self.palette.text_dim)
-        self.app.set_status(f"Benchmark started ({plan['mode']}): {plan['summary']}", toast=True)
+        self.app.set_status("Automatic benchmark started", toast=True)
 
         def on_progress(event: dict[str, Any]) -> None:
             with self._progress_lock:
@@ -2737,7 +2614,8 @@ class BenchmarkPage(Page):
     def _cancel(self) -> None:
         if self._cancel_event is not None:
             self._cancel_event.set()
-            self.progress_label.configure(text="cancelling - the in-flight measurement finishes")
+            self.progress_label.configure(text="Cancelling after the current measurement…")
+            self._update_buttons()
 
     def _on_finished(self, report: dict[str, Any] | None, error: BaseException | None) -> None:
         self._running = False
@@ -2789,14 +2667,6 @@ class BenchmarkPage(Page):
                     foreground=self.palette.ok,
                 )
                 self.app.set_status("Benchmark finished - best configuration applied")
-                if getattr(self, "auto_train_var", None) is not None and bool(
-                    self.auto_train_var.get()
-                ):
-                    self.app.show_page("Training")
-                    train_page = self.app.pages.get("Training")
-                    if train_page is not None and hasattr(train_page, "_quick_launch_agent"):
-                        self._push_to_launch_form(result)
-                        train_page._quick_launch_agent()
             self._refresh_workflow_labels()
 
         self.app.background.submit(_run, _done)
@@ -3825,7 +3695,10 @@ class SystemPage(Page):
         deps_card = self.card(host, "Optional dependencies & runtime capabilities")
         deps_card.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
         self.deps_label = ttk.Label(
-            deps_card.body, text="n/a", justify="left", style="CardLabel.TLabel"
+            deps_card.body,
+            text="Probing runtime capabilities…",
+            justify="left",
+            style="CardLabel.TLabel",
         )
         self.deps_label.pack(anchor="w")
 
@@ -4148,33 +4021,15 @@ class SettingsPage(Page):
         )
 
     def _build_accent_row(self, parent: tk.Misc) -> None:
-        """Accent colour: quick swatches plus a hex field for anything else."""
+        """Offer a direct hex override without a row of preset colour swatches."""
         row = ttk.Frame(parent, style="CardInner.TFrame")
         row.pack(fill="x", pady=(self.app.px(10, minimum=5), 0))
-        ttk.Label(row, text="Accent", style="FieldTitle.TLabel").pack(side="left", padx=(0, 8))
-        swatches = ttk.Frame(row, style="CardInner.TFrame")
-        swatches.pack(side="left")
-        self._accent_swatches: list[tk.Widget] = []
-        for color, label in ACCENT_PRESETS:
-            button = tk.Button(
-                swatches,
-                text="",
-                width=2,
-                height=1,
-                background=color,
-                activebackground=color,
-                relief="flat",
-                borderwidth=0,
-                highlightthickness=0,
-                cursor="hand2",
-                command=partial(self._pick_accent, color),
-            )
-            button.pack(side="left", padx=(0, 3))
-            ToolTip(button, f"{label} ({color})", bus=self.app.bus)
-            self._accent_swatches.append(button)
+        ttk.Label(row, text="Accent hex", style="FieldTitle.TLabel").pack(
+            side="left", padx=(0, 8)
+        )
         self.accent_var = tk.StringVar(value=self.app.prefs.accent or self.app.palette.accent)
         entry = ttk.Entry(row, textvariable=self.accent_var, width=10)
-        entry.pack(side="left", padx=(self.app.px(10, minimum=6), 4))
+        entry.pack(side="left", padx=(0, 4))
         entry.bind("<Return>", lambda _event: self._apply_accent())
         ttk.Button(row, text="Apply", command=self._apply_accent).pack(side="left")
         ttk.Button(
@@ -4199,11 +4054,6 @@ class SettingsPage(Page):
                 else "Using the theme's own accent"
             )
         )
-
-    def _pick_accent(self, color: str) -> None:
-        if self.app.set_accent(color):
-            self.accent_var.set(color)
-            self._refresh_accent_hint()
 
     def _apply_accent(self) -> None:
         typed = self.accent_var.get().strip()
@@ -4263,6 +4113,8 @@ class SettingsPage(Page):
         self.theme_var.set(THEMES["corz"].label)
         self.density_var.set(DENSITIES["comfort"].label)
         self.motion_var.set(MOTION_LEVELS["normal"])
+        self.accent_var.set(self.app.palette.accent)
+        self._refresh_accent_hint()
         self.app.notify("Appearance reset to defaults", kind="ok")
 
     # -- layout studio ----------------------------------------------------

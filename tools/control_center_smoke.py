@@ -1211,13 +1211,16 @@ def _exercise_presets(page: object) -> None:
 
 
 def _exercise_accent(app: object) -> None:
-    """Pick a curated accent, type a hex value, then fall back to the theme."""
+    """Type a custom hex accent, then fall back to the theme's own accent."""
     page = app.pages["Settings"]
-    page._pick_accent("#F5A524")  # type: ignore[attr-defined]
+    if "_accent_swatches" in vars(page):
+        raise AssertionError("curated accent swatches should not be present")
+    page.accent_var.set("#F5A524")
+    page._apply_accent()  # type: ignore[attr-defined]
     if app.palette.accent.lower() != "#f5a524":
-        raise AssertionError(f"a picked accent did not reach the palette: {app.palette.accent}")
+        raise AssertionError(f"a typed accent did not reach the palette: {app.palette.accent}")
     if app.prefs.accent.lower() != "#f5a524":
-        raise AssertionError("a picked accent was not remembered in the preferences")
+        raise AssertionError("a typed accent was not remembered in the preferences")
     page.accent_var.set("#22D3EE")
     page._apply_accent()  # type: ignore[attr-defined]
     if app.palette.accent.lower() != "#22d3ee":
@@ -1324,28 +1327,51 @@ def _exercise_training(page: object) -> None:
 
 
 def _exercise_benchmarks(page: object) -> None:
-    for mode in ("custom", "push", "auto"):
-        page.mode_control.set(mode)  # type: ignore[attr-defined]
-        page._on_mode_changed(mode)  # type: ignore[attr-defined]
-        page.refresh()  # type: ignore[attr-defined]
-    page.custom_env_var.set("16,32")  # type: ignore[attr-defined]
-    page.custom_worker_var.set("4")  # type: ignore[attr-defined]
-    page.custom_steps_var.set("50000")  # type: ignore[attr-defined]
-    page.mode_control.set("custom")  # type: ignore[attr-defined]
-    page._on_mode_changed("custom")  # type: ignore[attr-defined]
-    page.refresh()  # type: ignore[attr-defined]
-    if page.current_plan()["errors"]:  # type: ignore[attr-defined]
-        raise AssertionError(f"valid custom plan reported errors: {page.current_plan()}")  # type: ignore[attr-defined]
-    if str(page.run_button.cget("state")) == "disabled":  # type: ignore[attr-defined]
-        raise AssertionError("a valid custom plan must leave the run button enabled")
-    page.custom_worker_var.set("nonsense")  # type: ignore[attr-defined]
-    if not page.current_plan()["errors"]:  # type: ignore[attr-defined]
-        raise AssertionError("a malformed worker list must be reported as a plan error")
-    if str(page.run_button.cget("state")) != "disabled":  # type: ignore[attr-defined]
-        raise AssertionError("a malformed custom plan must disable the run button")
-    page.custom_worker_var.set("4")  # type: ignore[attr-defined]
-    if str(page.run_button.cget("state")) == "disabled":  # type: ignore[attr-defined]
-        raise AssertionError("fixing the list must make the run button usable again")
+    """The UI exposes one automatic action; Cancel exists only during a run."""
+    obsolete_controls = (
+        "mode_control",
+        "custom_env_var",
+        "custom_worker_var",
+        "custom_steps_var",
+        "custom_minutes_var",
+        "auto_train_var",
+    )
+    present = [name for name in obsolete_controls if name in vars(page)]
+    if present:
+        raise AssertionError(f"obsolete benchmark controls remain: {present}")
+    if page.run_button.cget("text") != "Start Benchmark":  # type: ignore[attr-defined]
+        raise AssertionError("the benchmark's only idle action must be Start Benchmark")
+    if page.cancel_button.winfo_manager():  # type: ignore[attr-defined]
+        raise AssertionError("Cancel must be hidden while the benchmark is idle")
+
+    plan = page.current_plan()  # type: ignore[attr-defined]
+    if plan["mode"] != "auto" or plan["errors"]:
+        raise AssertionError(f"the benchmark must build a valid automatic plan: {plan}")
+    if "Steps/s" not in page.LIVE_CARD_NAMES:  # type: ignore[attr-defined]
+        raise AssertionError("live telemetry must include Steps/s")
+    if "peak fps" in page.LIVE_CARD_NAMES:  # type: ignore[attr-defined]
+        raise AssertionError("duplicate Peak FPS telemetry should be removed")
+
+    from threading import Event
+
+    page._running = True  # type: ignore[attr-defined]
+    page._cancel_event = Event()  # type: ignore[attr-defined]
+    page._update_buttons()  # type: ignore[attr-defined]
+    if page.cancel_button.winfo_manager() != "pack":  # type: ignore[attr-defined]
+        raise AssertionError("Cancel must appear while a benchmark is running")
+    if str(page.cancel_button.cget("state")) == "disabled":  # type: ignore[attr-defined]
+        raise AssertionError("Cancel must be enabled before cancellation is requested")
+    page._cancel()  # type: ignore[attr-defined]
+    if not page._cancel_event.is_set():  # type: ignore[attr-defined]
+        raise AssertionError("Cancel did not reach the running benchmark")
+    if str(page.cancel_button.cget("state")) != "disabled":  # type: ignore[attr-defined]
+        raise AssertionError("Cancel must disable after it has been requested")
+    page._running = False  # type: ignore[attr-defined]
+    page._cancel_event = None  # type: ignore[attr-defined]
+    page._update_buttons()  # type: ignore[attr-defined]
+    if page.cancel_button.winfo_manager():  # type: ignore[attr-defined]
+        raise AssertionError("Cancel must hide when the benchmark finishes")
+
 
 
 def _exercise_board_resize(app: object, host: object) -> None:
