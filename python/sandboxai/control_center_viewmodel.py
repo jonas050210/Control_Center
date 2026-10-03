@@ -204,7 +204,7 @@ def dashboard_view(
         "timesteps": None,
         "target_timesteps": None,
         "progress_percent": None,
-        "fps": None,
+        "steps_per_second": None,
         "elapsed_seconds": None,
         "eta_seconds": None,
         "episodes": None,
@@ -255,7 +255,11 @@ def dashboard_view(
     timesteps, target = view["timesteps"], view["target_timesteps"]
     if isinstance(timesteps, (int, float)) and isinstance(target, (int, float)) and target:
         view["progress_percent"] = max(0.0, min(100.0, 100.0 * timesteps / target))
-    view["fps"] = control.get("steps_per_second")
+    # Labelled "steps/s" everywhere it is shown: it is the trainer's own
+    # throughput, not a render rate. A tile called "fps" here used to show
+    # this number, and an operator comparing it with the benchmark's FPS/env
+    # was comparing two different things with the same name.
+    view["steps_per_second"] = control.get("steps_per_second")
     view["elapsed_seconds"] = control.get("elapsed_seconds")
     view["eta_seconds"] = control.get("eta_seconds")
     view["episodes"] = control.get("episodes")
@@ -755,6 +759,7 @@ def _format_pipeline_row(stage_name: str | None, row: dict[str, Any]) -> dict[st
         "device": row.get("device"),
         "steps": row.get("steps") or row.get("total_steps"),
         "steps_per_second": row.get("steps_per_second"),
+        "frames_per_second": row.get("frames_per_second"),
         "speedup": row.get("speedup_vs_baseline"),
         "episodes_per_second": row.get("episodes_per_second"),
         "p50_ms": p50,
@@ -954,6 +959,22 @@ def _format_live_benchmark_cards(
         or (best_row or {}).get("steps_per_second")
     )
 
+    # And its per-environment counterpart: how many simulation ticks one
+    # agent lives through per second. Measured, not declared - it comes from
+    # the same payload as steps_per_second, and it is the number that says
+    # whether widening the topology starved the individual environments.
+    frames_per_second = _finite_number(
+        live.get("frames_per_second")
+        or (event or {}).get("frames_per_second")
+        or (best_row or {}).get("frames_per_second")
+    )
+    if frames_per_second is None and steps_per_second is not None:
+        environments = _finite_number(config.get("environments"))
+        if environments is None and best_row is not None:
+            environments = _finite_number(best_row.get("environments"))
+        if environments and environments > 0:
+            frames_per_second = steps_per_second / environments
+
     # Live Steps
     if running and live.get("total_steps") is not None:
         live_steps_text = (
@@ -1015,6 +1036,12 @@ def _format_live_benchmark_cards(
     return {
         "active_config": active_config,
         "steps_per_second": steps_per_second,
+        "frames_per_second": frames_per_second,
+        "frames_per_second_text": (
+            f"{format_number(frames_per_second, 1)} fps/env"
+            if frames_per_second is not None
+            else "n/a"
+        ),
         "live_phase": live.get("phase"),
         "steps_per_second_text": (
             f"{format_number(steps_per_second, 1)} steps/s"
@@ -1109,16 +1136,24 @@ def benchmark_live_telemetry_view(
         leader_text = ""
 
     chart_points: list[tuple[float, float]] = []
+    fps_chart_points: list[tuple[float, float]] = []
     for idx_row, row in enumerate(rows, start=1):
         sps = _finite_number(row.get("steps_per_second"))
         if sps is not None and sps > 0.0:
             chart_points.append((float(idx_row), sps))
+        fps = _finite_number(row.get("frames_per_second"))
+        if fps is not None and fps > 0.0:
+            fps_chart_points.append((float(idx_row), fps))
     if (
         running
         and cards["steps_per_second"] is not None
         and (event or {}).get("status") == "running"
     ):
         chart_points.append((float(len(chart_points) + 1), float(cards["steps_per_second"])))
+        if cards["frames_per_second"] is not None:
+            fps_chart_points.append(
+                (float(len(fps_chart_points) + 1), float(cards["frames_per_second"]))
+            )
 
     return {
         **workflow,
@@ -1135,6 +1170,7 @@ def benchmark_live_telemetry_view(
             (best_row.get("environments"), best_row.get("workers")) if best_row else None
         ),
         "chart_points": chart_points,
+        "fps_chart_points": fps_chart_points,
     }
 
 
@@ -1564,6 +1600,40 @@ def ttk_testing_view(status: dict[str, Any] | None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+#: Canonical unit labels. The benchmark table, its live cards and its two
+#: charts all measure the same two quantities, and they used to spell one of
+#: them two ways ("FPS/env" in the table, "FPS / env" in the cards). A
+#: constant plus a static test is cheaper than remembering which is which.
+UNIT_STEPS_PER_SECOND = "Steps/s"
+UNIT_FPS_PER_ENV = "FPS / env"
+
+
+def ttk_action_result_view(
+    label: str,
+    result: dict[str, Any] | None,
+    error: BaseException | None = None,
+) -> dict[str, Any]:
+    """One line describing what a Roblox helper just did.
+
+    The card used to send every answer to the status bar, where it was
+    replaced by the next poll a second later - so "Analyze HUD" could finish
+    and the operator would never learn what it read. The card keeps the
+    result now, and this is the one place that decides what it says:
+    ``role`` picks the colour, ``text`` is the whole sentence, and a missing
+    result is not dressed up as a success.
+    """
+    if error is not None:
+        return {"ok": False, "role": "error", "text": f"{label} failed: {error}"}
+    if not result:
+        return {"ok": False, "role": "error", "text": f"{label}: the helper returned nothing"}
+    ok = bool(result.get("ok"))
+    message = str(result.get("message") or result.get("error") or ("done" if ok else "failed"))
+    detail = str(result.get("path") or "")
+    if detail:
+        message = f"{message} - {detail}"
+    return {"ok": ok, "role": "ok" if ok else "warn", "text": message}
+
+
 def ubuntu_cpu_turbo_view(profile: dict[str, Any] | None) -> dict[str, Any]:
     """Presentation model for the Ubuntu CPU Performance Turbo engine."""
     if not profile or not isinstance(profile, dict):
@@ -1761,11 +1831,12 @@ BENCHMARK_MODES: tuple[tuple[str, str], ...] = (
 
 #: Environment ladders. ``auto`` is the host-scaled sweep (capped at 128
 #: environments, which is where the sharded bridge stops scaling on a
-#: 16-32 thread desktop), ``push`` continues to 256 to find the plateau.
-#: Push mode keeps climbing past the Auto ceiling. The point of Push is to
-#: measure where throughput stops improving, so it is allowed to oversubscribe
-#: the host on purpose.
-PUSH_ENVIRONMENT_LADDER: tuple[int, ...] = (16, 32, 64, 96, 128, 192, 256)
+#: 16-32 thread desktop), ``push`` continues to the widest rung the
+#: automatic sweep reaches - 258 - to sit on the plateau rather than
+#: somewhere below it. Push mode keeps climbing past the Auto ceiling. The
+#: point of Push is to measure where throughput stops improving, so it is
+#: allowed to oversubscribe the host on purpose.
+PUSH_ENVIRONMENT_LADDER: tuple[int, ...] = (16, 32, 64, 96, 128, 192, 258)
 PUSH_WORKER_LADDER: tuple[int, ...] = (1, 2, 4, 8, 16, 24, 32, 48)
 
 
@@ -1972,12 +2043,26 @@ def _automatic_benchmark_plan(
     same numbers - two hand-maintained ladders drifted apart before, which is
     how a run could stop at four workers while the window advertised more.
     """
-    from .benchmark_pipeline import default_environment_counts, default_worker_counts
+    from .benchmark_pipeline import (
+        DEFAULT_TIME_BUDGET_MINUTES,
+        MAX_DEFAULT_ENVIRONMENTS,
+        default_environment_counts,
+        default_worker_counts,
+        fit_candidates_to_budget,
+        plan_candidates,
+    )
 
     if mode == "push":
-        ceiling = max(32, min(256, physical * 16))
+        # Push is not a narrower sweep: it climbs to the same widest rung the
+        # automatic ladder reaches (a push run that stopped short of it could
+        # not say whether the plateau was reached) and then keeps going on the
+        # worker axis, which is what it actually oversubscribes.
+        ceiling = max(32, min(MAX_DEFAULT_ENVIRONMENTS, physical * 32))
         environments = [value for value in PUSH_ENVIRONMENT_LADDER if value <= ceiling]
-        worker_ceiling = min(48, max(4, physical * 2))
+        # Push oversubscribes on purpose, so its ceiling is not the one auto
+        # uses: it goes past the point where more workers stop paying, which
+        # is the only way to see that point at all.
+        worker_ceiling = min(48, max(8, physical * 4))
         workers = [value for value in PUSH_WORKER_LADDER if value <= worker_ceiling]
         if workers[-1:] != [worker_ceiling]:
             workers.append(worker_ceiling)
@@ -1997,15 +2082,27 @@ def _automatic_benchmark_plan(
     view["workers"] = workers
     view["budget_mode"] = "time"
     try:
-        view["minutes"] = float(str(minutes_raw).strip()) if str(minutes_raw).strip() else 15.0
+        view["minutes"] = (
+            float(str(minutes_raw).strip())
+            if str(minutes_raw).strip()
+            else DEFAULT_TIME_BUDGET_MINUTES
+        )
     except ValueError:
-        view["minutes"] = 15.0
-    view["expected_configurations"] = sum(
-        1 for environment in environments for worker in workers if worker <= environment
-    )
+        view["minutes"] = DEFAULT_TIME_BUDGET_MINUTES
+    # Counted with the pipeline's own planner, not with a second
+    # ``worker <= environment`` rule of our own: the pipeline also drops
+    # pairs the launcher would refuse, and a plan that promises 175
+    # configurations while the sweep measures 150 is how the window's plan
+    # and the run's report stopped agreeing.
+    planned = plan_candidates(environments, workers, cpu_count=logical)
+    minutes = float(view["minutes"] or DEFAULT_TIME_BUDGET_MINUTES)
+    _kept, per_config = fit_candidates_to_budget(planned, minutes * 60.0 * 0.55)
+    view["expected_configurations"] = len(planned)
+    view["per_config_seconds"] = per_config
     view["summary"] = (
         f"{mode} sweep scaled to {logical} logical / {physical} physical cores: "
-        f"up to {max(environments)} environments, up to {max(workers)} workers"
+        f"{len(planned)} configurations up to {max(environments)} environments "
+        f"and {max(workers)} workers, ~{format_number(per_config, 1)} s each"
     )
     if measured_steps_per_second:
         view["summary"] += f" (last measured {format_number(measured_steps_per_second, 1)} steps/s)"

@@ -1010,6 +1010,69 @@ class ControlCenterConstructionTests(unittest.TestCase):
         assert tip._after_id is None
         assert tip._window is None
 
+    def test_the_rail_names_every_page_in_full(self):
+        """A collapsed rail used to trade the titles for two-letter codes.
+
+        ``DB``, ``TR``, ``BM`` bought about 160 px and cost a shortcut sheet
+        at the bottom of the rail. The smoke harness can only check this in
+        source; here the buttons are real widgets with real text.
+        """
+        titles = {page_class.title for page_class in PAGE_CLASSES}
+        for name, button in self.app._nav_buttons.items():
+            with self.subTest(button=name):
+                label = str(button.cget("text")).strip()
+                self.assertIn(label, titles, f"nav button {name!r} does not name a page")
+                self.assertGreater(
+                    len(label), 3, f"nav button {name!r} looks like a two-letter code: {label!r}"
+                )
+
+    def test_the_roblox_window_actions_wait_for_a_client(self):
+        """Focus/Screenshot/Analyze HUD must not claim to work without Roblox."""
+        from sandboxai.control_center_pages import DashboardPage
+
+        self.app.show_page("Dashboard")
+        _drain_background(self.app)
+        page = self.app.pages["Dashboard"]
+        for label in DashboardPage.WINDOW_ACTIONS:
+            with self.subTest(action=label):
+                self.assertEqual(
+                    str(page.roblox_action_buttons[label].cget("state")),
+                    "disabled",
+                    f"{label} is enabled with no Roblox client running",
+                )
+
+    def test_the_benchmark_card_states_the_sweep_before_it_starts(self):
+        self.app.show_page("Benchmarks")
+        _drain_background(self.app)
+        label = str(self.app.pages["Benchmarks"].plan_label.cget("text"))
+        self.assertIn("configurations", label)
+        self.assertIn("workers", label)
+        self.assertIn("environments", label)
+
+    def test_the_measurements_table_reports_fps_per_environment(self):
+        from sandboxai import control_center_viewmodel as vm
+
+        self.app.show_page("Benchmarks")
+        _drain_background(self.app)
+        tree = self.app.pages["Benchmarks"].tree
+        headings = {column: str(tree.heading(column, "text")) for column in tree["columns"]}
+        self.assertIn("frames_per_second", headings)
+        self.assertEqual(headings["frames_per_second"], vm.UNIT_FPS_PER_ENV)
+        self.assertEqual(headings["steps_per_second"], vm.UNIT_STEPS_PER_SECOND)
+
+    def test_the_roblox_card_keeps_what_the_last_action_answered(self):
+        """A result that only lives in the status bar is gone on the next poll."""
+        self.app.show_page("Dashboard")
+        _drain_background(self.app)
+        page = self.app.pages["Dashboard"]
+        self.assertEqual(str(page.roblox_result_label.cget("text")), "")
+        page._set_roblox_result("Screenshot", {"ok": True, "path": "/tmp/shot.png"})
+        self.app.update_idletasks()
+        self.assertIn("/tmp/shot.png", str(page.roblox_result_label.cget("text")))
+        page._set_roblox_result("Focus window", None, RuntimeError("no client"))
+        self.app.update_idletasks()
+        self.assertIn("no client", str(page.roblox_result_label.cget("text")))
+
 
 if __name__ == "__main__":
     unittest.main()

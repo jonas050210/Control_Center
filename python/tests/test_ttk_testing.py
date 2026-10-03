@@ -7,6 +7,7 @@ import io
 import json
 import tempfile
 import unittest
+import unittest.mock
 
 from sandboxai.cli import main
 from sandboxai.ttk_testing import (
@@ -132,6 +133,136 @@ class CliTests(unittest.TestCase):
             self.assertTrue(res["ok"])
             self.assertEqual((res["width"], res["height"]), (1920, 1080))
             self.assertEqual(res["hud_layout"], "1080p-native")
+
+
+class WindowsHostBridgeTests(unittest.TestCase):
+    """Focus/probe/capture must work from WSL, not only from native Windows.
+
+    The maintainer runs the Control Center inside WSL and the Roblox client
+    on the Windows host: launching already worked (it goes through
+    ``cmd.exe``), but every window helper bailed out on
+    ``sys.platform.startswith("win")`` and did nothing. These tests drive the
+    PowerShell route with a fake subprocess so the behaviour is pinned
+    without a Windows machine.
+    """
+
+    def setUp(self) -> None:
+        from sandboxai import ttk_testing
+
+        self.ttk = ttk_testing
+        self.calls: list[list[str]] = []
+        self.results: list[tuple[int, str]] = []
+        self.platform = self.ttk.sys.platform
+        self.wsl = True
+        self.powershell = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"]
+        self._patchers = {
+            "is_wsl": unittest.mock.patch.object(ttk_testing, "is_wsl", lambda: self.wsl),
+            "powershell": unittest.mock.patch.object(
+                ttk_testing, "_powershell", self._fake_powershell
+            ),
+            "run": unittest.mock.patch.object(ttk_testing, "_run_host_command", self._fake_run),
+            "platform": unittest.mock.patch.object(ttk_testing.sys, "platform", "linux"),
+        }
+        for patcher in self._patchers.values():
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _fake_powershell(self, *arguments: str) -> list[str] | None:
+        if not self.wsl:
+            return None
+        return [*self.powershell, *arguments]
+
+    def _fake_run(self, command: list[str], *, timeout: float) -> tuple[int, str]:
+        del timeout
+        self.calls.append(list(command))
+        if not self.results:
+            return 1, "unexpected call"
+        return self.results.pop(0)
+
+    def test_host_bridge_is_powershell_under_wsl(self) -> None:
+        self.assertEqual(self.ttk.host_bridge(), "powershell")
+
+    def test_host_bridge_is_empty_without_a_windows_host(self) -> None:
+        self.wsl = False
+        self.assertEqual(self.ttk.host_bridge(), "")
+
+    def test_focus_reports_success_and_runs_the_host_script(self) -> None:
+        self.results = [(0, "OK")]
+        result = self.ttk.focus_roblox_window()
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["focused"])
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("SetForegroundWindow", self.calls[0][-1])
+
+    def test_focus_names_the_missing_client_instead_of_the_platform(self) -> None:
+        self.results = [(1, "NO_WINDOW")]
+        result = self.ttk.focus_roblox_window()
+        self.assertFalse(result["ok"])
+        self.assertIn("Start Roblox Player", result["message"])
+        self.assertNotIn("requires Windows", result["message"])
+
+    def test_probe_parses_the_window_rectangle(self) -> None:
+        self.results = [(0, "WINDOW|4242|10,20,1930,1100|1|TTK Testing [MAP VOTING]")]
+        probe = self.ttk._probe_roblox_window()
+        self.assertTrue(probe["window_found"])
+        self.assertEqual(probe["window_pid"], 4242)
+        self.assertEqual(probe["window_rect"], [10, 20, 1930, 1100])
+        self.assertEqual((probe["window_width"], probe["window_height"]), (1920, 1080))
+        self.assertTrue(probe["window_focused"])
+        self.assertEqual(probe["window_title"], "TTK Testing [MAP VOTING]")
+
+    def test_probe_reports_no_window_without_crashing(self) -> None:
+        self.results = [(0, "NONE")]
+        probe = self.ttk._probe_roblox_window()
+        self.assertFalse(probe["window_found"])
+        self.assertIsNone(probe.get("window_rect"))
+
+    def test_capture_writes_into_the_captures_directory(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        def run(command: list[str], *, timeout: float) -> tuple[int, str]:
+            del timeout
+            self.calls.append(list(command))
+            # Stand in for the Windows host: create the file PowerShell would
+            # have written, at the path the script was handed.
+            script = command[-1]
+            marker = "$bmp.Save('"
+            start = script.index(marker) + len(marker)
+            end = script.index("',", start)
+            target = script[start:end].replace("''", "'")
+            Path(target).write_bytes(b"\x89PNG")
+            return 0, target
+
+        self._patchers["run"].stop()
+        self._patchers["run"] = unittest.mock.patch.object(self.ttk, "_run_host_command", run)
+        self._patchers["run"].start()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.results = [(0, "NONE")]  # no window -> whole screen
+            result = self.ttk.capture_roblox_screenshot(tmp)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(Path(result["path"]).parent.name, "ttk_captures")
+            self.assertTrue(Path(result["path"]).is_file())
+            self.assertFalse(result["window_captured"])
+
+    def test_capture_reports_the_host_error_instead_of_a_platform_hint(self) -> None:
+        import tempfile
+
+        self.results = [(0, "NONE"), (1, "EMPTY_RECT")]  # probe, then capture
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.ttk.capture_roblox_screenshot(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("EMPTY_RECT", result["error"])
+
+    def test_capture_says_what_is_missing_without_a_host(self) -> None:
+        import tempfile
+
+        self.wsl = False
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.ttk.capture_roblox_screenshot(tmp)
+        self.assertFalse(result["ok"])
+        self.assertIn("PowerShell", result["error"])
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -100,6 +100,29 @@ def test_dashboard_view_with_no_runs_yet():
     assert view["warnings"] == []
 
 
+def test_dashboard_view_names_throughput_after_what_it_measures():
+    # The tile used to be labelled "fps" while it carried the trainer's
+    # steps_per_second. Next to the benchmark's FPS/env that read as the
+    # same quantity under two names, and it is not: one is the whole
+    # topology's throughput, the other is what a single agent lives through.
+    snapshot = {
+        "latest_run": {
+            "run_id": "run-a",
+            "run_dir": "/tmp/run-a",
+            "control": {"state": "Running", "steps_per_second": 812.5},
+            "config": {},
+            "checkpoints": {},
+            "evaluation": {},
+            "warnings": [],
+            "problems": [],
+        },
+        "active_processes": [{"run_dir": "/tmp/run-a"}],
+    }
+    view = vm.dashboard_view(snapshot)
+    assert view["steps_per_second"] == 812.5
+    assert "fps" not in view, "a dashboard tile called fps invites a comparison it cannot win"
+
+
 def test_dashboard_view_prefers_fresher_telemetry_row_when_available():
     snapshot = {
         "latest_run": {
@@ -894,30 +917,45 @@ def test_budget_view_rejects_unusable_values():
 
 
 def test_auto_benchmark_plan_reaches_the_wide_ladder():
-    view = vm.benchmark_mode_view("auto", minutes_raw="15", cpu_count=32)
+    view = vm.benchmark_mode_view("auto", minutes_raw="30", cpu_count=32)
     assert view["errors"] == []
-    assert view["environments"][-1] == 128
-    assert view["environments"][-3:] == [64, 96, 128]
+    assert view["environments"][-1] == 258
+    assert view["environments"][-3:] == [224, 256, 258]
     # The worker ladder must probe past the conservative auto recommendation:
     # that recommendation is what produced the 64-env / 4-worker runs that
     # left the CPU at 10-20 %.
     assert 32 in view["workers"]
-    assert view["expected_configurations"] > 20
+    # The whole point of the wide sweep: enough measurements to find the
+    # knee instead of guessing between two rungs.
+    assert view["expected_configurations"] >= 100
     assert "environments_note" in view
 
 
 def test_auto_benchmark_plan_is_the_pipeline_ladder():
-    from sandboxai.benchmark_pipeline import default_environment_counts, default_worker_counts
+    from sandboxai.benchmark_pipeline import (
+        default_environment_counts,
+        default_worker_counts,
+        plan_candidates,
+    )
 
-    view = vm.benchmark_mode_view("auto", minutes_raw="15", cpu_count=32)
+    view = vm.benchmark_mode_view("auto", minutes_raw="30", cpu_count=32)
     assert view["environments"] == list(default_environment_counts(32))
-    assert view["workers"] == list(default_worker_counts(128, 32))
+    assert view["workers"] == list(default_worker_counts(256, 32))
+    # The promised count is the pipeline's own count, not a second rule that
+    # would drift from it.
+    assert view["expected_configurations"] == len(
+        plan_candidates(view["environments"], view["workers"], cpu_count=32)
+    )
+    assert vm.benchmark_mode_view("auto", cpu_count=32)["minutes"] == 30.0
 
 
 def test_push_benchmark_plan_goes_wider_than_auto():
-    auto = vm.benchmark_mode_view("auto", minutes_raw="15", cpu_count=32)
-    push = vm.benchmark_mode_view("push", minutes_raw="15", cpu_count=32)
-    assert max(push["environments"]) > max(auto["environments"])
+    auto = vm.benchmark_mode_view("auto", minutes_raw="30", cpu_count=32)
+    push = vm.benchmark_mode_view("push", minutes_raw="30", cpu_count=32)
+    # Auto already reaches the widest environment rung, so what push adds is
+    # worker oversubscription past the point where it stops paying.
+    assert max(push["environments"]) >= max(auto["environments"])
+    assert max(push["workers"]) > max(auto["workers"])
     assert push["warnings"], "push mode must say that it oversubscribes"
 
 
@@ -1235,3 +1273,38 @@ def test_hidden_optimizer_fields_keep_the_training_config_defaults():
     assert config.entropy_coefficient == expected.entropy_coefficient
     assert config.rollout_length == expected.rollout_length
     assert "learning_rate" not in {spec.name for spec in vm.launch_field_specs()}
+
+
+def test_ttk_action_result_view_reports_a_failure_as_one():
+    # The card shows one line; a traceback or an empty string there reads as
+    # "nothing happened", which is the complaint this replaced.
+    view = vm.ttk_action_result_view("Focus window", None, RuntimeError("no client"))
+    assert view["ok"] is False
+    assert view["role"] == "error"
+    assert "Focus window" in view["text"]
+    assert "no client" in view["text"]
+
+
+def test_ttk_action_result_view_does_not_dress_up_a_missing_result():
+    view = vm.ttk_action_result_view("Analyze HUD", {})
+    assert view["ok"] is False
+    assert view["role"] == "error"
+    assert "returned nothing" in view["text"]
+
+
+def test_ttk_action_result_view_appends_the_path_it_wrote():
+    view = vm.ttk_action_result_view(
+        "Screenshot", {"ok": True, "message": "captured", "path": "/tmp/roblox_1.png"}
+    )
+    assert view["ok"] is True
+    assert view["role"] == "ok"
+    assert view["text"] == "captured - /tmp/roblox_1.png"
+
+
+def test_ttk_action_result_view_reports_a_refusal_without_crashing():
+    # "Roblox Player is not running yet" is not an exception; the card must
+    # still say so instead of claiming success.
+    view = vm.ttk_action_result_view("Connect", {"ok": False, "message": "not running yet"})
+    assert view["ok"] is False
+    assert view["role"] == "warn"
+    assert view["text"] == "not running yet"

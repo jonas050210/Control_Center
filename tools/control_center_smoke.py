@@ -9,8 +9,9 @@ would otherwise never be executed at all before it reaches a user.
 It installs a deliberately small fake ``tkinter`` (geometry is bookkeeping,
 ``after`` callbacks never fire, unknown widget methods are no-ops) and then
 builds the real application, shows and refreshes every page, cycles every
-theme, density, motion level and shell layout, drives the Settings layout
-studio and presets, and exercises the Training and Benchmark plan logic.
+theme, density and motion level, drives the Settings layout studio and
+presets, and exercises the Training and Benchmark plan logic. It also fails
+if switchable shell layouts come back: the window has one rail now.
 
 What it does **not** verify: pixels, colours, fonts, DPI, real geometry,
 real event dispatch, or that a native Tk build accepts every option. A pass
@@ -1167,10 +1168,24 @@ def _exercise_shell(app: object, page_classes: tuple[type, ...]) -> None:
     for name in ("quick", "theme_picker", "layout_picker"):
         if name in vars(app):
             raise AssertionError(f"obsolete header selector remains: {name}")
-    for mode in ("topbar", "board", "rail"):
-        app.set_layout_mode(mode)  # type: ignore[attr-defined]
-        for page_class in page_classes:
-            app.show_page(page_class.title)  # type: ignore[attr-defined]
+    # The shell is no longer switchable: it is the rail, and it must not
+    # carry a collapse toggle (it used to shrink the page titles to two
+    # letter codes) or a switcher that rebuilds every page.
+    if "sidebar_collapsed" in vars(app):
+        raise AssertionError("the rail still carries collapse state")
+    if "set_layout_mode" in vars(type(app)):
+        raise AssertionError("the shell is switchable again")
+    if "layout_var" in vars(app.pages["Settings"]):  # type: ignore[attr-defined]
+        raise AssertionError("Settings still offers a shell-layout picker")
+    for page_class in page_classes:
+        app.show_page(page_class.title)  # type: ignore[attr-defined]
+    nav_labels = [
+        str(button.cget("text"))  # type: ignore[attr-defined]
+        for button in app._nav_buttons.values()  # type: ignore[attr-defined]
+    ]
+    for title, label in zip([cls.title for cls in page_classes], nav_labels, strict=True):
+        if title != label:
+            raise AssertionError(f"nav button {label!r} does not name its page {title!r}")
 
 
 def _exercise_studio(page: object, page_widgets: dict) -> None:
@@ -1300,8 +1315,6 @@ def _exercise_preset_transfer(app: object) -> None:
 def _exercise_appearance(page: object) -> None:
     page.theme_var.set("Neon Lime")  # type: ignore[attr-defined]
     page._on_theme_selected()  # type: ignore[attr-defined]
-    page.layout_var.set("Top bar")  # type: ignore[attr-defined]
-    page._on_layout_selected()  # type: ignore[attr-defined]
     page.density_var.set("Compact")  # type: ignore[attr-defined]
     page._on_density_selected()  # type: ignore[attr-defined]
     page.motion_var.set("Reduced")  # type: ignore[attr-defined]

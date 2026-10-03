@@ -27,8 +27,8 @@ instead of a stack trace if not).
 The Control Center itself needs only Python 3.11+ with Tkinter (standard
 library). Training and benchmarking additionally need the Godot 4.7.2
 executable on this machine and the training extras
-(`pip install -e ".[train]"`) — the GUI reports exactly what is missing
-on the System page instead of guessing.
+(`pip install -e '.[training]'`) — the GUI reports exactly what is missing
+on the System page, and can install them from there.
 
 ## Architecture in one paragraph
 
@@ -60,7 +60,6 @@ look. Everything below is chosen on the **Settings** page and persisted in
 | Choice | Options | Effect |
 | --- | --- | --- |
 | Theme | Corz, Midnight Cyan, Neon Lime, Graphite Mono, Light | Full colour set incl. text, borders, states and chart colours |
-| Shell layout | Rail, Topbar, Command Board | Where navigation lives and how much width the content gets |
 | Density | Comfort, Compact, Ultra | Row heights, paddings and one font step (never below the 11 px floor) |
 | Motion | Off, Reduced, Normal, Cinematic | Speed of the small transitions; **Off** renders final states immediately |
 | Accent | any `#rrggbb` typed directly | Replaces the accent of whichever theme is active; *Theme accent* restores the designed one |
@@ -123,7 +122,7 @@ studio** every card can be moved up/down, given a 1x/2x/3x span and
 hidden (cards marked `removable=False`, such as the launch deck, stay
 visible). The result applies to the running window immediately.
 
-**Presets.** A preset stores the theme, shell, density, motion and every
+**Presets.** A preset stores the theme, density, motion and every
 card position as one JSON file under `.sandboxai/ui/presets/<name>.json`.
 *Save preset* captures the current arrangement, *Apply* switches back to
 it, *Delete* removes it, and *Rename to name* moves a preset to the name
@@ -190,6 +189,19 @@ entirely, `main.py` still starts, prints the exact fix (`python3-tk`, or
 a Python build with Tk) and exits cleanly instead of raising a stack
 trace.
 
+## Navigation
+
+The shell is one thing: a fixed-width rail down the left with one button
+per page, grouped under OVERVIEW, WORKFLOWS, ARTIFACTS and SYSTEM. It
+cannot be switched to another shell and it cannot be collapsed. Those were
+both options once, and neither earned its keep — "Command Board" built the
+rail anyway (the branch was dead), a collapsed rail replaced the page
+titles with two-letter codes (DB, TR, BM, ...) to win back about 160 px
+and then needed a shortcut sheet at the bottom to stay readable, and
+supporting the switch meant every shell change destroyed and rebuilt all
+eight pages. A preferences or preset file written by an older build that
+still names a removed shell is repaired to the rail on load.
+
 ## Keyboard
 
 `Ctrl+K` opens the command palette, `Ctrl+1..8` jump straight to a page
@@ -214,6 +226,37 @@ lifecycle state, run id, progress, steps/s, elapsed/ETA, environment and
 worker counts, an agent lifecycle summary (coloured red when anything
 failed), device, and reward. Stale status is labelled with its evidence,
 exactly as `run_inspection.py` reports it.
+
+The page deliberately does **not** chart run telemetry or list
+checkpoints and PPO diagnostics. Runs / Checkpoints already plots those
+series — for the run you selected, rather than for whichever run happens to
+be newest — and polling them here meant reading telemetry files every tick
+for a page nobody was reading.
+
+### Dashboard -> Roblox
+
+The one card that touches the real game. It opens the Roblox client in TTK
+Testing, probes which place it is in, and — once a client is running —
+focuses its window, captures a screenshot into `.sandboxai/ttk_captures`
+and reads the resolution and HUD layout back out of that capture. Nothing
+here plays the game: the human plays, the tool opens and photographs, which
+is the whole of the bounded helper surface described in
+[TTK_TESTING_REFERENCE.md](TTK_TESTING_REFERENCE.md).
+
+Every action answers **in the card**: the line under the status says what it
+did - `Screenshot - .sandboxai/ttk_captures/roblox_….png`, `Analyze HUD -
+16:9, minimap top right` - and is coloured by whether it worked. The status
+bar alone was not enough: the next poll overwrites it, so an action could
+succeed and the operator would still be guessing. *Open Captures* opens the
+folder the screenshots land in.
+
+Focus, Screenshot and Analyze HUD are disabled until a Roblox client is
+running, because pressing them without one used to answer with a platform
+error nobody could act on. They work under WSL as well as on native
+Windows: there is no `ctypes.windll` in a Linux process, so the same Win32
+calls are made by the Windows host's PowerShell — the interop the launcher
+already uses. A capture writes to the Windows form of the captures
+directory so the file appears at the POSIX path this process expects.
 
 ### Training
 
@@ -277,22 +320,39 @@ one place.
 ### Benchmarks
 
 The GUI offers one automatic benchmark and one idle action: **Start Benchmark**.
-It builds a host-scaled candidate ladder from the machine's available CPU and
-device capabilities, uses the pipeline's automatic time budget, validates the
-strongest measurements with real training slices, and applies the fastest
-stable recommendation. There are no visible mode, step, minute, environment,
-or worker inputs; **Cancel** appears only while a run is active and disables
-after cancellation has been requested.
+It builds a host-scaled candidate ladder, uses the pipeline's automatic time
+budget, validates the strongest measurements with real training slices, and
+applies the fastest stable recommendation. There are no visible mode, step,
+minute, environment, or worker inputs; **Cancel** appears only while a run is
+active and disables after cancellation has been requested. Before Start is
+pressed the card states the sweep it is about to run — *175 configurations ·
+up to 258 environments · up to 32 workers · ~8 s each · budget 30 min* —
+counted with the pipeline's own planner, so the promise and the report cannot
+disagree.
+
+The sweep is deliberately large. It measures at least 100 configurations on
+any host, rungs the environment count up to 258 (with rungs between the
+powers of two, because a knee reported as "somewhere between 64 and 128" is
+a guess) and the worker count up to 32 regardless of how many cores this
+machine has: capping the ladder by core count was a guess about what should
+win, and a guess is not a measurement. Oversubscribed rows measure as slow
+and are labelled as oversubscribed. Budget thinning refuses to go below 100
+configurations — a grid thinned to twenty rows cannot locate a knee, and the
+report would still present its winner as "the best configuration".
 
 The phase strip reports discovery, screening, device comparison, validation,
 recommendation and application. Live telemetry includes the active test,
-**Steps/s**, live steps, latency percentiles, jitter and elapsed host data.
-The duplicate **Peak FPS** card is removed because it used the same underlying
-steps-per-second measurement. After a run, the measurements table still
-provides its recorded environment, worker, step, device, speed, latency,
-stability and error details; these are results, not setup controls. The table
-and throughput chart occupy separate full-width cards so the table can show
-all 14 columns on a wide display without a permanent horizontal scrollbar.
+**Steps/s**, **FPS / env**, live steps, latency percentiles, jitter and
+elapsed host data. **FPS / env** is not a second peak-FPS counter: it is the
+same measurement divided by the environments that produced it, i.e. how many
+simulation ticks one agent lives through per second. Steps/s keeps climbing
+after the per-environment rate has already turned over, and the two curves
+usually peak at different configurations, so the page charts both. After a
+run, the measurements table provides its recorded environment, worker, step,
+device, speed, FPS, latency, stability and error details; these are results,
+not setup controls. The table and the charts occupy separate full-width cards
+so the table can show all 15 columns on a wide display without a permanent
+horizontal scrollbar.
 
 The pipeline runs these stages:
 
@@ -376,9 +436,17 @@ Real dependency and device status (Python, torch, Godot binary/version,
 CPU/RAM) and bounded live telemetry charts. Unavailable metrics are
 shown as such, never estimated.
 
+The **Training dependencies** card lists every optional extra with
+*installed* or *missing*, read from this interpreter rather than from
+memory, and offers one button — *Install training extras* — that runs
+`pip install -e '.[training]'` in the project root and shows pip's own
+output. Training cannot start without those extras, so the page says which
+ones are missing and the Training page refuses a launch with the exact
+command instead of failing seconds later inside SB3.
+
 ### Settings
 
-**Appearance** (theme, shell layout, density, motion, radius, glow/grid),
+**Appearance** (theme, density, motion, radius, glow/grid),
 the **Layout studio** (move/span/hide cards, reset one page or
 everything), **Presets** (save/apply/delete), then project and output
 roots, plus the machine-local **Godot executable**:
@@ -424,15 +492,33 @@ the runner is exercised on every run.
 
 Where neither Tkinter nor a display exists, `python3
 tools/control_center_smoke.py` constructs the real application against a
-small fake `tkinter` and drives every page, theme, density, motion level,
-shell layout, the layout studio, the presets, and the Training and
-Benchmark plan logic. It also drains the background queue after every
-page, so a poll completion callback that raises fails the run instead of
-being printed and forgotten. It proves "no name errors, no bad wiring, no
+small fake `tkinter` and drives every page, theme, density and motion
+level, the layout studio, the presets, and the Training and Benchmark plan
+logic. It also fails if the rail grows a collapse state, a shell switcher
+or a Settings layout picker again, and it asserts each nav button names
+its page instead of a two-letter code for it. It drains the background
+queue after every page, so a poll completion callback that raises fails the
+run instead of being printed and forgotten. It proves "no name errors, no bad wiring, no
 constructor crashes, no failing completion callback" and nothing about
 pixels, geometry or event dispatch — the `desktop-ui-tests` CI job runs it
 next to the real-Tk pytest file, and it is a development aid, not a
 substitute for that suite.
+
+**What the smoke harness cannot see.** It proves the window builds; it
+cannot say whether it *looks* right, and "the text is cut off" is a report
+only a human can make - badly, over chat. `python3
+tools/control_center_ui_report.py` opens the real window instead, walks
+every page and writes `.sandboxai/ui_report/report.md` (plus the same
+findings as `report.json`) with the things a screenshot does not explain:
+labels that need more room than they have, text under the 11 px floor, table
+headers wider than their column, buttons that are disabled and why, the
+theme-listener count across three density changes, what a `refresh()` costs
+per page, and whether any widget still carries a foreign theme bus. Where
+Pillow can reach the display it saves one PNG per page; where it cannot, the
+report says so instead of inventing an image. It needs Tkinter and a display,
+it is a measuring instrument rather than a gate, and it always exits `0`
+unless the prerequisites are missing (`2`) or the window failed to build
+(`1`).
 
 **Polling.** One timer drives the window (600 ms). Each tick refreshes the
 **visible page only** - every page's `refresh()` submits background reads

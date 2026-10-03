@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import json
 import math
 import time
@@ -26,19 +27,51 @@ if TYPE_CHECKING:
     from .run_control import RunControl
 
 
+#: The training extras, as ``(import name, distribution name)`` pairs. The
+#: distribution name is the one that belongs in an error message: it is what
+#: the operator has to install, and ``stable_baselines3`` vs
+#: ``stable-baselines3`` is exactly the kind of detail that costs somebody
+#: twenty minutes.
+TRAINING_DEPENDENCIES: tuple[tuple[str, str], ...] = (
+    ("stable_baselines3", "stable-baselines3"),
+    ("gymnasium", "gymnasium"),
+    ("torch", "torch"),
+    ("numpy", "numpy"),
+)
+
+#: The one command that installs every training extra from a checkout.
+TRAINING_INSTALL_HINT = "python -m pip install -e '.[training]'"
+
+
+def missing_training_dependencies() -> list[str]:
+    """The training extras that cannot be imported right now, by distribution name.
+
+    Reported rather than guessed: a dependency check that answers from memory
+    tells an operator to reinstall something they already have.
+    """
+    missing: list[str] = []
+    for module, distribution in TRAINING_DEPENDENCIES:
+        try:
+            if importlib.util.find_spec(module) is None:
+                missing.append(distribution)
+        except (ImportError, ValueError):
+            missing.append(distribution)
+    return missing
+
+
 def _require_sb3():
-    try:
-        from stable_baselines3 import PPO  # type: ignore
-        from stable_baselines3.common.callbacks import (  # type: ignore
-            BaseCallback,
-            CallbackList,
-            CheckpointCallback,
-        )
-    except ImportError as exc:
+    missing = missing_training_dependencies()
+    if missing:
         raise RuntimeError(
-            "PPO requires stable-baselines3, gymnasium, torch and numpy. "
-            "Install with: python -m pip install -e '.[training]'"
-        ) from exc
+            f"PPO cannot start: missing {', '.join(missing)}. Install with: {TRAINING_INSTALL_HINT}"
+        )
+    from stable_baselines3 import PPO  # type: ignore
+    from stable_baselines3.common.callbacks import (  # type: ignore
+        BaseCallback,
+        CallbackList,
+        CheckpointCallback,
+    )
+
     return PPO, BaseCallback, CallbackList, CheckpointCallback
 
 

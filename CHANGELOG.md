@@ -9,6 +9,105 @@ records what changed and why.
 ## Unreleased
 
 ### Control Center
+
+- **`python3 tools/control_center_ui_report.py` measures the real window.**
+  Every UI complaint so far had to be translated into words by whoever was
+  looking at the screen, because the headless harness proves the window
+  *builds* and nothing about how it looks. The new tool opens the real Tk
+  window, walks every page and writes `.sandboxai/ui_report/report.md` (plus
+  the same findings as `report.json`): cards, buttons with their state,
+  labels that need more room than they have, text under the 11 px floor,
+  table headers wider than their column, what a `refresh()` costs per page,
+  the theme-listener count across three density changes, and one PNG per
+  page where Pillow can reach the display. It never estimates what it could
+  not measure and never claims a screenshot it did not take - no Tk, no
+  Pillow or no `$DISPLAY` is written into the report as the reason.
+- **The Roblox card keeps what its actions answered.** Focus, Screenshot and
+  Analyze HUD reported through the status bar, which the next poll
+  overwrites a second later, so a successful HUD analysis could leave the
+  operator none the wiser. The card now carries a result line (coloured by
+  the outcome, path included where there is one) and an *Open Captures*
+  button; one viewmodel helper decides what that line says, so a missing
+  result is not dressed up as a success. "CPU turbo" left the card: it is a
+  host setting and Settings -> Host already owns it.
+- **The benchmark spells its units once.** The measurements table said
+  `FPS/env` while the live cards and the chart said `FPS / env` - one
+  quantity, two names, and an operator comparing them was comparing
+  strings. Both come from `vm.UNIT_FPS_PER_ENV` now, and a static test
+  fails if a second spelling appears.
+
+- **One shell: a fixed rail that names its pages.** The three switchable
+  shell layouts (rail, topbar, command board) are gone, and so is the rail's
+  collapse state. "Command Board" built the rail anyway - the branch was
+  dead - and a collapsed rail replaced the page titles with two-letter codes
+  (DB, TR, BM, ...) to win back about 160 px, then needed a shortcut sheet at
+  the bottom to stay readable; supporting the switch meant every shell change
+  destroyed and rebuilt all eight pages. The rail now always shows the full
+  page names, a preferences or preset file written by an older build that
+  still names a removed shell is repaired to the rail on load, and the smoke
+  harness fails if a collapse state, a shell switcher or a Settings layout
+  picker comes back - it also asserts every nav button names its page.
+- **The Dashboard is a decision surface again.** Two cards were cut for
+  cause: "Telemetry charts" duplicated the run's own charts one page over
+  (Runs / Checkpoints plots the same series against the run you actually
+  selected, not whichever run happens to be newest) while polling telemetry
+  files every tick, and "Run insight" listed checkpoints and PPO
+  diagnostics, which is what the Runs / Checkpoints page is for. What is
+  left is the state you need before you decide where to click: KPI row, the
+  Roblox card, quick actions and the active-process strip. The duplicate
+  "Start benchmark" / "Run benchmark" / "Open training" workflow buttons are
+  gone too - the rail already leads to those pages. The KPI tile that used
+  to be labelled **fps** is labelled **steps/s** now: it always showed the
+  trainer's `steps_per_second`, and an operator reading it next to the
+  benchmark's FPS/env was comparing two different quantities with one name.
+- **The Roblox card works, including from WSL.** Focus window, Screenshot
+  and Analyze HUD did nothing on this project's own machine:
+  `_probe_roblox_window` split `WINDOW|pid|rect|focused|title` into six
+  fields when the real output has five, so every probe reported
+  `window_found: False`, and the three Win32 helpers went through
+  `ctypes.windll`, which does not exist in a Linux process. Probes are
+  parsed by their real shape now, and the same Win32 calls are made by the
+  Windows host's PowerShell under WSL - the interop the launcher already
+  uses - with captures written to the Windows form of the captures directory
+  so they appear at the POSIX path this process expects. The three window
+  actions start disabled until a client is running instead of answering
+  with a platform error nobody can act on. "Open Shortcut" was removed (its
+  sibling on the Settings page keeps a configurable shortcut) and the
+  duplicated "CPU turbo" button left the card: it is a host setting and
+  Settings -> Host already owns it, with the live governor state beside it.
+- **The benchmark reports live FPS per environment.** A row's measured
+  steps/s is divided by the environments that produced it and reported as
+  `frames_per_second`, in the measurements table (15 columns), in the live
+  cards and as a second chart next to the throughput curve. The two do not
+  peak together - aggregate steps/s keeps climbing after the per-agent rate
+  has turned over - and the sweep needs both to find where adding
+  environments stops helping the individual agent. It is a measured rate
+  divided by a count, not a render rate: the workers run `--headless`, so
+  `Engine.get_frames_per_second()` is not available to them.
+- **The sweep is now large enough to find the best configuration.** The
+  automatic plan measures at least 100 configurations on any host (175 on
+  this project's 20-thread machine), rungs the environment count up to 258
+  - with rungs between the powers of two, because a knee reported as
+  "somewhere between 64 and 128" is not a measurement - and the worker
+  count up to 32 regardless of how many cores this machine has, since
+  capping the ladder by core count was a guess about what should win.
+  Budget thinning refuses to cross the 100-configuration floor: a grid
+  thinned to twenty rows cannot locate a knee, and the report would still
+  present its winner as "the best configuration". The default budget went
+  from 15 to 30 minutes (ceiling 120) because the wider ladder did not fit
+  in the old one, and the card states the sweep it is about to run - *175
+  configurations · up to 258 environments · up to 32 workers · ~8 s each ·
+  budget 30 min* - counted with the pipeline's own planner, so the promise
+  in the window and the report the run writes cannot drift apart.
+- **Missing training extras are reported instead of raised.** `train_ppo`
+  imported `stable_baselines3` at the top of the function, so a launch on a
+  machine without the extras died with a `ModuleNotFoundError` traceback
+  after the run directory had been created. It now checks the three imports
+  first and raises one error naming the missing packages and the exact
+  `pip install -e '.[training]'` command, and the System / Telemetry page
+  lists every optional extra with *installed* or *missing* - read from this
+  interpreter, not from memory - next to one *Install training extras*
+  button that runs pip and shows its own output.
 - **The Stats page.** A new page (the eighth) shows what the trained policy
   actually receives, decoded from a real recording instead of guessed: the
   three tracked contacts (relative position, distance, bearing, elevation,
@@ -108,11 +207,12 @@ records what changed and why.
   smoke sweep checks the same thing on every page.
 - **Interface rework.** The window is now built from switchable design
   choices instead of one hard-coded look: five themes (Corz, Midnight
-  Cyan, Neon Lime, Graphite Mono, Light), three shell layouts (rail,
-  topbar, command board), three density presets, four motion levels,
-  adjustable corner radius and optional glow/grid effects. All of it
-  applies live, persists in `.sandboxai/ui/preferences.json` and never
-  drops a font below the 11 px floor.
+  Cyan, Neon Lime, Graphite Mono, Light), three density presets, four
+  motion levels, adjustable corner radius and optional glow/grid effects.
+  All of it applies live, persists in `.sandboxai/ui/preferences.json` and
+  never drops a font below the 11 px floor. (Three shell layouts shipped
+  with this rework - rail, topbar, command board. They are gone again; see
+  the entry above. What remains of the rework is the appearance half.)
 - **Every widget follows the live theme again.** Eleven construction sites
   (the benchmark phase stepper and live cards, the throughput and telemetry
   charts, the System stat row, several tooltips) built their widget without
@@ -253,7 +353,7 @@ records what changed and why.
 - **The window is sized for the display it opens on, and the wide tables use
   the width.** The preferred size is 1800x980 with a 1280x800 floor: a
   1920x1080 screen gets the full width for the benchmark measurements table
-  (which declares 14 columns) instead of the ~900 px its old 3:2 split with
+  (which declares 15 columns) instead of the ~900 px its old 3:2 split with
   the chart left it - the chart is a full-width card of its own now, and the
   Stats page's headline contacts table spans the page while the three small
   tables (objects/memory, hearing, action) sit in one row with widths that

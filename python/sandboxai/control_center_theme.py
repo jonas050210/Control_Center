@@ -390,10 +390,14 @@ DENSITIES: dict[str, Density] = {
     "ultra": Density("ultra", "Ultra", row_height=27, pad=9, gap=6, card_pad=11, font_delta=-1),
 }
 
+#: The shell is deliberately not a choice. There used to be three, but
+#: "Command Board" built the rail (the branch was dead), "Topbar" cost the
+#: window its vertical space for no gain over a rail with eight pages, and
+#: supporting the switch meant every shell change destroyed and rebuilt all
+#: eight pages. One shell keeps the navigation where operators look for it
+#: and keeps a preference that old files may still carry.
 LAYOUT_MODES: dict[str, str] = {
     "rail": "Rail",
-    "topbar": "Topbar",
-    "board": "Command Board",
 }
 
 MOTION_LEVELS: dict[str, str] = {

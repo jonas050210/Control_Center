@@ -128,7 +128,9 @@ sandboxai control-center-desktop
 It provides:
 
 - **Dashboard** - live state, progress, steps/s, elapsed/ETA, environment
-  and worker counts, agent lifecycle summary, device, reward
+  and worker counts, agent lifecycle summary, device, reward, the Roblox
+  client bridge and the quick actions. It does not duplicate run telemetry:
+  Runs / Checkpoints charts those series for the run you selected
 - **Training** - the launch deck (validated against the same
   compatibility rules the benchmark uses) with environment count, worker
   count, device and a **Steps or Time** budget: a time-boxed run carries
@@ -142,11 +144,14 @@ It provides:
 - **Benchmarks** - one **Start Benchmark** action runs the automatic,
   host-scaled measurement pipeline: it checks runtime capabilities, compares
   environment/worker/device candidates, validates the strongest results, and
-  applies the fastest stable recommendation to the launch deck. Live telemetry
-  reports **Steps/s** (not a duplicate peak-FPS counter), latency, stability
-  and progress; the measured configurations and full report remain available
-  for review and are persisted. Advanced sweep controls remain available to
-  scripted callers, not in the GUI.
+  applies the fastest stable recommendation to the launch deck. The sweep
+  measures at least 100 configurations per run, up to 258 environments and
+  32 workers, and states its size before it starts. Live telemetry reports
+  **Steps/s** and **FPS / env** (the same measurement per environment, not a
+  duplicate peak-FPS counter), latency, stability and progress; the measured
+  configurations and full report remain available for review and are
+  persisted. Advanced sweep controls remain available to scripted callers,
+  not in the GUI.
 - **Evaluations** - win/loss/timeout, combat, accuracy and
   action-head/zero-shot diagnostics plus multi-run comparison
 - **Runs / Checkpoints** - a browser over the on-disk run artifacts
@@ -157,10 +162,11 @@ It provides:
   The contract table is complete without a recording; a light replay is
   labelled as such instead of being rendered with zeros that would look
   like data
-- **System / Telemetry** - real CPU/RAM/Godot/dependency status and
-  bounded live telemetry charts; unavailable metrics are shown as such,
+- **System / Telemetry** - real CPU/RAM/Godot/dependency status, a
+  per-extra dependency list with a button that installs the training extras,
+  and bounded live telemetry charts; unavailable metrics are shown as such,
   never estimated
-- **Settings** - theme, shell layout (rail/topbar/board), density,
+- **Settings** - theme, density,
   motion, a free **accent colour** (enter any `#rrggbb`) that any theme can
   wear, accent effects, the **Layout studio** (move, span and
   hide cards), savable **layout presets** that can also be exported to a

@@ -87,12 +87,31 @@ sandboxai benchmark --env-counts 1,2,4,8,16,24,32,48,64 \
 Each environment count is time-boxed (`--max-seconds-per-config`, default
 20 s) so the full recommended sweep finishes in a few minutes instead of
 being proportional to `steps * len(env_counts)`. The result JSON/CSV
-includes, per environment count: `steps_per_second`, `episodes_per_second`,
+includes, per environment count: `steps_per_second`, `frames_per_second`
+(the same throughput divided by the environment count, i.e. how many
+simulation ticks one agent lives through per second), `episodes_per_second`,
 whether the run was time-boxed, and a best-effort resource snapshot (CPU%,
 process RSS, CUDA allocated/reserved memory if PyTorch+CUDA are available).
 `summarize_scaling()` (also printed by the CLI) picks the environment count
 with the best measured throughput and flags where returns start
 diminishing relative to environment-count growth.
+
+`sandboxai benchmark-pipeline` is the staged sweep the Control Center runs.
+It plans a `(environments, workers)` grid of at least 100 configurations up
+to 258 environments and 32 workers, screens each one on the real bridge,
+validates the strongest finalists with a training slice, and writes both a
+report and a recommendation:
+
+```bash
+sandboxai benchmark-pipeline --budget-mode time --minutes 30
+sandboxai benchmark-pipeline --budget-mode steps --steps 2000
+sandboxai benchmark-pipeline --show        # print the persisted recommendation
+```
+
+The 30-minute default is what it costs to carry 100+ measurements plus
+validation. Thinning to fit a smaller budget stops at 100 configurations:
+below that the sweep could no longer locate the knee of the scaling curve,
+and its report would still present the winner as "the best configuration".
 
 ### Profiling the complete PPO path
 

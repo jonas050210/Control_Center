@@ -13,7 +13,9 @@ What is pinned:
   registers exactly the widgets it declared (a spec without a factory
   would render an empty cell; a factory without a spec raises),
 * page titles are unique and ``PAGE_WIDGETS`` only mentions real pages,
-* the old Agents page is gone and no page resurrects a "Tests" tab.
+* the old Agents page is gone and no page resurrects a "Tests" tab,
+* a label names what it shows (``steps/s``, not ``fps``) and a control
+  lives in the one page that owns it.
 """
 
 from __future__ import annotations
@@ -337,6 +339,69 @@ _STYLE_SUFFIXES = (
 )
 
 _THEME = "control_center_theme.py"
+
+
+class PageSurfaceTests(unittest.TestCase):
+    """Labels and controls the operator reads, and where they belong.
+
+    Both failures here were real: a dashboard tile labelled *fps* showed the
+    trainer's steps/s, and the Roblox card carried a "CPU turbo" button that
+    Settings already owned. Neither is a wiring error, so nothing else in
+    this file would notice them.
+    """
+
+    def setUp(self) -> None:
+        self.tree = _module_tree()
+        self.classes = _page_classes(self.tree)
+
+    def _class_constants(self, name: str, attribute: str) -> list[str]:
+        node = self.classes[name]
+        assigned = _class_attr(node, attribute)
+        assert assigned is not None, f"{name}.{attribute} is gone"
+        return [str(item.value) for item in assigned.elts]  # type: ignore[union-attr]
+
+    def test_the_dashboard_names_throughput_steps_per_second(self) -> None:
+        labels = self._class_constants("DashboardPage", "STAT_LABELS")
+        self.assertIn(
+            "steps/s",
+            labels,
+            "the dashboard tile shows the trainer's steps_per_second - calling it fps "
+            "sets it next to the benchmark's FPS/env as if they were one quantity",
+        )
+        self.assertNotIn("fps", labels)
+
+    def test_the_benchmark_units_are_spelled_once(self) -> None:
+        # The table said "FPS/env" while the live cards and the chart said
+        # "FPS / env". Same quantity, two names, one operator comparing them.
+        source = (PACKAGE / "control_center_pages.py").read_text(encoding="utf-8")
+        self.assertNotIn(
+            '"FPS/env"',
+            source,
+            "the FPS column header must come from vm.UNIT_FPS_PER_ENV, not a second spelling",
+        )
+        viewmodel = (PACKAGE / "control_center_viewmodel.py").read_text(encoding="utf-8")
+        self.assertIn('UNIT_STEPS_PER_SECOND = "Steps/s"', viewmodel)
+        self.assertIn('UNIT_FPS_PER_ENV = "FPS / env"', viewmodel)
+
+    def test_the_roblox_card_offers_the_captures_folder(self) -> None:
+        # Screenshots are the evidence of a calibration session; a card that
+        # takes them has to be able to open the folder they land in.
+        source = (PACKAGE / "control_center_pages.py").read_text(encoding="utf-8")
+        self.assertIn('"Open Captures"', source)
+
+    def test_host_settings_live_on_settings_not_in_the_roblox_card(self) -> None:
+        # The Roblox card is about the game client. A CPU-governor button there
+        # was a second control for something Settings already owns - and the
+        # duplication is what makes a page unreadable, not the extra click.
+        self.assertIsNone(
+            _find_method(self.classes["DashboardPage"], "_enable_ubuntu_cpu_turbo"),
+            "CPU turbo is a host setting: it belongs to Settings, which shows the "
+            "governor state beside it, not to the Roblox card",
+        )
+        self.assertIsNotNone(
+            _find_method(self.classes["SettingsPage"], "_activate_ubuntu_cpu_turbo")
+        )
+
 
 _GUI_MODULES = (
     "control_center_desktop.py",

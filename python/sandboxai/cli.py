@@ -659,6 +659,20 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
     results: dict[str, Any] = {}
     failures: list[str] = []
 
+    # 0. Training extras. Everything below imports torch or SB3, and a bare
+    # ModuleNotFoundError three steps into an end-to-end verification reads
+    # like a broken stack rather than a missing optional extra.
+    from .ppo import TRAINING_INSTALL_HINT, missing_training_dependencies
+
+    missing = missing_training_dependencies()
+    if missing:
+        print(f"missing training dependencies: {', '.join(missing)}", file=sys.stderr)
+        print(f"install them with: {TRAINING_INSTALL_HINT}", file=sys.stderr)
+        return {
+            "all_passed": False,
+            "failures": [f"missing training dependencies: {', '.join(missing)}"],
+        }
+
     # 1. Config test
     TrainingConfig(
         environment_count=2,
@@ -870,6 +884,27 @@ def _run_under_control(control: Any, work: Callable[[], dict[str, Any]]) -> dict
     return result
 
 
+def _missing_training_extras_exit_code() -> int | None:
+    """An exit code when the training extras are absent, otherwise ``None``.
+
+    A missing optional extra used to reach the operator as a traceback whose
+    last line happened to be the fix. The message is the deliverable here, so
+    it is printed as one, and the exit code is 2 (a usage-level problem: the
+    command is right, the environment is not) rather than an unhandled crash.
+    """
+    from .ppo import TRAINING_INSTALL_HINT, missing_training_dependencies
+
+    missing = missing_training_dependencies()
+    if not missing:
+        return None
+    print(
+        f"sandboxai: missing training dependency/dependencies: {', '.join(missing)}",
+        file=sys.stderr,
+    )
+    print(f"sandboxai: install them with: {TRAINING_INSTALL_HINT}", file=sys.stderr)
+    return 2
+
+
 def _cmd_bc_train(args: argparse.Namespace) -> int:
     from .bc import train_behavior_cloning
     from .run_control import from_cli_paths
@@ -903,6 +938,9 @@ def _cmd_bc_train(args: argparse.Namespace) -> int:
 
 def _cmd_train(args: argparse.Namespace) -> int:
     """Handles both `train` and `resume`; they differ only in the checkpoint."""
+    blocked = _missing_training_extras_exit_code()
+    if blocked is not None:
+        return blocked
     from .ppo import train_ppo
     from .run_control import from_cli_paths
 
@@ -927,6 +965,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
 
 
 def _cmd_evaluate(args: argparse.Namespace) -> int:
+    blocked = _missing_training_extras_exit_code()
+    if blocked is not None:
+        return blocked
     from stable_baselines3 import PPO  # type: ignore
 
     from .config import TrainingConfig
