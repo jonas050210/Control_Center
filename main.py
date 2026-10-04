@@ -9,7 +9,9 @@ evaluations, runs and telemetry) over the existing ``sandboxai`` package.
 
     python3 main.py
 
-The equivalent installed entry point is ``sandboxai control-center-desktop``
+The recommended launcher is ``python start.py`` (after ``python install.py``):
+it runs this same window inside the project's ``.venv`` and also starts the
+3D checkpoint viewer (``python start.py view``). The equivalent installed entry point is ``sandboxai control-center-desktop``
 (see ``tools/windows/start_control_center.bat`` for the Windows launcher).
 """
 

@@ -162,3 +162,70 @@ jobs:
           PY
           gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
             --method POST --input payload.json
+
+  install-and-viewer:
+    # The user-facing path end to end: `python install.py` on a clean runner
+    # (venv, CPU-only PyTorch, Godot download + SHA-256 check, runtime
+    # validation), then `python start.py view` headless - once with the
+    # scripted baseline and once with a freshly saved PPO checkpoint, so the
+    # real Godot viewer actually talks to the real Python policy server.
+    name: install.py + 3D viewer smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: python install.py
+        run: python install.py
+
+      - name: Viewer smoke test (scripted policy)
+        run: |
+          set -o pipefail
+          python start.py view --policy scripted --headless --max-steps 300 2>&1 | tee viewer_scripted.txt
+          grep -E "Answered [1-9][0-9]* policy decisions" viewer_scripted.txt
+
+      - name: Viewer smoke test (PPO checkpoint)
+        run: |
+          set -o pipefail
+          PY=.venv/bin/python
+          [ -f "$PY" ] || PY=.venv/Scripts/python.exe
+          "$PY" - <<'PY'
+          from pathlib import Path
+
+          import gymnasium as gym
+          import numpy as np
+          from stable_baselines3 import PPO
+
+          from sandboxai.contract import ACTION_NVEC, OBSERVATION_FIELD_COUNT
+
+
+          class ContractEnv(gym.Env):
+              observation_space = gym.spaces.Box(-1.0, 1.0, (OBSERVATION_FIELD_COUNT,), np.float32)
+              action_space = gym.spaces.MultiDiscrete(list(ACTION_NVEC))
+
+              def reset(self, *, seed=None, options=None):
+                  return np.zeros(OBSERVATION_FIELD_COUNT, np.float32), {}
+
+              def step(self, action):
+                  return np.zeros(OBSERVATION_FIELD_COUNT, np.float32), 0.0, True, False, {}
+
+
+          target = Path("training/runs/ci-viewer/checkpoints/best_eval.zip")
+          target.parent.mkdir(parents=True, exist_ok=True)
+          PPO("MlpPolicy", ContractEnv(), n_steps=8, batch_size=8, device="cpu").save(target)
+          print("saved", target)
+          PY
+          python start.py view --headless --map compound --max-steps 300 2>&1 | tee viewer_ppo.txt
+          grep -F "best_eval.zip" viewer_ppo.txt
+          grep -E "Answered [1-9][0-9]* policy decisions" viewer_ppo.txt

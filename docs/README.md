@@ -17,7 +17,7 @@ truth for versions and the engine contract.
 | --- | --- |
 | [OBSERVATION_ACTION_CONTRACT.md](OBSERVATION_ACTION_CONTRACT.md) | The single source of truth for what a policy sees and does. Read this before touching the bridge, the observation builder or the action space. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The Godot/Python runtime split, the module map, and the testing rules the suite is held to. |
-| [PYTHON_MODULE_MAP.md](PYTHON_MODULE_MAP.md) | Where to find things in `python/sandboxai/`: all 52 modules grouped by theme, with each description generated from the module's own docstring. |
+| [PYTHON_MODULE_MAP.md](PYTHON_MODULE_MAP.md) | Where to find things in `python/sandboxai/`: all 54 modules grouped by theme, with each description generated from the module's own docstring. |
 | [CURRICULUM_AND_COMBAT.md](CURRICULUM_AND_COMBAT.md) | Curriculum levels, enemy behaviour and the multi-enemy combat model. |
 | [REPLAY_AND_METRICS.md](REPLAY_AND_METRICS.md) | Replay format, research metrics, generalization conditions and curriculum telemetry. |
 | [TTK_TESTING_REFERENCE.md](TTK_TESTING_REFERENCE.md) | Official TTK Testing evidence, calibration gaps, screenshot protocol and excluded mechanics. |
@@ -28,6 +28,7 @@ truth for versions and the engine contract.
 | --- | --- |
 | [CONTROL_CENTER.md](CONTROL_CENTER.md) | The headless desktop Control Center (`python3 main.py`): pages, lifecycle actions, benchmark pipeline and honesty rules. |
 | [ADAPTER_AND_DESKTOP_CONTROL_CENTER.md](ADAPTER_AND_DESKTOP_CONTROL_CENTER.md) | The Python adapter and the Tkinter desktop Control Center built on top of it. |
+| [CHECKPOINT_VIEWER.md](CHECKPOINT_VIEWER.md) | The 3D checkpoint viewer (`python start.py view`): watch a trained PPO/BC policy play any map with spectator cameras, plus its socket protocol. |
 | [DEBUG_GUI_AND_BENCHMARKING.md](DEBUG_GUI_AND_BENCHMARKING.md) | The in-scene debug overlay and how to run and read the benchmark suites. |
 | [RUN_LOCAL_VALIDATION.md](RUN_LOCAL_VALIDATION.md) | Step-by-step full validation on a machine that actually has Godot installed, including the Windows/WSL paths. |
 

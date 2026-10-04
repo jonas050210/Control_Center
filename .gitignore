@@ -43,3 +43,6 @@ coverage.xml
 htmlcov/
 # Virtualenv created by the desktop-ui-tests CI job
 .ui-venv/
+
+# Godot build downloaded by install.py (official release, SHA-256 verified)
+/tools/godot/

@@ -8,6 +8,34 @@ records what changed and why.
 
 ## Unreleased
 
+### Setup, launcher and 3D viewer
+
+- **`python install.py` sets up everything in one command.** It creates
+  `.venv` and installs CPU-only PyTorch from the PyTorch CPU index. The
+  project and its extras come next, then the official Godot 4.7.2 build,
+  downloaded into `tools/godot/` with a SHA-256 check. A `validate-runtime`
+  check runs last. It is safe to re-run; `--repair` rebuilds the
+  environment. On Linux, plain PyPI torch would pull CUDA wheels of several
+  gigabytes, so the installer refuses that fallback unless
+  `--allow-pypi-torch` is given.
+- **`python start.py` replaces `python3 main.py` as the launcher.** It
+  re-executes itself inside `.venv`, offers to run `install.py` when the
+  environment is missing, and forwards every `sandboxai` command (`start.py
+  view`, `start.py train ...`). `main.py` and the Windows `.bat` keep
+  working; the `.bat` now delegates to `start.py`.
+- **GPU support is dropped from setup.** "Install training extras" in the
+  Control Center and `sandboxai install` now install CPU-only PyTorch.
+  `config.find_godot_executable` also finds the downloaded build.
+- **New 3D checkpoint viewer (`sandboxai view`, Control Center "Watch in
+  3D").** A trained PPO `.zip`, a BC `.pt` or the scripted baseline drives
+  the agent in a rendered Godot window. The Godot process asks a local
+  Python policy server for one action per tick over newline-delimited JSON,
+  so the game physics are unchanged. The window offers four cameras, pause,
+  single-step, 0.25x to 8x speed, live map switching and a HUD. See
+  `docs/CHECKPOINT_VIEWER.md`. CI gained the job `install-and-viewer`. On
+  clean Linux and Windows runners it runs `install.py`, then plays the
+  viewer headless against the scripted baseline and a real PPO checkpoint.
+
 ### Control Center
 
 - **Automatic benchmark windows are fixed, not budget-thinned.** Every

@@ -22,6 +22,7 @@ const SandboxTest = preload("res://tests/sandbox_test.gd")
 const ENTRY_POINT_PATHS: Array = [
 	"res://scripts/rl/rl_server.gd",
 	"res://scripts/recording/record_demo.gd",
+	"res://scripts/viewer/viewer_entry.gd",
 	"res://tests/run_tests.gd",
 ]
 

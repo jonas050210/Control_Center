@@ -40,7 +40,7 @@ TRAINING_DEPENDENCIES: tuple[tuple[str, str], ...] = (
 )
 
 #: The one command that installs every training extra from a checkout.
-TRAINING_INSTALL_HINT = "python -m pip install -e '.[training]'"
+TRAINING_INSTALL_HINT = "python install.py"
 
 
 def missing_training_dependencies() -> list[str]:

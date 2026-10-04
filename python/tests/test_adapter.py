@@ -3,6 +3,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from sandboxai.adapter import ProcessManager, SandboxAIAdapter
 from sandboxai.config import TrainingConfig
 from sandboxai.contract import OBSERVATION_FIELD_COUNT
@@ -860,3 +862,47 @@ def test_automatic_benchmark_has_a_fixed_window_and_no_synthetic_fallback(tmp_pa
     assert report["status"] == "unavailable"
     assert report["recommendation"] is None
     assert not (tmp_path / "training" / ".runtime").exists()
+
+
+def test_start_viewer_launches_the_view_command(tmp_path):
+    adapter = SandboxAIAdapter(project_root=tmp_path, output_root=tmp_path / "training")
+    try:
+        adapter.start_viewer(tmp_path / "missing.zip")
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("expected FileNotFoundError for a missing checkpoint")
+
+    checkpoint = tmp_path / "training" / "runs" / "demo" / "checkpoints" / "best_eval.zip"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"zip")
+    try:
+        adapter.start_viewer(checkpoint, level=11)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for level 11")
+
+    launched = {}
+
+    def fake_start(kind, command, run_dir, cwd, meta=None):
+        launched.update(kind=kind, command=command, run_dir=run_dir, meta=meta)
+        raise RuntimeError("stop before spawning")
+
+    adapter.processes.start = fake_start
+    with pytest.raises(RuntimeError):
+        adapter.start_viewer(checkpoint, map_id="compound", level=4, stochastic=True)
+    assert launched["kind"] == "viewer"
+    assert launched["run_dir"] == checkpoint.parent.parent
+    command = launched["command"]
+    view_args = command[command.index("view") :]
+    assert view_args == [
+        "view",
+        "--checkpoint",
+        str(checkpoint),
+        "--map",
+        "compound",
+        "--level",
+        "4",
+        "--stochastic",
+    ]

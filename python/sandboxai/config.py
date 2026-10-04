@@ -170,6 +170,10 @@ def _local_godot_search_dirs() -> list[Path]:
             seen_dirs.add(key)
             search_dirs.append(path)
 
+    # The build install.py downloads lives inside the checkout; it wins over
+    # whatever older Godot sits in Downloads.
+    add_dir(Path(__file__).resolve().parents[2] / "tools" / "godot" / GODOT_VERSION)
+
     roots = [Path.home()]
     userprofile = os.environ.get("USERPROFILE")
     if userprofile:
@@ -214,6 +218,7 @@ def _discover_local_godot_in_directory(directory: Path) -> str | None:
         f"Godot_v{GODOT_VERSION}-stable_win64_console.exe",
         f"Godot_v{GODOT_VERSION}-stable_win64.exe",
         f"Godot_v{GODOT_VERSION}-stable_linux.x86_64",
+        f"Godot_v{GODOT_VERSION}-stable_linux.arm64",
     )
     patterns = (
         "Godot_v*_console.exe",

@@ -829,39 +829,65 @@ class SandboxAIAdapter:
         }
 
     def install_training_extras(self, *, timeout_seconds: float = 1800.0) -> dict[str, Any]:
-        """Run ``pip install -e '.[training]'`` in this checkout.
+        """Install the training extras (CPU-only PyTorch first) in this checkout.
 
         Deliberately not a silent repair: it is the operator's own button, it
         runs in their interpreter, and its whole output comes back so the
         window can show what actually happened instead of a success flag.
+
+        PyTorch comes from the CPU-only wheel index first - the same choice as
+        ``install.py`` - so pip never pulls the multi-gigabyte CUDA build that
+        plain PyPI ships on Linux. The project install then finds torch
+        already satisfied.
         """
-        command = [sys.executable, "-m", "pip", "install", "-e", ".[training]"]
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=str(self.project_root),
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-                check=False,
+        commands = [
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "torch>=2.1,<3",
+                "--index-url",
+                "https://download.pytorch.org/whl/cpu",
+            ],
+            [sys.executable, "-m", "pip", "install", "-e", ".[training]"],
+        ]
+        outputs: list[str] = []
+        for command in commands:
+            try:
+                completed = subprocess.run(
+                    command,
+                    cwd=str(self.project_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return {
+                    "ok": False,
+                    "command": " ".join(command),
+                    "returncode": None,
+                    "error": str(exc),
+                    "output": "\n".join(outputs)[-4000:],
+                }
+            outputs.append(
+                "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
             )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return {
-                "ok": False,
-                "command": " ".join(command),
-                "returncode": None,
-                "error": str(exc),
-                "output": "",
-            }
-        output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
+            if completed.returncode != 0:
+                return {
+                    "ok": False,
+                    "command": " ".join(command),
+                    "returncode": completed.returncode,
+                    "error": f"pip exited with {completed.returncode}",
+                    "output": "\n".join(outputs)[-4000:],
+                }
         return {
-            "ok": completed.returncode == 0,
-            "command": " ".join(command),
-            "returncode": completed.returncode,
-            "error": None
-            if completed.returncode == 0
-            else f"pip exited with {completed.returncode}",
-            "output": output[-4000:],
+            "ok": True,
+            "command": " && ".join(" ".join(command) for command in commands),
+            "returncode": 0,
+            "error": None,
+            "output": "\n".join(outputs)[-4000:],
         }
 
     # ------------------------------------------------------------------
@@ -1928,6 +1954,42 @@ class SandboxAIAdapter:
         record = self.processes.start(
             "evaluation", command, directory, self.project_root, meta=meta
         )
+        return self.processes.snapshot(record.id) | {"process_id": record.id}
+
+    def start_viewer(
+        self,
+        checkpoint: str | Path,
+        *,
+        map_id: str = "",
+        level: int | None = None,
+        stochastic: bool = False,
+    ) -> dict[str, Any]:
+        """Open the rendered 3D viewer with ``checkpoint`` driving the agent.
+
+        The viewer is an ordinary child process (``sandboxai view``), so it
+        shows up in the process list and can be stopped like any other job.
+        It opens its own Godot window; this window stays responsive.
+        """
+        checkpoint_path = Path(checkpoint).expanduser()
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(f"checkpoint does not exist: {checkpoint_path}")
+        if level is not None and not 1 <= int(level) <= 10:
+            raise ValueError("level must be between 1 and 10")
+        arguments = ["view", "--checkpoint", str(checkpoint_path)]
+        if map_id:
+            arguments += ["--map", map_id]
+        if level is not None:
+            arguments += ["--level", str(int(level))]
+        if stochastic:
+            arguments.append("--stochastic")
+        command = self._python_command(*arguments)
+        run_dir = (
+            checkpoint_path.parent.parent
+            if checkpoint_path.parent.name == "checkpoints"
+            else checkpoint_path.parent
+        )
+        meta = {"checkpoint": str(checkpoint_path), "map_id": map_id, "level": level}
+        record = self.processes.start("viewer", command, run_dir, self.project_root, meta=meta)
         return self.processes.snapshot(record.id) | {"process_id": record.id}
 
     def process_status(self, process_id: str) -> ProcessSnapshot:

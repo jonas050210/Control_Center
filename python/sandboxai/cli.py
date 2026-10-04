@@ -337,9 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
     install = sub.add_parser(
         "install", help="print the recommended local dependency installation command"
     )
-    install.add_argument(
-        "--cuda", action="store_true", help="also print the CUDA PyTorch index example"
-    )
+    # Kept so old scripts do not crash; GPU training is no longer supported.
+    install.add_argument("--cuda", action="store_true", help=argparse.SUPPRESS)
 
     train = sub.add_parser("train", help="train PPO against headless Godot")
     _add_training_options(train)
@@ -385,6 +384,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="run/benchmark/evaluation output directory, relative to --project-path unless absolute "
         "(default: training)",
     )
+
+    view = sub.add_parser(
+        "view",
+        help="watch a checkpoint play in the rendered 3D viewer (Godot window)",
+        description="Watch a trained policy play the real simulation in a Godot window. "
+        "Without --checkpoint the newest run's best checkpoint is used.",
+    )
+    view.add_argument(
+        "--checkpoint",
+        help="PPO .zip, BC .pt, or a run directory (default: the newest run under --output-root)",
+    )
+    view.add_argument(
+        "--policy",
+        choices=["ppo", "bc", "scripted"],
+        help="'scripted' plays the scripted baseline without any checkpoint",
+    )
+    view.add_argument("--map", default="", help="authored map id (see --list-maps); M cycles live")
+    view.add_argument(
+        "--level", type=int, help="curriculum level 1-10 (default: where the run ended, else 10)"
+    )
+    view.add_argument("--enemies", type=int, help="enemy count (default: the run's setting)")
+    view.add_argument("--seed", type=int, help="seed of the first episode")
+    view.add_argument("--scenario", default="", help="scenario id (spawn layout)")
+    view.add_argument("--lighting", default="", help="lighting mode override")
+    view.add_argument("--weapon", default="", help="agent weapon profile override")
+    view.add_argument("--speed", type=float, default=1.0, help="playback speed (0.25-8)")
+    view.add_argument(
+        "--camera",
+        default="chase",
+        choices=["chase", "orbit", "top-down", "first-person"],
+        help="initial camera (C cycles live)",
+    )
+    view.add_argument(
+        "--stochastic", action="store_true", help="sample actions instead of taking the argmax"
+    )
+    view.add_argument("--headless", action="store_true", help="no window (automated smoke tests)")
+    view.add_argument("--max-steps", type=int, default=0, help="quit after N ticks (0 = never)")
+    view.add_argument(
+        "--max-episodes", type=int, default=0, help="quit after N episodes (0 = never)"
+    )
+    view.add_argument("--list-maps", action="store_true", help="print the map ids and exit")
+    view.add_argument("--godot-executable", default=None)
+    view.add_argument("--project-path", default="")
+    view.add_argument("--output-root", default="training")
 
     bc = sub.add_parser("bc-train", help="train a PyTorch behavior-cloning policy")
     bc.add_argument("--dataset", required=True)
@@ -783,16 +826,14 @@ def run_smoke_test(device: str = "cpu") -> dict[str, Any]:
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
-    print("python -m pip install -e '.[training]'")
-    if args.cuda:
-        print(
-            "For CUDA, install the matching PyTorch wheel from "
-            "https://pytorch.org/ before the command above."
-        )
+    print("python install.py")
     print(
-        f"Godot {GODOT_VERSION} must be installed separately and available as "
-        "'godot' (or pass --godot-executable)."
+        "(sets up .venv with CPU-only PyTorch, the training extras and Godot; "
+        "manual equivalent: pip install torch --index-url "
+        "https://download.pytorch.org/whl/cpu && pip install -e '.[training]')"
     )
+    if args.cuda:
+        print("Note: SandboxAI trains on the CPU only; there is no CUDA build to install.")
     return 0
 
 
@@ -815,6 +856,38 @@ def _cmd_control_center_desktop(args: argparse.Namespace) -> int:
         raise
 
     return desktop_main(project_root=args.project_path or None, output_root=args.output_root)
+
+
+def _cmd_view(args: argparse.Namespace) -> int:
+    from .viewer import ViewerOptions
+    from .viewer import main as viewer_main
+
+    if args.list_maps:
+        from .conditions import MAP_IDS
+
+        print("\n".join(MAP_IDS))
+        return 0
+    options = ViewerOptions(
+        checkpoint=args.checkpoint,
+        policy=args.policy,
+        map=args.map,
+        level=args.level,
+        enemies=args.enemies,
+        seed=args.seed,
+        scenario=args.scenario,
+        lighting=args.lighting,
+        weapon=args.weapon,
+        speed=args.speed,
+        camera=args.camera,
+        stochastic=args.stochastic,
+        headless=args.headless,
+        max_steps=max(0, args.max_steps),
+        max_episodes=max(0, args.max_episodes),
+        godot_executable=args.godot_executable,
+        project_path=args.project_path,
+        output_root=args.output_root,
+    )
+    return viewer_main(options)
 
 
 def _cmd_smoke_test(args: argparse.Namespace) -> int:
@@ -1278,6 +1351,7 @@ _COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inspect-dataset": _cmd_inspect_dataset,
     "inspect-runs": _cmd_inspect_runs,
     "record": _cmd_record,
+    "view": _cmd_view,
     "bc-train": _cmd_bc_train,
     "train": _cmd_train,
     "resume": _cmd_train,

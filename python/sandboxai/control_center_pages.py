@@ -652,7 +652,11 @@ class ActiveRunStrip(ttk.Frame):
         self.app.background.submit(lambda: self.adapter.agents.stop(agent_id), done)
 
     def _open_page(self, kind: str) -> None:
-        page = {"benchmark": "Benchmarks", "evaluation": "Runs / Checkpoints"}.get(kind, "Training")
+        page = {
+            "benchmark": "Benchmarks",
+            "evaluation": "Runs / Checkpoints",
+            "viewer": "Runs / Checkpoints",
+        }.get(kind, "Training")
         if page in self.app.pages:
             self.app.show_page(page)
 
@@ -2972,6 +2976,9 @@ class RunsPage(Page):
         ttk.Button(actions, text="Evaluate best checkpoint", command=self._evaluate_best).pack(
             side="left", padx=(8, 0)
         )
+        ttk.Button(actions, text="Watch in 3D", command=self._watch_in_3d).pack(
+            side="left", padx=(8, 0)
+        )
         ttk.Button(
             actions, text="Clone topology to Training", command=self._clone_to_training
         ).pack(side="left", padx=(8, 0))
@@ -3355,6 +3362,32 @@ class RunsPage(Page):
             )
             return
         self._start_evaluation(target)
+
+    def _watch_in_3d(self) -> None:
+        """Opens the rendered Godot viewer with this run's best checkpoint.
+
+        The viewer is a separate window and a normal child process: it
+        appears in the active-jobs strip and is stopped from there or by
+        closing its window. See docs/CHECKPOINT_VIEWER.md.
+        """
+        if not self._selected_run_dir:
+            return
+        target = _resolve_run_checkpoint(self._selected_run_dir, prefer_best=True)
+        if target is None:
+            messagebox.showinfo(
+                "No checkpoint yet",
+                "This run has neither best_eval.zip nor latest.zip yet.",
+            )
+            return
+        path = str(target)
+
+        def done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+            if error is not None or result is None:
+                messagebox.showerror("Viewer could not start", str(error))
+                return
+            self.app.set_status(f"3D viewer opening with {target.name} — close its window to stop")
+
+        self.app.background.submit(lambda: self.adapter.start_viewer(path), done)
 
     def prepare_evaluation(self, checkpoint: str | Path) -> None:
         """Takes over a checkpoint another page already resolved.
@@ -3755,7 +3788,7 @@ class SystemPage(Page):
         self.deps_install_button.pack(side="right", padx=(self.app.px(8, minimum=4), 0))
         ToolTip(
             self.deps_install_button,
-            "Runs pip install -e '.[training]' in the project root; the output is shown afterwards",
+            "Installs CPU-only PyTorch and the training extras into this Python; the output is shown afterwards",
             bus=self.app.bus,
         )
 

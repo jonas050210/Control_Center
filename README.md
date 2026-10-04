@@ -30,20 +30,66 @@ screenshot the Roblox client for a human to measure, as specified in
 
 ## Requirements
 
-- Godot **4.7.2** (standard build, GDScript only)
-- Python **3.11+**
-- Optional Python training dependencies: PyTorch, Gymnasium,
-  Stable-Baselines3, TensorBoard and psutil
-- Windows 11 or Ubuntu/Linux. CUDA is optional and detected through
-  `torch.cuda.is_available()`; no GPU model is hardcoded.
-
-The target RTX 4060 Ti 8 GB is appropriate for the compact MLP and structured
-observations, but CPU mode is fully supported.
+- Python **3.11+**. On Windows, use the python.org installer, which includes Tkinter. On Linux, also install `python3-tk` (and `python3-venv`).
+- Windows 11, Ubuntu/Linux or macOS. Training and inference run on the **CPU**. SandboxAI installs the CPU-only PyTorch build, so no NVIDIA driver, CUDA or GPU is needed.
+- Godot **4.7.2** (standard build). You do not need to install it yourself; `install.py` fetches it.
 
 ## Installation
 
-Install Godot separately and make the executable available as `godot`, or
-configure its location once with `--godot-executable`. The last verified
+Two commands from the repository root:
+
+```bash
+python install.py      # once: .venv, CPU-only PyTorch, all extras, Godot 4.7.2, self-check
+python start.py        # every time: opens the Control Center
+```
+
+`install.py` performs these steps:
+
+1. Creates `.venv`.
+2. Installs PyTorch from the CPU-only wheel index.
+3. Installs the project with the training extras.
+4. Downloads and verifies Godot.
+5. Runs `validate-runtime` once against the real headless bridge.
+
+It is safe to re-run, and `--repair` rebuilds a broken environment. Other flags:
+
+- `--godot PATH` uses an existing Godot instead of downloading one.
+- `--no-godot` skips Godot.
+- `--no-training` is an inspection-only setup without PyTorch.
+- `--dev` adds the lint and test tools.
+
+See `python install.py --help` for the full list.
+
+`start.py` always runs inside `.venv`; you never activate it yourself. If the
+setup is missing, it offers to run `install.py`. It also starts every other
+command:
+
+```bash
+python start.py                          # Control Center (desktop window)
+python start.py view                     # watch the newest checkpoint play in 3D
+python start.py train --env-count 8      # any `sandboxai` command works
+python start.py help
+```
+
+On Windows, `tools\windows\start_control_center.bat` does the same as
+`python start.py`. `python3 main.py` still opens the Control Center as well,
+but it uses whatever Python runs it.
+
+### Manual setup
+
+Equivalent to `install.py`, for people who manage environments themselves:
+
+```bash
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate    Windows: .venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[training,test]"
+```
+
+### Godot location
+
+`install.py` downloads the official Godot build into `tools/godot/` (gitignored), checks its SHA-256 and remembers it. To use your own build, pass `python install.py --godot PATH`, or configure its location once with `--godot-executable`. The last verified
 executable is remembered in `.sandboxai/settings.json` (gitignored), so
 configuring it for one command — for example
 `python -m sandboxai validate-runtime --godot-executable "C:\path\to\Godot.exe"`
@@ -70,24 +116,6 @@ wrapper is applied automatically when needed. Reliable direct launches
 require `[interop] enabled=true` in `/etc/wsl.conf`, the WSLInterop
 `systemd-binfmt` registration, and the execute bit on the `.exe` as seen
 from WSL.
-
-Then from the repository root:
-
-```bash
-python -m venv .venv
-# Linux/macOS
-source .venv/bin/activate
-# Windows PowerShell
-.venv\Scripts\Activate.ps1
-
-python -m pip install --upgrade pip
-python -m pip install -e ".[training,test]"
-```
-
-For CUDA, install the PyTorch wheel matching the installed NVIDIA driver from
-[pytorch.org](https://pytorch.org/) before installing the remaining extras.
-The application detects CUDA at startup and fails clearly if `--device cuda`
-is requested but unavailable.
 
 ## Run the Godot project
 
@@ -119,7 +147,7 @@ read-only status files with them.
 
 ```bash
 # from the repository root (no Godot editor, no .tscn):
-python3 main.py
+python start.py
 
 # ... or through the CLI:
 sandboxai control-center-desktop
@@ -410,9 +438,11 @@ see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
   processes run concurrently and are joined before best-model selection or
   early stopping.
 - `--inference-device cpu` (default `auto`): run rollout/evaluation policy
-  inference on CPU while PPO updates stay on `--device`. On CUDA hardware
-  this removes the per-step host<->device round trip that makes GPU training
-  *slower* than CPU for the tiny (126 -> 128 -> 128) policy.
+  inference on CPU while PPO updates stay on `--device`. With the CPU-only
+  PyTorch that `install.py` sets up, both are the CPU anyway. The flag only
+  matters for a self-managed CUDA install, where it avoids the per-step
+  host<->device round trip that makes GPU training *slower* than CPU for the
+  tiny (126 -> 128 -> 128) policy.
 - `--env-workers N|auto` (default 1): host the environments in N independent
   headless Godot processes instead of one. Shard *k* owns a contiguous slice
   of the environments and is launched with that slice's base seed, which is
@@ -442,7 +472,7 @@ To warm-start PPO from BC, request an exact-compatible transfer:
 
 ```bash
 sandboxai train --bc-checkpoint training/bc_runs/human_v1/best.pt \
-  --device cuda --steps 500000
+  --steps 500000
 ```
 
 The transfer copies only matching MLP hidden layers and categorical action
@@ -528,6 +558,21 @@ sandboxai train --curriculum-mode fixed --curriculum-level 3
 sandboxai train --checkpoint-league-eval --league-matches-per-checkpoint 8 \
   --condition-eval-episodes 48 --generalization-episodes-per-cell 2
 ```
+
+### Watch a checkpoint in 3D
+
+```bash
+python start.py view                                  # newest run, best checkpoint
+python start.py view --checkpoint training/runs/<run> --map compound
+python start.py view --checkpoint training/bc_runs/human_v1/best.pt --camera orbit
+```
+
+This opens a rendered Godot window in which the checkpoint drives the agent
+through the real simulation, one decision per tick, exactly as in
+training. You can pause, single-step, change the speed between 0.25x and 8x,
+switch between four cameras and change maps live. The Control Center offers
+the same with **Runs / Checkpoints -> Watch in 3D**. Details, controls and
+the protocol: [docs/CHECKPOINT_VIEWER.md](docs/CHECKPOINT_VIEWER.md).
 
 ### Evaluation
 

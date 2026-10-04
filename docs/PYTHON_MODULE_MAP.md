@@ -1,6 +1,6 @@
 # Python module map
 
-`sandboxai` is a flat package: all 53 modules sit directly under
+`sandboxai` is a flat package: all 54 modules sit directly under
 `python/sandboxai/`. That is deliberate. Every module's import path is
 public API - it appears in the docs, in user scripts and in saved run
 manifests - so rearranging the files into subpackages would rewrite
@@ -134,4 +134,5 @@ Reached from a shell rather than from Python.
 | Module | Summary |
 | --- | --- |
 | [`cli`](../python/sandboxai/cli.py) | Command-line workflow for recording, BC, PPO, evaluation, benchmarks and smoke tests. |
+| [`viewer`](../python/sandboxai/viewer.py) | 3D checkpoint viewer: watch a trained policy play in a rendered Godot window. |
 | [`gdscript_analysis`](../python/sandboxai/gdscript_analysis.py) | Static analysis for the Godot/GDScript half of SandboxAI. |
