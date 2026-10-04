@@ -381,7 +381,45 @@ records what changed and why.
   functions (`fit_window_geometry`) with unit tests, so the Tk side only
   passes the screen size in and applies the result.
 
+- **The Evaluations page is gone.** Evaluations were a page of their own,
+  which meant picking a run twice: once to find its evaluations and once to
+  read them. The Runs page now carries a run's evaluations next to its
+  checkpoints, `discover_evaluations(run=...)` takes the run it is asking
+  about, and the checkpoint picker that the desktop never used (it resolves
+  `latest`/`best` for the selected run) is gone with the page. The CLI
+  `sandboxai evaluate` and the training scheduler's evaluation fields are
+  untouched - this removed a view, not the capability.
+- **The Stats page says what its numbers mean.** 126 normalised fields with
+  no statement of the normalisation is noise, so the page now leads with a
+  *How to read this page* card built from the contract's own constants: what
+  a tick is (126 in, 6 out), that "norm" is a division by a fixed maximum
+  and not a percentage (distance `0.50` is 14 m because the arena diagonal
+  is 28 m; counts are divided by 8), that signed values are directions and
+  unsigned ones amounts, and that every contact is relative to the agent.
+  *The agent's own screen* draws the same vector: the three contacts as the
+  boxes the engine reported, lit by how readable each one was, centred under
+  the crosshair - a view, not a map, and a contact with no box is not drawn,
+  because that is what the engine means when it zeroes the block. Exposure
+  and Clarity columns keep "in the cone with a clear line" apart from "a
+  readable target", and both report `n/a` rather than `0%` when there is no
+  box, because a zero would read like a measurement.
+- **A TTK capture is shown, not named.** The Roblox card used to print the
+  path of the screenshot it had just written. It now shows the image, and
+  the annotated copy the analysis produced, scaled to the card.
+
 ### TTK Testing scope
+- **A capture is analysed the moment it is written, and the dark is
+  readable.** `sandboxai.ttk_vision` decodes the PNG itself (zlib + numpy -
+  Pillow is not a dependency and `ImageGrab` is Windows-only anyway), lifts
+  the shadows so a target standing in a dark corner is separable from the
+  wall behind it, and returns one box per figure with a score, its contrast
+  against the surround and whether the box touches the frame edge. The
+  annotated PNG is written next to the capture, the result is part of the
+  capture itself, and a frame that cannot be decoded reports the error while
+  still reporting the file it wrote. Twenty tests cover the round-trip
+  through every PNG filter type, the five decode failures, the shadow lift
+  on dark, bright and coloured frames, and the false-positive probe that
+  made an earlier version draw a box around a bright wall.
 - **The bounded live-helper surface is documented, and the statements that
   contradicted it are corrected.** `sandboxai.ttk_testing` had grown the
   helpers the Control Center uses for a manual calibration session (process
@@ -405,6 +443,50 @@ records what changed and why.
 - `docs/TTK_TESTING_REFERENCE.md`: official-source links, the mechanics
   matrix, screenshot-only calibration protocol and exclusions for the
   TTK-focused rebuild.
+
+### Observation contract v5 - what the agent sees of a contact
+- **The observation grew from 106 to 126 floats: every tracked contact now
+  reports the box it covers on the agent's own screen.** Where it sits
+  (`screen_x` / `screen_y`, normalised device coordinates, so `0, 0` is under
+  the crosshair), how much of the screen it covers (half-extents, which grow
+  as the contact comes closer), how much of the body is not behind cover
+  (`exposure_fraction`) and how much light it is standing in
+  (`illumination`), plus `reticle_on_primary` (124) and
+  `primary_contact_clarity` (125). Indices `0-105` are unchanged and
+  everything new is appended; nothing has been trained on v4, so no
+  checkpoint is lost by the bump.
+- **Still nothing the agent cannot perceive.** A contact it has never seen
+  gets no box, not a box at a guessed position; a contact it has lost keeps
+  the box it last saw and nothing only a live sighting could produce - no
+  exposure, no clarity, never a reticle. A target at or behind the eye zeroes
+  the block, which reads as "not on my screen" and never as a box pinned to
+  the middle of it.
+- **The block is filled on levels 1-5 too, which have no perception layer.**
+  There are no beliefs to read there, so it is measured from ground truth
+  with the same function (`AgentPerception.vision_reading`) and written by
+  the same writer (`Observation.apply_vision_reading`) - one measurement,
+  two paths, so they cannot drift into two dialects. Those levels already
+  report exact contact positions, so an empty block claimed the agent cannot
+  tell how big an enemy looks whose position it knows to the centimetre. It
+  also makes `exposure_fraction` real at level 5 (`obstacles_cover`), the
+  level that has cover before it has the perception gate.
+- **The play camera shows the cone the contract describes.** `AgentView`
+  hardcoded `camera.fov = 80.0`, but Godot's `fov` is the vertical angle
+  under the default `keep_aspect` while `AGENT_FOV_DEG` (100 degrees) is the
+  horizontal cone the perception system and the screen box are built on: at
+  the project's 16:9 window that was roughly 112 degrees horizontal, so a
+  human was shown noticeably more than the agent can perceive and the
+  crosshair could sit over an enemy the observation reports as outside the
+  cone. The vertical angle is now derived from the contract (about 67.7
+  degrees at 16:9) and pinned by a test.
+- **The debug overlay frames what the agent can see.** Every enemy the
+  perception system marks visible gets a thin hollow rectangle at the
+  position the engine itself reports - orange with a clear line of sight,
+  green when the contact is partly behind cover - and the text panel counts
+  them. The boxes come from the same `screen_box` the observation carries on
+  the perception levels and from the same geometry on the others, so the
+  rectangles, the vector and the Stats page cannot disagree. A remembered
+  contact and a corpse get no box: "in view" is not "alive".
 
 ### Removed
 - The invented weapon drills `rifle_lane_drill`, `shotgun_breach_drill`,

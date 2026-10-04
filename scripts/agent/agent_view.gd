@@ -9,6 +9,7 @@ extends Node3D
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const AgentState = preload("res://scripts/agent/agent_state.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 var state: AgentState
 var camera: Camera3D
@@ -32,10 +33,27 @@ func setup(p_state: AgentState) -> void:
 
 	camera = Camera3D.new()
 	camera.position = Vector3(0.0, state.eye_height, 0.0)
-	camera.fov = 80.0
+	camera.keep_aspect = Camera3D.KEEP_HEIGHT
+	camera.fov = vertical_fov_deg()
 	add_child(camera)
 
 	sync()
+
+
+## The vertical field-of-view angle for the play camera, derived from the
+## contract's cone instead of being typed in.
+##
+## The two live on different axes: `SandboxConfig.AGENT_FOV_DEG` is the
+## HORIZONTAL cone - the one `PerceptionSystem.target_screen_box` and the
+## observation's screen box are built on - while Godot's `Camera3D.fov` is the
+## VERTICAL angle whenever `keep_aspect` is `KEEP_HEIGHT`, which is the
+## default. A hardcoded `80.0` here was therefore not "a bit off": at the
+## project's 16:9 window it is ~112° horizontal, so the human was shown
+## noticeably more than the agent can perceive, and the crosshair could sit
+## over an enemy the observation reports as outside the cone.
+static func vertical_fov_deg() -> float:
+	var half_horizontal: float = deg_to_rad(SandboxConfig.AGENT_FOV_DEG) * 0.5
+	return rad_to_deg(2.0 * atan(tan(half_horizontal) / SandboxConfig.AGENT_VIEW_ASPECT))
 
 
 ## Mirrors the current AgentState onto this node's transform. Called once

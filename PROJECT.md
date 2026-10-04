@@ -101,13 +101,15 @@ The full field-level authority is `docs/OBSERVATION_ACTION_CONTRACT.md`; the exe
 | `72–75` | 4 | Second sound plus hearing error/source-count summary |
 | `76–83` | 8 | Perception-earned map coverage, visit age, remembered cover/danger, contact uncertainty |
 | `84–105` | 22 | Three ranked **visible** objects: closest-surface position, distance, bearing, kind, per-slot visibility, visible-object count |
+| `106–125` | 20 | Each tracked contact's **box on the agent's own screen**: centre, half-extents, unoccluded body fraction, illumination at the contact, reticle-on-primary, primary clarity |
 
 Important semantics:
 
-- **CURRENT:** v1 is the stable prefix `0–32`; v2 appended `33–64`; v3 appended `65–83`; v4 appended `84–105`.
+- **CURRENT:** v1 is the stable prefix `0–32`; v2 appended `33–64`; v3 appended `65–83`; v4 appended `84–105`; v5 appended `106–125`.
 - **CURRENT:** booleans are `0/1`; most distances/counts are `[0,1]`; signed directions/angles may use `[-1,1]`.
 - **CURRENT:** up to three highest-priority/nearest known contacts are individual; contacts beyond them appear only as aggregate fields `66–69`.
 - **CURRENT:** from curriculum level 6, contact positions are live sightings or decaying beliefs produced by FOV/LOS/reaction/memory logic. Unperceived contacts are zeroed. Levels 1–5 deliberately use easier ground-truth contact data.
+- **CURRENT:** the contact boxes (`106–125`) follow the same split: they come from the tick's beliefs where a perception layer runs, and are measured directly from ground truth on levels 1–5, which report exact contact positions anyway. A contact with no box is all zeros, never a box pinned to the centre of the screen.
 - **CONSTRAINT:** map ID, layout ID, lighting-mode ID, spawn list, global geometry, and hidden enemy positions are absent. Local illumination and perception-earned memory are allowed.
 - **CURRENT:** `weapon_ready` is false during cooldown, reload, or an empty magazine. Ammo count and bloom are not observed.
 - **CURRENT:** current PPO is feed-forward, so unobserved action history is not actually remembered by the network even though the simulator's belief fields carry some temporal state.
