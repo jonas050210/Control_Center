@@ -65,7 +65,7 @@ Damit die KI im echten Spiel so spielt wie im Training:
 | `replays/` | aufgezeichnete Bewertungsspiele für die Arena |
 | `train.log`, `process.log` | Protokoll und rohe Prozessausgabe |
 | `control.json` | von der Web-App geschrieben: `{"stop": true}` beendet sauber |
-| `trainer.lock` | Dateisperre des laufenden Trainings (verschwindet beim Beenden) |
+| `trainer.lock`, `trainer.lock.guard` | Prozessnummer und Dateisperre des laufenden Trainings (verschwinden beim Beenden) |
 
 ## Phasen
 

@@ -350,3 +350,18 @@ def test_failed_lock_attempt_does_not_leave_an_open_file(tmp_path, monkeypatch):
         assert attempt._handle is None  # Griff geschlossen
     assert lock_owner(paths.root) is None
     assert not (paths.root / "trainer.lock").exists()
+
+
+def test_lock_does_not_block_reading_the_pid_file(tmp_path, monkeypatch):
+    """Unter Windows sind Dateisperren *erzwingend*: Die gesperrte Datei darf
+    nicht die Datei mit der Prozessnummer sein, sonst kann niemand (auch nicht
+    der eigene Prozess) sie lesen — genau daran scheiterte CI auf Windows."""
+    monkeypatch.setenv("ROCKETAI_RUNS", str(tmp_path / "runs"))
+    paths = run_paths("lesbar").ensure()
+    with TrainLock(paths.root, "lesbar"):
+        owner = lock_owner(paths.root)
+        assert owner is not None
+        assert owner["pid"] > 0 and owner["alive"] is True
+        # Die Schutzzdatei trägt nur die Sperre, die Inhaltsdatei bleibt lesbar.
+        assert paths.root.joinpath("trainer.lock.guard").exists()
+    assert lock_owner(paths.root) is None

@@ -105,24 +105,30 @@ class TrainLock:
         with TrainLock(paths.root, name="my-bot"):
             Trainer(config).train()
 
-    Die Sperrdatei bleibt nach dem Ende liegen (sie enthält nur den letzten
-    Besitzer) — entscheidend ist die Dateisperre des Betriebssystems, nicht die
-    Datei selbst.
+    Aufbau: ``trainer.lock`` enthält die Prozessnummer (zum Anzeigen und für die
+    Erkennung abgestürzter Prozesse), ``trainer.lock.guard`` trägt nur die
+    Betriebssystem-Sperre. Zwei Dateien, weil Windows Sperren *erzwingt*: Eine
+    Sperre auf der Inhaltsdatei würde das Lesen der Prozessnummer durch andere
+    Prozesse (und durch uns selbst) blockieren — auf Linux wäre das harmlos,
+    unter Windows ein Fehler.
     """
 
     def __init__(self, directory: Path, name: str = "") -> None:
         self.directory = Path(directory)
         self.name = name or self.directory.name
         self.path = self.directory / "trainer.lock"
+        self.guard = self.directory / "trainer.lock.guard"
         self._handle: Any = None
         self._locked = False
 
     # -- internals -------------------------------------------------------
     def _try_lock(self) -> bool:
+        """Sperre auf der Schutzzdatei holen (``False`` = jemand anderes hat sie)."""
         assert self._handle is not None
         if os.name == "nt":  # pragma: no cover - Windows-Pfad
             import msvcrt
 
+            self._handle.seek(0)
             try:
                 msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError:
@@ -155,23 +161,22 @@ class TrainLock:
     # -- context manager -------------------------------------------------
     def __enter__(self) -> TrainLock:
         self.directory.mkdir(parents=True, exist_ok=True)
-        self._handle = self.path.open("a+b")
+        self._handle = self.guard.open("a+b")
         info = read_pid_file(self.path)
-        stale_pid = info.get("pid")
         if not self._try_lock():
-            # Wichtig (Windows): Die Datei wieder schließen, bevor der Fehler
+            # Wichtig (Windows): Den Griff wieder schließen, bevor der Fehler
             # fliegt. Ein offener Griff verhindert dort das Löschen der
-            # Sperrdatei — dann bliebe die Sperre für immer stehen.
+            # Schutzzdatei — die Sperre bliebe sonst für immer stehen.
             self._handle.close()
             self._handle = None
-            owner = stale_pid if stale_pid and process_alive(stale_pid) else None
+            owner = info.get("pid") if info.get("pid") and process_alive(info["pid"]) else None
             raise AlreadyRunning(self.name, owner, info.get("since"))
         self._locked = True
-        # Ab hier gehören wir die Sperre: Besitzer eintragen und kürzen.
-        self._handle.seek(0)
-        self._handle.truncate()
-        self._handle.write(f"{os.getpid()} {time.time():.3f}\n".encode())
-        self._handle.flush()
+        # Ab hier gehört die Sperre uns: Besitzer eintragen (atomar, damit
+        # Leser nie eine halb geschriebene Datei sehen).
+        tmp = self.path.with_suffix(".lock.tmp")
+        tmp.write_text(f"{os.getpid()} {time.time():.3f}\n", encoding="utf-8")
+        os.replace(tmp, self.path)
         return self
 
     def __exit__(self, *_error: object) -> None:
@@ -181,13 +186,14 @@ class TrainLock:
         if self._handle is not None:
             self._handle.close()
             self._handle = None
-        # Nur aufräumen, wenn die Sperrdatei uns gehört. Auf Windows kann ein
-        # anderer Prozess die Datei noch offen haben — dann bleibt sie liegen
-        # (was harmlos ist: entscheidend ist die Sperre, nicht die Datei).
+        # Nur aufräumen, wenn die Datei uns gehört. Auf Windows kann ein anderer
+        # Prozess die Schutzzdatei noch offen haben — dann bleibt sie liegen
+        # (harmlos: entscheidend ist die Sperre, nicht die Datei).
         info = read_pid_file(self.path)
         if info.get("pid") == os.getpid():
-            with contextlib.suppress(OSError):
-                self.path.unlink(missing_ok=True)
+            for target in (self.path, self.guard):
+                with contextlib.suppress(OSError):
+                    target.unlink(missing_ok=True)
 
 
 def heartbeat_writer(
