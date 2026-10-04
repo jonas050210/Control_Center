@@ -30,7 +30,7 @@ rocketai = "rocketai.cli:main"
 include = ["rocketai*"]
 
 [tool.setuptools.package-data]
-rocketai = ["web/*", "rlbot_bot/*.toml"]
+rocketai = ["web/*", "web/js/*", "web/vendor/*", "rlbot_bot/*.toml"]
 
 [tool.ruff]
 line-length = 100

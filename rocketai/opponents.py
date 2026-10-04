@@ -5,9 +5,10 @@ from __future__ import annotations
 import math
 import random
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
+import torch
 from rlgym.rocket_league.api import Car, GameState
 from rlgym.rocket_league.common_values import BACK_WALL_Y, BLUE_TEAM
 
@@ -51,6 +52,10 @@ class PolicyPlayer:
         self.model = model
         self.name = name
         self.deterministic = deterministic
+        #: Set ``explain = True`` to keep, per agent, what the network "thought"
+        #: on its last decision (used by the live view).
+        self.explain = False
+        self.last_info: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def from_checkpoint(cls, path: Path, deterministic: bool = True) -> PolicyPlayer:
@@ -62,8 +67,72 @@ class PolicyPlayer:
         if not agents:
             return {}
         batch = np.stack([obs[agent] for agent in agents]).astype(np.float32)
-        actions, _, _ = self.model.act(batch, deterministic=self.deterministic)
-        return {agent: int(action) for agent, action in zip(agents, actions, strict=True)}
+        if not self.explain:
+            actions, _, _ = self.model.act(batch, deterministic=self.deterministic)
+            return {agent: int(a) for agent, a in zip(agents, actions, strict=True)}
+        with torch.no_grad():
+            tensor = torch.as_tensor(batch)
+            probs = torch.softmax(self.model.logits(tensor), dim=-1).numpy()
+            values = self.model.value(tensor).numpy()
+        if self.deterministic:
+            actions = probs.argmax(axis=-1)
+        else:
+            rng = np.random.default_rng()
+            actions = np.array([rng.choice(len(p), p=p / p.sum()) for p in probs])
+        self.last_info = {
+            agent: explain_decision(probs[i], float(values[i]), int(actions[i]))
+            for i, agent in enumerate(agents)
+        }
+        return {agent: int(a) for agent, a in zip(agents, actions, strict=True)}
+
+
+def describe_action(index: int) -> str:
+    """Human-readable German label for one of the 90 actions."""
+    throttle, steer, pitch, yaw, roll, jump, boost, handbrake = (float(v) for v in _TABLE[index])
+    parts: list[str] = []
+    if jump:
+        if pitch or yaw or roll:
+            vertical = {-1.0: "vorwärts", 1.0: "rückwärts"}.get(pitch, "")
+            side = ("rechts" if (yaw or roll) > 0 else "links") if (yaw or roll) else ""
+            parts.append("Flip " + " ".join(x for x in (vertical, side) if x))
+        else:
+            parts.append("Sprung")
+    else:
+        if throttle > 0:
+            parts.append("Gas")
+        elif throttle < 0:
+            parts.append("Rückwärts")
+        if pitch:
+            parts.append("Nase runter" if pitch < 0 else "Nase hoch")
+        if steer:
+            parts.append("rechts" if steer > 0 else "links")
+        if roll:
+            parts.append("Rolle " + ("rechts" if roll > 0 else "links"))
+    if boost:
+        parts.append("Boost")
+    if handbrake:
+        parts.append("Luftrolle" if jump or pitch or roll else "Drift")
+    return " · ".join(parts) or "Nichts tun"
+
+
+ACTION_LABELS = [describe_action(i) for i in range(len(_TABLE))]
+
+
+def explain_decision(probs: np.ndarray, value: float, action: int, top: int = 5) -> dict[str, Any]:
+    order = np.argsort(probs)[::-1][:top]
+    entropy = float(-(probs * np.log(probs + 1e-12)).sum())
+    row = _TABLE[action]
+    return {
+        "action": action,
+        "label": ACTION_LABELS[action],
+        "controls": [
+            round(float(v), 2) for v in row
+        ],  # throttle steer pitch yaw roll jump boost handbrake
+        "top": [[ACTION_LABELS[i], round(float(probs[i]), 4)] for i in order],
+        "value": round(value, 3),
+        # 1 = completely sure (one action), 0 = uniform over all 90 actions.
+        "confidence": round(1.0 - entropy / float(np.log(len(probs))), 3),
+    }
 
 
 class IdleBot:

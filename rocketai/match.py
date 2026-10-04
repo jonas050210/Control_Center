@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,7 +15,7 @@ from .env import make_env
 from .opponents import Player
 
 #: Replay frames are recorded every decision (15 per second).
-REPLAY_FORMAT = "rocketai.replay.v1"
+REPLAY_FORMAT = "rocketai.replay.v1"  # v1 readers ignore the extra frame fields
 
 
 @dataclass
@@ -47,28 +46,39 @@ class MatchResult:
         return data
 
 
-def _yaw(forward: np.ndarray) -> float:
-    return math.atan2(float(forward[1]), float(forward[0]))
+def frame_of(t: float, state: Any) -> list[Any]:
+    """Compact frame: ``[t, [bx, by, bz], cars, pads]``.
 
-
-def _frame(t: float, state: Any) -> list[Any]:
-    """Compact frame: [t, [bx, by, bz], [[team, x, y, z, yaw, boost, demoed], ...]]."""
+    Each car is ``[team, x, y, z, yaw, boost, demoed, pitch, roll]``; ``pads``
+    is a bitmask of active boost pads in RLGym's BOOST_LOCATIONS order.
+    """
     ball = state.ball.position
     cars = []
     for car in state.cars.values():
         pos = car.physics.position
+        pitch, yaw, roll = (float(v) for v in car.physics.euler_angles)
         cars.append(
             [
                 int(car.team_num),
                 round(float(pos[0])),
                 round(float(pos[1])),
                 round(float(pos[2])),
-                round(_yaw(car.physics.forward), 3),
+                round(yaw, 3),
                 round(float(car.boost_amount)),
                 1 if car.is_demoed else 0,
+                round(pitch, 3),
+                round(roll, 3),
             ]
         )
-    return [round(t, 3), [round(float(v)) for v in ball], cars]
+    pads = 0
+    for index, timer in enumerate(state.boost_pad_timers):
+        if timer <= 0:
+            pads |= 1 << index
+    return [round(t, 3), [round(float(v)) for v in ball], cars, pads]
+
+
+# Backwards-compatible name.
+_frame = frame_of
 
 
 def play_match(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -334,6 +335,32 @@ class PlayRequest(BaseModel):
 # ----------------------------------------------------------------- app
 
 
+class LiveRequest(BaseModel):
+    blue: str
+    orange: str = "chaser"
+    team_size: int = 1
+    speed: float = 1.0
+    match_seconds: float = 300.0
+
+
+class LiveControl(BaseModel):
+    paused: bool | None = None
+    speed: float | None = None
+
+
+_RL_CACHE: dict[str, Any] = {"time": 0.0, "data": None}
+
+
+def rocket_league_status(refresh: bool = False) -> dict[str, Any]:
+    """Cached (5 s) because the process query starts PowerShell on Windows."""
+    from .rlcheck import check
+
+    if refresh or _RL_CACHE["data"] is None or time.time() - _RL_CACHE["time"] > 5:
+        _RL_CACHE["data"] = check().to_dict()
+        _RL_CACHE["time"] = time.time()
+    return _RL_CACHE["data"]
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="RocketAI", version=__version__, docs_url="/api/docs", redoc_url=None)
 
@@ -358,7 +385,11 @@ def create_app() -> FastAPI:
 
     @app.get("/api/presets")
     def presets() -> dict[str, Any]:
-        return {"presets": PRESETS, "defaults": TrainConfig().to_dict()}
+        return {
+            "presets": PRESETS,
+            "defaults": TrainConfig().to_dict(),
+            "cpu_count": os.cpu_count() or 1,
+        }
 
     @app.get("/api/runs")
     def runs() -> list[dict[str, Any]]:
@@ -563,6 +594,56 @@ def create_app() -> FastAPI:
         STATE.play.stop()
         return STATE.play.info()
 
+    @app.get("/api/rocketleague")
+    def rocketleague(refresh: bool = False) -> dict[str, Any]:
+        return rocket_league_status(refresh)
+
+    @app.get("/api/field")
+    def field_info() -> dict[str, Any]:
+        from rlgym.rocket_league.common_values import BOOST_LOCATIONS
+
+        return {
+            "pads": [[int(x), int(y), 1 if z > 72 else 0] for x, y, z in BOOST_LOCATIONS],
+            "size": {"x": 4096, "y": 5120, "z": 2044},
+            "goal": {"width": 1786, "height": 642.5, "depth": 880},
+        }
+
+    @app.get("/api/live")
+    def live_state(since: int = -1) -> dict[str, Any]:
+        from .live import LIVE
+
+        return LIVE.state(since)
+
+    @app.post("/api/live/start")
+    def live_start(request: LiveRequest) -> dict[str, Any]:
+        from .live import LIVE, LiveSettings, SpecError
+
+        try:
+            return LIVE.start(LiveSettings(**request.model_dump()))
+        except SpecError as error:
+            raise HTTPException(400, str(error)) from error
+
+    @app.post("/api/live/control")
+    def live_control(request: LiveControl) -> dict[str, Any]:
+        from .live import LIVE, SpecError
+
+        try:
+            return LIVE.control(paused=request.paused, speed=request.speed)
+        except SpecError as error:
+            raise HTTPException(409, str(error)) from error
+
+    @app.post("/api/live/stop")
+    def live_stop() -> dict[str, Any]:
+        from .live import LIVE
+
+        LIVE.stop()
+        return LIVE.state()
+
+    @app.get("/api/snapshot")
+    def snapshot() -> dict[str, Any]:
+        """Same data as the event stream, for clients behind proxies that buffer SSE."""
+        return json.loads(_snapshot())
+
     @app.get("/api/system")
     def system() -> dict[str, Any]:
         from .doctor import run_checks
@@ -608,7 +689,12 @@ def _snapshot() -> str:
         for r in list_runs()
     ]
     jobs = [{"id": j.id, "state": j.state} for j in STATE.jobs.values()]
-    return json.dumps({"runs": runs, "jobs": jobs, "play": STATE.play.state}, sort_keys=True)
+    from .live import LIVE
+
+    live = LIVE.session.running if LIVE.session is not None else False
+    return json.dumps(
+        {"runs": runs, "jobs": jobs, "play": STATE.play.state, "live": live}, sort_keys=True
+    )
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:

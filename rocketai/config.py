@@ -60,9 +60,9 @@ class TrainConfig:
     episode_seconds: float = 300.0  # hard cap per episode (game time)
     no_touch_seconds: float = 30.0  # reset when nobody touches the ball for this long
     # Bookkeeping
-    checkpoint_every_steps: int = 5_000_000
+    checkpoint_every_steps: int = 2_000_000  # also what the live view follows
     keep_checkpoints: int = 20
-    eval_every_steps: int = 10_000_000  # 0 = never
+    eval_every_steps: int = 5_000_000  # 0 = never
     eval_games: int = 6
     seed: int = 0
     torch_threads: int = 0  # 0 = auto

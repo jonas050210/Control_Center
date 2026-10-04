@@ -37,11 +37,14 @@ In der App:
 
 | Seite | Was sie zeigt |
 | --- | --- |
-| Übersicht | aktive Trainings, Fortschritt, letzte Replays |
-| Training | alle Runs; pro Run Live-Kurven, Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
-| Arena | 2D-Replay-Player (Zeitleiste mit Toren, 0,5–4× Tempo) und neue Simulations-Matches |
-| Spielen | Voraussetzungen und Match-Start im echten Rocket League |
-| Einrichtung | Systemprüfung, Befehle, Ordner, Zeitabschätzung |
+| Übersicht | Status in drei Schritten, aktive Trainings, letzte Replays, Rocket-League-Status |
+| Training | alle Runs; pro Run Prognose (wann welches Niveau), Live-Kurven mit Checkpoint-Markern, Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
+| **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
+| Arena | Replay-Player in 3D oder 2D (Zeitleiste mit Toren, 0,5–4×) und neue Simulations-Matches |
+| Spielen | Rocket-League-Check (installiert? Steam/Epic? läuft es – normal oder im Bot-Modus?) und Match-Start im echten Spiel |
+| Einrichtung | Systemprüfung, Rocket-League-Check, Befehle, Tastenkürzel, Zeitabschätzung |
+
+Tastenkürzel in Live/Arena: `1`–`5` Kamera, `V` 3D/2D, `F` Vollbild, Leertaste Pause (Replay), `←`/`→` ±5 s.
 
 Training läuft als eigener Prozess weiter, auch wenn der Browser zu ist. Ein
 gestopptes Training lässt sich jederzeit fortsetzen.

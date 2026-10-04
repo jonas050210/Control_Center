@@ -60,5 +60,24 @@ def run_checks() -> list[dict[str, Any]]:
         else "Training geht überall, Spielen im echten RL nur unter Windows",
         required=False,
     )
+    if is_windows:
+        from .rlcheck import check
+
+        rl = check()
+        add(
+            "rocket_league",
+            "Rocket League installiert",
+            bool(rl.install),
+            f"{rl.store}: {rl.install}" if rl.install else "nicht gefunden (Steam/Epic)",
+            required=False,
+        )
+        if rl.game == "normal":
+            add(
+                "rl_running",
+                "Rocket League geschlossen",
+                False,
+                "läuft normal gestartet – vor dem Spielstart schließen",
+                required=False,
+            )
     add("cpu", "CPU-Kerne", True, f"{os.cpu_count()} (mehr Kerne = schnelleres Training)")
     return checks

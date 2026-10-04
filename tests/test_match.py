@@ -38,8 +38,10 @@ def test_replay_recording(tmp_path):
     policy = PolicyPlayer(ActorCritic(hidden_sizes=[16]))
     result = play_match(policy, make_player("chaser"), seconds=10, record=True)
     assert len(result.frames) == 10 * 15 + 1
-    t, ball, cars = result.frames[-1]
-    assert len(ball) == 3 and len(cars) == 2 and len(cars[0]) == 7
+    t, ball, cars, pads = result.frames[-1]
+    # [team, x, y, z, yaw, boost, demoed, pitch, roll]
+    assert len(ball) == 3 and len(cars) == 2 and len(cars[0]) == 9
+    assert 0 <= pads < 2**34
     path = tmp_path / "r.json"
     save_replay(path, result, {"kind": "test"})
     data = json.loads(path.read_text())
