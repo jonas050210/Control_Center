@@ -80,6 +80,7 @@ func setup(p_simulation_manager: SimulationManager, p_focused_env_index: int = 0
 	# to build nodes for it.
 	for index in range(CONTACT_BOX_POOL):
 		_contact_box_node(index)
+	_show_focused_environment()
 
 
 func _build_label() -> void:
@@ -181,6 +182,9 @@ func _on_enemy_count_delta(delta: int) -> void:
 		return
 	var new_count: int = maxi(1, simulation_manager.enemy_count_per_environment + delta)
 	simulation_manager.build(simulation_manager.environment_count, new_count)
+	# `build()` throws the old views away, so the camera that was on screen is
+	# gone with them: re-point it at the focused environment.
+	_show_focused_environment()
 
 
 func _on_curriculum_delta(delta: int) -> void:
@@ -199,6 +203,35 @@ func _on_focus_delta(delta: int) -> void:
 		return
 	var count: int = simulation_manager.environments.size()
 	focused_env_index = ((focused_env_index + delta) % count + count) % count
+	_show_focused_environment()
+
+
+## Puts the focused environment's own camera on screen. The text panel, the
+## contact boxes and the picture have to be the same environment: the focus
+## buttons used to move the numbers only, which was merely confusing before
+## and became plainly wrong once rectangles were drawn over the view - the
+## boxes were computed for one environment and painted onto another's image.
+##
+## Guarded, because only the graphical scene has views: the headless bridge
+## never creates this overlay, and a manager built with `create_visuals =
+## false` leaves `null` in the slot.
+func _show_focused_environment() -> void:
+	var camera: Camera3D = _focused_camera()
+	if camera != null and not camera.is_current():
+		camera.make_current()
+
+
+## The camera of the focused environment, or `null` when it has none.
+func _focused_camera() -> Camera3D:
+	if simulation_manager == null:
+		return null
+	var views: Array = simulation_manager.views
+	if views.is_empty() or focused_env_index >= views.size():
+		return null
+	var view = views[focused_env_index]
+	if view == null or not is_instance_valid(view):
+		return null
+	return view.get_camera()
 
 
 ## One screen-space box per enemy the agent can actually see right now, in
@@ -331,7 +364,12 @@ func _process(_delta: float) -> void:
 ## feed back into the simulation.
 func _update_contact_boxes() -> void:
 	var boxes: Array = []
-	if simulation_manager != null and not simulation_manager.environments.is_empty():
+	var camera: Camera3D = _focused_camera()
+	# Boxes are screen-space: they only mean something over the picture the
+	# focused environment's camera is drawing. If another camera is on screen
+	# (or the focus has no view at all), drawing them would put one
+	# environment's contacts on top of another's image - so they stay hidden.
+	if camera != null and camera.is_current() and not simulation_manager.environments.is_empty():
 		var idx: int = clampi(focused_env_index, 0, simulation_manager.environments.size() - 1)
 		boxes = contact_boxes(simulation_manager.environments[idx])
 	var viewport: Vector2 = get_viewport().get_visible_rect().size

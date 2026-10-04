@@ -57,6 +57,12 @@ what it is looking at), **green** is a contact that is partly behind cover
 stroke is thin and hollow on purpose: the box frames the enemy, it does not
 paint over it.
 
+One caveat, stated rather than hidden: the boxes are exact at the project's
+16:9 window. Stretch the window and the vertical axis stays exact while the
+horizontal one scales, because the engine locks the vertical field of view
+(`keep_aspect = KEEP_HEIGHT`) while the contract defines its cone
+horizontally - the two only coincide at one aspect ratio.
+
 This is the in-engine twin of the TTK silhouette boxes
 ([`TTK_TESTING_REFERENCE.md`](TTK_TESTING_REFERENCE.md)): there the boxes come
 from the pixels of a captured frame, here they come from the simulation that
@@ -99,7 +105,10 @@ methods — the overlay adds no new simulation behavior:
   was judged not worth the extra surface area.
 - **Level -/+** — calls `SimulationManager.set_curriculum_level(new_level)`.
 - **`< Env` / `Env >`** — changes which environment's telemetry is
-  displayed; does not touch simulation state.
+  displayed and which one the camera looks through; does not touch
+  simulation state. The two are the same environment on purpose: the
+  contact boxes are screen-space, so drawing them for one environment over
+  another's picture would put the rectangles where nothing is.
 
 ### Headless independence
 
