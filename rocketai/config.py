@@ -136,9 +136,7 @@ class TrainConfig:
         if not 0 <= self.teacher_weight <= 10 or not 0 <= self.teacher_final_weight <= 10:
             problems.append("teacher_weight and teacher_final_weight must be in [0, 10]")
         if self.teacher_weight <= 0 and self.teacher_final_weight > 0:
-            problems.append(
-                "teacher_final_weight needs teacher_weight > 0; 0 = teacher off"
-            )
+            problems.append("teacher_final_weight needs teacher_weight > 0; 0 = teacher off")
         if self.envs_per_worker > 64:
             problems.append("envs_per_worker above 64 is not useful (memory per match)")
         if any(size > 4096 for size in self.hidden_sizes):

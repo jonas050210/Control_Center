@@ -101,6 +101,7 @@ def describe_features() -> list[dict[str, str]]:
         for key in EXTRA_FEATURES
     ]
 
+
 POS_COEF = 1 / 2300
 SPIN_COEF = 1 / 6.0  # sehr schnelle Bälle drehen mit ~6 rad/s
 

@@ -368,7 +368,9 @@ class Collector:
                     learner_rewards = [episode["reward"][a] for a in learners] or [0.0]
                     opponent = self.opponent[i]
                     episode["opponent"] = (
-                        "self" if opponent is None else ("teacher" if opponent == "teacher" else "past")
+                        "self"
+                        if opponent is None
+                        else ("teacher" if opponent == "teacher" else "past")
                     )
                     record = {
                         "reward": float(np.mean(learner_rewards)),

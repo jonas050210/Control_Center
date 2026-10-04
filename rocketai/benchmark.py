@@ -269,7 +269,9 @@ def format_report(report: dict[str, Any]) -> str:
         lines += [
             "",
             f"Beste Einstellung: {best['workers']} Prozesse × {best['envs_per_worker']} Spiele "
-            f"→ {report['steps_per_day'] / 1e6:,.0f} Mio. Schritte pro Tag (24/7)".replace(",", "."),
+            f"→ {report['steps_per_day'] / 1e6:,.0f} Mio. Schritte pro Tag (24/7)".replace(
+                ",", "."
+            ),
         ]
     for key, label in (("update_cpu", "Lernschritt (CPU)"), ("update_cuda", "Lernschritt (GPU)")):
         entry = report.get(key)

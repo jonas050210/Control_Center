@@ -693,9 +693,7 @@ def create_app() -> FastAPI:
             benchmark_cache["time"] = time.time()
             return report
 
-        return STATE.submit(
-            "benchmark", f"Geschwindigkeit messen ({seconds:.0f} s)", job
-        ).info()
+        return STATE.submit("benchmark", f"Geschwindigkeit messen ({seconds:.0f} s)", job).info()
 
     @app.get("/api/benchmark")
     def benchmark_latest() -> dict[str, Any]:

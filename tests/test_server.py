@@ -127,13 +127,15 @@ def test_config_check_reports_problems_and_hints(client):
     assert body["ok"] is True and body["problems"] == []
 
     bad = client.post(
-        "/api/config/check", json={"preset": "quick-test", "overrides": {"name": "x", "team_size": 9}}
+        "/api/config/check",
+        json={"preset": "quick-test", "overrides": {"name": "x", "team_size": 9}},
     )
     body = bad.json()
     assert body["ok"] is False and any("team_size" in problem for problem in body["problems"])
 
     hinted = client.post(
-        "/api/config/check", json={"preset": "quick-test", "overrides": {"name": "x", "n_workers": 999}}
+        "/api/config/check",
+        json={"preset": "quick-test", "overrides": {"name": "x", "n_workers": 999}},
     )
     assert hinted.json()["ok"] is True
     assert hinted.json()["hints"]
