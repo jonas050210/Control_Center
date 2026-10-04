@@ -511,3 +511,27 @@ ol.flow span { color: var(--faint); font-size: 12.5px; }
 .teacher-box .row.between b { font-size: 0.95rem; }
 .teacher-box .faint.small { margin: 0; max-width: 60ch; }
 .estimate + .estimate { margin-top: 6px; }
+
+/* „Was die KI sieht": Zusatzwerte der Beobachtung (siehe rocketai/obs.py) */
+.sees { display: grid; gap: 6px; margin-top: 8px; }
+.see-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 88px 52px;
+  align-items: center; gap: 8px; font-size: 12px;
+}
+.see-label { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.see-bar { position: relative; height: 6px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+.see-bar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line-strong); opacity: .7; }
+.see-bar > i { position: absolute; top: 0; bottom: 0; width: 0; background: var(--accent); transition: left .12s linear, width .12s linear; }
+.see-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+.see-row.warn .see-bar > i { background: var(--orange-team, #ff9a4d); }
+.see-row.warn .see-val { color: var(--orange-team, #ff9a4d); }
+
+.feature-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.feature {
+  font-size: 12px; padding: 4px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--surface-2); color: var(--muted);
+}
+
+.hints ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.hints li { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.hints { border-color: rgba(255, 154, 77, .28); }

@@ -1,10 +1,37 @@
 import pytest
 
-from rocketai.config import OBS_SIZE, PRESETS, TrainConfig, preset_config, run_paths
+from rocketai.config import (
+    OBS_BASE_SIZE,
+    OBS_EXTRA_SIZE,
+    OBS_SIZE,
+    PRESETS,
+    TrainConfig,
+    preset_config,
+    run_paths,
+)
+from rocketai.obs import obs_size
 
 
 def test_obs_size_matches_padding():
-    assert OBS_SIZE == 172
+    assert OBS_BASE_SIZE == 172  # RLGym DefaultObs, 3 Autos pro Team
+    assert OBS_SIZE == OBS_BASE_SIZE + OBS_EXTRA_SIZE
+    assert obs_size(extras=True) == OBS_SIZE
+    assert obs_size(extras=False) == OBS_BASE_SIZE
+    assert TrainConfig().obs_size == OBS_SIZE
+    assert TrainConfig(obs_extras=False).obs_size == OBS_BASE_SIZE
+    assert TrainConfig(obs_extras=True).teacher_labels is False  # Lehrer ist standardmäßig aus
+    assert TrainConfig(teacher_weight=1.0).teacher_labels is True
+
+
+def test_teacher_without_start_weight_is_rejected():
+    with pytest.raises(ValueError):
+        TrainConfig(teacher_weight=0.0, teacher_final_weight=0.1).validate()
+
+
+def test_hints_are_not_errors():
+    config = TrainConfig(n_workers=9999, envs_per_worker=32)
+    config.validate()  # darf nicht werfen
+    assert config.hints()
 
 
 @pytest.mark.parametrize("preset", sorted(PRESETS))

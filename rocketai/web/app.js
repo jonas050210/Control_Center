@@ -344,16 +344,31 @@ async function pageNewRun() {
           <p class="faint small" style="margin:-4px 0 10px">${speedHint}</p>
           <div class="estimate"><span>Dauer für ${fmt.steps(v.total_steps)}</span><b>~${fmt.duration(v.total_steps / sps)}</b></div>
           <div class="estimate"><span>Erster Checkpoint</span><b>nach ~${fmt.duration(Math.min(v.checkpoint_every_steps, v.total_steps) / sps)}</b></div>
-          <p class="faint small" style="margin-top:14px"><b>Wichtig:</b> Trainiert wird nur auf der CPU (die Physik-Simulation), die Grafikkarte hilft dabei nicht. Zu viele Prozesse bremsen: 12–16 sind auf einem 8-Kern-Prozessor meist besser als 20, weil Windows und der Lernprozess auch Kerne brauchen. Ballkontakt nach 20–50 Mio. Schritten, gezielte Tore nach 100–300 Mio., Psyonix-Bots schlagen ab 0,3–1 Mrd.</p>
+          <div id="new-hints"></div>
+          <p class="faint small" style="margin-top:14px"><b>Wichtig:</b> Die Simulation läuft immer auf der CPU; die Grafikkarte beschleunigt nur den Lernschritt. Zu viele Prozesse bremsen: ein paar Kerne für Windows und den Lernprozess frei lassen. ${measured ? "" : "Für eine echte Zeitangabe einmal auf der Einrichtungsseite „Geschwindigkeit messen“ drücken."}</p>
         </div>
       </div>`);
   };
+  const refreshHints = async (valuesNow) => {
+    const el = view.querySelector("#new-hints");
+    if (!el) return;
+    try {
+      const check = await api("/api/config/check", { method: "POST", body: { preset: form.preset, overrides: form.overrides } });
+      const items = [...(check.problems || []), ...(check.hints || [])];
+      el.innerHTML = items.length
+        ? `<div class="hints section-sm"><b class="small">${check.ok ? "Hinweise" : "So geht das nicht"}</b><ul>${items.map((x) => `<li>${h(x)}</li>`).join("")}</ul></div>`
+        : "";
+    } catch { /* Hinweise sind Beiwerk */ }
+    void valuesNow;
+  };
+
   page.actions = {
     preset: (el) => { form.preset = el.dataset.preset; form.overrides = {}; view.querySelectorAll("[data-dirty]").forEach((i) => { if (i.id !== "name") delete i.dataset.dirty; }); draw(); },
     seg: (el) => {
       const key = el.dataset.key, value = Number(el.dataset.value);
       form.overrides[key] = key === "auto_curriculum" ? Boolean(value) : value;
       draw();
+      refreshHints();
     },
     name: (el) => { form.name = el.value.trim(); },
     "load-teacher": (el) => busy(el, async () => {
@@ -370,6 +385,7 @@ async function pageNewRun() {
     }),
   };
   draw();
+  refreshHints();
 }
 
 function numberField(id, label, value, hint = "", step = "1") {
@@ -469,11 +485,18 @@ async function pageRun(rawName) {
         <span>${active ? (eta ? `noch ca. ${fmt.duration(eta)}` : "läuft …") : `${pct.toFixed(1)} %`}</span></div></div>
 
       <div class="grid cols-4 section-sm">
-        <div class="card stat"><div class="label">Tempo</div><div class="value">${sps && active ? fmt.int(sps) : "–"}<small>Schritte/s</small></div></div>
-        <div class="card stat"><div class="label">Ballkontakte</div><div class="value">${fmt.num(last.touches_per_minute, 1)}<small>pro Minute</small></div></div>
-        <div class="card stat"><div class="label">Tore</div><div class="value">${fmt.num(last.goals_per_minute, 2)}<small>pro Minute</small></div></div>
-        <div class="card stat"><div class="label">Belohnung</div><div class="value">${fmt.num(last.episode_reward, 1)}<small>pro Episode</small></div></div>
+        <div class="card stat"><div class="label">Tempo</div><div class="value">${sps && active ? fmt.int(sps) : "–"}<small>Schritte/s</small></div>
+          <div class="foot">${last.realtime_factor ? `≈ ${fmt.int(last.realtime_factor)}× Echtzeit` : "&nbsp;"}${st.device ? ` · lernt auf ${h(String(st.device).toUpperCase())}` : ""}</div></div>
+        <div class="card stat"><div class="label">Eigene Ballkontakte</div><div class="value">${fmt.num(last.touches_per_minute, 1)}<small>pro Minute</small></div>
+          <div class="foot">Gegner: ${fmt.num(last.touches_against_per_minute, 1)} mal</div></div>
+        <div class="card stat"><div class="label">Eigene Tore</div><div class="value">${fmt.num(last.goals_per_minute, 2)}<small>pro Minute</small></div>
+          <div class="foot">Gegentore: ${fmt.num(last.goals_against_per_minute, 2)} pro Minute</div></div>
+        <div class="card stat"><div class="label">Belohnung</div><div class="value">${fmt.num(last.episode_reward, 1)}<small>pro Episode</small></div>
+          <div class="foot">${last.explained_variance != null ? `Kritiker erklärt ${Math.round(last.explained_variance * 100)} %` : "&nbsp;"}</div></div>
       </div>
+
+      ${(data.run.hints || []).length ? `<div class="card section-sm hints"><div class="card-head"><h3>Hinweise zu dieser Einstellung</h3><span class="sub">läuft trotzdem</span></div>
+        <ul>${data.run.hints.map((x) => `<li>${h(x)}</li>`).join("")}</ul></div>` : ""}
 
       <div class="card section-sm"><div class="card-head"><h2>Prognose</h2><span class="sub">${sps ? `bei ${fmt.int(sps)} Schritten/s` : "Tempo unbekannt"} · Erfahrungswerte der RLGym-Community</span></div>
         <div class="milestones">${MILESTONES.map(([at, label, range]) => {
@@ -643,6 +666,7 @@ async function pageLive() {
           <dt>Entscheidung</dt><dd>Die KI wählt 15-mal pro Sekunde eine von 90 Aktionen – eine Kombination aus Gas, Lenken, Springen, Boost usw.</dd>
           <dt>Sicherheit</dt><dd>Wie eindeutig die Wahl war. Niedrig heißt: Viele Aktionen schienen ihr ähnlich gut. Frühe Trainingsstände sind oft unsicher.</dd>
           <dt>Erwartung</dt><dd>Der „Kritiker“ schätzt, wie viel Belohnung noch kommt. Steigt die Kurve, glaubt die KI, dass die Lage gut für sie ist (z. B. kurz vor einem Ballkontakt).</dd>
+          <dt>Was die KI sieht</dt><dd>Die Eingaben des Netzes aus dem Spielzustand: Ballabstand, Höhe, Drehung, Boost, ob der Ball in unserer Hälfte liegt und ob er auf unser Tor zuläuft. Es sind exakt die Zahlen, die auch im Training ankommen – die KI „sieht“ kein Bild, sondern diese Werte.</dd>
           <dt>Alternativen</dt><dd>Die fünf wahrscheinlichsten Aktionen mit ihrer Wahrscheinlichkeit.</dd>
         </dl></div>
     </div>`;
@@ -681,8 +705,47 @@ async function pageLive() {
       <div><div class="meter-head"><span>Erwartung (Kritiker)</span><b id="value-val">–</b></div><div id="value-spark" class="spark-wrap"></div></div>
       <div><div class="meter-head"><span>Eingaben der letzten 5 s</span><span class="faint small">links alt · rechts jetzt</span></div>
         <div class="history"><div class="history-labels"><span>Gas</span><span>Lenken</span><span>Sprung</span><span>Boost</span><span>Drift</span></div><canvas id="history" width="300" height="90"></canvas></div></div>
+      <div><div class="meter-head"><span>Was die KI sieht</span><span class="faint small" id="sees-who">Eingaben des Netzes</span></div>
+        <div id="sees" class="sees"></div></div>
       <div><div class="meter-head"><span>Alternativen</span><span class="faint small">Wahrscheinlichkeit</span></div><div id="top5" class="top5"></div></div>
     </div>`;
+
+  // „Was die KI sieht": die Zusatzwerte der Beobachtung (siehe rocketai/obs.py).
+  // Die Legende kommt vom Server (/api/live → features), damit Python und
+  // Oberfläche nie auseinanderlaufen.
+  const seesRows = (features) => (features || []).map((f) => {
+    const key = f.key, format = f.format || "signed";
+    return `<div class="see-row" data-see="${h(key)}" title="${h(key)}">
+      <span class="see-label">${h(f.label)}</span>
+      <div class="see-bar"><i></i></div>
+      <b class="see-val">–</b></div>`;
+  }).join("");
+
+  const updateSees = (brain) => {
+    const el = $("sees");
+    if (!el || !brain) return;
+    if (!el.dataset.ready) { el.innerHTML = seesRows(meta.features); el.dataset.ready = "1"; }
+    const sees = brain.sees || {};
+    el.querySelectorAll(".see-row").forEach((row) => {
+      const value = sees[row.dataset.see];
+      const bar = row.querySelector("i"), out = row.querySelector(".see-val");
+      if (value == null) { bar.style.width = "0%"; out.textContent = "–"; return; }
+      const rowMeta = (meta.features || []).find((f) => f.key === row.dataset.see) || {};
+      const format = rowMeta.format || "signed";
+      if (format === "flag") {
+        bar.style.left = "0%"; bar.style.width = value >= 0.5 ? "100%" : "0%";
+        out.textContent = value >= 0.5 ? "ja" : "nein";
+      } else if (format === "percent") {
+        bar.style.left = "0%"; bar.style.width = `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+        out.textContent = `${Math.round(value * 100)} %`;
+      } else {
+        bar.style.left = value < 0 ? `${50 + value * 50}%` : "50%";
+        bar.style.width = `${Math.abs(Math.max(-1, Math.min(1, value))) * 50}%`;
+        out.textContent = value >= 0 ? `+${fmt.num(value, 2)}` : fmt.num(value, 2);
+      }
+      row.classList.toggle("warn", row.dataset.see === "own_goal_danger" && value > 0.5);
+    });
+  };
 
   const updateBrain = (brain, frame) => {
     if (!brain || !brainPanel.querySelector(".brain-live")) return;
@@ -703,6 +766,7 @@ async function pageLive() {
     $("b-drift").classList.toggle("on", c[7] > 0);
     $("value-val").textContent = fmt.num(brain.value, 1);
     $("value-spark").innerHTML = sparkline(values.get(brain.car) || [], { width: 300, height: 54 });
+    updateSees(brain);
     drawHistory(brain.car);
     $("top5").innerHTML = brain.top.map(([label, p], i) => `<div class="top-row ${i === 0 && label === brain.label ? "chosen" : ""}"><span>${h(label)}</span><div class="bar"><i style="width:${Math.max(2, p * 100 / Math.max(brain.top[0][1], 0.01))}%"></i></div><b>${fmt.pct(p)}</b></div>`).join("");
     void frame;
@@ -762,6 +826,7 @@ async function pageLive() {
     meta.score = state.score;
     meta.hasBrain = state.blue?.kind !== "scripted" || state.orange?.kind !== "scripted";
     meta.match = state.match;
+    meta.features = state.features || meta.features;
     $("blue-name").textContent = state.blue?.label || "–";
     $("orange-name").textContent = state.orange?.label || "–";
     $("match-no").textContent = state.match ? `Spiel ${state.match}${state.history?.length ? ` · bisher ${state.history.map((x) => `${x.blue}:${x.orange}`).join(", ")}` : ""}` : "";
@@ -1083,16 +1148,42 @@ async function pagePlay(_unused, query) {
 // ------------------------------------------------------------------ setup
 
 async function pageSetup() {
-  const system = await api("/api/system");
+  const [system, benchmark] = await Promise.all([api("/api/system"), api("/api/benchmark")]);
   const py = system.python || "python3"; // Linux/macOS: python3, Windows: python
+  let measured = benchmark?.report || system.benchmark || null;
   const commands = [
     ["Installation (einmalig)", `${py} install.py`],
     ["App starten", `${py} start.py`],
     ["Lehrer laden", `${py} -m rocketai teacher`],
+    ["Geschwindigkeit messen", `${py} -m rocketai benchmark`],
     ["Training ohne Oberfläche", `${py} -m rocketai train --preset student --name mein-bot`],
     ["Checkpoint bewerten", `${py} -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher`],
     ["Installation prüfen", `${py} -m rocketai doctor`],
   ];
+  // Ziele in Schritten und die Zeit, die sie bei diesem (gemessenen) Tempo brauchen.
+  let benchmarkBusy = false;
+  const milestones = [
+    ["Ball treffen", 35e6],
+    ["Gezielt schießen", 200e6],
+    ["Schlägt Rookie-Bots", 650e6],
+    ["Schlägt Pro-Bots", 1.5e9],
+  ];
+  const sps = measured?.best?.steps_per_second || 0;
+  const trainingHours = 4; // Annahme für die 24/7-Spalte
+  const benchmarkCard = () => {
+    const best = measured?.best;
+    const rows = (measured?.scale || []).map((s) =>
+      `<tr><td>${s.workers} Prozesse × ${s.envs_per_worker} Spiel(e)</td><td class="num">${fmt.int(s.steps_per_second)}</td><td class="num">${fmt.int(s.decisions_per_second)}</td><td class="num">${fmt.int(s.realtime_factor)}×</td></tr>`).join("");
+    return `<div class="card"><div class="card-head"><h2>Geschwindigkeit messen</h2>
+        <span class="sub">${measured ? "auf diesem Rechner gemessen" : "noch nicht gemessen"}</span></div>
+      <p class="muted small">Misst mit echten RocketSim-Spielen und einem echten PPO-Lernschritt, wie schnell dieser Rechner trainiert. Dauert ein paar Sekunden.</p>
+      ${rows ? `<div class="table-scroll"><table class="table"><thead><tr><th>Einstellung</th><th class="num">Schritte/s</th><th class="num">Entscheidungen/s</th><th class="num">Echtzeit</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+      ${best ? `<p class="small">Beste Einstellung: <b>${best.workers} Prozesse × ${best.envs_per_worker} Spiel(e)</b> → ${fmt.int(measured.steps_per_day)} Schritte pro Tag (24/7).
+        ${measured.update_cuda && measured.update_cpu ? `Lernschritt auf der Grafikkarte ${(measured.update_cuda.steps_per_second / Math.max(1, measured.update_cpu.steps_per_second)).toFixed(1)}× schneller als auf der CPU.` : ""}</p>` : ""}
+      ${(measured?.advice || []).map((x) => `<p class="faint small">${h(x)}</p>`).join("")}
+      <div class="row end"><button class="btn" data-action="benchmark" ${benchmarkBusy ? "disabled" : ""}>${icon("play")}${benchmarkBusy ? "Messt …" : "Jetzt messen (ca. 20 s)"}</button></div>
+    </div>`;
+  };
   const draw = () => patch(view, `
     <div class="page-head"><div><div class="eyebrow">Einrichtung</div><h1>Einrichtung</h1>
       <p>Alles, was RocketAI braucht – und wie du es ohne Oberfläche bedienst.</p></div><span class="faint">Version ${h(system.version)}</span></div>
@@ -1102,6 +1193,10 @@ async function pageSetup() {
           ${system.checks.map((c) => checkRow(c.ok ? "ok" : c.required ? "bad" : "off", c.label, c.detail, c.required ? "" : ' <span class="faint">(optional)</span>')).join("")}
         </div></div>
         ${rlCard(app.rl)}
+        ${benchmarkCard()}
+        <div class="card"><div class="card-head"><h2>Was die KI sieht</h2><span class="sub">${system.observation?.size || 184} Eingabewerte pro Auto</span></div>
+          <p class="muted small">Kein Bild, sondern Messwerte aus dem Spiel: Ballposition, Geschwindigkeit, Drehung, Boost-Pads, alle Autos – gespiegelt auf das eigene Tor. Dazu diese Zusatzwerte:</p>
+          <div class="feature-list">${(system.observation?.extras || []).map((f) => `<span class="feature">${h(f.label)}</span>`).join("")}</div></div>
       </div>
       <div class="grid">
         <div class="card"><div class="card-head"><h2>Befehle</h2></div><div class="grid gap-sm">
@@ -1112,14 +1207,26 @@ async function pageSetup() {
           <div class="keys"><span><kbd>1</kbd>–<kbd>5</kbd> Kamera</span><span><kbd>V</kbd> 3D/2D</span><span><kbd>F</kbd> Vollbild</span><span><kbd>Leertaste</kbd> Replay Pause</span><span><kbd>←</kbd><kbd>→</kbd> ±5 s</span></div></div>
       </div>
     </div>
-    <div class="section card"><div class="card-head"><h2>Wie lange dauert das Training?</h2><span class="sub">Erfahrungswerte aus der RLGym-Community · dein echtes Tempo steht beim Training</span></div>
-      <div class="table-scroll"><table class="table"><thead><tr><th>Ziel</th><th class="num">Schritte (grob)</th><th class="num">2 Kerne (~4 000/s)</th><th class="num">8 Kerne (~15 000/s)</th></tr></thead><tbody>
-        <tr><td>Fährt zum Ball und trifft ihn</td><td class="num">20–50 Mio.</td><td class="num">1,5–3,5 h</td><td class="num">0,5–1 h</td></tr>
-        <tr><td>Schießt gezielt Tore</td><td class="num">100–300 Mio.</td><td class="num">7–21 h</td><td class="num">2–6 h</td></tr>
-        <tr><td>Schlägt Psyonix Rookie/Pro</td><td class="num">0,3–1 Mrd.</td><td class="num">1–3 Tage</td><td class="num">6–20 h</td></tr>
-        <tr><td>Gold/Platin-Niveau</td><td class="num">mehrere Mrd.</td><td class="num">Wochen</td><td class="num">Tage bis Wochen</td></tr>
-      </tbody></table></div></div>`);
-  page.actions = { ...rlActions, copy: (el) => copyText(el.dataset.text) };
+        <div class="section card"><div class="card-head"><h2>Wie lange dauert das Training?</h2><span class="sub">${sps ? `gerechnet mit deinem Tempo: ${fmt.int(sps)} Schritte/s` : "Beispielwerte – miss oben dein eigenes Tempo"}</span></div>
+      <div class="table-scroll"><table class="table"><thead><tr><th>Ziel</th><th class="num">Schritte (Erfahrungswerte)</th><th class="num">${sps ? "Bei deinem Rechner" : "4 000/s (2 Kerne)"}</th><th class="num">${sps ? "24/7" : "15 000/s (8 Kerne)"}</th></tr></thead><tbody>
+        ${milestones.map(([label, steps]) => `<tr><td>${h(label)}</td><td class="num">${fmt.steps(steps)}</td><td class="num">${sps ? fmt.duration(steps / sps) : "-"}</td><td class="num">${sps ? fmt.duration(steps / sps / (24 / (trainingHours || 4))) : "-"}</td></tr>`).join("")}
+      </tbody></table></div>
+      <p class="faint small">Die Schrittzahlen sind Erfahrungswerte: Wie schnell die KI wirklich lernt, hängt von Belohnung, Einstellungen und Startbedingungen ab – nicht nur von der Rechenleistung.</p></div>`);`);
+  page.actions = {
+    ...rlActions,
+    copy: (el) => copyText(el.dataset.text),
+    benchmark: (el) => busy(el, async () => {
+      benchmarkBusy = true; draw();
+      try {
+        const job = await attempt(() => api("/api/benchmark", { method: "POST", body: { seconds: 5, workers: 0, envs_per_worker: 1 } }), "Messung konnte nicht starten");
+        if (job) {
+          await waitForJob(job.id);
+          measured = await api("/api/benchmark").then((r) => r.report);
+          toast("Messung fertig", measured?.best ? `${fmt.int(measured.best.steps_per_second)} Schritte/s` : "");
+        }
+      } finally { benchmarkBusy = false; draw(); }
+    }),
+  };
   draw();
   refreshOnSnapshot(draw);
 }

@@ -19,12 +19,18 @@ Alles wird über eine lokale Web-App im Browser bedient.
 
 Voraussetzungen: **Python 3.11–3.13**. Für das echte Spiel zusätzlich
 **Windows** und **Rocket League** (Steam oder Epic). Eine Grafikkarte ist
-nicht nötig, trainiert wird auf der CPU.
+nicht nötig (die Simulation läuft immer auf der CPU); ist eine da, nutzt
+RocketAI sie automatisch für den Lernschritt.
 
 ```bash
 python3 install.py   # einmalig: venv, PyTorch (CPU), RocketAI, RLBotServer
 python3 start.py     # öffnet http://127.0.0.1:8765
 ```
+
+Mit NVIDIA-Grafikkarte lohnt `python3 install.py --cuda`: Dann installiert
+RocketAI die CUDA-Variante von PyTorch, und der **Lernschritt** läuft auf der
+Grafikkarte (die Physik-Simulation bleibt auf der CPU — dort zählt jeder Kern).
+Ob es etwas bringt, zeigt `python3 -m rocketai benchmark`.
 
 In der App:
 
@@ -47,10 +53,10 @@ In der App:
 | --- | --- |
 | Übersicht | Status in drei Schritten, aktive Trainings, letzte Replays, Rocket-League-Status |
 | Training | alle Runs; pro Run Prognose (wann welches Niveau), Kurven mit Checkpoint- und Stufenwechsel-Markern (u. a. Siegquote gegen ältere Versionen, Neugier), Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
-| **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen und ein Eingabe-Verlauf der letzten 5 Sekunden. Bei mehreren KI-Autos per Klick auf das Auto-Kärtchen umschalten. Tore mit Effekt und „TOR!“-Einblendung. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
+| **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen, ein Eingabe-Verlauf der letzten 5 Sekunden und **„Was die KI sieht“** (Ballabstand, Ballhöhe, Drehung, Boost, Gefahr am eigenen Tor …). Bei mehreren KI-Autos per Klick auf das Auto-Kärtchen umschalten. Tore mit Effekt und „TOR!“-Einblendung. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
 | Arena | Replay-Player in 3D oder 2D (Zeitleiste mit Toren, 0,5–4×) und neue Simulations-Matches |
 | Spielen | Rocket-League-Check (installiert? Steam/Epic? läuft es – normal oder im Bot-Modus?) und Match-Start im echten Spiel. Wählbar, wer fährt: **deine KI** oder der **Lehrer (Nexto)** |
-| Einrichtung | Systemprüfung, Rocket-League-Check, Befehle, Tastenkürzel, Zeitabschätzung |
+| Einrichtung | Systemprüfung, Rocket-League-Check, **Geschwindigkeit messen** (echtes Tempo dieses Rechners), „Was die KI sieht“, Befehle, Tastenkürzel, Zeitabschätzung mit dem gemessenen Tempo |
 
 Tastenkürzel in Live/Arena: `1`–`5` Kamera, `V` 3D/2D, `F` Vollbild, Leertaste Pause (Replay), `←`/`→` ±5 s.
 
@@ -66,6 +72,7 @@ python3 -m rocketai train --preset autopilot --name mein-bot   # ohne Lehrer
 python3 -m rocketai train --resume mein-bot --steps 200000000 # fortsetzen mit neuem Ziel
 python3 -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher
 python3 -m rocketai replay runs/mein-bot/checkpoints/latest.pt chaser --out spiel.json
+python3 -m rocketai benchmark                                 # Tempo dieses Rechners messen
 python3 -m rocketai play runs/mein-bot/checkpoints/latest.pt --mode psyonix --skill rookie
 python3 -m rocketai play --brain teacher --mode psyonix        # Nexto fährt selbst
 python3 -m rocketai doctor                                    # Installation prüfen
@@ -78,9 +85,12 @@ python3 -m rocketai doctor                                    # Installation pr�
 - **Lernen:** eigenes PPO in PyTorch mit parallelen Simulationsprozessen.
 - **Belohnung in Stufen:** 1 = Ball treffen, 2 = Tore schießen,
   3 = komplettes Spiel inkl. Luftspiel und Boost. Der **Autopilot** wechselt
-  die Stufe selbst: 1 → 2 ab ≥ 15 Ballkontakten/min (Schnitt der letzten 20
-  Updates, frühestens nach 10 Mio. Schritten), 2 → 3 ab ≥ 1 Tor/min
-  (frühestens nach 50 Mio.).
+  die Stufe selbst: 1 → 2 ab ≥ 10 *eigenen* Ballkontakten/min (Schnitt der
+  letzten 20 Updates, frühestens nach 10 Mio. Schritten), 2 → 3 ab ≥ 1 eigenem
+  Tor/min (frühestens nach 50 Mio.). Alle Kennzahlen werden nach Team getrennt
+  ausgewiesen: „eigene Ballkontakte“ gehören der lernenden KI, „Gegner“
+  der anderen Seite. Vorher zählte die Anzeige die Kontakte **aller** Autos —
+  dadurch stieg die Zahl auch dann, wenn nur der Gegner am Ball war.
 - **Gegner-Pool:** Ein Teil der Spiele läuft gegen die letzten 5 gespeicherten
   Checkpoints. Nur die aktuelle KI lernt daraus; die Siegquote zeigt, ob neue
   Versionen wirklich besser werden.
@@ -96,10 +106,29 @@ python3 -m rocketai doctor                                    # Installation pr�
   Beobachtung aus dem Training (per Test abgesichert). Der Bot entscheidet wie
   im Training 15-mal pro Sekunde aus 90 Aktionen.
 
-Gemessen (2 Kerne): Der Lehrer gewinnt 6:0 gegen den eingebauten Balljäger, und
-Trainingsspiele gegen ihn heben die Ballkontakte der KI von ~1 auf 51–93 pro
-Minute. Die Nachahmung allein ist dagegen schwach – warum, steht ausführlich in
-[docs/WISSEN.md](docs/WISSEN.md).
+- **Was die KI sieht:** Der Zustand wird nicht als Bild, sondern als Zahlen
+  übergeben — 172 Werte aus RLGyms `DefaultObs` (Ball samt Drehung,
+  Boost-Pads, alle Autos) plus 12 eigene Zusatzwerte (`rocketai/obs.py`):
+  Ballposition relativ zum Auto, Abstand, Ballgeschwindigkeit, Balldrehung,
+  Ballhöhe, ob der Ball auf das eigene Tor zuläuft, eigene Hälfte, Boost,
+  Bodenkontakt, Überschall. Die Live-Ansicht zeigt diese Werte unter
+  **„Was die KI sieht“**. Ein Test vergleicht Simulation und echtes Spiel
+  Wert für Wert für beide Varianten.
+- **Sperre pro Training:** Ein Run kann nur von *einem* Prozess trainiert
+  werden (Dateisperre, siehe `rocketai/runtime.py`) — auch wenn Weboberfläche
+  und Kommandozeile gleichzeitig starten wollen.
+- **Messen statt raten:** `python3 -m rocketai benchmark` (oder der Knopf in
+  *Einrichtung*) misst auf dem eigenen Rechner Schritte/s, Echtzeit-Faktor und
+  die Dauer eines Lernschritts.
+
+Gemessen (2-Kern-Sandbox, `rocketai benchmark`): rund 2 100 Schritte/s pro
+Simulationsprozess (ca. 70× Echtzeit), mit 2 Prozessen etwa 4 200 Schritte/s;
+ein PPO-Lernschritt läuft mit ~20 000 Schritten/s. Der Balljäger wird vom
+Lehrer 6:0 geschlagen. Wie stark Trainingsspiele gegen den Lehrer wirklich
+helfen, muss mit den **getrennten** Kennzahlen neu gemessen werden: die früher
+genannten „51–93 Ballkontakte pro Minute“ wurden noch mit dem alten Zähler
+ermittelt, der die Kontakte beider Teams addierte. Die Nachahmung allein ist
+schwach – warum, steht ausführlich in [docs/WISSEN.md](docs/WISSEN.md).
 
 **Alles Wissen zum Projekt** (wie die KI sieht und lernt, der Lehrer,
 Zeitabschätzungen, Fehlerbehebung, Glossar): [docs/WISSEN.md](docs/WISSEN.md).

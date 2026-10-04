@@ -19,19 +19,29 @@ from pathlib import Path
 import numpy as np
 from rlbot import flat
 from rlbot.managers import Bot
-from rlgym.rocket_league.obs_builders import DefaultObs
 
-from ..config import OBS_PADDING, OBS_SIZE, TICK_SKIP
+from ..config import OBS_BASE_SIZE, TICK_SKIP
 from ..env import lookup_table
-from ..model import load_policy
+from ..model import load_checkpoint, model_from_checkpoint
+from ..obs import build_obs_builder
 from ..rlbot_convert import PacketConverter, controls_from_action
 
-AGENT_ID = "rocketai/policy"
+#: Muss zur ``agent_id`` im Match-Config passen (siehe play.py). Bei
+#: Selbsttests („KI gegen sich selbst") fährt ein zweiter Prozess mit
+#: ``rocketai/orange``, damit RLBot die beiden Bots auseinanderhalten kann.
+DEFAULT_AGENT_ID = "rocketai/policy"
 
 
 class RocketAIBot(Bot):
-    def __init__(self, checkpoint: Path | None, deterministic: bool = True, teacher: bool = False):
-        super().__init__(AGENT_ID)
+    def __init__(
+        self,
+        checkpoint: Path | None,
+        deterministic: bool = True,
+        teacher: bool = False,
+        agent_id: str = DEFAULT_AGENT_ID,
+    ):
+        super().__init__(agent_id)
+        self.agent_id = agent_id
         self.checkpoint = checkpoint
         self.deterministic = deterministic
         self.teacher_mode = teacher
@@ -47,13 +57,20 @@ class RocketAIBot(Bot):
             self.teacher = NextoTeacher(progress=self.logger.info)
             self.logger.info("RocketAI: Lehrer (Nexto) geladen (Spieler %s)", self.index)
             return
-        self.policy = load_policy(self.checkpoint)
-        self.obs_builder = DefaultObs(zero_padding=OBS_PADDING)
+        # Der Checkpoint beschreibt sich selbst: Beobachtungsgröße aus dem
+        # Training wird übernommen, damit Training und echtes Spiel identisch sind.
+        payload = load_checkpoint(self.checkpoint)
+        self.obs_size = int(payload["obs_size"])
+        self.obs_extras = self.obs_size > OBS_BASE_SIZE
+        self.policy = model_from_checkpoint(payload)
+        self.obs_builder = build_obs_builder(self.obs_extras)
         self.logger.info(
-            "RocketAI: %s geladen (Spieler %s, Team %s)",
+            "RocketAI: %s geladen (%s, Spieler %s, Team %s, %d Beobachtungen)",
             self.checkpoint.name,
+            self.agent_id,
             self.index,
             self.team,
+            self.obs_size,
         )
 
     def get_output(self, packet: flat.GamePacket) -> flat.ControllerState:
@@ -71,7 +88,7 @@ class RocketAIBot(Bot):
             self.controls = flat.ControllerState(**controls_from_action(self.table[action]))
             return self.controls
         obs = self.obs_builder.build_obs([me], state, {})[me]
-        if obs.shape[0] != OBS_SIZE:  # more than 3 cars per team: not supported
+        if obs.shape[0] != self.obs_size:  # more than 3 cars per team: not supported
             return self.controls
         actions, _, _ = self.policy.act(
             obs[None].astype(np.float32), deterministic=self.deterministic
@@ -84,6 +101,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="RocketAI RLBot bot")
     parser.add_argument("--checkpoint", default=os.environ.get("ROCKETAI_CHECKPOINT", ""))
     parser.add_argument(
+        "--agent-id",
+        default=os.environ.get("ROCKETAI_AGENT_ID", DEFAULT_AGENT_ID),
+        help="Muss zur agent_id in der Match-Config passen",
+    )
+    parser.add_argument(
         "--sample", action="store_true", help="Aktionen würfeln statt immer die beste"
     )
     parser.add_argument(
@@ -94,7 +116,12 @@ def main(argv: list[str] | None = None) -> None:
     if not args.teacher and (checkpoint is None or not checkpoint.is_file()):
         print(f"RocketAI: Checkpoint nicht gefunden: {checkpoint!s}", file=sys.stderr)
         raise SystemExit(2)
-    RocketAIBot(checkpoint, deterministic=not args.sample, teacher=args.teacher).run()
+    RocketAIBot(
+        checkpoint,
+        deterministic=not args.sample,
+        teacher=args.teacher,
+        agent_id=args.agent_id,
+    ).run()
 
 
 if __name__ == "__main__":

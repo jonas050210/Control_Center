@@ -24,9 +24,10 @@ from typing import Any
 import numpy as np
 import torch
 
-from .config import PYTHON_CMD
+from .config import PYTHON_CMD, TICK_SKIP
 from .env import lookup_table, make_env
 from .model import ActorCritic
+from .obs import obs_size
 from .teacher import NextoTeacher, TeacherPlayer, canonical_players, encode_compact
 
 
@@ -57,8 +58,21 @@ class Batch:
 
     @staticmethod
     def concat(batches: list[Batch]) -> Batch:
+        """Batches mehrerer Worker zu einem zusammenlegen.
+
+        Wichtig: ``teacher_rows`` sind Zeilennummern **innerhalb** des Batches
+        des jeweiligen Workers. Beim Zusammenlegen müssen sie um die Länge der
+        vorherigen Batches verschoben werden, sonst lernt die KI vom Lehrer für
+        die falschen Spielsituationen — und zwar nur, wenn mehr als ein Worker
+        läuft (bei einem Worker fällt der Fehler nicht auf).
+        """
         stats = merge_stats([b.stats for b in batches])
         with_teacher = [b for b in batches if b.teacher_states is not None]
+        rows: list[np.ndarray] = []
+        offset = 0
+        for batch in with_teacher:
+            rows.append(np.asarray(batch.teacher_rows, dtype=np.int64) + offset)
+            offset += len(batch)
         return Batch(
             obs=np.concatenate([b.obs for b in batches]),
             actions=np.concatenate([b.actions for b in batches]),
@@ -70,9 +84,7 @@ class Batch:
             teacher_states=(
                 np.concatenate([b.teacher_states for b in with_teacher]) if with_teacher else None
             ),
-            teacher_rows=(
-                np.concatenate([b.teacher_rows for b in with_teacher]) if with_teacher else None
-            ),
+            teacher_rows=(np.concatenate(rows) if rows else None),
             teacher_slots=(
                 np.concatenate([b.teacher_slots for b in with_teacher]) if with_teacher else None
             ),
@@ -88,10 +100,12 @@ def merge_stats(items: list[dict[str, Any]]) -> dict[str, Any]:
         "reward_parts": {},
         "agent_steps": 0,
         "collect_seconds": 0.0,
+        "game_seconds": 0.0,
     }
     for stats in items:
         merged["episodes"].extend(stats.get("episodes", []))
         merged["agent_steps"] += stats.get("agent_steps", 0)
+        merged["game_seconds"] += stats.get("game_seconds", 0.0)
         merged["collect_seconds"] = max(
             merged["collect_seconds"], stats.get("collect_seconds", 0.0)
         )
@@ -150,6 +164,8 @@ class Collector:
 
     def __init__(self, config: dict[str, Any], seed: int):
         self.config = config
+        self.extras = bool(config.get("obs_extras", True))
+        self.tick_skip = int(config.get("tick_skip") or TICK_SKIP)
         self.envs = [
             make_env(
                 team_size=config["team_size"],
@@ -157,10 +173,14 @@ class Collector:
                 episode_seconds=config["episode_seconds"],
                 no_touch_seconds=config["no_touch_seconds"],
                 seed=seed + index,
+                obs_extras=self.extras,
             )
             for index in range(config["envs_per_worker"])
         ]
-        self.model = ActorCritic(hidden_sizes=config["hidden_sizes"])
+        self.model = ActorCritic(
+            obs_size=int(config.get("obs_size") or obs_size(self.extras)),
+            hidden_sizes=config["hidden_sizes"],
+        )
         self.model.eval()
         self.rng = random.Random(seed)
         self.past_models: list[ActorCritic] = []
@@ -196,11 +216,22 @@ class Collector:
 
     @staticmethod
     def _new_episode(env: Any) -> dict[str, Any]:
+        """Zähler für ein Spiel.
+
+        Ballkontakte und Tore werden **getrennt** nach Team gezählt: Die
+        lernende KI spielt Blau, alles andere (Lehrer, ältere Version, anderes
+        blaues Auto) ist „die anderen". Nur so ist „die KI trifft den Ball
+        häufiger" eine ehrliche Aussage — sonst zählen die Kontakte des Gegners
+        mit und die Zahl steigt, obwohl die KI nichts besser macht.
+        """
         return {
             "reward": dict.fromkeys(env.agents, 0.0),
             "ticks": 0,
-            "touches": 0,
-            "goals": [0, 0],  # [blue, orange]
+            "touches_own": 0,
+            "touches_other": 0,
+            "goals_own": 0,
+            "goals_other": 0,
+            "opponent": "self",
         }
 
     def load_weights(self, state_dict: dict[str, Any]) -> None:
@@ -210,7 +241,9 @@ class Collector:
         """Replace the pool of frozen older policies."""
         models = []
         for state in state_dicts:
-            model = ActorCritic(hidden_sizes=self.config["hidden_sizes"])
+            model = ActorCritic(
+                obs_size=self.model.obs_size, hidden_sizes=self.config["hidden_sizes"]
+            )
             model.load_state_dict(state)
             model.eval()
             models.append(model)
@@ -236,16 +269,18 @@ class Collector:
             return None
         return opponent
 
-    def collect(self, n_agent_steps: int) -> Batch:
+    def collect(self, n_agent_steps: int, teacher_weight: float | None = None) -> Batch:
+        """Play until ``n_agent_steps`` of *learning* steps are collected.
+
+        ``teacher_weight`` ist das Nachahmungs-Gewicht dieses Schritts; bei 0
+        werden keine Lehrer-Daten aufgezeichnet (der Lehrer ist dann aus).
+        """
         started = time.perf_counter()
         gamma, lam = self.config["gamma"], self.config["gae_lambda"]
-        tick_skip = 8
+        tick_skip = self.tick_skip
+        recording = self.teacher_enabled and (teacher_weight is None or teacher_weight > 0)
         wanted = int(self.config.get("teacher_samples") or 0)
-        self.stride = (
-            1
-            if (wanted <= 0 or not self.teacher_enabled)
-            else max(1, round(n_agent_steps / wanted))
-        )
+        self.stride = 1 if (wanted <= 0 or not recording) else max(1, round(n_agent_steps / wanted))
         finished: list[_Stream] = []
         episodes: list[dict[str, Any]] = []
         parts: dict[str, float] = {}
@@ -267,7 +302,7 @@ class Collector:
                     stream.actions.append(int(actions[k]))
                     stream.log_probs.append(float(log_probs[k]))
                     stream.values.append(float(values[k]))
-                    if self.teacher_enabled:
+                    if recording:
                         # Ask the teacher about a regular subset of the steps.
                         if self.teacher_tick % self.stride == 0:
                             stream.teacher.append(encode_compact(self.envs[i].state, self.order[i]))
@@ -297,7 +332,12 @@ class Collector:
                 episode = self.episode[i]
                 episode["ticks"] += tick_skip
                 state = env.state
-                episode["touches"] += sum(car.ball_touches for car in state.cars.values())
+                for car in state.cars.values():
+                    # Team 0 = Blau = die lernende KI (siehe _new_episode).
+                    if int(car.team_num) == 0:
+                        episode["touches_own"] += car.ball_touches
+                    else:
+                        episode["touches_other"] += car.ball_touches
                 for name, value in env.shared_info.get("reward_parts", {}).items():
                     parts[name] = parts.get(name, 0.0) + value
                 env.shared_info["reward_parts"] = dict.fromkeys(
@@ -321,20 +361,32 @@ class Collector:
                 if is_done:
                     scoring = state.scoring_team if is_terminal else None
                     if scoring is not None:
-                        episode["goals"][int(scoring)] += 1
+                        if int(scoring) == 0:
+                            episode["goals_own"] += 1
+                        else:
+                            episode["goals_other"] += 1
                     learner_rewards = [episode["reward"][a] for a in learners] or [0.0]
+                    opponent = self.opponent[i]
+                    episode["opponent"] = (
+                        "self" if opponent is None else ("teacher" if opponent == "teacher" else "past")
+                    )
                     record = {
                         "reward": float(np.mean(learner_rewards)),
                         "seconds": episode["ticks"] / 120.0,
                         "goal": scoring is not None,
-                        "touches": episode["touches"],
+                        # "touches" = Ballkontakte der lernenden KI (Blau).
+                        "touches": episode["touches_own"],
+                        "touches_other": episode["touches_other"],
+                        "goals_own": episode["goals_own"],
+                        "goals_other": episode["goals_other"],
+                        "opponent": episode["opponent"],
                     }
-                    if self.opponent[i] == "teacher":
+                    if opponent == "teacher":
                         # +1 the current policy (blue) scored, -1 the teacher did, 0 timeout
                         record["vs_teacher"] = 0 if scoring is None else (1 if scoring == 0 else -1)
-                        record["teacher_goals_for"] = int(episode["goals"][0])
-                        record["teacher_goals_against"] = int(episode["goals"][1])
-                    elif self.opponent[i] is not None:
+                        record["teacher_goals_for"] = int(episode["goals_own"])
+                        record["teacher_goals_against"] = int(episode["goals_other"])
+                    elif opponent is not None:
                         # +1 the current policy (blue) scored, -1 the old one did, 0 timeout
                         record["vs_past"] = 0 if scoring is None else (1 if scoring == 0 else -1)
                     episodes.append(record)
@@ -419,6 +471,8 @@ class Collector:
                 "reward_parts": parts,
                 "agent_steps": collected,
                 "collect_seconds": time.perf_counter() - started,
+                # Simulierte Spielzeit — daraus wird der „Echtzeit-Faktor".
+                "game_seconds": float(sum(e["seconds"] for e in episodes)),
             },
         )
 
@@ -431,11 +485,11 @@ def _worker_main(conn: Any, config: dict[str, Any], seed: int) -> None:
         while True:
             command, payload = conn.recv()
             if command == "collect":
-                weights, n_steps, past = payload
+                weights, n_steps, past, teacher_weight = payload
                 collector.load_weights(weights)
                 if past is not None:
                     collector.set_past(past)
-                conn.send(("batch", collector.collect(n_steps)))
+                conn.send(("batch", collector.collect(n_steps, teacher_weight)))
             elif command == "close":
                 break
     except (EOFError, KeyboardInterrupt):
@@ -483,11 +537,16 @@ class WorkerPool:
         weights: dict[str, Any],
         total_steps: int,
         past: list[dict[str, Any]] | None = None,
+        teacher_weight: float = 0.0,
     ) -> Batch:
-        """``past``: new opponent pool to install first (None = keep the current one)."""
+        """``past``: opponent pool to install first (None = keep the current one).
+
+        ``teacher_weight``: Nachahmungs-Gewicht dieses Schritts; bei 0 zeichnen
+        die Worker keine Lehrer-Daten auf.
+        """
         per_worker = max(1, -(-total_steps // len(self.connections)))
         for conn in self.connections:
-            conn.send(("collect", (weights, per_worker, past)))
+            conn.send(("collect", (weights, per_worker, past, teacher_weight)))
         batches = []
         for conn in self.connections:
             kind, payload = self._receive(conn)
