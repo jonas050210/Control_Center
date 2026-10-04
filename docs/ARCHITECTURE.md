@@ -288,7 +288,8 @@ Godot workers (rl_server.gd)                 unchanged simulation
 ## Debug GUI, benchmarking and the TTK evidence boundary
 
 - [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](DEBUG_GUI_AND_BENCHMARKING.md)
-  documents the optional, presentation-only `DebugOverlay` (telemetry +
+  documents the optional, presentation-only `DebugOverlay` (telemetry, the
+  boxes that frame what the agent has in view, and
   pause/reset/enemy-count/curriculum controls, never used by headless
   training) and how to run/interpret `sandboxai benchmark`.
 - [`docs/OBSERVATION_ACTION_CONTRACT.md`](OBSERVATION_ACTION_CONTRACT.md) is

@@ -23,10 +23,45 @@ logic living in two pure, dependency-free functions:
   node is touched; this is what `tests/test_debug_overlay.gd` exercises.
 - `DebugOverlay.format_lines(telemetry: Dictionary) -> PackedStringArray` —
   pure text formatting.
+- `DebugOverlay.contact_boxes(env) -> Array` — the enemies the agent can
+  actually see right now, each as a screen-space box in normalised device
+  coordinates. Also pure, and unit tested the same way.
 
-`_process()` just calls both and assigns the result to a `Label`, so the only
-engine-coupled part is the label text assignment and the button wiring
-(both trivial, no gameplay logic).
+`_process()` calls the telemetry pair, assigns the result to a `Label`, and
+moves the contact boxes; the only engine-coupled parts are the label text
+assignment, the rectangles themselves and the button wiring (all trivial, no
+gameplay logic).
+
+### Contact boxes: "what can the agent see"
+
+Pressing nothing at all, the overlay frames every enemy the agent currently
+has **in view** with a thin rectangle, and prints `in view: N` (plus the mean
+exposure of those contacts) in the text panel. The rule is the vision
+system's own, not a distance guessed by the GUI:
+
+- The perception levels (6-10) build a belief per enemy every tick, and the
+  overlay reads the very same `screen_box` the observation vector is built
+  from - so a box here and a box in the Control Center's Stats page cannot
+  disagree.
+- The legacy levels (1-4) run without a perception layer and their
+  observation carries no boxes, so there the geometry is evaluated directly
+  through the agent's own cone (`fov_deg`) and reach (`vision_range`).
+- Either way an enemy is framed only when it is in the field of view, within
+  reach and has a clear line. A contact that is merely *remembered* - seen a
+  second ago, behind cover now - gets no box, and neither does a corpse.
+  "In view" is not "alive", and the overlay never pretends otherwise.
+
+Colour is the second fact: **orange** is a clear contact (the agent can shoot
+what it is looking at), **green** is a contact that is partly behind cover
+(exposure < 1.0 — it sees the target, it just cannot hit all of it). The
+stroke is thin and hollow on purpose: the box frames the enemy, it does not
+paint over it.
+
+This is the in-engine twin of the TTK silhouette boxes
+([`TTK_TESTING_REFERENCE.md`](TTK_TESTING_REFERENCE.md)): there the boxes come
+from the pixels of a captured frame, here they come from the simulation that
+would have produced those pixels. Same question, same answer: what is on the
+screen, and how readable is it.
 
 ### What it shows
 
@@ -36,6 +71,8 @@ engine-coupled part is the label text assignment and the button wiring
 - Episode number, timestep (step count within the episode).
 - Agent HP, position, aim yaw/pitch, weapon-ready flag.
 - Per-enemy list: index, AI state (idle/chase/attack/dead), HP, position.
+- How many of those enemies the agent actually has in view right now, and the
+  mean exposure of those contacts (see "Contact boxes" below).
 - Shots fired/hit, accuracy, kills (episode + lifetime total), deaths
   (episode + lifetime total).
 - Episode cumulative reward, last-step reward, reward breakdown (from
