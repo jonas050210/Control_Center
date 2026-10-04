@@ -66,9 +66,7 @@ def check_python(version: tuple[int, int] | None = None) -> None:
     """Stop before installing when the current interpreter is outside our tested range."""
     version = sys.version_info[:2] if version is None else version
     if version < (3, 11):
-        sys.exit(
-            f"Python 3.11–3.13 wird benötigt (gefunden: {version[0]}.{version[1]})."
-        )
+        sys.exit(f"Python 3.11–3.13 wird benötigt (gefunden: {version[0]}.{version[1]}).")
     if version >= (3, 14):
         sys.exit(
             f"Python {version[0]}.{version[1]} wird noch nicht unterstützt. "

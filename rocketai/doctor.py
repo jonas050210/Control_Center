@@ -25,9 +25,7 @@ def _module(name: str) -> tuple[bool, str]:
 
 def _python_check(version: tuple[int, int] | None = None) -> tuple[bool, str]:
     actual_version = sys.version_info[:2] if version is None else version
-    display_version = (
-        platform.python_version() if version is None else f"{version[0]}.{version[1]}"
-    )
+    display_version = platform.python_version() if version is None else f"{version[0]}.{version[1]}"
     detail = f"{display_version} ({sys.executable})"
     ok = (3, 11) <= actual_version < (3, 14)
     if not ok:
