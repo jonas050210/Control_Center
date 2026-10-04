@@ -25,6 +25,7 @@ def in_venv() -> bool:
 
 
 PYTHON_CMD = "python" if sys.platform == "win32" else "python3"
+PYTHON_312_CMD = "py -3.12" if sys.platform == "win32" else "python3.12"
 
 
 def main() -> int:
@@ -39,6 +40,16 @@ def main() -> int:
         return subprocess.call(
             [str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]], cwd=ROOT
         )
+    version = sys.version_info[:2]
+    if version < (3, 11) or version >= (3, 14):
+        print(
+            f"Python {version[0]}.{version[1]} wird für RocketAI nicht unterstützt "
+            "(benötigt 3.11–3.13; RLGym 2.0.1 ist mit Python 3.14 inkompatibel). "
+            f"Bitte Python 3.12 installieren, .venv neu erstellen und "
+            f"`{PYTHON_312_CMD} install.py` ausführen.",
+            file=sys.stderr,
+        )
+        return 1
     sys.path.insert(0, str(ROOT))
     from rocketai.cli import main as cli_main
 
