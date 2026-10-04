@@ -838,6 +838,12 @@ OBSERVATION_MAX_TRACKED_OBJECTS: int = 3
 ## Mirrors ``Observation.COUNT_NORMALIZER``; a drift test parses the GDScript
 ## constant, and the Control Center's Stats page converts back with it.
 OBSERVATION_COUNT_NORMALIZER: int = 8
+## Every ``*_distance_norm`` is divided by this, so a Stats-page reader can
+## turn a normalised distance back into metres. Mirrors
+## ``SandboxConfig.ARENA_MAX_DISTANCE`` (the arena's own diagonal:
+## ``ARENA_HALF_EXTENT * 2 * sqrt(2)``); a drift test parses the GDScript
+## constant and fails if the two disagree.
+OBSERVATION_DISTANCE_NORMALIZER_METERS: float = 28.284
 ## ``Obstacle.Kind`` (``scripts/world/obstacle.gd``) in declaration order.
 ## ``object_k_kind_norm`` is this ordinal divided by ``len(...) - 1``; the order
 ## is a wire detail, so ``test_contract.py`` parses the GDScript enum and fails

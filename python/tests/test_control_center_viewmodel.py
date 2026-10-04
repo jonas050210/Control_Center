@@ -1075,7 +1075,118 @@ def test_contact_rows_report_perception_not_world_state():
     assert primary["distance"] == "0.200"
     assert rows[1]["state"] == "dead / absent"
     assert rows[2]["state"] == "dead / absent"
+    # No box, no exposure: a contact the agent has no view of reports n/a
+    # rather than 0%, which would read like a measurement.
+    assert primary["exposure"] == "n/a"
     assert all(row["state"] == "not tracked" for row in vm.contact_rows(None))
+
+
+def test_contact_rows_report_how_much_of_a_body_was_actually_visible():
+    """'Visible' used to mean in-cone and in line of sight. It is not enough.
+
+    A contact can pass both and still be a sliver behind cover in the dark.
+    The vision block answers the part that matters, and a contact with no
+    box at all must not claim an exposure.
+    """
+    observation = _observation(
+        alive_enemy_count_norm=0.375,
+        primary_enemy_visible=1.0,
+        primary_enemy_screen_half_width=0.05,
+        primary_enemy_screen_half_height=0.2,
+        primary_enemy_exposure_fraction=0.6,
+        primary_enemy_illumination=0.75,
+        primary_contact_clarity=0.45,
+    )
+    primary = vm.contact_rows(observation)[0]
+    assert primary["exposure"] == "0.60"
+    assert primary["clarity"] == "0.45"
+    # The other two slots carry no box, so they carry no exposure either.
+    assert [row["exposure"] for row in vm.contact_rows(observation)[1:]] == ["n/a", "n/a"]
+
+
+def test_stats_guide_states_the_normalisation_it_shows():
+    """The page's own numbers must explain the page's own scaling."""
+    from sandboxai.contract import (
+        ACTION_NVEC,
+        OBSERVATION_COUNT_NORMALIZER,
+        OBSERVATION_DISTANCE_NORMALIZER_METERS,
+        OBSERVATION_FIELD_COUNT,
+    )
+
+    lines = vm.stats_guide_lines()
+    assert len(lines) >= 4
+    joined = " ".join(lines)
+    assert str(OBSERVATION_FIELD_COUNT) in joined
+    assert str(ACTION_NVEC) in joined
+    assert f"{OBSERVATION_DISTANCE_NORMALIZER_METERS:.0f} m" in joined
+    assert str(OBSERVATION_COUNT_NORMALIZER) in joined
+    # A guide that does not say what a normalised value *is* explains nothing.
+    assert "divided by" in joined
+    assert "relative to the agent" in joined
+
+
+def test_agent_view_model_draws_only_contacts_that_have_a_box():
+    """A contact with no box is not tracked - never a box in the middle.
+
+    The engine zeroes the whole vision block when a contact is not being
+    seen, and a view that drew that as "dead ahead" would be worse than no
+    view at all.
+    """
+    view = vm.agent_view_model(None)
+    assert view["available"] is False
+    assert view["contacts"] == []
+    assert view["notes"]
+
+    observation = _observation(
+        alive_enemy_count_norm=0.375,
+        primary_enemy_visible=1.0,
+        primary_enemy_distance_norm=0.25,
+        primary_enemy_screen_x=-0.5,
+        primary_enemy_screen_y=0.125,
+        primary_enemy_screen_half_width=0.04,
+        primary_enemy_screen_half_height=0.15,
+        primary_enemy_exposure_fraction=0.6,
+        primary_enemy_illumination=0.8,
+        reticle_on_primary=1.0,
+        primary_contact_clarity=0.51,
+    )
+    view = vm.agent_view_model(observation)
+    assert view["available"] is True
+    assert view["reticle_on_primary"] is True
+    primary = view["contacts"][0]
+    assert primary["on_screen"] is True
+    assert primary["state"] == "seen"
+    assert (primary["screen_x"], primary["screen_y"]) == (-0.5, 0.125)
+    assert primary["half_height"] > primary["half_width"], "a body is taller than wide"
+    assert primary["exposure"] == 0.6
+    assert primary["clarity"] == 0.51
+    assert primary["distance_text"].endswith("m")
+    assert 6.0 < float(primary["distance_text"].split()[0]) < 8.0  # 0.25 x 28.284 m
+    # The other two slots have no box at all, so they are named, not drawn.
+    assert [contact["on_screen"] for contact in view["contacts"][1:]] == [False, False]
+    assert any("not tracked" in note for note in view["notes"])
+    assert "crosshair is on the closest contact" in view["notes"]
+
+
+def test_agent_view_model_marks_a_remembered_contact_as_a_memory():
+    """A remembered contact keeps its box and loses its exposure."""
+    observation = _observation(
+        alive_enemy_count_norm=0.25,
+        primary_enemy_visible=0.0,
+        primary_enemy_screen_half_width=0.05,
+        primary_enemy_screen_half_height=0.2,
+        primary_enemy_exposure_fraction=0.0,
+        primary_enemy_illumination=0.0,
+        primary_contact_clarity=0.0,
+        reticle_on_primary=0.0,
+    )
+    view = vm.agent_view_model(observation)
+    primary = view["contacts"][0]
+    assert primary["on_screen"] is True, "the box is where the contact was"
+    assert primary["state"] == "remembered"
+    assert primary["exposure"] == 0.0
+    assert view["reticle_on_primary"] is False
+    assert any("remembered" in note for note in view["notes"])
 
 
 def test_world_and_audio_rows_name_the_documented_fields():

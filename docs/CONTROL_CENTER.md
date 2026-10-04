@@ -421,7 +421,25 @@ a property of a run, so it is read next to the run it measures.
 
 ### Stats
 
-What the policy actually receives, decoded from a recording. The contract
+What the policy actually receives, decoded from a recording - and, since the
+complaint was that none of it could be read, what the numbers *mean*. A
+**How to read this page** card states the scaling once, from the contract's
+own constants: what a tick is (126 values in, 6 out), that "norm" is a
+division by a fixed maximum rather than a percentage (a distance of 0.50 is
+14 m, because the arena diagonal is 28 m; counts are divided by 8), that
+signed values are directions and unsigned ones are amounts, and that a
+contact's position is always relative to the agent.
+
+**The agent's own screen** draws the same vector as a picture: the three
+contacts where they fall in the agent's field of view, each as the box the
+engine reported and lit by how readable the target was - because "inside
+the cone with a clear line" and "a readable target" are different facts,
+and only the second one is what the policy can act on. The contacts table
+carries the same two numbers as columns (*Exposure*, *Clarity*). Centre of
+the drawing is under the crosshair, so it is a view and not a map: a
+contact behind the agent has no box and is not drawn at all.
+
+The contract
 table (`contract.OBSERVATION_SPEC`) is complete without any recording; a
 replay is the only thing that can show real values, and only
 `--replay-detail detailed` stores the observation vector per tick - a light

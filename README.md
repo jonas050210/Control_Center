@@ -165,8 +165,12 @@ It provides:
   with the run instead of on a page of their own
 - **Stats** - every value the policy receives, decoded from a real
   recording: the three tracked contacts (enemy position, distance,
-  bearing, health, visibility/source), the world objects around the agent,
-  hearing, memory, the raw observation vector and the recorded action.
+  bearing, health, visibility/source, exposure and clarity), the world
+  objects around the agent, hearing, memory, the raw observation vector
+  and the recorded action. A **How to read this page** card states the
+  scaling (what "norm" divides by, which values are directions), and
+  **the agent's own screen** draws the same vector as a picture: where
+  the contacts fall in the field of view and how readable each one was.
   The contract table is complete without a recording; a light replay is
   labelled as such instead of being rendered with zeros that would look
   like data

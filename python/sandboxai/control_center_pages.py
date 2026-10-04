@@ -41,6 +41,7 @@ from .control_center_ui import (
     StatusDot,
 )
 from .control_center_widgets import (
+    AgentView,
     CaptureView,
     LineChart,
     LogPanel,
@@ -5030,6 +5031,8 @@ class StatsPage(Page):
         ("info_age", "Age", 60),
         ("confidence", "Confidence", 85),
         ("source", "Source", 70),
+        ("exposure", "Exposure", 70),
+        ("clarity", "Clarity", 70),
     )
 
     # The declared widths are *minimums*: Tk's own column stretching fills
@@ -5094,6 +5097,21 @@ class StatsPage(Page):
             max_span=3,
         ),
         WidgetSpec(
+            "agent_view",
+            "The agent's own screen",
+            "Where the three contacts fall in its field of view, and how readable they were.",
+            default_span=3,
+            max_span=3,
+        ),
+        WidgetSpec(
+            "guide",
+            "How to read this page",
+            "What a tick is, what 'norm' means, and where the values come from.",
+            default_span=3,
+            max_span=3,
+            removable=False,
+        ),
+        WidgetSpec(
             "vector",
             "Observation vector (raw)",
             "All 126 fields, grouped, exactly as the contract defines them.",
@@ -5137,6 +5155,8 @@ class StatsPage(Page):
         board = self.board(area.body)
         board.add("source", self._build_source_card)
         board.add("summary", self._build_summary_card)
+        board.add("agent_view", self._build_agent_view_card)
+        board.add("guide", self._build_guide_card)
         board.add("vector", self._build_vector_card)
         board.add("contacts", self._build_contacts_card)
         board.add("world", self._build_world_card)
@@ -5160,6 +5180,7 @@ class StatsPage(Page):
         self._fill_world(None)
         self._fill_audio(None)
         self._fill_action(None)
+        self._fill_agent_view(None)
 
     # -- cards -------------------------------------------------------------
 
@@ -5270,6 +5291,64 @@ class StatsPage(Page):
         )
         self._draw_tactical_radar(None, None)
         return card
+
+    def _build_guide_card(self, parent: tk.Misc) -> tk.Widget:
+        """The page's own legend: 126 decoded fields mean nothing without it.
+
+        The complaint about this page was never that it lacked numbers. It
+        was that a table of normalised values with no statement of the
+        normalisation reads as noise, so the scaling is written out once,
+        from the contract itself.
+        """
+        card = self.card(
+            parent,
+            "How to read this page",
+            "Every number below is one of the values the policy received",
+        )
+        ttk.Label(
+            card.body,
+            text="\n\n".join(f"• {line}" for line in vm.stats_guide_lines()),
+            style="CardLabel.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        ).pack(anchor="w")
+        return card
+
+    def _build_agent_view_card(self, parent: tk.Misc) -> tk.Widget:
+        """What the agent sees, from the numbers it was handed.
+
+        A radar shows where contacts are in the world. This shows where they
+        are *on its screen* - which is the only place a policy can act from
+        - and lights each box by how readable the target was, so "in the
+        picture" and "readable" stay different facts.
+        """
+        card = self.card(
+            parent,
+            "The agent's own screen",
+            "Contacts in the agent's field of view — centre is under the crosshair",
+        )
+        self.agent_view = AgentView(card.body, bus=self.app.bus, height=210)
+        self.agent_view.pack(fill="x")
+        self.agent_view_notes = ttk.Label(
+            card.body,
+            text="",
+            style="FieldHelp.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        )
+        self.agent_view_notes.pack(anchor="w", fill="x", pady=(self.app.px(6, minimum=3), 0))
+        return card
+
+    def _fill_agent_view(self, observation: Any) -> None:
+        if getattr(self, "agent_view", None) is None:
+            return
+        model = vm.agent_view_model(observation)
+        self.agent_view.set_contacts(
+            model["contacts"],
+            reticle=model["reticle_on_primary"],
+            note=model["summary"],
+        )
+        self.agent_view_notes.configure(text="   ·   ".join(model["notes"]))
 
     def _build_vector_card(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(
@@ -5540,6 +5619,7 @@ class StatsPage(Page):
         self._fill_world(result.get("observation"))
         self._fill_audio(result.get("observation"))
         self._fill_action(result.get("action"))
+        self._fill_agent_view(result.get("observation"))
         self._draw_tactical_radar(result.get("observation"), result.get("action"))
 
     def _clear_decode(self) -> None:
@@ -5566,6 +5646,7 @@ class StatsPage(Page):
         self._fill_world(None)
         self._fill_audio(None)
         self._fill_action(None)
+        self._fill_agent_view(None)
         self._draw_tactical_radar(None, None)
 
     def _draw_tactical_radar(self, observation: Any, action: Any) -> None:

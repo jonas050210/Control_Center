@@ -23,6 +23,7 @@ from tkinter import messagebox, ttk
 from typing import Any
 
 from . import control_center_viewmodel as vm
+from .contract import AGENT_VIEW_ASPECT
 from .control_center_layout import fit_table_column_widths
 from .control_center_theme import (
     FONT_FAMILY,
@@ -1649,3 +1650,187 @@ class CaptureView(tk.Canvas):
             fill=self._theme.text,
             font=self._bus.font("micro", mono=True),
         )
+
+
+class AgentView(tk.Canvas):
+    """The agent's own screen, drawn from the numbers it was given.
+
+    The Stats page can list all 126 values the policy receives and still
+    not answer "what did it see". This is that answer in one picture: the
+    three contacts where they fall in the agent's field of view - left of
+    centre, dead ahead, off to the side - each drawn as the box the engine
+    reported and lit by how readable it was.
+
+    It is deliberately *not* a map. The coordinates are the agent's view,
+    so x=0 is under the crosshair whatever the agent happens to be facing,
+    and a contact behind it has no box and is not drawn at all.
+    """
+
+    #: Height of the note strip at the bottom of the canvas.
+    NOTE_HEIGHT = 16
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        bus: ThemeBus | None = None,
+        height: int = 200,
+    ) -> None:
+        self._bus = bus or _DEFAULT_BUS
+        self._cc_bus = self._bus
+        self._theme = self._bus.theme
+        self._base_height = height
+        effective = (
+            max(96, int(round(height * self._bus.scale.viewport_scale)))
+            if self._bus.scale.viewport_scale < 1.0
+            else height
+        )
+        super().__init__(
+            parent,
+            height=effective,
+            background=self._theme.panel,
+            highlightthickness=1,
+            highlightbackground=self._theme.border,
+        )
+        self._contacts: tuple[dict[str, Any], ...] = ()
+        self._reticle = False
+        self._note = "no observation loaded"
+        self.bind("<Configure>", lambda _event: self._redraw())
+        self._unsubscribe = self._bus.subscribe(self.apply_theme, owner=self)
+
+    def set_contacts(
+        self,
+        contacts: tuple[dict[str, Any], ...] | list[dict[str, Any]],
+        *,
+        reticle: bool = False,
+        note: str = "",
+    ) -> None:
+        self._contacts = tuple(contacts)
+        self._reticle = bool(reticle)
+        self._note = note
+        self._redraw()
+
+    def apply_theme(self, theme: Theme) -> None:
+        self._theme = theme
+        with contextlib.suppress(tk.TclError):
+            effective = (
+                max(96, int(round(self._base_height * self._bus.scale.viewport_scale)))
+                if self._bus.scale.viewport_scale < 1.0
+                else self._base_height
+            )
+            self.configure(
+                background=theme.panel,
+                highlightbackground=theme.border,
+                height=effective,
+            )
+        self._redraw()
+
+    # -- painting ---------------------------------------------------------
+
+    def _redraw(self) -> None:
+        with contextlib.suppress(tk.TclError):
+            self.delete("all")
+            width = max(1, int(self.winfo_width()))
+            height = max(1, int(self.winfo_height()))
+            frame_height = max(1, height - self.NOTE_HEIGHT)
+            # The view is the agent's cone, so it keeps the engine's aspect:
+            # a wider card letterboxes instead of stretching every box.
+            frame_width = min(width, int(round(frame_height * AGENT_VIEW_ASPECT)))
+            left = max(0, (width - frame_width) // 2)
+            self._paint_frame(left, 0, frame_width, frame_height)
+            self._paint_contacts(left, 0, frame_width, frame_height)
+            self._paint_note(width, height)
+
+    def _paint_frame(self, left: int, top: int, frame_width: int, frame_height: int) -> None:
+        self.create_rectangle(
+            left,
+            top,
+            left + frame_width,
+            top + frame_height,
+            fill=self._theme.card,
+            outline=self._theme.border,
+        )
+        centre_y = top + frame_height / 2.0
+        self.create_line(
+            left,
+            centre_y,
+            left + frame_width,
+            centre_y,
+            fill=self._theme.border,
+            dash=(3, 3),
+        )
+
+    def _paint_contacts(self, left: int, top: int, frame_width: int, frame_height: int) -> None:
+        centre_x = left + frame_width / 2.0
+        centre_y = top + frame_height / 2.0
+        unit_x = frame_width / 2.0
+        unit_y = frame_height / 2.0
+        # The crosshair: bright when it is on the closest contact, because
+        # "the policy is aiming at it" is the question behind the box.
+        reticle_colour = self._theme.accent if self._reticle else self._theme.text_muted
+        for offset in (-6.0, 6.0):
+            self.create_line(
+                centre_x + offset,
+                centre_y - 2,
+                centre_x + offset,
+                centre_y + 2,
+                fill=reticle_colour,
+            )
+            self.create_line(
+                centre_x - 2,
+                centre_y + offset,
+                centre_x + 2,
+                centre_y + offset,
+                fill=reticle_colour,
+            )
+        for contact in self._contacts:
+            if not contact.get("on_screen"):
+                continue
+            half_w = max(1.5, float(contact.get("half_width", 0.0)) * unit_x)
+            half_h = max(1.5, float(contact.get("half_height", 0.0)) * unit_y)
+            x0 = centre_x + float(contact.get("screen_x", 0.0)) * unit_x - half_w
+            x1 = centre_x + float(contact.get("screen_x", 0.0)) * unit_x + half_w
+            y0 = centre_y - float(contact.get("screen_y", 0.0)) * unit_y - half_h
+            y1 = centre_y - float(contact.get("screen_y", 0.0)) * unit_y + half_h
+            visibility = _contact_visibility(contact)
+            colour = lerp_color(self._theme.text_dim, self._theme.warn, visibility)
+            self.create_rectangle(x0, y0, x1, y1, outline=colour, width=2)
+            label = (
+                f"#{int(contact.get('index', 0)) + 1} {contact.get('distance_text', '')}".strip()
+            )
+            self.create_text(
+                x0,
+                max(top + 8.0, y0 - 4.0),
+                anchor="sw",
+                text=label,
+                fill=colour,
+                font=self._bus.font("micro", mono=True),
+            )
+
+    def _paint_note(self, width: int, height: int) -> None:
+        if not self._note:
+            return
+        self.create_text(
+            4,
+            height - self.NOTE_HEIGHT / 2.0,
+            anchor="w",
+            text=self._note,
+            fill=self._theme.text_dim,
+            font=self._bus.font("micro", mono=True),
+        )
+
+
+def _contact_visibility(contact: Mapping[str, Any]) -> float:
+    """How readable a contact was, in ``[0, 1]``, from what the vector says.
+
+    Clarity when the engine reported one (it folds the light on the target
+    and the distance into a single number), otherwise the product of how
+    much of the body was exposed and how brightly it was lit. A remembered
+    contact has neither, and is drawn as the dim box that it is.
+    """
+    clarity = contact.get("clarity")
+    if isinstance(clarity, (int, float)):
+        return max(0.0, min(1.0, float(clarity)))
+    exposure = float(contact.get("exposure", 0.0) or 0.0)
+    illumination = float(contact.get("illumination", 0.0) or 0.0)
+    return max(0.0, min(1.0, exposure * illumination))

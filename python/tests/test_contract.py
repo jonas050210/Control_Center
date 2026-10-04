@@ -9,6 +9,7 @@ gap statically: they parse the GDScript sources and fail loudly when the
 Godot-side constants/field layout no longer match the Python contract.
 """
 
+import math
 import re
 import unittest
 from pathlib import Path
@@ -21,6 +22,7 @@ from sandboxai.contract import (
     CONTACT_SLOTS,
     OBJECT_KIND_NAMES,
     OBSERVATION_COUNT_NORMALIZER,
+    OBSERVATION_DISTANCE_NORMALIZER_METERS,
     OBSERVATION_FIELD_COUNT,
     OBSERVATION_HIGH,
     OBSERVATION_LOW,
@@ -211,6 +213,24 @@ class GodotSourceDriftTests(unittest.TestCase):
         self.assertIsNotNone(match, "Observation.COUNT_NORMALIZER declaration not found")
         assert match is not None  # narrowing for type checkers
         self.assertEqual(int(match.group(1)), OBSERVATION_COUNT_NORMALIZER)
+
+    def test_distance_normalizer_matches_the_godot_arena_diagonal(self):
+        """Metres on the Stats page must be the engine's metres.
+
+        ``*_distance_norm`` is "distance / arena diagonal", so the number
+        that turns it back into metres is the arena's own diagonal. A drift
+        would not fail a single test - the GUI would just report every
+        contact at the wrong range.
+        """
+        source = self._godot_source("scripts/core/sandbox_config.gd")
+        half = re.search(r"const ARENA_HALF_EXTENT:\s*float\s*=\s*([0-9.]+)", source)
+        maximum = re.search(r"const ARENA_MAX_DISTANCE:\s*float\s*=\s*([^\n]+)", source)
+        self.assertIsNotNone(half, "SandboxConfig.ARENA_HALF_EXTENT declaration not found")
+        self.assertIsNotNone(maximum, "SandboxConfig.ARENA_MAX_DISTANCE declaration not found")
+        assert half is not None and maximum is not None  # narrowing for type checkers
+        expression = maximum.group(1).strip().replace("ARENA_HALF_EXTENT", half.group(1))
+        engine_value = math.prod(float(part) for part in expression.split("*") if part.strip())
+        self.assertAlmostEqual(engine_value, OBSERVATION_DISTANCE_NORMALIZER_METERS, places=2)
 
     def test_object_kind_names_match_the_godot_enum_order(self):
         """``object_k_kind_norm`` is only readable if the ordinals agree.
