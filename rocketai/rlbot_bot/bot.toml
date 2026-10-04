@@ -1,0 +1,15 @@
+# RocketAI as an RLBot v5 bot. The web app (Play page) writes its own copy with
+# absolute paths per match; this file is for using the bot from other RLBot tools.
+# Set ROCKETAI_CHECKPOINT to the .pt file you want to play with.
+[settings]
+name = "RocketAI"
+agent_id = "rocketai/policy"
+root_dir = "../.."
+run_command = "python -m rocketai bot"
+run_command_linux = "python3 -m rocketai bot"
+
+[details]
+description = "Selbst trainierte Rocket-League-KI (PPO in RocketSim)"
+developer = "RocketAI"
+language = "python"
+tags = ["1v1", "teamplay"]

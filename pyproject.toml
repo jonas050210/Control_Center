@@ -1,203 +1,46 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sandboxai"
-# Single source of truth for the version: `sandboxai.__version__` reads this
-# back through importlib.metadata, and the release workflow refuses to build
-# a tag that disagrees with it.
-version = "0.3.0"
-description = "Local PPO, behavior cloning and evaluation tooling for SandboxAI"
+name = "rocketai"
+version = "0.1.0"
+description = "Train a Rocket League AI in RocketSim and play it in the real game through RLBot v5."
 readme = "README.md"
-license = "MIT"
-license-files = ["LICENSE"]
-requires-python = ">=3.11"
-authors = [{ name = "jonas050210" }]
-keywords = ["reinforcement-learning", "godot", "ppo", "behavior-cloning", "simulation"]
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Intended Audience :: Science/Research",
-  "Operating System :: Microsoft :: Windows",
-  "Operating System :: POSIX :: Linux",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Scientific/Engineering :: Artificial Intelligence",
-  "Typing :: Typed",
-]
+license = { text = "MIT" }
+requires-python = ">=3.11,<3.15"
 dependencies = [
-  "numpy>=1.24,<3",
+  "numpy>=1.24",
+  "torch>=2.1",
+  "rlgym[rl-sim]==2.0.1",
+  "rocketsim==2.2.1",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
 ]
-
-[project.urls]
-Homepage = "https://github.com/jonas050210/SandboxAI"
-Documentation = "https://github.com/jonas050210/SandboxAI/blob/main/docs/README.md"
-Changelog = "https://github.com/jonas050210/SandboxAI/blob/main/CHANGELOG.md"
-Issues = "https://github.com/jonas050210/SandboxAI/issues"
 
 [project.optional-dependencies]
-# Tkinter ships with the supported CPython Windows installer and is supplied
-# by the OS package manager on Linux; this named profile documents intent and
-# gives installers a stable target even though it has no PyPI dependency.
-desktop = []
-# Upper bounds are majors, not patches: a major bump of torch/SB3/gymnasium
-# has broken this stack before, and Dependabot proposes those migrations
-# explicitly instead of CI discovering them on an unrelated PR.
-training = [
-  "torch>=2.1,<3",
-  "gymnasium>=0.29,<2",
-  "stable-baselines3>=2.2,<3",
-  "tensorboard>=2.14,<3",
-  "psutil>=5.9,<8",
-]
-test = [
-  "pytest>=7.4",
-  # A wedged subprocess/model test must become a real, actionable failure
-  # before the job-level CI timeout hides the offending test name.
-  "pytest-timeout>=2.3,<3",
-]
-# GDScript tooling: real grammar parsing (gdparse) and style rules (gdlint)
-# used by python/sandboxai/gdscript_analysis.py. Optional because it is only
-# needed to verify the Godot half of the repository.
-gdscript = [
-  "gdtoolkit>=4.3,<5",
-]
-# Static analysis and formatting for the Python package/tests (CI "lint"
-# job). Kept separate from `test` so running the suite locally never
-# requires it.
-lint = [
-  "ruff>=0.6",
-]
-# Static type checking of the package the `py.typed` marker advertises
-# (CI "typecheck" job). Separate from `lint` because mypy pulls in stub
-# packages that ruff does not need.
-typecheck = [
-  "mypy>=1.11",
-]
-dev = [
-  "sandboxai[test,lint,typecheck,gdscript,training]",
-  "coverage>=7.4",
-  "pre-commit>=3.7",
-]
+# RLBot v5 is still a pre-release; it is only needed to play in the real game.
+rlbot = ["rlbot==2.0.0b56"]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.6"]
 
 [project.scripts]
-sandboxai = "sandboxai.cli:main"
+rocketai = "rocketai.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["python"]
-
-[tool.setuptools.package-dir]
-"" = "python"
+include = ["rocketai*"]
 
 [tool.setuptools.package-data]
-# The package is fully annotated; ship the marker so downstream type
-# checkers actually use those annotations (PEP 561).
-sandboxai = ["py.typed"]
+rocketai = ["web/*", "web/js/*", "web/vendor/*", "rlbot_bot/*.toml"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = [".venv", ".ui-venv", "build", "dist"]
+extend-exclude = [".venv"]
 
 [tool.ruff.lint]
-# Beyond the original pyflakes-only (`F`) set: import hygiene (`I`), modern
-# syntax (`UP`), likely-bug patterns (`B`), simplifications (`SIM`) and a
-# complexity ceiling (`C901`). Formatting is owned by `ruff format`, so the
-# pycodestyle rules the formatter handles are not repeated here.
-select = ["E", "W", "F", "I", "UP", "B", "SIM", "C901"]
-ignore = [
-  # Owned by the formatter.
-  "E501",
-  # `zip(..., strict=)` is correct for equal-length pairs, but this codebase
-  # deliberately zips deliberately-unequal sequences in places (padding,
-  # truncation to the shorter contract slice). Enabled per-file where it is
-  # a genuine invariant instead.
-  "B905",
-]
-
-[tool.ruff.lint.per-file-ignores]
-# Test modules legitimately build deep nested structures and long tables.
-"python/tests/*" = ["C901", "SIM117"]
-
-[tool.ruff.lint.mccabe]
-# 15 is above every function in the tree after the 0.4.0 decomposition pass
-# and low enough that the next `train_ppo`-sized function is caught early.
-max-complexity = 15
-
-[tool.ruff.lint.isort]
-known-first-party = ["sandboxai"]
-
-[tool.ruff.format]
-docstring-code-format = true
-
-[tool.mypy]
-# The package ships py.typed, so downstream code type-checks against these
-# annotations; this is the gate that keeps them honest. The settings are
-# deliberately the "clean today" set rather than --strict: the training
-# stack is mostly `Any` at the torch/SB3 boundary, and turning on
-# disallow_untyped_defs would produce hundreds of findings that say
-# nothing about correctness. It has already paid for itself twice - see
-# ReplayEpisode.event_tick and the battery's replay recording, both of
-# which were AttributeError/TypeError at runtime.
-python_version = "3.11"
-files = ["python/sandboxai"]
-mypy_path = "python"
-# torch, stable-baselines3, gymnasium and gdtoolkit either ship no stubs or
-# are optional extras that may be absent in the checking environment.
-ignore_missing_imports = true
-# Deliberately off: nearly every `# type: ignore` in the package sits on an
-# optional import (`import torch  # type: ignore`). Whether it is "unused"
-# depends on which extras happen to be installed, so enabling this would
-# make the gate fail differently on a contributor's machine than in CI.
-warn_unused_ignores = false
-warn_redundant_casts = true
-warn_unused_configs = true
-no_implicit_optional = true
-show_error_codes = true
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
 
 [tool.pytest.ini_options]
-minversion = "7.4"
-testpaths = ["python/tests"]
-# `-ra` surfaces the skip reasons: a green run with 60 silent skips because
-# an optional extra is missing looks identical to a genuinely complete one.
-addopts = "-ra --strict-markers --strict-config"
-# A hung subprocess/model test must fail on its own with the current test
-# name and stack instead of sitting until the CI job timeout reports nothing.
-# The complete suite normally takes a few minutes even with training extras,
-# so a single test reaching three minutes is wedged, not slow. `thread` is
-# portable to Windows (the project has no macOS CI) and pytest-timeout makes
-# the timeout a real failure rather than faulthandler's diagnostic-only dump.
-timeout = 180
-timeout_method = "thread"
-faulthandler_timeout = 180
-markers = [
-  "slow: wall-clock heavy; opt in with `-m slow`",
-  "requires_godot: needs a real Godot 4.7.2 executable on the machine",
-]
-filterwarnings = [
-  "error::DeprecationWarning:sandboxai.*",
-]
-
-[tool.coverage.run]
-source = ["python/sandboxai"]
-branch = true
-omit = [
-  # Tk pages cannot be imported on a headless runner without the system Tk
-  # package. They are covered by the dedicated xvfb job instead, and leaving
-  # them in here would make the gate measure "is Tk installed?".
-  "python/sandboxai/control_center_pages.py",
-  "python/sandboxai/control_center_widgets.py",
-  "python/sandboxai/control_center_desktop.py",
-  "python/sandboxai/__main__.py",
-]
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = true
-fail_under = 70
-exclude_also = [
-  "if TYPE_CHECKING:",
-  "raise NotImplementedError",
-  "if __name__ == .__main__.:",
-  "@(abc\\.)?abstractmethod",
-]
+testpaths = ["tests"]
+addopts = "-q"
