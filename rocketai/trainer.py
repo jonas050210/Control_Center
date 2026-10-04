@@ -308,7 +308,9 @@ class Trainer:
     def train(self) -> None:
         config = self.config
         cpu = os.cpu_count() or 2
-        torch.set_num_threads(config.torch_threads or cpu)
+        # Der Lernprozess braucht nur wenige Threads: Die Simulationen sollen
+        # die Kerne behalten, sonst kämpfen beim Update 40 Threads um 20 CPUs.
+        torch.set_num_threads(config.torch_threads or max(1, min(8, cpu // 4)))
         workers = config.resolved_workers()
         self.paths.control.unlink(missing_ok=True)
         self.status("starting", message=f"Starte {workers} Simulations-Prozesse")

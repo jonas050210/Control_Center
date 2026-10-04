@@ -263,9 +263,13 @@ async function pageTraining() {
 // ------------------------------------------------------------------ new run
 
 async function pageNewRun() {
-  const [{ presets, defaults, cpu_count: cpus = 2 }, opponents] = await Promise.all([
-    api("/api/presets"), api("/api/opponents"),
+  const [{ presets, defaults, cpu_count: cpus = 2 }, opponents, runs] = await Promise.all([
+    api("/api/presets"), api("/api/opponents"), api("/api/runs"),
   ]);
+  // Am ehrlichsten ist der gemessene Wert: das schnellste Tempo, das auf diesem
+  // Rechner schon einmal erreicht wurde. Sonst eine vorsichtige Schätzung.
+  const measured = Math.max(0, ...runs.map((r) => r.last?.steps_per_second || 0));
+  const guess = 1400 * Math.max(1, cpus - 1);
   const teacherReady = Boolean(opponents.teacher?.ready);
   const form = {
     preset: presets.student ? "student" : presets.autopilot ? "autopilot" : "beginner",
@@ -275,7 +279,10 @@ async function pageNewRun() {
   const draw = () => {
     const v = values();
     const workers = v.n_workers || Math.max(1, cpus - 1);
-    const sps = 2000 * Math.max(1, Math.min(workers + 1, cpus));
+    const sps = measured || guess;
+    const speedHint = measured
+      ? `gemessen an deinem schnellsten Training`
+      : (v.teacher_opponent_prob > 0 ? "grobe Schätzung (mit Lehrer etwas langsamer)" : "grobe Schätzung");
     patch(view, `
       <div class="page-head"><div><div class="eyebrow"><a href="#/training">Training</a> / Neu</div><h1>Neues Training</h1>
         <p>Wähle eine Vorlage. Du kannst ein Training jederzeit stoppen und später fortsetzen – auch mit höherem Ziel.</p></div></div>
@@ -313,7 +320,8 @@ async function pageNewRun() {
           </div>
           <details class="advanced"><summary>Erweiterte Einstellungen</summary>
             <div class="grid cols-3">
-              ${numberField("n_workers", "Simulations-Prozesse", v.n_workers, "0 = automatisch (Kerne − 1)")}
+              ${numberField("n_workers", "Simulations-Prozesse", v.n_workers, "0 = automatisch. Empfehlung: 12–16 (ein paar Kerne für Windows und den Lernprozess frei lassen)")}
+              ${numberField("torch_threads", "Threads des Lernprozesses", v.torch_threads, "0 = automatisch (wenige Threads, damit die Simulationen die Kerne behalten)")}
               ${numberField("envs_per_worker", "Spiele pro Prozess", v.envs_per_worker)}
               ${numberField("steps_per_iteration", "Schritte pro Update", v.steps_per_iteration)}
               ${numberField("learning_rate", "Lernrate", v.learning_rate, "", "0.00001")}
@@ -330,11 +338,12 @@ async function pageNewRun() {
           </details>
           <div class="row end"><a class="btn ghost" href="#/training">Abbrechen</a><button class="btn primary" data-action="start">${icon("play")}Training starten</button></div>
         </div>
-        <div class="card sticky"><div class="card-head"><h2>Schätzung</h2><span class="sub">${cpus} CPU-Kerne</span></div>
-          <div class="estimate"><span>Tempo (grob)</span><b>~${fmt.int(sps)} Schritte/s</b></div>
+        <div class="card sticky"><div class="card-head"><h2>Schätzung</h2><span class="sub">${cpus} logische CPU-Kerne</span></div>
+          <div class="estimate"><span>Tempo ${measured ? "" : "(grob)"}</span><b>~${fmt.int(sps)} Schritte/s</b></div>
+          <p class="faint small" style="margin:-4px 0 10px">${speedHint}</p>
           <div class="estimate"><span>Dauer für ${fmt.steps(v.total_steps)}</span><b>~${fmt.duration(v.total_steps / sps)}</b></div>
           <div class="estimate"><span>Erster Checkpoint</span><b>nach ~${fmt.duration(Math.min(v.checkpoint_every_steps, v.total_steps) / sps)}</b></div>
-          <p class="faint small" style="margin-top:14px">Erfahrungswerte: Ballkontakt nach 20–50 Mio. Schritten, gezielte Tore nach 100–300 Mio., Psyonix-Bots schlagen ab 0,3–1 Mrd. Mehr Kerne = proportional schneller.</p>
+          <p class="faint small" style="margin-top:14px"><b>Wichtig:</b> Trainiert wird nur auf der CPU (die Physik-Simulation), die Grafikkarte hilft dabei nicht. Zu viele Prozesse bremsen: 12–16 sind auf einem 8-Kern-Prozessor meist besser als 20, weil Windows und der Lernprozess auch Kerne brauchen. Ballkontakt nach 20–50 Mio. Schritten, gezielte Tore nach 100–300 Mio., Psyonix-Bots schlagen ab 0,3–1 Mrd.</p>
         </div>
       </div>`);
   };
