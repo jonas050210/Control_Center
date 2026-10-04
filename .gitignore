@@ -1,48 +1,18 @@
-# Godot 4 editor/import cache (regenerated automatically, must not be versioned)
-.godot/
-.import/
-export.cfg
-export_presets.cfg
-*.translation
-
-# Build output
-/build/
-/export/
-
-# OS / editor cruft
-.DS_Store
-Thumbs.db
-*.swp
-
-# Python venv used only for local static-analysis tooling (gdtoolkit)
+# Python
 .venv/
 __pycache__/
 *.egg-info/
-
-# Local training outputs (checkpoints, TensorBoard, datasets, evaluations)
-/training/runs/
-/training/bc_runs/
-/training/checkpoints/
-/training/logs/
-/training/datasets/*.jsonl
-/training/evaluations/
-/training/benchmarks/
-/training/local-validation/
-/training/device-comparison/
-
-# Machine-local tool settings (remembered --godot-executable, etc.)
-/.sandboxai/
-
-# Python tooling caches and coverage data
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
-# Virtualenv created by the desktop-ui-tests CI job
-.ui-venv/
 
-# Godot build downloaded by install.py (official release, SHA-256 verified)
-/tools/godot/
+# Training output (checkpoints, metrics, replays) - large and machine-local
+/runs/
+# Downloaded tools (RLBotServer) and local settings
+/tools/
+/.rocketai/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
