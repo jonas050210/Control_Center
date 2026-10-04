@@ -103,14 +103,17 @@ func _stage_line_of_sight(env: EnvironmentCore) -> void:
 	env.agent.yaw_deg = 0.0
 	env.agent.pitch_deg = 0.0
 	env.agent.alive = true
+	# Unequal distances on purpose: with both enemies 8 m away the "nearest"
+	# slot would be decided by a tie-break, and every assertion below that
+	# names the primary contact would be asserting an accident.
 	var front = env.enemies[0]
 	front.alive = true
 	front.health = front.max_health
-	front.position = Vector3(0.0, 0.0, -8.0)
+	front.position = Vector3(0.0, 0.0, -6.0)
 	var behind = env.enemies[1]
 	behind.alive = true
 	behind.health = behind.max_health
-	behind.position = Vector3(0.0, 0.0, 8.0)
+	behind.position = Vector3(0.0, 0.0, 9.0)
 	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
 
 
@@ -162,9 +165,14 @@ func test_contact_boxes_follow_the_agent_gaze() -> SandboxTest:
 	var env := EnvironmentCore.new(0, 2)
 	env.reset(11)
 	_stage_line_of_sight(env)
+	# Only the staged contact in front is left, so "no box" can only mean the
+	# agent is no longer looking at it. With the second enemy still alive a
+	# turn brings *it* into view and the count says nothing.
+	env.enemies[1].alive = false
+	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
 	t.assert_eq(DebugOverlay.contact_boxes(env).size(), 1)
-	# Look away and the same enemy leaves the screen.
-	env.agent.yaw_deg = 135.0
+	# Turn right around and the same enemy leaves the screen.
+	env.agent.yaw_deg = 180.0
 	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
 	t.assert_eq(
 		DebugOverlay.contact_boxes(env).size(),
@@ -192,11 +200,6 @@ func test_contact_boxes_ignore_the_dead() -> SandboxTest:
 	return t
 
 
-## The perception levels (6+) build a belief per enemy and the observation is
-## built from those beliefs, so there the overlay must read the very same
-## `screen_box` the policy reads - not a second, slightly different geometry.
-## This asserts the two agree exactly, whatever the seeded arena happens to
-## look like.
 ## The text panel and the rectangles must come from one source, or the
 ## overlay starts arguing with itself.
 func test_telemetry_reports_the_same_contacts_the_boxes_draw() -> SandboxTest:
@@ -216,17 +219,26 @@ func test_telemetry_reports_the_same_contacts_the_boxes_draw() -> SandboxTest:
 	return t
 
 
+## The perception layer builds a belief per enemy and the vision block of the
+## observation is filled from those beliefs, so the overlay has to read the
+## very same `screen_box` - not a second, slightly different geometry. This
+## pins the two together, and then pins the drawn box to the one that reaches
+## the vector, so all three can only ever be one measurement.
 func test_contact_boxes_are_the_boxes_the_observation_carries() -> SandboxTest:
 	var t := SandboxTest.new("contact_boxes_are_the_boxes_the_observation_carries")
 	var env := EnvironmentCore.new(0, 2)
-	env.set_curriculum_level(CurriculumConfig.Level.FOV_LOS)
+	env.set_curriculum_level(CurriculumConfig.Level.STATIONARY_TARGET)
+	# Beliefs on an obstacle-free level, without waiting out the acquisition
+	# delay: `debug_perception` runs the perception layer on a level that does
+	# not gate vision, so one tick is enough and the geometry is the staged
+	# one rather than whatever the seeded arena happened to produce.
+	env.debug_perception = true
 	env.reset(21)
-	for _tick in range(3):
-		env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
+	_stage_line_of_sight(env)
 	t.assert_gt(
 		float(env.get_beliefs().size()),
 		0.0,
-		"the perception level must actually produce beliefs for this test to mean anything"
+		"the perception layer must produce beliefs for this test to mean anything"
 	)
 	var expected: Array = []
 	for belief_value in env.get_beliefs():
@@ -234,6 +246,7 @@ func test_contact_boxes_are_the_boxes_the_observation_carries() -> SandboxTest:
 		var box: Dictionary = belief.get("screen_box", {})
 		if bool(belief.get("visible", false)) and bool(box.get("in_front", false)):
 			expected.append(belief)
+	t.assert_gt(float(expected.size()), 0.0, "the staged contact is a sighting with a box")
 	var boxes: Array = DebugOverlay.contact_boxes(env)
 	t.assert_eq(
 		boxes.size(), expected.size(), "one box per visible, in-front belief - no more, no fewer"
@@ -245,4 +258,12 @@ func test_contact_boxes_are_the_boxes_the_observation_carries() -> SandboxTest:
 		t.assert_almost_eq(float(drawn["center_y"]), float(expected_box["center_y"]), 0.0001)
 		t.assert_almost_eq(float(drawn["half_width"]), float(expected_box["half_width"]), 0.0001)
 		t.assert_almost_eq(float(drawn["half_height"]), float(expected_box["half_height"]), 0.0001)
+	# And the same box reaches the vector: the overlay reads it from the
+	# belief, the observation measures it from ground truth on this level, and
+	# both go through one writer.
+	var obs = env.get_observations()
+	t.assert_almost_eq(obs.primary_enemy_screen_x, float(boxes[0]["center_x"]), 0.0001)
+	t.assert_almost_eq(obs.primary_enemy_screen_y, float(boxes[0]["center_y"]), 0.0001)
+	t.assert_almost_eq(obs.primary_enemy_screen_half_width, float(boxes[0]["half_width"]), 0.0001)
+	t.assert_almost_eq(obs.primary_enemy_screen_half_height, float(boxes[0]["half_height"]), 0.0001)
 	return t

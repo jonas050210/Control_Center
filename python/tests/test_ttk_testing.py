@@ -180,7 +180,11 @@ class ScreenshotAnalysisTests(unittest.TestCase):
             # checked while the capture's directory still exists.
             annotated = Path(str(result["annotated_path"]))
             self.assertTrue(annotated.is_file(), "the annotated copy must be written")
-            self.assertEqual(annotated.parent, shot_dir)
+            # Compared resolved: the discovery walks the project root it was
+            # given, which spells the directory out, while %TEMP% on the
+            # Windows runners is handed over in its 8.3 short form
+            # (C:\Users\RUNNER~1\...). One directory, two spellings.
+            self.assertEqual(annotated.parent.resolve(), shot_dir.resolve())
         for contact in result["contacts"]:
             self.assertTrue(contact["on_screen"])
             self.assertIn("score", contact)
