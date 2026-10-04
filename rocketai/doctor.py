@@ -13,14 +13,24 @@ from .play import server_path
 
 
 def _module(name: str) -> tuple[bool, str]:
-    spec = importlib.util.find_spec(name)
-    if spec is None:
-        return False, "nicht installiert"
     try:
-        module = __import__(name)
-    except Exception as error:  # broken install
-        return False, f"Fehler beim Import: {error}"
+        spec = importlib.util.find_spec(name)
+        if spec is None:
+            return False, "nicht installiert"
+        module = __import__(name, fromlist=["*"])
+    except Exception as error:  # missing or broken install
+        return False, f"Fehler beim Import: {type(error).__name__}: {error}"
     return True, str(getattr(module, "__version__", "installiert"))
+
+
+def _python_check(version: tuple[int, int] | None = None) -> tuple[bool, str]:
+    actual_version = sys.version_info[:2] if version is None else version
+    display_version = platform.python_version() if version is None else f"{version[0]}.{version[1]}"
+    detail = f"{display_version} ({sys.executable})"
+    ok = (3, 11) <= actual_version < (3, 14)
+    if not ok:
+        detail += "; unterstützt werden Python 3.11–3.13 (empfohlen: 3.12)"
+    return ok, detail
 
 
 def teacher_check() -> dict[str, Any]:
@@ -47,14 +57,14 @@ def run_checks() -> list[dict[str, Any]]:
             {"key": key, "label": label, "ok": ok, "detail": detail, "required": required}
         )
 
-    version = sys.version_info
-    add(
-        "python",
-        "Python 3.11+",
-        version >= (3, 11),
-        f"{platform.python_version()} ({sys.executable})",
-    )
-    for key, label in (("torch", "PyTorch (CPU)"), ("rlgym", "RLGym"), ("RocketSim", "RocketSim")):
+    python_ok, python_detail = _python_check()
+    add("python", "Python 3.11–3.13", python_ok, python_detail)
+
+    for key, label in (
+        ("torch", "PyTorch (CPU)"),
+        ("rlgym.rocket_league.api", "RLGym-Simulation"),
+        ("RocketSim", "RocketSim"),
+    ):
         ok, detail = _module(key)
         add(key, label, ok, detail)
     ok, detail = _module("rlbot")
@@ -97,5 +107,14 @@ def run_checks() -> list[dict[str, Any]]:
                 required=False,
             )
     add("cpu", "CPU-Kerne", True, f"{os.cpu_count()} (mehr Kerne = schnelleres Training)")
-    checks.append(teacher_check())
+    try:
+        checks.append(teacher_check())
+    except Exception as error:
+        add(
+            "teacher",
+            "Lehrer (Nexto)",
+            False,
+            f"Prüfung fehlgeschlagen: {type(error).__name__}: {error}",
+            required=False,
+        )
     return checks

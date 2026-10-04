@@ -447,6 +447,7 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 | RLBot findet Rocket League nicht | `python3 -m rocketai doctor` ausführen; im Spiel „ohne Easy Anti-Cheat“ starten. |
 | Screenshots/3D bleibt schwarz | WebGL im Browser deaktiviert; auf 2D umschalten. |
 | Live-Ansicht zeigt „kein Checkpoint“ | Training braucht mindestens einen Checkpoint (`Checkpoint alle`). |
+| `NameError: __annotations__` in `rlgym/.../physics_object.py` | Python 3.14 ist mit der verwendeten RLGym-Version inkompatibel. Python 3.12 installieren, die alte `.venv` löschen und das Setup erneut starten (`python3.12 install.py`; Windows: `py -3.12 install.py`). |
 | `python: command not found` (Ubuntu) | Auf Linux heißt der Befehl `python3` (siehe Abschnitt 12). |
 | `ModuleNotFoundError: rocketai` | Im falschen Ordner oder ohne `.venv`: `python3 install.py`, dann `python3 start.py`. |
 

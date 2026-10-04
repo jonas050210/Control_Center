@@ -58,21 +58,58 @@ def run(*args: str | Path) -> None:
     subprocess.run(command, check=True, cwd=ROOT)
 
 
-def check_python() -> None:
-    version = sys.version_info[:2]
+def python_312_command() -> str:
+    return "py -3.12" if os.name == "nt" else "python3.12"
+
+
+def check_python(version: tuple[int, int] | None = None) -> None:
+    """Stop before installing when the current interpreter is outside our tested range."""
+    version = sys.version_info[:2] if version is None else version
     if version < (3, 11):
-        sys.exit(f"Python 3.11 oder neuer wird benötigt (gefunden: {sys.version.split()[0]}).")
-    if version > (3, 13):
-        print(
-            f"Hinweis: Python {version[0]}.{version[1]} ist neuer als getestet (3.11–3.13). "
-            "Falls RocketSim sich nicht installieren lässt, Python 3.12 verwenden."
+        sys.exit(f"Python 3.11–3.13 wird benötigt (gefunden: {version[0]}.{version[1]}).")
+    if version >= (3, 14):
+        sys.exit(
+            f"Python {version[0]}.{version[1]} wird noch nicht unterstützt. "
+            "RocketAI benötigt Python 3.11–3.13; die verwendete RLGym-Version "
+            f"bricht unter Python 3.14 beim Import ab. Bitte Python 3.12 installieren "
+            f"und `{python_312_command()} install.py` ausführen."
+        )
+
+
+def interpreter_version(python: Path) -> tuple[int, int]:
+    """Read the version of an existing venv without relying on activation."""
+    try:
+        result = subprocess.run(
+            [
+                str(python),
+                "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        )
+        major, minor = result.stdout.strip().split(".", maxsplit=1)
+        return int(major), int(minor)
+    except (OSError, subprocess.CalledProcessError, ValueError) as error:
+        sys.exit(
+            f"Die vorhandene virtuelle Umgebung kann nicht geprüft werden ({error}). "
+            "Bitte den Ordner .venv löschen und install.py erneut ausführen."
         )
 
 
 def create_venv() -> Path:
     python = venv_python()
     if python.exists():
-        say(f"Virtuelle Umgebung vorhanden: {VENV}")
+        version = interpreter_version(python)
+        if version < (3, 11) or version >= (3, 14):
+            sys.exit(
+                f"Die vorhandene virtuelle Umgebung verwendet Python {version[0]}.{version[1]} "
+                "und wird nicht unterstützt. Bitte .venv löschen und danach mit Python 3.12 "
+                f"`{python_312_command()} install.py` erneut ausführen."
+            )
+        say(f"Virtuelle Umgebung vorhanden: {VENV} (Python {version[0]}.{version[1]})")
     else:
         say(f"Lege virtuelle Umgebung an: {VENV}")
         venv.EnvBuilder(with_pip=True).create(VENV)
@@ -162,7 +199,7 @@ def main() -> None:
                 "später erneut ausführen."
             )
     say("Prüfe die Installation")
-    subprocess.run([str(python), "-m", "rocketai", "doctor"], cwd=ROOT)
+    subprocess.run([str(python), "-m", "rocketai", "doctor"], cwd=ROOT, check=True)
     say(f"Fertig! Starte die App mit:  {PYTHON_CMD} start.py")
 
 
