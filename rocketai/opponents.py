@@ -244,10 +244,18 @@ SCRIPTED_BOTS = {
 }
 
 
+#: Der Lehrer braucht einen Download und wird deshalb getrennt geführt.
+TEACHER_SPECS = ("teacher", "nexto", "lehrer")
+
+
 def make_player(spec: str) -> Player:
-    """``idle`` / ``random`` / ``chaser`` / ``defender`` or a path to a checkpoint."""
+    """``idle`` / ``random`` / ``chaser`` / ``defender`` / ``teacher`` or a checkpoint path."""
     if spec in SCRIPTED_BOTS:
         return SCRIPTED_BOTS[spec][1]()
+    if spec in TEACHER_SPECS:
+        from .teacher import TeacherPlayer
+
+        return TeacherPlayer()
     path = Path(spec)
     if path.is_file():
         return PolicyPlayer.from_checkpoint(path)

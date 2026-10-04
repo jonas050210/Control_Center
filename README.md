@@ -45,7 +45,7 @@ In der App:
 | Training | alle Runs; pro Run Prognose (wann welches Niveau), Kurven mit Checkpoint- und Stufenwechsel-Markern (u. a. Siegquote gegen ältere Versionen, Neugier), Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
 | **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen und ein Eingabe-Verlauf der letzten 5 Sekunden. Bei mehreren KI-Autos per Klick auf das Auto-Kärtchen umschalten. Tore mit Effekt und „TOR!“-Einblendung. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
 | Arena | Replay-Player in 3D oder 2D (Zeitleiste mit Toren, 0,5–4×) und neue Simulations-Matches |
-| Spielen | Rocket-League-Check (installiert? Steam/Epic? läuft es – normal oder im Bot-Modus?) und Match-Start im echten Spiel |
+| Spielen | Rocket-League-Check (installiert? Steam/Epic? läuft es – normal oder im Bot-Modus?) und Match-Start im echten Spiel. Wählbar, wer fährt: **deine KI** oder der **Lehrer (Nexto)** |
 | Einrichtung | Systemprüfung, Rocket-League-Check, Befehle, Tastenkürzel, Zeitabschätzung |
 
 Tastenkürzel in Live/Arena: `1`–`5` Kamera, `V` 3D/2D, `F` Vollbild, Leertaste Pause (Replay), `←`/`→` ±5 s.
@@ -56,11 +56,14 @@ gestopptes Training lässt sich jederzeit fortsetzen.
 ## Ohne Oberfläche
 
 ```bash
-python -m rocketai train --preset autopilot --name mein-bot  # trainieren
+python -m rocketai teacher                                    # Lehrer laden/prüfen (--test: Testspiel)
+python -m rocketai train --preset student --name mein-bot     # mit Lehrer (Nexto)
+python -m rocketai train --preset autopilot --name mein-bot   # ohne Lehrer
 python -m rocketai train --resume mein-bot --steps 200000000 # fortsetzen mit neuem Ziel
-python -m rocketai eval runs/mein-bot/checkpoints/latest.pt  # gegen Balljäger/Verteidiger
+python -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher
 python -m rocketai replay runs/mein-bot/checkpoints/latest.pt chaser --out spiel.json
 python -m rocketai play runs/mein-bot/checkpoints/latest.pt --mode psyonix --skill rookie
+python -m rocketai play --brain teacher --mode psyonix        # Nexto fährt selbst
 python -m rocketai doctor                                    # Installation prüfen
 ```
 
@@ -77,10 +80,25 @@ python -m rocketai doctor                                    # Installation prü
 - **Gegner-Pool:** Ein Teil der Spiele läuft gegen die letzten 5 gespeicherten
   Checkpoints. Nur die aktuelle KI lernt daraus; die Siegquote zeigt, ob neue
   Versionen wirklich besser werden.
+- **Lehrer (Nexto):** Der stärkste frei verfügbare Community-Bot (Grand
+  Champion) kann drei Dinge: (1) in einem einstellbaren Anteil der Spiele
+  **gegen** deine KI spielen – der stärkste Hebel, weil die KI dann gegen einen
+  richtig guten Gegner lernt, (2) als **Vorbild** dienen, dessen Tasten die KI
+  vorhersagen lernt (Anteil fällt über das Training), (3) selbst
+  **spielen** – in der Live-Ansicht und im echten Spiel. Seine Dateien (GPL)
+  werden geprüft heruntergeladen und bleiben lokal, sie sind nicht Teil des
+  Projekts.
 - **Echtes Spiel:** Ein Konverter übersetzt RLBots Spielzustand in genau die
   Beobachtung aus dem Training (per Test abgesichert). Der Bot entscheidet wie
   im Training 15-mal pro Sekunde aus 90 Aktionen.
 
+Gemessen (2 Kerne): Der Lehrer gewinnt 6:0 gegen den eingebauten Balljäger, und
+Trainingsspiele gegen ihn heben die Ballkontakte der KI von ~1 auf 51–93 pro
+Minute. Die Nachahmung allein ist dagegen schwach – warum, steht ausführlich in
+[docs/WISSEN.md](docs/WISSEN.md).
+
+**Alles Wissen zum Projekt** (wie die KI sieht und lernt, der Lehrer,
+Zeitabschätzungen, Fehlerbehebung, Glossar): [docs/WISSEN.md](docs/WISSEN.md).
 Details, Phasen und Zeitabschätzungen: [docs/PLAN.md](docs/PLAN.md).
 
 ## Entwicklung

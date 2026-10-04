@@ -24,7 +24,7 @@ from .config import RUN_NAME_PATTERN, TICK_SKIP, TICKS_PER_SECOND, run_paths
 from .env import make_env
 from .match import frame_of
 from .model import load_checkpoint, model_from_checkpoint
-from .opponents import SCRIPTED_BOTS, PolicyPlayer, make_player
+from .opponents import SCRIPTED_BOTS, TEACHER_SPECS, PolicyPlayer, make_player
 
 STEP_SECONDS = TICK_SKIP / TICKS_PER_SECOND
 BUFFER = 15 * 30  # 30 s of frames
@@ -37,9 +37,11 @@ class SpecError(ValueError):
 
 
 def resolve_spec(spec: str) -> tuple[str, Path | None]:
-    """Return (kind, path): kind is 'scripted', 'checkpoint' or 'follow'."""
+    """Return (kind, path): kind is 'scripted', 'teacher', 'checkpoint' or 'follow'."""
     if spec in SCRIPTED_BOTS:
         return "scripted", None
+    if spec in TEACHER_SPECS:
+        return "teacher", None
     if spec.startswith("run:"):
         run = spec[4:]
         if not RUN_NAME_PATTERN.match(run):
@@ -69,6 +71,12 @@ class Side:
         if self.kind == "scripted":
             self.player = make_player(self.spec)
             self.label = SCRIPTED_BOTS[self.spec][0]
+            return
+        if self.kind == "teacher":
+            player = make_player("teacher")
+            player.explain = True  # show what the teacher is thinking
+            self.player = player
+            self.label = player.name
             return
         assert self.path is not None
         if not self.path.is_file():

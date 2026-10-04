@@ -497,3 +497,17 @@ ol.flow span { color: var(--faint); font-size: 12.5px; }
 .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: .03em; border: 1px solid var(--line-strong); color: var(--muted); vertical-align: 1px; }
 .badge.accent { color: var(--accent); border-color: rgba(198, 244, 50, .35); background: var(--accent-soft); }
 .field > small { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+/* Lehrer-Box im Formular für neue Trainings */
+.teacher-box {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 12px;
+  background: var(--surface-2);
+}
+.teacher-box .row.between { align-items: center; }
+.teacher-box .row.between b { font-size: 0.95rem; }
+.teacher-box .faint.small { margin: 0; max-width: 60ch; }
+.estimate + .estimate { margin-top: 6px; }

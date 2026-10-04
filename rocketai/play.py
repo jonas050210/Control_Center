@@ -24,11 +24,13 @@ MODES = {
 }
 SKILLS = {"beginner": "Beginner", "rookie": "Rookie", "pro": "Pro", "allstar": "AllStar"}
 LAUNCHERS = {"steam": "Steam", "epic": "Epic"}
+BRAINS = {"policy": "Eigene KI", "teacher": "Lehrer (Nexto)"}
 
 
 @dataclass
 class PlaySettings:
-    checkpoint: str
+    checkpoint: str = ""
+    brain: str = "policy"  # "policy" = own AI, "teacher" = Nexto plays
     mode: str = "psyonix"
     team_size: int = 1
     skill: str = "rookie"
@@ -37,7 +39,16 @@ class PlaySettings:
     match_length: str = "FiveMinutes"
 
     def validate(self) -> None:
-        if not Path(self.checkpoint).is_file():
+        if self.brain not in BRAINS:
+            raise ValueError(f"Unbekanntes Gehirn {self.brain!r}")
+        if self.brain == "teacher":
+            from .teacher import teacher_ready
+
+            if not teacher_ready():
+                raise ValueError(
+                    "Der Lehrer ist nicht geladen. Einmal 'python -m rocketai teacher' ausführen."
+                )
+        elif not Path(self.checkpoint).is_file():
             raise ValueError(f"Checkpoint nicht gefunden: {self.checkpoint}")
         if self.mode not in MODES:
             raise ValueError(f"Unbekannter Modus {self.mode!r}")
@@ -66,12 +77,15 @@ def _toml_str(value: str) -> str:
 
 def bot_toml(settings: PlaySettings) -> str:
     python = sys.executable
-    command = f'"{python}" -m rocketai bot --checkpoint "{Path(settings.checkpoint).resolve()}"'
+    if settings.brain == "teacher":
+        command = f'"{python}" -m rocketai bot --teacher'
+    else:
+        command = f'"{python}" -m rocketai bot --checkpoint "{Path(settings.checkpoint).resolve()}"'
     return "\n".join(
         [
             "[settings]",
-            'name = "RocketAI"',
-            'agent_id = "rocketai/policy"',
+            f'name = "{BRAINS[settings.brain]}"',
+            f'agent_id = "rocketai/{settings.brain}"',
             f"root_dir = {_toml_str(str(ROOT))}",
             f"run_command = {_toml_str(command)}",
             f"run_command_linux = {_toml_str(command)}",
@@ -194,7 +208,8 @@ def start_match(settings: PlaySettings, wait: bool = True) -> Any:
             f"RLBotServer fehlt ({server}). Bitte 'python install.py' erneut ausführen."
         )
     config = write_match_files(settings)
-    os.environ["ROCKETAI_CHECKPOINT"] = str(Path(settings.checkpoint).resolve())
+    if settings.brain == "policy":
+        os.environ["ROCKETAI_CHECKPOINT"] = str(Path(settings.checkpoint).resolve())
     manager = MatchManager(server)
     manager.start_match(config, wait_for_start=wait)
     return manager

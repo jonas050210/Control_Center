@@ -263,8 +263,14 @@ async function pageTraining() {
 // ------------------------------------------------------------------ new run
 
 async function pageNewRun() {
-  const { presets, defaults, cpu_count: cpus = 2 } = await api("/api/presets");
-  const form = { preset: presets.autopilot ? "autopilot" : "beginner", name: "", overrides: {} };
+  const [{ presets, defaults, cpu_count: cpus = 2 }, opponents] = await Promise.all([
+    api("/api/presets"), api("/api/opponents"),
+  ]);
+  const teacherReady = Boolean(opponents.teacher?.ready);
+  const form = {
+    preset: presets.student ? "student" : presets.autopilot ? "autopilot" : "beginner",
+    name: "", overrides: {},
+  };
   const values = () => ({ ...defaults, ...presets[form.preset].values, ...form.overrides });
   const draw = () => {
     const v = values();
@@ -292,6 +298,19 @@ async function pageNewRun() {
             <div class="field"><span class="field-label">Gegner-Pool</span>${seg("past_opponent_prob", [[0, "Aus"], [0.2, "20 %"], [0.35, "35 %"]], v.past_opponent_prob)}
               <small>Anteil der Spiele gegen ältere eigene Versionen – verhindert, dass die KI Gelerntes wieder vergisst.</small></div>
           </div>
+          <div class="teacher-box">
+            <div class="row between"><b>Lehrer (Nexto) nutzen</b><span class="faint small">${teacherReady ? "geladen" : "noch nicht geladen"}</span></div>
+            <div class="grid cols-2">
+              <div class="field"><span class="field-label">Gegen den Lehrer spielen</span>${seg("teacher_opponent_prob", [[0, "Aus"], [0.15, "15 %"], [0.25, "25 %"], [0.4, "40 %"]], v.teacher_opponent_prob)}
+                <small>Anteil der Trainingsspiele gegen Nexto (Grand Champion). Stärkt die KI am schnellsten, weil sie gegen einen richtig guten Gegner spielt.</small></div>
+              <div class="field"><span class="field-label">Nachahmung</span>${seg("teacher_weight", [[0, "Aus"], [0.5, "50 %"], [1, "100 %"]], v.teacher_weight)}
+                <small>Die KI versucht zusätzlich, die Tasten des Lehrers vorherzusagen. Achtung: gemessen nur ein kleiner Zusatzeffekt – der große Hebel ist das Spielen gegen ihn.</small></div>
+            </div>
+            <div class="row between">
+              <p class="faint small">Der Lehrer wird einmalig aus dem Internet geladen (nicht Teil des Projekts, GPL, nur offline nutzen).</p>
+              <button class="btn sm" data-action="load-teacher">${teacherReady ? "Neu laden" : "Lehrer laden"}</button>
+            </div>
+          </div>
           <details class="advanced"><summary>Erweiterte Einstellungen</summary>
             <div class="grid cols-3">
               ${numberField("n_workers", "Simulations-Prozesse", v.n_workers, "0 = automatisch (Kerne − 1)")}
@@ -304,6 +323,8 @@ async function pageNewRun() {
               ${numberField("eval_every_steps", "Bewertung alle", v.eval_every_steps, "0 = nie")}
               ${numberField("eval_games", "Spiele pro Bewertung", v.eval_games)}
               ${numberField("past_pool_size", "Größe Gegner-Pool", v.past_pool_size, "so viele ältere Checkpoints spielen mit")}
+              ${numberField("teacher_samples", "Lehrer-Antworten pro Update", v.teacher_samples, "0 = für jeden Schritt (langsamer)")}
+              ${numberField("teacher_temperature", "Lehrer-Temperatur", v.teacher_temperature, "1 = wie trainiert")}
             </div>
             <label class="field" style="margin-top:16px"><span>Netzgröße (Schichten)</span><input id="hidden_sizes" value="${v.hidden_sizes.join(", ")}" data-change="sizes"><small>Größer lernt mehr, ist aber langsamer. Später nicht mehr änderbar.</small></label>
           </details>
@@ -325,6 +346,10 @@ async function pageNewRun() {
       draw();
     },
     name: (el) => { form.name = el.value.trim(); },
+    "load-teacher": (el) => busy(el, async () => {
+      const info = await attempt(() => api("/api/teacher/load", { method: "POST" }), "Lehrer konnte nicht geladen werden");
+      if (info?.ready) { toast("Lehrer bereit", "Nexto ist geladen."); location.reload(); }
+    }),
     num: (el) => { form.overrides[el.dataset.key] = Number(el.value); delete el.dataset.dirty; draw(); },
     sizes: (el) => { form.overrides.hidden_sizes = el.value.split(/[ ,;x×]+/).filter(Boolean).map(Number); },
     start: (el) => busy(el, async () => {
@@ -387,6 +412,19 @@ async function pageRun(rawName) {
     const stageMarks = [];
     metrics.forEach((m, i) => { if (i && m.stage && metrics[i - 1].stage && m.stage !== metrics[i - 1].stage) stageMarks.push([m.steps, `Stufe ${m.stage}`, "stage"]); });
     const marks = [...checkpoints.map((c) => [c.steps]), ...stageMarks];
+    // win rate against the teacher, pooled like the past-version series
+    const teacherSeries = metrics.map((m, i) => {
+      let games = 0, score = 0;
+      for (const x of metrics.slice(Math.max(0, i - 14), i + 1)) {
+        if (!x.teacher_games) continue;
+        games += x.teacher_games;
+        score += x.teacher_wins + 0.5 * (x.teacher_games - x.teacher_wins - x.teacher_losses);
+      }
+      return [m.steps, games ? (100 * score) / games : null];
+    }).filter(([, v]) => v !== null);
+    const teacherGoals = metrics.reduce(
+      (acc, m) => [acc[0] + (m.teacher_goals_for || 0), acc[1] + (m.teacher_goals_against || 0)], [0, 0],
+    );
     // win rate against older versions, pooled over the last 15 updates (single updates have few games)
     const pastSeries = metrics.map((m, i) => {
       let games = 0, score = 0;
@@ -440,8 +478,10 @@ async function pageRun(rawName) {
         <div class="card"><div class="card-head"><h3>Belohnung pro Episode</h3><span class="sub">geglättet</span></div>${lineChart(series("episode_reward"), { marks })}</div>
         <div class="card"><div class="card-head"><h3>Tore pro Minute</h3><span class="sub">Selbstspiel</span></div>${lineChart(series("goals_per_minute"), { format: (v) => fmt.num(v, 2), marks })}</div>
         <div class="card"><div class="card-head"><h3>Lernsignal</h3><span class="sub">erklärte Varianz des Kritikers</span></div>${lineChart(series("explained_variance", 3), { format: (v) => fmt.num(v, 2), marks })}</div>
-        <div class="card"><div class="card-head"><h3>Siegquote gegen ältere Versionen</h3><span class="sub">über 50 % = besser als die Vorgänger</span></div>
+        <div class="card"><div class="card-head"><h3>Siegquote</h3><span class="sub">gegen ältere Versionen · über 50 % = besser als die Vorgänger</span></div>
           ${pastSeries.length > 1 ? lineChart(pastSeries, { format: (v) => `${Math.round(v)} %`, marks }) : `<div class="chart-empty">${cfg.past_opponent_prob ? "Erscheint, sobald der erste Checkpoint im Pool ist und Spiele gegen ihn fertig sind." : "Gegner-Pool ist für dieses Training ausgeschaltet."}</div>`}</div>
+        ${teacherSeries.length > 1 ? `<div class="card"><div class="card-head"><h3>Gegen den Lehrer</h3><span class="sub">Siegquote und Tore gegen Nexto · ${fmt.num(teacherSeries.at(-1)[1], 0)} %</span></div>${lineChart(teacherSeries, { format: (v) => `${Math.round(v)} %`, marks })}
+          <div class="estimate"><span>Tore für dich</span><b>${teacherGoals[0]}</b></div><div class="estimate"><span>Tore für den Lehrer</span><b>${teacherGoals[1]}</b></div></div>` : ""}
         <div class="card"><div class="card-head"><h3>Neugier</h3><span class="sub">Entropie der Entscheidungen · sinkt, wenn die KI sicherer wird</span></div>${lineChart(series("entropy", 3), { format: (v) => fmt.num(v, 2), marks })}</div>
       </div>
 
@@ -549,6 +589,7 @@ async function pageLive() {
   const options = (selectedId) => [
     runs.length ? `<optgroup label="Folgt dem Training (immer neuester Stand)">${runs.map((r) => `<option value="run:${h(r)}" ${`run:${r}` === selectedId ? "selected" : ""}>${h(r)} · live</option>`).join("")}</optgroup>` : "",
     `<optgroup label="Eingebaute Gegner">${opponents.scripted.map((o) => `<option value="${o.id}" ${o.id === selectedId ? "selected" : ""}>${h(o.label)}</option>`).join("")}</optgroup>`,
+    opponents.teacher?.ready ? `<optgroup label="Lehrer"><option value="teacher" ${selectedId === "teacher" ? "selected" : ""}>Lehrer (Nexto, Grand Champion)</option></optgroup>` : "",
     ...Object.entries(groupBy(opponents.checkpoints.filter((c) => !c.id.endsWith("latest.pt")), (c) => c.run)).map(([run, list]) =>
       `<optgroup label="${h(run)} – fester Stand">${list.slice().reverse().map((c) => `<option value="${h(c.id)}" ${c.id === selectedId ? "selected" : ""}>${h(run)} · ${fmt.steps(c.steps)}</option>`).join("")}</optgroup>`),
   ].join("");
@@ -828,6 +869,7 @@ async function pageArena(replayId) {
   const current = replayId || (replays[0] && replays[0].id);
   const options = (selectedId) => [
     `<optgroup label="Eingebaute Gegner">${opponents.scripted.map((o) => `<option value="${o.id}" ${o.id === selectedId ? "selected" : ""}>${h(o.label)}</option>`).join("")}</optgroup>`,
+    opponents.teacher?.ready ? `<optgroup label="Lehrer"><option value="teacher" ${selectedId === "teacher" ? "selected" : ""}>Lehrer (Nexto, Grand Champion)</option></optgroup>` : "",
     ...Object.entries(groupBy(opponents.checkpoints, (c) => c.run)).map(([run, list]) =>
       `<optgroup label="${h(run)}">${list.slice().reverse().map((c) => `<option value="${h(c.id)}" ${c.id === selectedId ? "selected" : ""}>${h(run)} · ${c.id.endsWith("latest.pt") ? "neuester" : fmt.steps(c.steps)}</option>`).join("")}</optgroup>`),
   ].join("");
@@ -961,14 +1003,16 @@ async function pagePlay(_unused, query) {
   const usable = opponents.checkpoints;
   const form = {
     checkpoint: preselect || (usable.filter((c) => !c.id.endsWith("latest.pt")).at(-1) || usable.at(-1) || {}).id || "",
+    brain: "policy",
     mode: "psyonix", team_size: 1, skill: "rookie", launcher: app.rl?.store === "Steam" ? "steam" : "epic", opponent_bot: "",
   };
+  const teacherReady = Boolean(opponents.teacher?.ready);
   let info = await api("/api/play");
 
   const draw = () => {
     const rl = app.rl;
     const busyState = info.state === "starting" || info.state === "running";
-    const blocked = !info.windows ? "Nur unter Windows möglich." : !info.server_installed ? "RLBotServer fehlt – einmal python install.py ausführen." : rl?.game === "normal" ? "Rocket League läuft normal – bitte zuerst schließen." : !form.checkpoint ? "Erst ein Training laufen lassen." : "";
+    const blocked = !info.windows ? "Nur unter Windows möglich." : !info.server_installed ? "RLBotServer fehlt – einmal python install.py ausführen." : rl?.game === "normal" ? "Rocket League läuft normal – bitte zuerst schließen." : form.brain === "teacher" ? (!teacherReady ? "Der Lehrer ist noch nicht geladen." : "") : !form.checkpoint ? "Erst ein Training laufen lassen." : "";
     patch(view, `
       <div class="page-head"><div><div class="eyebrow">Spielen</div><h1>Im echten Rocket League</h1>
         <p>RLBot startet Rocket League und ein <b>Offline-Match</b>, in dem deine KI ein Auto steuert – gegen Psyonix-Bots, Community-Bots oder dich selbst.</p></div>
@@ -986,9 +1030,11 @@ async function pagePlay(_unused, query) {
             </ol></div>
         </div>
         <div class="card form"><h2>Match einrichten</h2>
-          <label class="field"><span>KI (Checkpoint)</span><select data-change="field" data-key="checkpoint">
+          <div class="field"><span class="field-label">Wer fährt?</span>${seg("brain", [["policy", "Eigene KI"], ["teacher", teacherReady ? "Lehrer (Nexto)" : "Lehrer (nicht geladen)"]], form.brain, "pick")}
+            <small>${form.brain === "teacher" ? "Nexto spielt selbst – Grand-Champion-Niveau. Ideal, um zu sehen, wie gut ein Bot wirklich sein kann." : "Dein trainiertes Modell aus dem Training-Tab."}</small></div>
+          ${form.brain === "teacher" ? "" : `<label class="field"><span>KI (Checkpoint)</span><select data-change="field" data-key="checkpoint">`}
             ${usable.length ? Object.entries(groupBy(usable, (c) => c.run)).map(([run, list]) => `<optgroup label="${h(run)}">${list.slice().reverse().map((c) => `<option value="${h(c.id)}" ${c.id === form.checkpoint ? "selected" : ""}>${h(run)} · ${c.id.endsWith("latest.pt") ? "neuester Stand" : `${fmt.steps(c.steps)} Schritte`}</option>`).join("")}</optgroup>`).join("") : `<option value="">– noch keine –</option>`}
-          </select></label>
+          ${form.brain === "teacher" ? "" : "</select></label>"}
           <div class="field"><span class="field-label">Gegner</span>
             <div class="choice-grid">${Object.entries(info.modes).map(([key, label]) => `<button type="button" class="choice ${form.mode === key ? "on" : ""}" data-action="pick" data-key="mode" data-value="${key}"><b>${h(label)}</b><span>${MODE_HINT[key]}</span></button>`).join("")}</div></div>
           <div class="grid cols-2">

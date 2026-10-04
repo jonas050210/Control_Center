@@ -20,6 +20,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         "reward_stage": args.stage,
         "envs_per_worker": args.envs,
         "seed": args.seed,
+        "teacher_opponent_prob": args.teacher_opponent,
+        "teacher_weight": args.teacher_weight,
     }
     if args.resume:
         paths = run_paths(args.resume)
@@ -43,6 +45,33 @@ def _cmd_train(args: argparse.Namespace) -> int:
         print(f"Ungültige Einstellungen: {error}", file=sys.stderr)
         return 2
     train(config)
+    return 0
+
+
+def _cmd_teacher(args: argparse.Namespace) -> int:
+    """Lehrer laden, prüfen und auf Wunsch ein Testspiel zeigen."""
+    from .teacher import NextoTeacher, describe_teacher, ensure_teacher
+
+    try:
+        ensure_teacher(progress=print)
+    except Exception as error:
+        print(f"Fehler: {error}", file=sys.stderr)
+        return 2
+    info = describe_teacher()
+    print(f"Lehrer {info['name']}: {'bereit' if info['ready'] else 'fehlt'}")
+    print(f"  Ordner: {info['directory']}")
+    print(f"  Quelle: {info['source']} ({info['license']})")
+    if not args.test:
+        print("Hinweis: nur offline verwenden. Testspiel mit '--test'.")
+        return 0
+    from .match import play_match
+    from .opponents import make_player
+
+    print("Testspiel: Lehrer (blau) gegen Balljäger (orange), 60 Sekunden ...")
+    teacher = make_player("teacher")
+    _ = NextoTeacher()  # früher Fehler statt mitten im Match
+    result = play_match(teacher, make_player(args.opponent), team_size=1, seconds=60.0)
+    print(json.dumps(result.summary(), indent=2, ensure_ascii=False))
     return 0
 
 
@@ -84,7 +113,8 @@ def _cmd_play(args: argparse.Namespace) -> int:
     from .play import PlaySettings, start_match
 
     settings = PlaySettings(
-        checkpoint=str(Path(args.checkpoint).resolve()),
+        checkpoint=str(Path(args.checkpoint).resolve()) if args.checkpoint else "",
+        brain=args.brain,
         mode=args.mode,
         team_size=args.team_size,
         skill=args.skill,
@@ -98,7 +128,11 @@ def _cmd_play(args: argparse.Namespace) -> int:
 def _cmd_bot(args: argparse.Namespace) -> int:
     from .rlbot_bot.bot import main as bot_main
 
-    bot_main(["--checkpoint", args.checkpoint] + (["--sample"] if args.sample else []))
+    bot_main(
+        ["--checkpoint", args.checkpoint]
+        + (["--sample"] if args.sample else [])
+        + (["--teacher"] if args.teacher else [])
+    )
     return 0
 
 
@@ -132,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--team-size", type=int, choices=(1, 2, 3))
     train.add_argument("--stage", type=int, choices=(1, 2, 3), help="Belohnungsstufe")
     train.add_argument("--seed", type=int)
+    train.add_argument(
+        "--teacher-opponent",
+        type=float,
+        help="Anteil der Trainings-Matches gegen den Lehrer (z. B. 0.25)",
+    )
+    train.add_argument("--teacher-weight", type=float, help="Gewicht der Nachahmung (0 = aus)")
     train.set_defaults(func=_cmd_train)
 
     ev = sub.add_parser("eval", help="Checkpoint gegen eingebaute Gegner testen")
@@ -156,7 +196,13 @@ def build_parser() -> argparse.ArgumentParser:
     sv.set_defaults(func=_cmd_serve)
 
     pl = sub.add_parser("play", help="Im echten Rocket League spielen (RLBot, offline)")
-    pl.add_argument("checkpoint")
+    pl.add_argument("checkpoint", nargs="?", default="")
+    pl.add_argument(
+        "--brain",
+        choices=("policy", "teacher"),
+        default="policy",
+        help="'policy' = eigene KI, 'teacher' = Nexto spielt (Lehrer)",
+    )
     pl.add_argument("--mode", choices=("psyonix", "human", "bot", "self"), default="psyonix")
     pl.add_argument("--team-size", type=int, default=1, choices=(1, 2, 3))
     pl.add_argument("--skill", choices=("beginner", "rookie", "pro", "allstar"), default="rookie")
@@ -169,7 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
     bot = sub.add_parser("bot", help="(intern) RLBot-Bot-Prozess")
     bot.add_argument("--checkpoint", default=os.environ.get("ROCKETAI_CHECKPOINT", ""))
     bot.add_argument("--sample", action="store_true")
+    bot.add_argument("--teacher", action="store_true", help="Lehrer statt Checkpoint fahren")
     bot.set_defaults(func=_cmd_bot)
+
+    th = sub.add_parser("teacher", help="Lehrer (Nexto) laden und prüfen")
+    th.add_argument("--test", action="store_true", help="Testspiel gegen einen Bot zeigen")
+    th.add_argument("--opponent", default="chaser", help="Gegner im Testspiel")
+    th.set_defaults(func=_cmd_teacher)
 
     doc = sub.add_parser("doctor", help="Installation prüfen")
     doc.set_defaults(func=_cmd_doctor)

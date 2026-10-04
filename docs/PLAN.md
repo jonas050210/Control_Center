@@ -139,3 +139,17 @@ Das echte Tempo zeigt die Web-App nach den ersten Minuten Training.
   dem Sprung, Boost-Pad-Restzeit, Handbremse). Das ist Standard bei
   RLGym-Bots, kann aber in Einzelfällen anders reagieren als im Training.
 - **Nur Windows** für das echte Spiel; trainieren geht auch unter Linux.
+
+
+## Phase 5 - Der Lehrer (Nexto)  [erledigt]
+
+- [x] Nextos Netz laden (TorchScript), Dateien per SHA-256 pruefen, lokal
+      unter `tools/nexto` ablegen (nicht im Repo, GPL)
+- [x] Uebersetzer von unserem Spielzustand in Nextos Beobachtung
+      (Test: Abweichung < 1e-4 gegen Nextos eigene Funktion)
+- [x] Lehrer als Spieler: Live-Ansicht, Replays, echte Spiele (RLBot)
+- [x] Lehrer als Trainingsgegner (`teacher_opponent_prob`)
+- [x] Nachahmung als Zusatzsignal (`teacher_weight`, faellt ueber das Training)
+- [x] Messungen, ehrliche Einordnung und Wissensdokumentation in docs/WISSEN.md
+- [ ] Optional spaeter: Lehrer in ein groesseres Aufmerksamkeitsnetz destillieren,
+      damit die Nachahmung wirklich traegt

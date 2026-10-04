@@ -61,6 +61,13 @@ class TrainConfig:
     past_pool_size: int = 5  # how many older versions are kept as opponents
     # Curriculum: move to the next reward stage by itself once the bot is ready
     auto_curriculum: bool = False
+    # Teacher: Nexto shows the way (see rocketai/teacher.py). 0 = off.
+    teacher_weight: float = 0.0  # how strongly the teacher counts at the start
+    teacher_final_weight: float = 0.1  # ... and after the decay
+    teacher_decay_steps: int = 50_000_000  # steps until the weight reaches the final value
+    teacher_samples: int = 6_000  # teacher answers computed per iteration (0 = every step)
+    teacher_opponent_prob: float = 0.0  # share of matches PLAYED AGAINST the teacher
+    teacher_temperature: float = 1.0  # 1.0 = as trained; higher = softer advice
     # Episodes
     episode_seconds: float = 300.0  # hard cap per episode (game time)
     no_touch_seconds: float = 30.0  # reset when nobody touches the ball for this long
@@ -102,12 +109,30 @@ class TrainConfig:
             problems.append("past_opponent_prob must be in [0, 1)")
         if self.past_pool_size < 1:
             problems.append("past_pool_size must be at least 1")
+        if not 0 <= self.teacher_weight <= 10 or not 0 <= self.teacher_final_weight <= 10:
+            problems.append("teacher_weight and teacher_final_weight must be in [0, 10]")
+        if self.teacher_decay_steps < 0:
+            problems.append("teacher_decay_steps must be 0 (never decay) or more")
+        if not 0 <= self.teacher_opponent_prob < 1:
+            problems.append("teacher_opponent_prob must be in [0, 1)")
+        if self.teacher_samples < 0:
+            problems.append("teacher_samples must be 0 (all) or more")
+        if self.teacher_temperature <= 0:
+            problems.append("teacher_temperature must be positive")
         if not self.hidden_sizes or any(size < 8 for size in self.hidden_sizes):
             problems.append("hidden_sizes needs at least one layer of 8+ units")
         if self.episode_seconds <= 0 or self.no_touch_seconds <= 0:
             problems.append("episode_seconds and no_touch_seconds must be positive")
         if problems:
             raise ValueError("; ".join(problems))
+
+    def teacher_weight_at(self, steps: int) -> float:
+        """How much the teacher still counts after ``steps`` training steps."""
+        from .teacher import teacher_weight_at
+
+        return teacher_weight_at(
+            steps, self.teacher_weight, self.teacher_final_weight, self.teacher_decay_steps
+        )
 
     def resolved_workers(self) -> int:
         if self.n_workers:
@@ -155,6 +180,20 @@ PRESETS: dict[str, dict[str, Any]] = {
             "reward_stage": 1,
             "auto_curriculum": True,
             "total_steps": 500_000_000,
+        },
+    },
+    "student": {
+        "label": "Schüler mit Lehrer (stärkste KI)",
+        "description": "Spielt jeden vierten Trainings-Match gegen Nexto (Grand Champion), "
+        "ahmt ihn zusätzlich nach und trainiert dann selbst weiter.",
+        "values": {
+            "team_size": 1,
+            "reward_stage": 3,
+            "teacher_weight": 1.0,
+            "teacher_final_weight": 0.1,
+            "teacher_decay_steps": 50_000_000,
+            "teacher_opponent_prob": 0.25,
+            "total_steps": 300_000_000,
         },
     },
     "beginner": {

@@ -28,6 +28,7 @@ from .model import ActorCritic, load_checkpoint, model_from_checkpoint, save_che
 from .opponents import PolicyPlayer, make_player
 from .ppo import ppo_update
 from .rollout import Batch, WorkerPool
+from .teacher import TeacherLabeler
 
 EVAL_OPPONENTS = ("chaser", "defender")
 REPLAY_SECONDS = 60.0
@@ -80,6 +81,7 @@ def summarize(batch: Batch, update: dict[str, float]) -> dict[str, Any]:
         else None,
         "reward_parts": {k: v / agent_steps for k, v in stats["reward_parts"].items()},
         **past_summary(episodes),
+        **teacher_summary(episodes),
         **update,
     }
 
@@ -96,6 +98,25 @@ def past_summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         "past_wins": wins,
         "past_losses": losses,
         "past_win_rate": (wins + 0.5 * draws) / len(results),
+    }
+
+
+def teacher_summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Results of training matches against the teacher (wins count 1, draws ½)."""
+    results = [e["vs_teacher"] for e in episodes if "vs_teacher" in e]
+    if not results:
+        return {}
+    wins, losses = results.count(1), results.count(-1)
+    draws = len(results) - wins - losses
+    goals_for = sum(e.get("teacher_goals_for", 0) for e in episodes if "vs_teacher" in e)
+    goals_against = sum(e.get("teacher_goals_against", 0) for e in episodes if "vs_teacher" in e)
+    return {
+        "teacher_games": len(results),
+        "teacher_wins": wins,
+        "teacher_losses": losses,
+        "teacher_win_rate": (wins + 0.5 * draws) / len(results),
+        "teacher_goals_for": goals_for,
+        "teacher_goals_against": goals_against,
     }
 
 
@@ -136,6 +157,8 @@ class Trainer:
         #: frozen older versions used as opponents: (steps, weights)
         self.past_pool: list[tuple[int, dict[str, Any]]] = []
         self.pool_changed = True
+        #: set in train() when a teacher is configured
+        self.teacher: TeacherLabeler | None = None
         latest = self.paths.checkpoints / "latest.pt"
         if latest.exists():
             self._resume(latest)
@@ -217,6 +240,37 @@ class Trainer:
         prune_checkpoints(self.paths, self.config.keep_checkpoints)
         return target
 
+    def attach_teacher(self, batch: Batch, weight: float) -> dict[str, Any]:
+        """Ask the teacher about the recorded situations and store its answers."""
+        if (
+            self.teacher is None
+            or weight <= 0
+            or batch.teacher_states is None
+            or not len(batch.teacher_states)
+        ):
+            return {}
+        states = batch.teacher_states
+        rows = batch.teacher_rows
+        slots = batch.teacher_slots
+        previous = batch.teacher_previous
+        wanted = int(self.config.teacher_samples or 0)
+        if wanted and len(rows) > wanted:  # keep it balanced across the batch
+            pick = np.linspace(0, len(rows) - 1, wanted).round().astype(int)
+            states, rows, slots, previous = states[pick], rows[pick], slots[pick], previous[pick]
+        started = time.perf_counter()
+        answers = self.teacher.targets(states, slots, previous, self.config.teacher_temperature)
+        targets = np.zeros((len(batch), 90), dtype=np.float32)
+        mask = np.zeros(len(batch), dtype=bool)
+        targets[rows] = answers
+        mask[rows] = True
+        batch.teacher_probs = targets
+        batch.teacher_mask = mask
+        return {
+            "teacher_samples": int(len(rows)),
+            "teacher_weight": round(float(weight), 4),
+            "teacher_seconds": round(time.perf_counter() - started, 3),
+        }
+
     def run_evaluation(self) -> dict[str, Any]:
         policy = PolicyPlayer(self.model, name=f"{self.config.name}@{self.steps}")
         results = []
@@ -275,8 +329,19 @@ class Trainer:
                 f"Gegner-Pool: {config.past_opponent_prob:.0%} der Spiele gegen ältere Versionen "
                 f"({len(self.past_pool)} geladen, max. {config.past_pool_size})"
             )
+        if config.teacher_opponent_prob > 0:
+            self.log(
+                f"Lehrer als Gegner: {config.teacher_opponent_prob:.0%} der Matches gegen "
+                "Nexto (offline, lokal geladen)"
+            )
         if config.auto_curriculum:
             self.log(f"Autopilot aktiv: startet bei Stufe {config.reward_stage}")
+        if config.teacher_weight_at(self.steps) > 0:
+            self.teacher = TeacherLabeler(progress=self.log)
+            self.log(
+                "Lehrer aktiv: die KI imitiert Nexto mit "
+                f"{config.teacher_weight_at(self.steps):.0%} Gewicht und trainiert dann selbst weiter"
+            )
         try:
             pool = WorkerPool(workers, config.to_dict(), config.seed + self.iteration)
             while self.steps < config.total_steps:
@@ -292,6 +357,8 @@ class Trainer:
                 batch = pool.collect(weights, config.steps_per_iteration, past)
                 self.pool_changed = self.pool_changed and past is None and bool(self.past_pool)
                 collect_seconds = time.perf_counter() - tick
+                teacher_weight = config.teacher_weight_at(self.steps)
+                teacher_info = self.attach_teacher(batch, teacher_weight)
                 update = ppo_update(
                     self.model,
                     self.optimizer,
@@ -303,6 +370,7 @@ class Trainer:
                     value_coef=config.value_coef,
                     max_grad_norm=config.max_grad_norm,
                     target_kl=config.target_kl,
+                    teacher_coef=teacher_weight if teacher_info else 0.0,
                     rng=self.rng,
                 )
                 total_seconds = time.perf_counter() - tick
@@ -316,6 +384,7 @@ class Trainer:
                     "collect_seconds": collect_seconds,
                     "update_seconds": total_seconds - collect_seconds,
                     "stage": config.reward_stage,
+                    **teacher_info,
                     **summarize(batch, update),
                 }
                 append_jsonl(self.paths.metrics, metrics)
@@ -328,6 +397,18 @@ class Trainer:
                     + (
                         f" | gegen ältere Versionen {metrics['past_win_rate']:.0%}"
                         if "past_win_rate" in metrics
+                        else ""
+                    )
+                    + (
+                        f" | gegen den Lehrer {metrics['teacher_win_rate']:.0%} "
+                        f"({metrics['teacher_goals_for']}:{metrics['teacher_goals_against']})"
+                        if "teacher_win_rate" in metrics
+                        else ""
+                    )
+                    + (
+                        f" | Nachahmung {metrics['teacher_weight']:.0%}, Abweichung "
+                        f"{metrics['teacher_loss']:.2f}"
+                        if "teacher_weight" in metrics
                         else ""
                     )
                 )

@@ -24,8 +24,9 @@ from typing import Any
 import numpy as np
 import torch
 
-from .env import make_env
+from .env import lookup_table, make_env
 from .model import ActorCritic
+from .teacher import NextoTeacher, TeacherPlayer, canonical_players, encode_compact
 
 
 @dataclass
@@ -37,6 +38,18 @@ class Batch:
     returns: np.ndarray
     values: np.ndarray
     stats: dict[str, Any] = field(default_factory=dict)
+    #: Teacher data (only with ``teacher_weight`` > 0):
+    #: ``teacher_states`` is the compact world state, ``teacher_rows`` the row
+    #: in the batch it belongs to, ``teacher_slots`` which car was asked,
+    #: ``teacher_previous`` the last input of that car, and after the trainer
+    #: has filled them in, ``teacher_probs``/``teacher_mask`` hold the target
+    #: distribution per row.
+    teacher_states: np.ndarray | None = None
+    teacher_rows: np.ndarray | None = None
+    teacher_slots: np.ndarray | None = None
+    teacher_previous: np.ndarray | None = None
+    teacher_probs: np.ndarray | None = None
+    teacher_mask: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.actions)
@@ -44,6 +57,7 @@ class Batch:
     @staticmethod
     def concat(batches: list[Batch]) -> Batch:
         stats = merge_stats([b.stats for b in batches])
+        with_teacher = [b for b in batches if b.teacher_states is not None]
         return Batch(
             obs=np.concatenate([b.obs for b in batches]),
             actions=np.concatenate([b.actions for b in batches]),
@@ -52,6 +66,18 @@ class Batch:
             returns=np.concatenate([b.returns for b in batches]),
             values=np.concatenate([b.values for b in batches]),
             stats=stats,
+            teacher_states=(
+                np.concatenate([b.teacher_states for b in with_teacher]) if with_teacher else None
+            ),
+            teacher_rows=(
+                np.concatenate([b.teacher_rows for b in with_teacher]) if with_teacher else None
+            ),
+            teacher_slots=(
+                np.concatenate([b.teacher_slots for b in with_teacher]) if with_teacher else None
+            ),
+            teacher_previous=(
+                np.concatenate([b.teacher_previous for b in with_teacher]) if with_teacher else None
+            ),
         )
 
 
@@ -84,6 +110,10 @@ class _Stream:
     rewards: list[float] = field(default_factory=list)
     dones: list[bool] = field(default_factory=list)
     next_values: list[float] = field(default_factory=list)  # only meaningful where done
+    #: teacher questions for a subset of the steps above (local obs indices)
+    teacher: list[np.ndarray] = field(default_factory=list)
+    teacher_index: list[int] = field(default_factory=list)
+    teacher_slot: list[int] = field(default_factory=list)
 
 
 def compute_gae(
@@ -133,15 +163,44 @@ class Collector:
         self.model.eval()
         self.rng = random.Random(seed)
         self.past_models: list[ActorCritic] = []
-        #: per match: index into ``past_models`` controlling orange, or None (self-play)
-        self.opponent: list[int | None] = [None for _ in self.envs]
+        #: per match: index into ``past_models`` controlling orange, "teacher",
+        #: or None (self-play). The learning policy always plays blue.
+        self.opponent: list[int | str | None] = [None for _ in self.envs]
+        #: One teacher player per match so each keeps its own "last input"
+        #: memory; they share a single loaded network.
+        self.teachers: list[TeacherPlayer] = []
+        self.teacher_used = False
+        if float(config.get("teacher_opponent_prob") or 0.0) > 0:
+            try:
+                network = NextoTeacher()
+            except Exception as error:  # missing download or broken files
+                raise RuntimeError(
+                    f"Der Lehrer konnte nicht geladen werden ({error}). "
+                    "Starte 'python -m rocketai teacher' oder schalte den Lehrer aus."
+                ) from error
+            self.teachers = [TeacherPlayer(teacher=network) for _ in self.envs]
         self.obs = [env.reset() for env in self.envs]
         self.episode = [self._new_episode(env) for env in self.envs]
         self.streams: list[dict[str, _Stream]] = [{} for _ in self.envs]
+        # Teacher (see rocketai/teacher.py): the workers only *record* the
+        # situations; the answers are computed in the learner process.
+        self.teacher_enabled = bool(
+            config.get("teacher_weight") or config.get("teacher_final_weight")
+        )
+        self.order = [canonical_players(env.state) for env in self.envs]
+        self.slot = [{agent: index for index, agent in enumerate(order)} for order in self.order]
+        self.stride = 1
+        self.teacher_tick = 0
+        self.table = lookup_table()
 
     @staticmethod
     def _new_episode(env: Any) -> dict[str, Any]:
-        return {"reward": dict.fromkeys(env.agents, 0.0), "ticks": 0, "touches": 0}
+        return {
+            "reward": dict.fromkeys(env.agents, 0.0),
+            "ticks": 0,
+            "touches": 0,
+            "goals": [0, 0],  # [blue, orange]
+        }
 
     def load_weights(self, state_dict: dict[str, Any]) -> None:
         self.model.load_state_dict(state_dict)
@@ -155,16 +214,22 @@ class Collector:
             model.eval()
             models.append(model)
         self.past_models = models
-        self.opponent = [o if o is not None and o < len(models) else None for o in self.opponent]
+        self.opponent = [
+            o if (o == "teacher" or (isinstance(o, int) and o < len(models))) else None
+            for o in self.opponent
+        ]
 
-    def _pick_opponent(self) -> int | None:
+    def _pick_opponent(self) -> int | str | None:
+        teacher_prob = float(self.config.get("teacher_opponent_prob", 0.0) or 0.0)
+        if self.teachers and self.rng.random() < teacher_prob:
+            return "teacher"
         prob = float(self.config.get("past_opponent_prob", 0.0))
         if self.past_models and self.rng.random() < prob:
             return self.rng.randrange(len(self.past_models))
         return None
 
-    def _controller(self, i: int, agent: str) -> int | None:
-        """None = the learning policy, else the index of the past policy."""
+    def _controller(self, i: int, agent: str) -> int | str | None:
+        """None = the learning policy, else a past-policy index or "teacher"."""
         opponent = self.opponent[i]
         if opponent is None or self.envs[i].state.cars[agent].team_num == 0:
             return None
@@ -174,13 +239,19 @@ class Collector:
         started = time.perf_counter()
         gamma, lam = self.config["gamma"], self.config["gae_lambda"]
         tick_skip = 8
+        wanted = int(self.config.get("teacher_samples") or 0)
+        self.stride = (
+            1
+            if (wanted <= 0 or not self.teacher_enabled)
+            else max(1, round(n_agent_steps / wanted))
+        )
         finished: list[_Stream] = []
         episodes: list[dict[str, Any]] = []
         parts: dict[str, float] = {}
         collected = 0
         while collected < n_agent_steps:
             all_keys = [(i, agent) for i, env in enumerate(self.envs) for agent in env.agents]
-            groups: dict[int | None, list[tuple[int, str]]] = {}
+            groups: dict[Any, list[tuple[int, str]]] = {}
             for key in all_keys:
                 groups.setdefault(self._controller(*key), []).append(key)
             per_env: list[dict[str, np.ndarray]] = [{} for _ in self.envs]
@@ -195,11 +266,30 @@ class Collector:
                     stream.actions.append(int(actions[k]))
                     stream.log_probs.append(float(log_probs[k]))
                     stream.values.append(float(values[k]))
+                    if self.teacher_enabled:
+                        # Ask the teacher about a regular subset of the steps.
+                        if self.teacher_tick % self.stride == 0:
+                            stream.teacher.append(encode_compact(self.envs[i].state, self.order[i]))
+                            stream.teacher_index.append(len(stream.obs) - 1)
+                            stream.teacher_slot.append(self.slot[i][agent])
+                        self.teacher_tick += 1
             for index, past_keys in groups.items():
+                if index == "teacher":
+                    continue  # handled per match below: he needs the full state
                 past_obs = np.stack([self.obs[i][a] for i, a in past_keys]).astype(np.float32)
                 past_actions, _, _ = self.past_models[index].act(past_obs, deterministic=False)
                 for k, (i, agent) in enumerate(past_keys):
                     per_env[i][agent] = np.array([past_actions[k]])
+            teacher_keys = groups.pop("teacher", [])
+            if teacher_keys and self.teachers:
+                self.teacher_used = True
+                by_env: dict[int, list[str]] = {}
+                for i, agent in teacher_keys:
+                    by_env.setdefault(i, []).append(agent)
+                for i, agents in by_env.items():
+                    answer = self.teachers[i].act(agents, self.obs[i], self.envs[i].state)
+                    for agent, action in answer.items():
+                        per_env[i][agent] = np.array([action])
             collected += len(keys)
             for i, env in enumerate(self.envs):
                 next_obs, rewards, terminated, truncated = env.step(per_env[i])
@@ -229,6 +319,8 @@ class Collector:
                     episode["reward"][agent] += float(reward)
                 if is_done:
                     scoring = state.scoring_team if is_terminal else None
+                    if scoring is not None:
+                        episode["goals"][int(scoring)] += 1
                     learner_rewards = [episode["reward"][a] for a in learners] or [0.0]
                     record = {
                         "reward": float(np.mean(learner_rewards)),
@@ -236,7 +328,12 @@ class Collector:
                         "goal": scoring is not None,
                         "touches": episode["touches"],
                     }
-                    if self.opponent[i] is not None:
+                    if self.opponent[i] == "teacher":
+                        # +1 the current policy (blue) scored, -1 the teacher did, 0 timeout
+                        record["vs_teacher"] = 0 if scoring is None else (1 if scoring == 0 else -1)
+                        record["teacher_goals_for"] = int(episode["goals"][0])
+                        record["teacher_goals_against"] = int(episode["goals"][1])
+                    elif self.opponent[i] is not None:
                         # +1 the current policy (blue) scored, -1 the old one did, 0 timeout
                         record["vs_past"] = 0 if scoring is None else (1 if scoring == 0 else -1)
                     episodes.append(record)
@@ -263,6 +360,11 @@ class Collector:
 
         pieces = [(stream, 0.0) for stream in finished] + open_streams
         obs, acts, logps, advs, rets, vals_all = [], [], [], [], [], []
+        teacher_states: list[np.ndarray] = []
+        teacher_rows: list[int] = []
+        teacher_slots: list[int] = []
+        teacher_previous: list[np.ndarray] = []
+        row_offset = 0
         for stream, bootstrap in pieces:
             if not stream.rewards:
                 continue
@@ -282,6 +384,20 @@ class Collector:
             advs.append(adv)
             rets.append(ret)
             vals_all.append(values)
+            if stream.teacher:
+                # The teacher also sees the *previous* input of that car.
+                inputs = self.table[np.asarray(stream.actions, dtype=np.int64)]
+                previous = np.concatenate(
+                    [np.zeros((1, 8), dtype=np.float32), inputs[:-1].astype(np.float32)]
+                )
+                for local, slot, compact in zip(
+                    stream.teacher_index, stream.teacher_slot, stream.teacher, strict=True
+                ):
+                    teacher_rows.append(row_offset + local)
+                    teacher_slots.append(slot)
+                    teacher_states.append(compact)
+                    teacher_previous.append(previous[local])
+            row_offset += len(stream.rewards)
         return Batch(
             obs=np.concatenate(obs),
             actions=np.concatenate(acts),
@@ -289,6 +405,14 @@ class Collector:
             advantages=np.concatenate(advs),
             returns=np.concatenate(rets),
             values=np.concatenate(vals_all),
+            teacher_states=(
+                np.stack(teacher_states).astype(np.float32) if teacher_states else None
+            ),
+            teacher_rows=(np.asarray(teacher_rows, dtype=np.int64) if teacher_rows else None),
+            teacher_slots=(np.asarray(teacher_slots, dtype=np.int64) if teacher_slots else None),
+            teacher_previous=(
+                np.stack(teacher_previous).astype(np.float32) if teacher_previous else None
+            ),
             stats={
                 "episodes": episodes,
                 "reward_parts": parts,

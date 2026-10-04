@@ -22,6 +22,22 @@ def _module(name: str) -> tuple[bool, str]:
     return True, str(getattr(module, "__version__", "installiert"))
 
 
+def teacher_check() -> dict[str, Any]:
+    from .teacher import describe_teacher
+
+    info = describe_teacher()
+    if info["ready"]:
+        detail = f"bereit in {info['directory']}"
+    else:
+        detail = "nicht geladen - 'python -m rocketai teacher' holt ihn (nur offline nutzen)"
+    return {
+        "label": f"Lehrer ({info['name']})",
+        "detail": detail,
+        "ok": info["ready"],
+        "required": False,
+    }
+
+
 def run_checks() -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
 
@@ -80,4 +96,5 @@ def run_checks() -> list[dict[str, Any]]:
                 required=False,
             )
     add("cpu", "CPU-Kerne", True, f"{os.cpu_count()} (mehr Kerne = schnelleres Training)")
+    checks.append(teacher_check())
     return checks

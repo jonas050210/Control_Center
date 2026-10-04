@@ -38,7 +38,7 @@ from .config import (
     run_paths,
     runs_root,
 )
-from .play import LAUNCHERS, MODES, SKILLS, PlaySession, PlaySettings, server_path
+from .play import BRAINS, LAUNCHERS, MODES, SKILLS, PlaySession, PlaySettings, server_path
 from .trainer import read_json, write_json
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -110,9 +110,9 @@ def resolve_checkpoint(spec: str) -> Path:
 
 
 def player_from_spec(spec: str) -> Any:
-    from .opponents import SCRIPTED_BOTS, PolicyPlayer, make_player
+    from .opponents import SCRIPTED_BOTS, TEACHER_SPECS, PolicyPlayer, make_player
 
-    if spec in SCRIPTED_BOTS:
+    if spec in SCRIPTED_BOTS or spec in TEACHER_SPECS:
         return make_player(spec)
     path = resolve_checkpoint(spec)
     player = PolicyPlayer.from_checkpoint(path)
@@ -324,7 +324,8 @@ class MatchRequest(BaseModel):
 
 
 class PlayRequest(BaseModel):
-    checkpoint: str  # run/file.pt
+    checkpoint: str = ""  # run/file.pt (leer, wenn der Lehrer fährt)
+    brain: str = "policy"  # "policy" = eigene KI, "teacher" = Nexto
     mode: str = "psyonix"
     team_size: int = 1
     skill: str = "rookie"
@@ -550,6 +551,7 @@ def create_app() -> FastAPI:
     @app.get("/api/opponents")
     def opponents() -> dict[str, Any]:
         from .opponents import SCRIPTED_BOTS
+        from .teacher import describe_teacher
 
         checkpoints = [
             {"id": f"{run['name']}/{c['file']}", "run": run["name"], "steps": c["steps"]}
@@ -559,12 +561,14 @@ def create_app() -> FastAPI:
         return {
             "scripted": [{"id": key, "label": label} for key, (label, _) in SCRIPTED_BOTS.items()],
             "checkpoints": checkpoints,
+            "teacher": describe_teacher(),
         }
 
     @app.get("/api/play")
     def play_info() -> dict[str, Any]:
         return {
             **STATE.play.info(),
+            "brains": BRAINS,
             "modes": MODES,
             "skills": SKILLS,
             "launchers": LAUNCHERS,
@@ -574,9 +578,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/play/start")
     def play_start(request: PlayRequest) -> dict[str, Any]:
-        path = resolve_checkpoint(request.checkpoint)
+        path = resolve_checkpoint(request.checkpoint) if request.checkpoint else None
         settings = PlaySettings(
-            checkpoint=str(path),
+            checkpoint=str(path) if path else "",
+            brain=request.brain,
             mode=request.mode,
             team_size=request.team_size,
             skill=request.skill,
@@ -593,6 +598,22 @@ def create_app() -> FastAPI:
     def play_stop() -> dict[str, Any]:
         STATE.play.stop()
         return STATE.play.info()
+
+    @app.get("/api/teacher")
+    def teacher_status() -> dict[str, Any]:
+        from .teacher import describe_teacher
+
+        return describe_teacher()
+
+    @app.post("/api/teacher/load")
+    def teacher_load() -> dict[str, Any]:
+        from .teacher import TeacherError, describe_teacher, ensure_teacher
+
+        try:
+            ensure_teacher(progress=lambda message: print(f"[Lehrer] {message}", flush=True))
+        except TeacherError as error:
+            raise HTTPException(400, str(error)) from error
+        return describe_teacher()
 
     @app.get("/api/rocketleague")
     def rocketleague(refresh: bool = False) -> dict[str, Any]:
