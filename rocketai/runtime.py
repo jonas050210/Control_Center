@@ -159,6 +159,11 @@ class TrainLock:
         info = read_pid_file(self.path)
         stale_pid = info.get("pid")
         if not self._try_lock():
+            # Wichtig (Windows): Die Datei wieder schließen, bevor der Fehler
+            # fliegt. Ein offener Griff verhindert dort das Löschen der
+            # Sperrdatei — dann bliebe die Sperre für immer stehen.
+            self._handle.close()
+            self._handle = None
             owner = stale_pid if stale_pid and process_alive(stale_pid) else None
             raise AlreadyRunning(self.name, owner, info.get("since"))
         self._locked = True
@@ -176,10 +181,13 @@ class TrainLock:
         if self._handle is not None:
             self._handle.close()
             self._handle = None
-        # Nur aufräumen, wenn die Sperrdatei uns gehört.
+        # Nur aufräumen, wenn die Sperrdatei uns gehört. Auf Windows kann ein
+        # anderer Prozess die Datei noch offen haben — dann bleibt sie liegen
+        # (was harmlos ist: entscheidend ist die Sperre, nicht die Datei).
         info = read_pid_file(self.path)
         if info.get("pid") == os.getpid():
-            self.path.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                self.path.unlink(missing_ok=True)
 
 
 def heartbeat_writer(

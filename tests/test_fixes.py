@@ -333,3 +333,20 @@ def test_policy_player_explain_works_on_any_device():
     assert player.last_info["blue-0"]["top"]
     assert 0.0 <= player.last_info["blue-0"]["confidence"] <= 1.0
     torch.tensor(0.0)  # Platzhalter, damit torch sicher importiert ist
+
+
+def test_failed_lock_attempt_does_not_leave_an_open_file(tmp_path, monkeypatch):
+    """Ein abgelehnter Versuch darf keinen offenen Dateigriff hinterlassen.
+
+    Unter Windows verhindert ein offener Griff das Löschen der Sperrdatei —
+    die Sperre bliebe dann für immer stehen.
+    """
+    monkeypatch.setenv("ROCKETAI_RUNS", str(tmp_path / "runs"))
+    paths = run_paths("leak").ensure()
+    with TrainLock(paths.root, "leak"):
+        attempt = TrainLock(paths.root, "leak")
+        with pytest.raises(AlreadyRunning):
+            attempt.__enter__()
+        assert attempt._handle is None  # Griff geschlossen
+    assert lock_owner(paths.root) is None
+    assert not (paths.root / "trainer.lock").exists()
