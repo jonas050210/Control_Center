@@ -247,7 +247,11 @@ export function lineChart(points, { height = 170, format = (v) => fmt.num(v, 1),
     const v = y0 + ((y1 - y0) * i) / 3, y = sy(v);
     grid += `<line class="grid-line" x1="${L}" x2="${W - R}" y1="${y}" y2="${y}"/><text class="axis" x="${L - 8}" y="${y + 3}" text-anchor="end">${h(format(v))}</text>`;
   }
-  for (const [mx] of marks) if (mx >= x0 && mx <= x1) grid += `<line class="mark-line" x1="${sx(mx)}" x2="${sx(mx)}" y1="${T}" y2="${H - B}"/>`;
+  for (const [mx, label, cls = ""] of marks) {
+    if (mx < x0 || mx > x1) continue;
+    grid += `<line class="mark-line ${cls}" x1="${sx(mx)}" x2="${sx(mx)}" y1="${T}" y2="${H - B}">${label ? `<title>${label}</title>` : ""}</line>`;
+    if (cls === "stage") grid += `<text class="mark-text" x="${sx(mx) + 4}" y="${T + 10}">${label}</text>`;
+  }
   grid += `<text class="axis" x="${L}" y="${H - 4}">${fmt.steps(x0)}</text><text class="axis" x="${W - R}" y="${H - 4}" text-anchor="end">${fmt.steps(x1)}</text>`;
   const lastPoint = clean[clean.length - 1];
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">

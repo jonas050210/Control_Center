@@ -80,10 +80,10 @@ Erste Messungen in der Sandbox (2 CPU-Kerne):
 
 1. `python install.py`, dann `python start.py`.
 2. Vorlage **Schnelltest**: prüft in ~2 Minuten, ob alles läuft.
-3. Vorlage **Anfänger 1v1** (Stufe 1) bis die Kurve „Ballkontakte pro
-   Minute“ deutlich steigt (Richtwert 20–50 Mio. Schritte).
-4. Danach ein neues Training mit **Torjäger 1v1** (Stufe 2) – oder den
-   Anfänger-Run mit höherem Ziel fortsetzen.
+3. Vorlage **Autopilot** (startet bei Stufe 1, schaltet selbst auf 2 und 3
+   um). Laufen lassen; Stufenwechsel erscheinen als gestrichelte Linie in den
+   Kurven und im Protokoll.
+4. Manuell geht es weiterhin: **Anfänger 1v1** → **Torjäger 1v1**.
 5. Arena: Bewertungsspiele ansehen. Spielen: Checkpoint gegen Psyonix
    *Beginner* und *Rookie* testen.
 
@@ -98,8 +98,9 @@ Woran man Fortschritt erkennt:
 
 ### Phase 3 – Stärker werden
 
-- **Gegner-Pool:** zu 20–30 % gegen ältere Checkpoints spielen statt nur
-  gegen sich selbst (verhindert „Schere-Stein-Papier“-Zyklen).
+- ~~**Gegner-Pool**~~ (fertig): 20 % der Spiele gegen die letzten 5
+  Checkpoints, Siegquote als Kurve.
+- ~~**Automatischer Lehrplan**~~ (fertig): Autopilot wechselt die Stufe.
 - **Stufe 3:** Luftkontakte, Boost-Management, höhere Torbelohnung.
 - **Belohnungs-Feinschliff:** Ballgeschwindigkeit Richtung Tor statt nur
   Richtung; Strafe für Gegentore aus eigenem Fehler.

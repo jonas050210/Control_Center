@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,14 @@ from .rollout import Batch, WorkerPool
 
 EVAL_OPPONENTS = ("chaser", "defender")
 REPLAY_SECONDS = 60.0
+
+#: Autopilot curriculum: (from stage, metric, threshold, minimum steps). The
+#: average of the last CURRICULUM_WINDOW iterations must reach the threshold.
+CURRICULUM = (
+    (1, "touches_per_minute", 15.0, 10_000_000),
+    (2, "goals_per_minute", 1.0, 50_000_000),
+)
+CURRICULUM_WINDOW = 20
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -70,8 +79,37 @@ def summarize(batch: Batch, update: dict[str, float]) -> dict[str, Any]:
         if game_seconds
         else None,
         "reward_parts": {k: v / agent_steps for k, v in stats["reward_parts"].items()},
+        **past_summary(episodes),
         **update,
     }
+
+
+def past_summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Results of matches against older versions (wins count 1, draws ½)."""
+    results = [e["vs_past"] for e in episodes if "vs_past" in e]
+    if not results:
+        return {}
+    wins, losses = results.count(1), results.count(-1)
+    draws = len(results) - wins - losses
+    return {
+        "past_games": len(results),
+        "past_wins": wins,
+        "past_losses": losses,
+        "past_win_rate": (wins + 0.5 * draws) / len(results),
+    }
+
+
+def curriculum_ready(config: TrainConfig, steps: int, recent: list[dict[str, Any]]) -> bool:
+    """Should the autopilot move on to the next reward stage?"""
+    if not config.auto_curriculum or len(recent) < CURRICULUM_WINDOW:
+        return False
+    for stage, metric, threshold, min_steps in CURRICULUM:
+        if config.reward_stage != stage or steps < min_steps:
+            continue
+        values = [m.get(metric) for m in recent[-CURRICULUM_WINDOW:]]
+        values = [v for v in values if v is not None]
+        return bool(values) and float(np.mean(values)) >= threshold
+    return False
 
 
 def prune_checkpoints(paths: RunPaths, keep: int) -> None:
@@ -95,9 +133,13 @@ class Trainer:
         self.iteration = 0
         self.started = time.time()
         self.rng = np.random.default_rng(config.seed)
+        #: frozen older versions used as opponents: (steps, weights)
+        self.past_pool: list[tuple[int, dict[str, Any]]] = []
+        self.pool_changed = True
         latest = self.paths.checkpoints / "latest.pt"
         if latest.exists():
             self._resume(latest)
+            self._load_past_pool()
         config.save(self.paths.config)
 
     def log(self, message: str) -> None:
@@ -123,6 +165,26 @@ class Trainer:
         self.iteration = int(payload.get("extra", {}).get("iteration", 0))
         self.log(f"Fortgesetzt bei {self.steps:,} Schritten aus {path.name}")
 
+    def _load_past_pool(self) -> None:
+        numbered = sorted(
+            (p for p in self.paths.checkpoints.glob("*.pt") if p.stem.isdigit()),
+            key=lambda p: int(p.stem),
+        )
+        for path in numbered[-self.config.past_pool_size :]:
+            try:
+                payload = load_checkpoint(path)
+            except (OSError, ValueError, RuntimeError):
+                continue
+            if list(payload["hidden_sizes"]) == list(self.config.hidden_sizes):
+                self.past_pool.append((int(payload["steps"]), payload["model"]))
+        self.pool_changed = True
+
+    def _add_snapshot(self) -> None:
+        weights = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
+        self.past_pool.append((self.steps, weights))
+        del self.past_pool[: -self.config.past_pool_size]
+        self.pool_changed = True
+
     def status(self, state: str, **extra: Any) -> None:
         write_json(
             self.paths.status,
@@ -143,6 +205,7 @@ class Trainer:
         config = self.config.to_dict()
         target = self.paths.checkpoints / f"{self.steps}.pt"
         save_checkpoint(target, self.model, steps=self.steps, config=config, extra=extra)
+        self._add_snapshot()
         save_checkpoint(
             self.paths.checkpoints / "latest.pt",
             self.model,
@@ -206,6 +269,14 @@ class Trainer:
         every_eval = config.eval_every_steps
         next_eval = (self.steps // every_eval + 1) * every_eval if every_eval else None
         state = "finished"
+        recent: deque[dict[str, Any]] = deque(maxlen=CURRICULUM_WINDOW)
+        if config.past_opponent_prob:
+            self.log(
+                f"Gegner-Pool: {config.past_opponent_prob:.0%} der Spiele gegen ältere Versionen "
+                f"({len(self.past_pool)} geladen, max. {config.past_pool_size})"
+            )
+        if config.auto_curriculum:
+            self.log(f"Autopilot aktiv: startet bei Stufe {config.reward_stage}")
         try:
             pool = WorkerPool(workers, config.to_dict(), config.seed + self.iteration)
             while self.steps < config.total_steps:
@@ -215,7 +286,11 @@ class Trainer:
                     break
                 tick = time.perf_counter()
                 weights = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
-                batch = pool.collect(weights, config.steps_per_iteration)
+                past = None
+                if self.pool_changed and config.past_opponent_prob and self.past_pool:
+                    past = [w for _, w in self.past_pool]
+                batch = pool.collect(weights, config.steps_per_iteration, past)
+                self.pool_changed = self.pool_changed and past is None and bool(self.past_pool)
                 collect_seconds = time.perf_counter() - tick
                 update = ppo_update(
                     self.model,
@@ -240,6 +315,7 @@ class Trainer:
                     "steps_per_second": len(batch) / total_seconds,
                     "collect_seconds": collect_seconds,
                     "update_seconds": total_seconds - collect_seconds,
+                    "stage": config.reward_stage,
                     **summarize(batch, update),
                 }
                 append_jsonl(self.paths.metrics, metrics)
@@ -249,7 +325,25 @@ class Trainer:
                     f"#{self.iteration} {self.steps:,} Schritte | {metrics['steps_per_second']:,.0f}/s | "
                     f"Belohnung {metrics['episode_reward'] or 0:.2f} | "
                     f"Ballkontakte/min {touches if touches is not None else 0:.1f}"
+                    + (
+                        f" | gegen ältere Versionen {metrics['past_win_rate']:.0%}"
+                        if "past_win_rate" in metrics
+                        else ""
+                    )
                 )
+                recent.append(metrics)
+                if curriculum_ready(config, self.steps, list(recent)):
+                    config.reward_stage += 1
+                    config.save(self.paths.config)
+                    self.save()
+                    self.log(
+                        f"Autopilot: Ziel erreicht – weiter mit Stufe {config.reward_stage} "
+                        f"bei {self.steps:,} Schritten"
+                    )
+                    pool.close()
+                    pool = WorkerPool(workers, config.to_dict(), config.seed + self.iteration)
+                    self.pool_changed = True
+                    recent.clear()
                 if self.steps >= next_checkpoint:
                     self.save()
                     next_checkpoint += config.checkpoint_every_steps

@@ -144,3 +144,21 @@ def test_field_and_rocketleague_endpoints(client):
         "/vendor/three.min.js",
     ):
         assert client.get(path).status_code == 200, path
+
+
+def test_live_ai_vs_ai_reports_every_brain(client):
+    from test_training import _small_config
+
+    from rocketai.trainer import train
+
+    train(_small_config(total_steps=600))
+    response = client.post("/api/live/start", json={"blue": "run:t", "orange": "run:t", "speed": 8})
+    assert response.status_code == 200, response.text
+    deadline = time.time() + 30
+    frames = []
+    while time.time() < deadline and len(frames) < 5:
+        frames = client.get("/api/live?since=0").json()["frames"]
+        time.sleep(0.2)
+    brains = frames[-1]["brains"]
+    assert [b["car"] for b in brains] == [0, 1] and [b["team"] for b in brains] == [0, 1]
+    assert len(brains[0]["controls"]) == 8 and brains[0]["top"]

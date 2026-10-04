@@ -136,7 +136,7 @@ function runCard(run) {
   const score = evalRes.length ? evalRes.map((r) => `${Math.round(r.score * 100)}%`).join(" · ") : "–";
   return `<a class="card link run-card" href="#/training/${encodeURIComponent(run.name)}" data-key="run-${h(run.name)}">
     <div class="top"><div><div class="name">${h(run.name)}</div>
-      <div class="meta">${cfg.team_size}v${cfg.team_size} · Stufe ${cfg.reward_stage}: ${h(STAGES[cfg.reward_stage] || "")}</div></div>${pill(st.state)}</div>
+      <div class="meta">${cfg.auto_curriculum ? `<span class="badge accent">Autopilot</span> ` : ""}${cfg.team_size}v${cfg.team_size} · Stufe ${cfg.reward_stage}: ${h(STAGES[cfg.reward_stage] || "")}</div></div>${pill(st.state)}</div>
     <div><div class="progress ${ACTIVE.has(st.state) ? "active" : ""}"><i style="width:${pct}%"></i></div>
       <div class="progress-meta"><span>${fmt.steps(st.steps || 0)} / ${fmt.steps(total)} Schritte</span><span>${pct.toFixed(1)} %</span></div></div>
     <div class="kv">
@@ -264,7 +264,7 @@ async function pageTraining() {
 
 async function pageNewRun() {
   const { presets, defaults, cpu_count: cpus = 2 } = await api("/api/presets");
-  const form = { preset: "beginner", name: "", overrides: {} };
+  const form = { preset: presets.autopilot ? "autopilot" : "beginner", name: "", overrides: {} };
   const values = () => ({ ...defaults, ...presets[form.preset].values, ...form.overrides });
   const draw = () => {
     const v = values();
@@ -284,7 +284,13 @@ async function pageNewRun() {
           </div>
           <div class="grid cols-2">
             <div class="field"><span class="field-label">Spielmodus</span>${seg("team_size", [[1, "1v1"], [2, "2v2"], [3, "3v3"]], v.team_size)}</div>
-            <div class="field"><span class="field-label">Belohnungsstufe</span>${seg("reward_stage", [[1, "1 · Ball"], [2, "2 · Tore"], [3, "3 · Komplett"]], v.reward_stage)}</div>
+            <div class="field"><span class="field-label">${v.auto_curriculum ? "Startstufe" : "Belohnungsstufe"}</span>${seg("reward_stage", [[1, "1 · Ball"], [2, "2 · Tore"], [3, "3 · Komplett"]], v.reward_stage)}</div>
+          </div>
+          <div class="grid cols-2">
+            <div class="field"><span class="field-label">Autopilot</span>${seg("auto_curriculum", [[1, "An"], [0, "Aus"]], v.auto_curriculum ? 1 : 0)}
+              <small>Schaltet die Belohnungsstufe selbst hoch, sobald die KI so weit ist (erst Ball sicher treffen, dann Tore schießen).</small></div>
+            <div class="field"><span class="field-label">Gegner-Pool</span>${seg("past_opponent_prob", [[0, "Aus"], [0.2, "20 %"], [0.35, "35 %"]], v.past_opponent_prob)}
+              <small>Anteil der Spiele gegen ältere eigene Versionen – verhindert, dass die KI Gelerntes wieder vergisst.</small></div>
           </div>
           <details class="advanced"><summary>Erweiterte Einstellungen</summary>
             <div class="grid cols-3">
@@ -297,6 +303,7 @@ async function pageNewRun() {
               ${numberField("checkpoint_every_steps", "Checkpoint alle", v.checkpoint_every_steps, "Schritte – so oft gibt es neue Stände für Live")}
               ${numberField("eval_every_steps", "Bewertung alle", v.eval_every_steps, "0 = nie")}
               ${numberField("eval_games", "Spiele pro Bewertung", v.eval_games)}
+              ${numberField("past_pool_size", "Größe Gegner-Pool", v.past_pool_size, "so viele ältere Checkpoints spielen mit")}
             </div>
             <label class="field" style="margin-top:16px"><span>Netzgröße (Schichten)</span><input id="hidden_sizes" value="${v.hidden_sizes.join(", ")}" data-change="sizes"><small>Größer lernt mehr, ist aber langsamer. Später nicht mehr änderbar.</small></label>
           </details>
@@ -312,7 +319,11 @@ async function pageNewRun() {
   };
   page.actions = {
     preset: (el) => { form.preset = el.dataset.preset; form.overrides = {}; view.querySelectorAll("[data-dirty]").forEach((i) => { if (i.id !== "name") delete i.dataset.dirty; }); draw(); },
-    seg: (el) => { form.overrides[el.dataset.key] = Number(el.dataset.value); draw(); },
+    seg: (el) => {
+      const key = el.dataset.key, value = Number(el.dataset.value);
+      form.overrides[key] = key === "auto_curriculum" ? Boolean(value) : value;
+      draw();
+    },
     name: (el) => { form.name = el.value.trim(); },
     num: (el) => { form.overrides[el.dataset.key] = Number(el.value); delete el.dataset.dirty; draw(); },
     sizes: (el) => { form.overrides.hidden_sizes = el.value.split(/[ ,;x×]+/).filter(Boolean).map(Number); },
@@ -373,7 +384,20 @@ async function pageRun(rawName) {
     };
     const checkpoints = [...run.checkpoints].reverse();
     if ((!selected || !checkpoints.some((c) => c.file === selected)) && checkpoints.length) selected = checkpoints.find((c) => c.file !== "latest.pt")?.file || checkpoints[0].file;
-    const marks = checkpoints.map((c) => [c.steps]);
+    const stageMarks = [];
+    metrics.forEach((m, i) => { if (i && m.stage && metrics[i - 1].stage && m.stage !== metrics[i - 1].stage) stageMarks.push([m.steps, `Stufe ${m.stage}`, "stage"]); });
+    const marks = [...checkpoints.map((c) => [c.steps]), ...stageMarks];
+    // win rate against older versions, pooled over the last 15 updates (single updates have few games)
+    const pastSeries = metrics.map((m, i) => {
+      let games = 0, score = 0;
+      for (const x of metrics.slice(Math.max(0, i - 14), i + 1)) {
+        if (!x.past_games) continue;
+        games += x.past_games;
+        score += x.past_wins + 0.5 * (x.past_games - x.past_wins - x.past_losses);
+      }
+      return [m.steps, games ? (score / games) * 100 : null];
+    }).filter(([, v]) => v != null);
+    const stageNow = last.stage || cfg.reward_stage;
     const evals = [...run.evaluations].reverse();
     const parts = last.reward_parts || {};
     const logEl = view.querySelector("#log");
@@ -384,7 +408,7 @@ async function pageRun(rawName) {
     patch(view, `
       <div class="page-head"><div><div class="eyebrow"><a href="#/training">Training</a> / ${h(name)}</div>
         <div class="row"><h1>${h(name)}</h1>${pill(st.state)}</div>
-        <p>${cfg.team_size}v${cfg.team_size} · Stufe ${cfg.reward_stage}: ${h(STAGES[cfg.reward_stage])} · Netz ${cfg.hidden_sizes.join("×")} · ${cfg.n_workers || "auto"} Prozesse</p></div>
+        <p>${cfg.auto_curriculum ? `<span class="badge accent">Autopilot</span> ` : ""}${cfg.team_size}v${cfg.team_size} · Stufe ${stageNow}: ${h(STAGES[stageNow])} · Netz ${cfg.hidden_sizes.join("×")} · ${cfg.n_workers || "auto"} Prozesse</p></div>
         <div class="row">
           ${checkpoints.length ? `<button class="btn" data-action="live">${icon("eye")}Live zuschauen</button>` : ""}
           ${active ? `<button class="btn" data-action="stop" ${st.state === "stopping" ? "disabled" : ""}>${icon("stop")}${st.state === "stopping" ? "Stoppt …" : "Stoppen"}</button>`
@@ -416,6 +440,9 @@ async function pageRun(rawName) {
         <div class="card"><div class="card-head"><h3>Belohnung pro Episode</h3><span class="sub">geglättet</span></div>${lineChart(series("episode_reward"), { marks })}</div>
         <div class="card"><div class="card-head"><h3>Tore pro Minute</h3><span class="sub">Selbstspiel</span></div>${lineChart(series("goals_per_minute"), { format: (v) => fmt.num(v, 2), marks })}</div>
         <div class="card"><div class="card-head"><h3>Lernsignal</h3><span class="sub">erklärte Varianz des Kritikers</span></div>${lineChart(series("explained_variance", 3), { format: (v) => fmt.num(v, 2), marks })}</div>
+        <div class="card"><div class="card-head"><h3>Siegquote gegen ältere Versionen</h3><span class="sub">über 50 % = besser als die Vorgänger</span></div>
+          ${pastSeries.length > 1 ? lineChart(pastSeries, { format: (v) => `${Math.round(v)} %`, marks }) : `<div class="chart-empty">${cfg.past_opponent_prob ? "Erscheint, sobald der erste Checkpoint im Pool ist und Spiele gegen ihn fertig sind." : "Gegner-Pool ist für dieses Training ausgeschaltet."}</div>`}</div>
+        <div class="card"><div class="card-head"><h3>Neugier</h3><span class="sub">Entropie der Entscheidungen · sinkt, wenn die KI sicherer wird</span></div>${lineChart(series("entropy", 3), { format: (v) => fmt.num(v, 2), marks })}</div>
       </div>
 
       <div class="section grid cols-2">
@@ -515,8 +542,9 @@ async function pageLive() {
   };
   const meta = { active: false, seq: -1, speed: 1, paused: false };
   const buffer = [];
-  const values = [];
-  let stage = null, pos = null, lastTs = null, lastHud = 0, raf = 0, pollTimer = 0, stopped = false;
+  const values = new Map(); // car index → recent critic values
+  let focusCar = null; // null = first AI car
+  let stage = null, pos = null, lastTs = null, lastHud = 0, raf = 0, pollTimer = 0, stopped = false, lastFloor = null;
 
   const options = (selectedId) => [
     runs.length ? `<optgroup label="Folgt dem Training (immer neuester Stand)">${runs.map((r) => `<option value="run:${h(r)}" ${`run:${r}` === selectedId ? "selected" : ""}>${h(r)} · live</option>`).join("")}</optgroup>` : "",
@@ -600,13 +628,15 @@ async function pageLive() {
         <div class="buttons"><span class="btn-led" id="b-jump">Sprung</span><span class="btn-led" id="b-boost">Boost</span><span class="btn-led" id="b-drift">Drift</span></div>
       </div>
       <div><div class="meter-head"><span>Erwartung (Kritiker)</span><b id="value-val">–</b></div><div id="value-spark" class="spark-wrap"></div></div>
+      <div><div class="meter-head"><span>Eingaben der letzten 5 s</span><span class="faint small">links alt · rechts jetzt</span></div>
+        <div class="history"><div class="history-labels"><span>Gas</span><span>Lenken</span><span>Sprung</span><span>Boost</span><span>Drift</span></div><canvas id="history" width="300" height="90"></canvas></div></div>
       <div><div class="meter-head"><span>Alternativen</span><span class="faint small">Wahrscheinlichkeit</span></div><div id="top5" class="top5"></div></div>
     </div>`;
 
   const updateBrain = (brain, frame) => {
     if (!brain || !brainPanel.querySelector(".brain-live")) return;
     const team = brain.team === 0 ? "Blau" : "Orange";
-    $("brain-who").textContent = `${team} · Auto ${brain.car + 1}`;
+    $("brain-who").textContent = `${team} · Auto ${brain.car + 1}${meta.brainCount > 1 ? " · Auto unten links wechseln" : ""}`;
     $("decision").textContent = brain.label;
     $("conf-val").textContent = fmt.pct(brain.confidence);
     $("conf-bar").style.width = `${Math.round(brain.confidence * 100)}%`;
@@ -621,15 +651,42 @@ async function pageLive() {
     $("b-boost").classList.toggle("on", c[6] > 0);
     $("b-drift").classList.toggle("on", c[7] > 0);
     $("value-val").textContent = fmt.num(brain.value, 1);
-    $("value-spark").innerHTML = sparkline(values, { width: 300, height: 54 });
+    $("value-spark").innerHTML = sparkline(values.get(brain.car) || [], { width: 300, height: 54 });
+    drawHistory(brain.car);
     $("top5").innerHTML = brain.top.map(([label, p], i) => `<div class="top-row ${i === 0 && label === brain.label ? "chosen" : ""}"><span>${h(label)}</span><div class="bar"><i style="width:${Math.max(2, p * 100 / Math.max(brain.top[0][1], 0.01))}%"></i></div><b>${fmt.pct(p)}</b></div>`).join("");
     void frame;
+  };
+
+  const drawHistory = (car) => {
+    const canvas = $("history");
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height, rows = 5, rowH = H / rows;
+    ctx.clearRect(0, 0, W, H);
+    const end = Math.floor(pos ?? 0) - (buffer[0]?.seq ?? 0);
+    const slice = buffer.slice(Math.max(0, end - 74), end + 1);
+    const colW = W / 75;
+    slice.forEach((frame, n) => {
+      const b = (frame.brains || []).find((x) => x.car === car);
+      if (!b) return;
+      const x = (75 - slice.length + n) * colW;
+      const c = b.controls;
+      const cells = [c[0], c[1], c[5], c[6], c[7]];
+      cells.forEach((v, r) => {
+        if (!v) return;
+        const signed = r < 2;
+        ctx.fillStyle = signed ? (v > 0 ? `rgba(198,244,50,${0.25 + 0.75 * v})` : `rgba(255,154,77,${0.25 + 0.75 * -v})`) : "rgba(198,244,50,.9)";
+        ctx.fillRect(x, r * rowH + 2, Math.max(1, colW - 0.5), rowH - 4);
+      });
+    });
+    ctx.fillStyle = "rgba(255,255,255,.04)";
+    for (let r = 1; r < rows; r++) ctx.fillRect(0, r * rowH, W, 1);
   };
 
   const updateBoost = (scene) => {
     const el = $("hud-boost");
     if (!el) return;
-    const html = scene.cars.map((car, i) => `<div class="boost-pill ${car.team ? "orange" : "blue"} ${scene.focus === i ? "focus" : ""}"><span>${Math.round(car.boost)}</span><div><i style="height:${car.boost}%"></i></div></div>`).join("");
+    const aiCars = new Set((meta.lastBrains || []).map((b) => b.car));
+    const html = scene.cars.map((car, i) => `<button type="button" class="boost-pill ${car.team ? "orange" : "blue"} ${scene.focus === i ? "focus" : ""} ${aiCars.has(i) ? "ai" : ""}" data-car="${i}" title="${aiCars.has(i) ? "Gehirn dieses Autos anzeigen" : "Eingebauter Bot – kein KI-Gehirn"}"><span>${aiCars.has(i) ? "KI" : "Bot"}</span><b>${Math.round(car.boost)}</b><div><i style="height:${car.boost}%"></i></div></button>`).join("");
     if (el.innerHTML !== html) el.innerHTML = html;
   };
 
@@ -660,7 +717,12 @@ async function pageLive() {
     if (state.events?.length) addEvents(state.events);
     for (const f of state.frames || []) {
       buffer.push(f);
-      if (f.brain) { values.push(f.brain.value); if (values.length > 150) values.shift(); }
+      for (const b of f.brains || []) {
+        const list = values.get(b.car) || [];
+        list.push(b.value);
+        if (list.length > 150) list.shift();
+        values.set(b.car, list);
+      }
     }
     if (state.seq != null) meta.seq = state.seq;
     if (state.error) toast("Live-Spiel gestoppt", state.error, "error");
@@ -698,9 +760,22 @@ async function pageLive() {
       const scene = blend(A.f, B.f, pos - Math.floor(pos));
       const start = Math.max(0, i - 40);
       scene.trail = buffer.slice(start, i + 1).map((x) => x.f[1]);
-      const brain = A.brain || B.brain;
-      scene.focus = brain ? brain.car : 0;
+      const brains = A.brains || B.brains || [];
+      meta.lastBrains = brains;
+      meta.brainCount = brains.length;
+      const brain = brains.find((b) => b.car === focusCar) || brains[0] || null;
+      scene.focus = brain ? brain.car : focusCar ?? 0;
       stage.render(scene);
+      // goals between the last and the current playback position
+      const floor = Math.floor(pos);
+      if (lastFloor != null && floor > lastFloor) {
+        buffer.forEach((f, n) => {
+          if (f.seq > lastFloor && f.seq <= floor && f.goal != null) {
+            stage.goal(f.goal, $(f.goal === 0 ? "blue-name" : "orange-name")?.textContent, buffer[Math.max(0, n - 1)].f[1]);
+          }
+        });
+      }
+      lastFloor = floor;
       $("stage-empty")?.remove();
       if (ts - lastHud > 90) {
         lastHud = ts;
@@ -720,7 +795,7 @@ async function pageLive() {
     form: (el) => { form[el.dataset.key] = el.value; },
     "form-seg": (el) => { form[el.dataset.key] = Number(el.dataset.value); patch(brainPanel, setupHtml()); },
     start: (el) => busy(el, async () => {
-      buffer.length = 0; values.length = 0; pos = null; meta.seq = -1;
+      buffer.length = 0; values.clear(); pos = null; lastFloor = null; focusCar = null; meta.seq = -1;
       $("events").innerHTML = "";
       const result = await attempt(() => api("/api/live/start", { method: "POST", body: form }), "Live-Spiel konnte nicht starten");
       if (result) { applyState(result); toast("Live-Spiel gestartet", `${result.blue.label} gegen ${result.orange.label}`); }
@@ -730,6 +805,14 @@ async function pageLive() {
     stop: (el) => busy(el, async () => { const r = await attempt(() => api("/api/live/stop", { method: "POST" })); if (r) { meta.active = false; renderSide(); } }),
   };
   page.cleanup.push(() => { stopped = true; clearTimeout(pollTimer); cancelAnimationFrame(raf); stage?.dispose(); });
+  $("hud-boost").addEventListener("click", (e) => {
+    const pill = e.target.closest("[data-car]");
+    if (!pill) return;
+    const car = Number(pill.dataset.car);
+    if (!(meta.lastBrains || []).some((b) => b.car === car)) return toast("Kein KI-Gehirn", "Dieses Auto steuert ein eingebauter Bot.");
+    focusCar = car;
+    lastHud = 0;
+  });
 
   renderSide();
   addEvents([]);
@@ -831,9 +914,16 @@ async function mountReplay(wrap, replay, pads) {
   document.addEventListener("keydown", onKey);
 
   const loop = (ts) => {
+    const before = t;
     if (lastTs != null && playing && !dragging) {
       t += ((ts - lastTs) / 1000) * speed;
       if (t >= duration) { t = duration; setPlaying(false); }
+      for (const [gt, team] of goals) {
+        if (gt > before && gt <= t && team >= 0) {
+          const k = Math.max(0, Math.round(gt * fps) - 1);
+          stage.goal(team, opponentLabel(team === 0 ? meta.blue : meta.orange), frames[Math.min(frames.length - 1, k)][1]);
+        }
+      }
     }
     lastTs = ts;
     const f = Math.min(frames.length - 1, Math.max(0, t * fps));

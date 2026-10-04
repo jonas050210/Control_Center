@@ -26,8 +26,12 @@ In der App:
 
 1. **Training → Neues Training →** Vorlage *Schnelltest* (2 Minuten) prüft,
    ob alles läuft.
-2. Danach *Anfänger 1v1*: Die KI lernt zuerst, zum Ball zu fahren und ihn zu
-   treffen. Die Kurve „Ballkontakte pro Minute“ zeigt den Fortschritt.
+2. Danach *Autopilot (empfohlen)*: Die KI lernt zuerst, zum Ball zu fahren und
+   ihn zu treffen, und schaltet von selbst auf „Tore schießen“ und dann
+   „Komplettes Spiel“ um, sobald sie so weit ist. Nebenbei spielt sie 20 % der
+   Spiele gegen ältere eigene Versionen (Gegner-Pool), damit sie Gelerntes
+   nicht wieder vergisst. Die Kurven „Ballkontakte pro Minute“ und „Siegquote
+   gegen ältere Versionen“ zeigen den Fortschritt.
 3. **Arena**: Bewertungsspiele als animierte Draufsicht ansehen oder zwei
    Gegner antreten lassen.
 4. **Spielen**: Checkpoint wählen, Gegner wählen (Psyonix-Bots, du selbst,
@@ -38,8 +42,8 @@ In der App:
 | Seite | Was sie zeigt |
 | --- | --- |
 | Übersicht | Status in drei Schritten, aktive Trainings, letzte Replays, Rocket-League-Status |
-| Training | alle Runs; pro Run Prognose (wann welches Niveau), Live-Kurven mit Checkpoint-Markern, Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
-| **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
+| Training | alle Runs; pro Run Prognose (wann welches Niveau), Kurven mit Checkpoint- und Stufenwechsel-Markern (u. a. Siegquote gegen ältere Versionen, Neugier), Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
+| **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen und ein Eingabe-Verlauf der letzten 5 Sekunden. Bei mehreren KI-Autos per Klick auf das Auto-Kärtchen umschalten. Tore mit Effekt und „TOR!“-Einblendung. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
 | Arena | Replay-Player in 3D oder 2D (Zeitleiste mit Toren, 0,5–4×) und neue Simulations-Matches |
 | Spielen | Rocket-League-Check (installiert? Steam/Epic? läuft es – normal oder im Bot-Modus?) und Match-Start im echten Spiel |
 | Einrichtung | Systemprüfung, Rocket-League-Check, Befehle, Tastenkürzel, Zeitabschätzung |
@@ -52,7 +56,7 @@ gestopptes Training lässt sich jederzeit fortsetzen.
 ## Ohne Oberfläche
 
 ```bash
-python -m rocketai train --preset beginner --name mein-bot   # trainieren
+python -m rocketai train --preset autopilot --name mein-bot  # trainieren
 python -m rocketai train --resume mein-bot --steps 200000000 # fortsetzen mit neuem Ziel
 python -m rocketai eval runs/mein-bot/checkpoints/latest.pt  # gegen Balljäger/Verteidiger
 python -m rocketai replay runs/mein-bot/checkpoints/latest.pt chaser --out spiel.json
@@ -66,7 +70,13 @@ python -m rocketai doctor                                    # Installation prü
   aktuelle KI). Episoden starten zur Hälfte als Anstoß, zur Hälfte zufällig.
 - **Lernen:** eigenes PPO in PyTorch mit parallelen Simulationsprozessen.
 - **Belohnung in Stufen:** 1 = Ball treffen, 2 = Tore schießen,
-  3 = komplettes Spiel inkl. Luftspiel und Boost.
+  3 = komplettes Spiel inkl. Luftspiel und Boost. Der **Autopilot** wechselt
+  die Stufe selbst: 1 → 2 ab ≥ 15 Ballkontakten/min (Schnitt der letzten 20
+  Updates, frühestens nach 10 Mio. Schritten), 2 → 3 ab ≥ 1 Tor/min
+  (frühestens nach 50 Mio.).
+- **Gegner-Pool:** Ein Teil der Spiele läuft gegen die letzten 5 gespeicherten
+  Checkpoints. Nur die aktuelle KI lernt daraus; die Siegquote zeigt, ob neue
+  Versionen wirklich besser werden.
 - **Echtes Spiel:** Ein Konverter übersetzt RLBots Spielzustand in genau die
   Beobachtung aus dem Training (per Test abgesichert). Der Bot entscheidet wie
   im Training 15-mal pro Sekunde aus 90 Aktionen.

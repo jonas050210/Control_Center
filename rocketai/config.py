@@ -56,6 +56,11 @@ class TrainConfig:
     max_grad_norm: float = 0.5
     target_kl: float = 0.02  # stop an update early once the policy moved this far (0 = off)
     hidden_sizes: list[int] = field(default_factory=lambda: [512, 512, 256])
+    # Opponents: share of training matches against a frozen older version
+    past_opponent_prob: float = 0.2
+    past_pool_size: int = 5  # how many older versions are kept as opponents
+    # Curriculum: move to the next reward stage by itself once the bot is ready
+    auto_curriculum: bool = False
     # Episodes
     episode_seconds: float = 300.0  # hard cap per episode (game time)
     no_touch_seconds: float = 30.0  # reset when nobody touches the ball for this long
@@ -93,6 +98,10 @@ class TrainConfig:
             problems.append("learning_rate must be between 0 and 1")
         if not 0 < self.gamma < 1 or not 0 < self.gae_lambda <= 1:
             problems.append("gamma must be in (0, 1) and gae_lambda in (0, 1]")
+        if not 0 <= self.past_opponent_prob < 1:
+            problems.append("past_opponent_prob must be in [0, 1)")
+        if self.past_pool_size < 1:
+            problems.append("past_pool_size must be at least 1")
         if not self.hidden_sizes or any(size < 8 for size in self.hidden_sizes):
             problems.append("hidden_sizes needs at least one layer of 8+ units")
         if self.episode_seconds <= 0 or self.no_touch_seconds <= 0:
@@ -135,6 +144,17 @@ PRESETS: dict[str, dict[str, Any]] = {
             "checkpoint_every_steps": 100_000,
             "eval_every_steps": 0,
             "hidden_sizes": [256, 256],
+        },
+    },
+    "autopilot": {
+        "label": "Autopilot (empfohlen)",
+        "description": "Startet bei Ballkontakt und schaltet selbst zu Toren und "
+        "Komplettspiel weiter, sobald die KI so weit ist.",
+        "values": {
+            "team_size": 1,
+            "reward_stage": 1,
+            "auto_curriculum": True,
+            "total_steps": 500_000_000,
         },
     },
     "beginner": {

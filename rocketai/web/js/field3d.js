@@ -58,40 +58,75 @@ function floorTexture() {
   return tex;
 }
 
+function extrude(points, depth, bevel = 3) {
+  const shape = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
+  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: true, bevelSize: bevel, bevelThickness: bevel, bevelSegments: 2 });
+  geo.translate(0, 0, -depth / 2);
+  return geo;
+}
+
+// Octane-like side profile (x forward, y up), extruded across the car's width.
+const BODY_PROFILE = [[-57, -10], [57, -10], [61, 0], [56, 8], [29, 14], [4, 33], [-28, 33], [-57, 19]];
+const WINDOW_PROFILE = [[28, 15.2], [5, 31.4], [-26, 31.4], [-27, 21]];
+
+function ballTexture() {
+  const c = document.createElement("canvas");
+  c.width = 512; c.height = 256;
+  const g = c.getContext("2d");
+  g.fillStyle = "#e9ecf2"; g.fillRect(0, 0, 512, 256);
+  g.strokeStyle = "#9aa3b5"; g.lineWidth = 3;
+  for (let row = 0; row < 6; row++) {
+    for (let col = 0; col < 12; col++) {
+      const x = col * 44 + (row % 2) * 22, y = row * 44 + 20, r = 18;
+      g.beginPath();
+      for (let k = 0; k < 6; k++) { const a = (Math.PI / 3) * k; g[k ? "lineTo" : "moveTo"](x + r * Math.cos(a), y + r * Math.sin(a)); }
+      g.closePath(); g.stroke();
+    }
+  }
+  g.fillStyle = "#c6f432"; g.fillRect(0, 124, 512, 8);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function makeCar(team) {
   const color = new THREE.Color(TEAM_COLOR[team]);
   const group = new THREE.Group();
   group.scale.setScalar(CAR_SCALE);
   const body = new THREE.Mesh(
-    new THREE.BoxGeometry(118, 30, 84),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.25, emissive: color, emissiveIntensity: 0.12 }),
+    extrude(BODY_PROFILE, 70),
+    new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.35, emissive: color, emissiveIntensity: 0.14 }),
   );
-  body.position.set(0, 10, 0);
-  const cabin = new THREE.Mesh(
-    new THREE.BoxGeometry(52, 22, 66),
-    new THREE.MeshStandardMaterial({ color: 0x0b0d12, roughness: 0.2, metalness: 0.6 }),
+  const glass = new THREE.Mesh(
+    extrude(WINDOW_PROFILE, 74, 2),
+    new THREE.MeshStandardMaterial({ color: 0x0b0d12, roughness: 0.1, metalness: 0.8 }),
   );
-  cabin.position.set(-8, 34, 0);
-  const nose = new THREE.Mesh(
-    new THREE.BoxGeometry(18, 14, 76),
-    new THREE.MeshStandardMaterial({ color: color.clone().multiplyScalar(1.25), roughness: 0.4 }),
+  const stripe = new THREE.Mesh(
+    new THREE.BoxGeometry(70, 1.5, 10),
+    new THREE.MeshBasicMaterial({ color: color.clone().lerp(new THREE.Color(0xffffff), 0.55) }),
   );
-  nose.position.set(62, 4, 0);
-  group.add(body, cabin, nose);
-  const wheelGeo = new THREE.CylinderGeometry(17, 17, 12, 14);
+  stripe.position.set(20, 13.5, 0);
+  stripe.rotation.z = -0.22;
+  group.add(body, glass, stripe);
+  const wheelGeo = new THREE.CylinderGeometry(16, 16, 12, 18);
   wheelGeo.rotateX(Math.PI / 2);
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
-  for (const [x, z] of [[38, 42], [38, -42], [-38, 42], [-38, -42]]) {
+  const rimGeo = new THREE.CylinderGeometry(8, 8, 12.6, 12);
+  rimGeo.rotateX(Math.PI / 2);
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0d0d0f, roughness: 0.9 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: 0x9aa3b5, roughness: 0.3, metalness: 0.9 });
+  for (const [x, z] of [[36, 40], [36, -40], [-38, 40], [-38, -40]]) {
     const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-    wheel.position.set(x, -6, z);
-    group.add(wheel);
+    const rim = new THREE.Mesh(rimGeo, rimMat);
+    wheel.position.set(x, -8, z);
+    rim.position.copy(wheel.position);
+    group.add(wheel, rim);
   }
   const flame = new THREE.Mesh(
     new THREE.ConeGeometry(13, 90, 12),
     new THREE.MeshBasicMaterial({ color: 0xffc43d, transparent: true, opacity: 0.85 }),
   );
   flame.rotation.z = Math.PI / 2;
-  flame.position.set(-104, 10, 0);
+  flame.position.set(-102, 6, 0);
   flame.visible = false;
   group.add(flame);
   const ring = new THREE.Mesh(
@@ -139,7 +174,7 @@ export class Field3D {
 
     this.ball = new THREE.Mesh(
       new THREE.SphereGeometry(BALL_RADIUS * BALL_SCALE, 32, 20),
-      new THREE.MeshStandardMaterial({ color: 0xf2f4f8, roughness: 0.35, metalness: 0.1, emissive: 0x6b7280, emissiveIntensity: 0.25 }),
+      new THREE.MeshStandardMaterial({ map: ballTexture(), roughness: 0.4, metalness: 0.05, emissive: 0x6b7280, emissiveIntensity: 0.2 }),
     );
     this.ballShadow = new THREE.Mesh(
       new THREE.CircleGeometry(BALL_RADIUS * BALL_SCALE, 24),
@@ -182,6 +217,9 @@ export class Field3D {
     for (let i = 0; i < pos.count; i++) {
       uv.setXY(i, (FIELD.halfX - pos.getX(i)) / (2 * FIELD.halfX), (pos.getZ(i) + FIELD.halfY) / (2 * FIELD.halfY));
     }
+    const grid = new THREE.GridHelper(30000, 60, 0x1a1f2a, 0x141821);
+    grid.position.y = -4;
+    this.scene.add(grid);
     const floor = new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.9, side: THREE.DoubleSide }));
     this.scene.add(floor);
 
@@ -250,6 +288,49 @@ export class Field3D {
     });
   }
 
+  /** Particle burst + light flash where the ball crossed the line. */
+  goal(team, ball) {
+    const count = 260;
+    const positions = new Float32Array(count * 3);
+    const velocities = [];
+    const origin = ball ? v3(...ball) : v3(0, team === 0 ? FIELD.halfY : -FIELD.halfY, 300);
+    for (let i = 0; i < count; i++) {
+      positions.set([origin.x, origin.y, origin.z], i * 3);
+      const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() * 0.9, Math.random() - 0.5).normalize();
+      velocities.push(dir.multiplyScalar(900 + Math.random() * 2400));
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const points = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: TEAM_COLOR[team], size: 70, transparent: true, opacity: 1, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    const light = new THREE.PointLight(TEAM_COLOR[team], 40, 6000, 1.2);
+    light.position.copy(origin);
+    this.scene.add(points, light);
+    (this.effects ||= []).push({ points, light, velocities, age: 0 });
+  }
+
+  updateEffects(dt) {
+    if (!this.effects) return;
+    this.effects = this.effects.filter((fx) => {
+      fx.age += dt;
+      const attr = fx.points.geometry.attributes.position;
+      for (let i = 0; i < fx.velocities.length; i++) {
+        const v = fx.velocities[i];
+        v.y -= 1600 * dt;
+        attr.setXYZ(i, attr.getX(i) + v.x * dt, Math.max(5, attr.getY(i) + v.y * dt), attr.getZ(i) + v.z * dt);
+      }
+      attr.needsUpdate = true;
+      const life = 1 - fx.age / 1.8;
+      fx.points.material.opacity = Math.max(0, life);
+      fx.light.intensity = Math.max(0, 40 * life);
+      if (life > 0) return true;
+      this.scene.remove(fx.points, fx.light);
+      fx.points.geometry.dispose(); fx.points.material.dispose();
+      return false;
+    });
+  }
+
   ensureCars(cars) {
     while (this.cars.length > cars.length) {
       const c = this.cars.pop();
@@ -276,7 +357,8 @@ export class Field3D {
     }
     if (mode === "top") this.camera.up.set(1, 0, 0);
     else this.camera.up.set(0, 1, 0);
-    this.snap = true;
+    if (this.snap === undefined) this.snap = true;
+    this.transition = 1;
   }
 
   setFocus(index) { this.focus = index; }
@@ -288,7 +370,17 @@ export class Field3D {
   apply(scene, dt) {
     const [bx, by, bz] = scene.ball;
     this.ball.position.copy(v3(bx, by, bz));
-    this.ball.rotation.x += dt * 2; this.ball.rotation.z += dt * 1.3;
+    // roll the ball according to its movement
+    const now = new THREE.Vector3(bx, bz, by);
+    if (this.lastBall && dt > 0) {
+      const move = now.clone().sub(this.lastBall);
+      const dist = move.length();
+      if (dist > 0.5 && dist < 1500) {
+        const axis = new THREE.Vector3(0, 1, 0).cross(move).normalize();
+        this.ball.rotateOnWorldAxis(axis, dist / (BALL_RADIUS * BALL_SCALE));
+      }
+    }
+    this.lastBall = now;
     this.ballShadow.position.copy(v3(bx, by, 3));
     const s = Math.max(0.35, 1 - bz / 2500);
     this.ballShadow.scale.set(s, s, s);
@@ -371,7 +463,9 @@ export class Field3D {
         target.set(-9400, 5000, follow * 0.7); look.set(0, -400, follow);
       }
     }
-    const k = this.snap ? 1 : 1 - Math.exp(-dt * (this.mode === "overview" ? 2.5 : 6));
+    this.transition = Math.max(0, (this.transition || 0) - dt * 1.5);
+    const rate = this.transition > 0 ? 4 : this.mode === "overview" ? 2.5 : 6;
+    const k = this.snap ? 1 : 1 - Math.exp(-dt * rate);
     this.camPos.lerp(target, k);
     this.camLook.lerp(look, k);
     if (this.snap) { this.camPos.copy(target); this.camLook.copy(look); this.snap = false; }
@@ -387,6 +481,7 @@ export class Field3D {
       this.apply(this.state, dt);
       this.updateCamera(this.state, dt);
     }
+    this.updateEffects(dt);
     this.renderer.render(this.scene, this.camera);
     this.raf = requestAnimationFrame(this.loop);
   }

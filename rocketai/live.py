@@ -266,7 +266,7 @@ class LiveManager:
                 with session.lock:
                     session.seq += 1
                     session.frames.append(
-                        {"seq": session.seq, "f": frame, "brain": brain, "goal": goal}
+                        {"seq": session.seq, "f": frame, "brains": brain, "goal": goal}
                     )
                 if goal is not None:
                     obs = env.reset()
@@ -289,15 +289,15 @@ class LiveManager:
             session.running = False
 
     @staticmethod
-    def _brain(session: LiveSession, agents: list[str]) -> dict[str, Any] | None:
-        """What the first AI-controlled car decided (blue preferred)."""
-        for index, side in enumerate((session.blue, session.orange)):
-            info = getattr(side.player, "last_info", None)
-            if info:
-                agent = sorted(info)[0]
-                car_index = agents.index(agent) if agent in agents else 0
-                return {"team": index, "car": car_index, **info[agent]}
-        return None
+    def _brain(session: LiveSession, agents: list[str]) -> list[dict[str, Any]]:
+        """What every AI-controlled car decided this step (``car`` = index in the frame)."""
+        brains = []
+        for team, side in enumerate((session.blue, session.orange)):
+            info = getattr(side.player, "last_info", None) or {}
+            for agent, decision in info.items():
+                if agent in agents:
+                    brains.append({"team": team, "car": agents.index(agent), **decision})
+        return sorted(brains, key=lambda b: b["car"])
 
     @staticmethod
     def _finish_match(session: LiveSession) -> None:

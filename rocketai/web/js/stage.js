@@ -100,6 +100,16 @@ export async function createStage(root, host, { pads = DEFAULT_PADS } = {}) {
   return {
     get mode() { return mode; },
     render(scene) { last = scene; if (renderer) renderer.render(scene); },
+    /** Celebrate a goal: effect in the renderer + banner over the field. */
+    goal(team, label = "", ball = null) {
+      renderer?.goal?.(team, ball || last?.ball);
+      host.querySelector(".goal-banner")?.remove();
+      const banner = document.createElement("div");
+      banner.className = `goal-banner ${team === 0 ? "blue" : "orange"}`;
+      banner.innerHTML = `<b>TOR!</b><span>${h(label || (team === 0 ? "Blau" : "Orange"))}</span>`;
+      host.appendChild(banner);
+      setTimeout(() => banner.remove(), 2200);
+    },
     dispose() {
       disposed = true;
       tools?.removeEventListener("click", onClick);

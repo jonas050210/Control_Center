@@ -7,7 +7,7 @@ from rocketai.config import TrainConfig, run_paths
 from rocketai.model import ActorCritic
 from rocketai.ppo import ppo_update
 from rocketai.rollout import Collector, compute_gae
-from rocketai.trainer import train
+from rocketai.trainer import CURRICULUM_WINDOW, Trainer, curriculum_ready, past_summary, train
 
 
 def test_gae_matches_hand_computation():
@@ -104,3 +104,41 @@ def test_resume_rejects_other_network_size():
 
 def test_model_sizes_used():
     assert ActorCritic(hidden_sizes=[16]).hidden_sizes == [16]
+
+
+def test_collector_plays_against_past_versions():
+    config = _small_config(past_opponent_prob=0.95)
+    collector = Collector(config.to_dict(), seed=1)
+    old = ActorCritic(hidden_sizes=config.hidden_sizes).state_dict()
+    collector.set_past([old, old])
+    collector.opponent = [0 for _ in collector.envs]  # start every match against the pool
+    batch = collector.collect(1200)
+    # Only blue (learning) cars produce training samples in pool matches.
+    assert len(batch) >= 1200
+    results = [e["vs_past"] for e in batch.stats["episodes"] if "vs_past" in e]
+    assert results and set(results) <= {-1, 0, 1}
+    summary = past_summary(batch.stats["episodes"])
+    assert 0.0 <= summary["past_win_rate"] <= 1.0 and summary["past_games"] == len(results)
+
+
+def test_curriculum_switches_only_when_ready():
+    config = _small_config(auto_curriculum=True, reward_stage=1)
+    good = [{"touches_per_minute": 20.0}] * CURRICULUM_WINDOW
+    bad = [{"touches_per_minute": 3.0}] * CURRICULUM_WINDOW
+    assert curriculum_ready(config, 20_000_000, good)
+    assert not curriculum_ready(config, 20_000_000, bad)
+    assert not curriculum_ready(config, 1_000_000, good)  # too early
+    assert not curriculum_ready(config, 20_000_000, good[:5])  # not enough history
+    config.auto_curriculum = False
+    assert not curriculum_ready(config, 20_000_000, good)
+    stage2 = _small_config(auto_curriculum=True, reward_stage=2)
+    assert curriculum_ready(stage2, 60_000_000, [{"goals_per_minute": 1.2}] * CURRICULUM_WINDOW)
+    stage3 = _small_config(auto_curriculum=True, reward_stage=3)
+    assert not curriculum_ready(stage3, 10**10, [{"goals_per_minute": 9.0}] * CURRICULUM_WINDOW)
+
+
+def test_training_builds_opponent_pool():
+    train(_small_config(total_steps=1200, checkpoint_every_steps=500, past_pool_size=2))
+    trainer = Trainer(_small_config(total_steps=1800, past_pool_size=2))
+    assert 1 <= len(trainer.past_pool) <= 2
+    trainer._log_handle.close()

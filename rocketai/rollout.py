@@ -1,7 +1,13 @@
 """Experience collection: worker processes that play RocketSim matches with the current policy.
 
-Every car in every match is controlled by the same policy (self-play), and
-each (match, car) pair is its own trajectory. Workers compute GAE advantages
+By default every car in a match is controlled by the current policy
+(self-play). With ``past_opponent_prob`` > 0, that share of matches puts a
+frozen *older* version of the policy on the orange team ("opponent pool");
+only the blue cars' experience is trained on there. This keeps the bot from
+over-fitting to its own current habits and gives an honest progress signal:
+the win rate against its predecessors.
+
+Each (match, car) pair is its own trajectory. Workers compute GAE advantages
 themselves, so the learner only concatenates batches and updates.
 """
 
@@ -9,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import multiprocessing as mp
+import random
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -124,6 +131,10 @@ class Collector:
         ]
         self.model = ActorCritic(hidden_sizes=config["hidden_sizes"])
         self.model.eval()
+        self.rng = random.Random(seed)
+        self.past_models: list[ActorCritic] = []
+        #: per match: index into ``past_models`` controlling orange, or None (self-play)
+        self.opponent: list[int | None] = [None for _ in self.envs]
         self.obs = [env.reset() for env in self.envs]
         self.episode = [self._new_episode(env) for env in self.envs]
         self.streams: list[dict[str, _Stream]] = [{} for _ in self.envs]
@@ -135,6 +146,30 @@ class Collector:
     def load_weights(self, state_dict: dict[str, Any]) -> None:
         self.model.load_state_dict(state_dict)
 
+    def set_past(self, state_dicts: list[dict[str, Any]]) -> None:
+        """Replace the pool of frozen older policies."""
+        models = []
+        for state in state_dicts:
+            model = ActorCritic(hidden_sizes=self.config["hidden_sizes"])
+            model.load_state_dict(state)
+            model.eval()
+            models.append(model)
+        self.past_models = models
+        self.opponent = [o if o is not None and o < len(models) else None for o in self.opponent]
+
+    def _pick_opponent(self) -> int | None:
+        prob = float(self.config.get("past_opponent_prob", 0.0))
+        if self.past_models and self.rng.random() < prob:
+            return self.rng.randrange(len(self.past_models))
+        return None
+
+    def _controller(self, i: int, agent: str) -> int | None:
+        """None = the learning policy, else the index of the past policy."""
+        opponent = self.opponent[i]
+        if opponent is None or self.envs[i].state.cars[agent].team_num == 0:
+            return None
+        return opponent
+
     def collect(self, n_agent_steps: int) -> Batch:
         started = time.perf_counter()
         gamma, lam = self.config["gamma"], self.config["gae_lambda"]
@@ -144,17 +179,27 @@ class Collector:
         parts: dict[str, float] = {}
         collected = 0
         while collected < n_agent_steps:
-            keys = [(i, agent) for i, env in enumerate(self.envs) for agent in env.agents]
-            obs_batch = np.stack([self.obs[i][agent] for i, agent in keys]).astype(np.float32)
-            actions, log_probs, values = self.model.act(obs_batch)
+            all_keys = [(i, agent) for i, env in enumerate(self.envs) for agent in env.agents]
+            groups: dict[int | None, list[tuple[int, str]]] = {}
+            for key in all_keys:
+                groups.setdefault(self._controller(*key), []).append(key)
             per_env: list[dict[str, np.ndarray]] = [{} for _ in self.envs]
-            for k, (i, agent) in enumerate(keys):
-                per_env[i][agent] = np.array([actions[k]])
-                stream = self.streams[i].setdefault(agent, _Stream())
-                stream.obs.append(obs_batch[k])
-                stream.actions.append(int(actions[k]))
-                stream.log_probs.append(float(log_probs[k]))
-                stream.values.append(float(values[k]))
+            keys = groups.pop(None, [])
+            if keys:
+                obs_batch = np.stack([self.obs[i][agent] for i, agent in keys]).astype(np.float32)
+                actions, log_probs, values = self.model.act(obs_batch)
+                for k, (i, agent) in enumerate(keys):
+                    per_env[i][agent] = np.array([actions[k]])
+                    stream = self.streams[i].setdefault(agent, _Stream())
+                    stream.obs.append(obs_batch[k])
+                    stream.actions.append(int(actions[k]))
+                    stream.log_probs.append(float(log_probs[k]))
+                    stream.values.append(float(values[k]))
+            for index, past_keys in groups.items():
+                past_obs = np.stack([self.obs[i][a] for i, a in past_keys]).astype(np.float32)
+                past_actions, _, _ = self.past_models[index].act(past_obs, deterministic=False)
+                for k, (i, agent) in enumerate(past_keys):
+                    per_env[i][agent] = np.array([past_actions[k]])
             collected += len(keys)
             for i, env in enumerate(self.envs):
                 next_obs, rewards, terminated, truncated = env.step(per_env[i])
@@ -170,30 +215,36 @@ class Collector:
                 is_terminal = any(terminated.values())
                 is_done = is_terminal or any(truncated.values())
                 final_values: dict[str, float] = {}
-                if is_done and not is_terminal:
-                    agents = list(next_obs)
-                    _, _, vals = self.model.act(np.stack([next_obs[a] for a in agents]))
-                    final_values = dict(zip(agents, (float(v) for v in vals), strict=True))
+                learners = list(self.streams[i])
+                if is_done and not is_terminal and learners:
+                    _, _, vals = self.model.act(np.stack([next_obs[a] for a in learners]))
+                    final_values = dict(zip(learners, (float(v) for v in vals), strict=True))
                 for agent, reward in rewards.items():
-                    stream = self.streams[i][agent]
+                    stream = self.streams[i].get(agent)
+                    if stream is None:  # controlled by a past policy: not trained on
+                        continue
                     stream.rewards.append(float(reward))
                     stream.dones.append(is_done)
                     stream.next_values.append(final_values.get(agent, 0.0))
                     episode["reward"][agent] += float(reward)
                 if is_done:
                     scoring = state.scoring_team if is_terminal else None
-                    episodes.append(
-                        {
-                            "reward": float(np.mean(list(episode["reward"].values()))),
-                            "seconds": episode["ticks"] / 120.0,
-                            "goal": scoring is not None,
-                            "touches": episode["touches"],
-                        }
-                    )
+                    learner_rewards = [episode["reward"][a] for a in learners] or [0.0]
+                    record = {
+                        "reward": float(np.mean(learner_rewards)),
+                        "seconds": episode["ticks"] / 120.0,
+                        "goal": scoring is not None,
+                        "touches": episode["touches"],
+                    }
+                    if self.opponent[i] is not None:
+                        # +1 the current policy (blue) scored, -1 the old one did, 0 timeout
+                        record["vs_past"] = 0 if scoring is None else (1 if scoring == 0 else -1)
+                    episodes.append(record)
                     finished.extend(self.streams[i].values())
                     self.streams[i] = {}
                     self.obs[i] = env.reset()
                     self.episode[i] = self._new_episode(env)
+                    self.opponent[i] = self._pick_opponent()
                 else:
                     self.obs[i] = next_obs
 
@@ -255,8 +306,10 @@ def _worker_main(conn: Any, config: dict[str, Any], seed: int) -> None:
         while True:
             command, payload = conn.recv()
             if command == "collect":
-                weights, n_steps = payload
+                weights, n_steps, past = payload
                 collector.load_weights(weights)
+                if past is not None:
+                    collector.set_past(past)
                 conn.send(("batch", collector.collect(n_steps)))
             elif command == "close":
                 break
@@ -300,10 +353,16 @@ class WorkerPool:
         except EOFError:
             return "error", "simulation process exited unexpectedly (see the output above)"
 
-    def collect(self, weights: dict[str, Any], total_steps: int) -> Batch:
+    def collect(
+        self,
+        weights: dict[str, Any],
+        total_steps: int,
+        past: list[dict[str, Any]] | None = None,
+    ) -> Batch:
+        """``past``: new opponent pool to install first (None = keep the current one)."""
         per_worker = max(1, -(-total_steps // len(self.connections)))
         for conn in self.connections:
-            conn.send(("collect", (weights, per_worker)))
+            conn.send(("collect", (weights, per_worker, past)))
         batches = []
         for conn in self.connections:
             kind, payload = self._receive(conn)

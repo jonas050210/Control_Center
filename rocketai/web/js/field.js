@@ -147,9 +147,19 @@ export class Field2D {
     ctx.beginPath(); ctx.ellipse(X(by), Y(bx), 92 * s, 92 * s, 0, 0, Math.PI * 2); ctx.fill();
     const r = (92 + Math.min(bz, 2000) * 0.06) * s, lift = Math.min(bz, 2000) * 0.08 * s;
     ctx.fillStyle = "#f2f4f8"; ctx.beginPath(); ctx.arc(X(by), Y(bx) - lift, r, 0, Math.PI * 2); ctx.fill();
+
+    if (this.flash) {
+      const age = (performance.now() - this.flash.t) / 1400;
+      if (age < 1) {
+        ctx.fillStyle = this.flash.team === 0 ? `rgba(91,140,255,${0.35 * (1 - age)})` : `rgba(255,154,77,${0.35 * (1 - age)})`;
+        ctx.fillRect(0, 0, W, H);
+      } else this.flash = null;
+    }
   }
 
   setCamera() {}
+
+  goal(team) { this.flash = { team, t: performance.now() }; }
 
   dispose() {
     this.observer.disconnect();
