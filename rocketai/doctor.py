@@ -8,6 +8,7 @@ import platform
 import sys
 from typing import Any
 
+from .config import PYTHON_CMD
 from .play import server_path
 
 
@@ -29,7 +30,7 @@ def teacher_check() -> dict[str, Any]:
     if info["ready"]:
         detail = f"bereit in {info['directory']}"
     else:
-        detail = "nicht geladen - 'python -m rocketai teacher' holt ihn (nur offline nutzen)"
+        detail = f"nicht geladen - '{PYTHON_CMD} -m rocketai teacher' holt ihn (nur offline nutzen)"
     return {
         "label": f"Lehrer ({info['name']})",
         "detail": detail,
@@ -63,7 +64,7 @@ def run_checks() -> list[dict[str, Any]]:
         "rlbot_server",
         "RLBotServer (für das echte Spiel)",
         server.exists(),
-        str(server) if server.exists() else f"fehlt: {server} (python install.py)",
+        str(server) if server.exists() else f"fehlt: {server} ({PYTHON_CMD} install.py)",
         required=False,
     )
     is_windows = sys.platform == "win32"

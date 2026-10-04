@@ -24,10 +24,16 @@ def in_venv() -> bool:
         return False
 
 
+PYTHON_CMD = "python" if sys.platform == "win32" else "python3"
+
+
 def main() -> int:
     if not in_venv():
         if not VENV_PYTHON.exists():
-            print("RocketAI ist noch nicht installiert. Bitte zuerst ausführen:  python install.py")
+            print(
+                "RocketAI ist noch nicht installiert. Bitte zuerst ausführen:  "
+                f"{PYTHON_CMD} install.py"
+            )
             return 1
         # Re-run inside the virtual environment.
         return subprocess.call(

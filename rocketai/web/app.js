@@ -271,6 +271,7 @@ async function pageNewRun() {
   const measured = Math.max(0, ...runs.map((r) => r.last?.steps_per_second || 0));
   const guess = 1400 * Math.max(1, cpus - 1);
   const teacherReady = Boolean(opponents.teacher?.ready);
+  const pyCmd = opponents.python || "python3";
   const form = {
     preset: presets.student ? "student" : presets.autopilot ? "autopilot" : "beginner",
     name: "", overrides: {},
@@ -314,7 +315,7 @@ async function pageNewRun() {
                 <small>Die KI versucht zusätzlich, die Tasten des Lehrers vorherzusagen. Achtung: gemessen nur ein kleiner Zusatzeffekt – der große Hebel ist das Spielen gegen ihn.</small></div>
             </div>
             <div class="row between">
-              <p class="faint small">Der Lehrer wird einmalig aus dem Internet geladen (nicht Teil des Projekts, GPL, nur offline nutzen).</p>
+              <p class="faint small">Der Lehrer wird einmalig aus dem Internet geladen (nicht Teil des Projekts, GPL, nur offline nutzen). Ohne Oberfläche: <code>${pyCmd} -m rocketai teacher</code></p>
               <button class="btn sm" data-action="load-teacher">${teacherReady ? "Neu laden" : "Lehrer laden"}</button>
             </div>
           </div>
@@ -1016,12 +1017,13 @@ async function pagePlay(_unused, query) {
     mode: "psyonix", team_size: 1, skill: "rookie", launcher: app.rl?.store === "Steam" ? "steam" : "epic", opponent_bot: "",
   };
   const teacherReady = Boolean(opponents.teacher?.ready);
+  const pyCmd = opponents.python || "python3";
   let info = await api("/api/play");
 
   const draw = () => {
     const rl = app.rl;
     const busyState = info.state === "starting" || info.state === "running";
-    const blocked = !info.windows ? "Nur unter Windows möglich." : !info.server_installed ? "RLBotServer fehlt – einmal python install.py ausführen." : rl?.game === "normal" ? "Rocket League läuft normal – bitte zuerst schließen." : form.brain === "teacher" ? (!teacherReady ? "Der Lehrer ist noch nicht geladen." : "") : !form.checkpoint ? "Erst ein Training laufen lassen." : "";
+    const blocked = !info.windows ? "Nur unter Windows möglich." : !info.server_installed ? `RLBotServer fehlt – einmal ${pyCmd} install.py ausführen.` : rl?.game === "normal" ? "Rocket League läuft normal – bitte zuerst schließen." : form.brain === "teacher" ? (!teacherReady ? "Der Lehrer ist noch nicht geladen." : "") : !form.checkpoint ? "Erst ein Training laufen lassen." : "";
     patch(view, `
       <div class="page-head"><div><div class="eyebrow">Spielen</div><h1>Im echten Rocket League</h1>
         <p>RLBot startet Rocket League und ein <b>Offline-Match</b>, in dem deine KI ein Auto steuert – gegen Psyonix-Bots, Community-Bots oder dich selbst.</p></div>
@@ -1082,12 +1084,14 @@ async function pagePlay(_unused, query) {
 
 async function pageSetup() {
   const system = await api("/api/system");
+  const py = system.python || "python3"; // Linux/macOS: python3, Windows: python
   const commands = [
-    ["Installation (einmalig)", "python install.py"],
-    ["App starten", "python start.py"],
-    ["Training ohne Oberfläche", "python -m rocketai train --preset beginner --name mein-bot"],
-    ["Checkpoint bewerten", "python -m rocketai eval runs/mein-bot/checkpoints/latest.pt"],
-    ["Installation prüfen", "python -m rocketai doctor"],
+    ["Installation (einmalig)", `${py} install.py`],
+    ["App starten", `${py} start.py`],
+    ["Lehrer laden", `${py} -m rocketai teacher`],
+    ["Training ohne Oberfläche", `${py} -m rocketai train --preset student --name mein-bot`],
+    ["Checkpoint bewerten", `${py} -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher`],
+    ["Installation prüfen", `${py} -m rocketai doctor`],
   ];
   const draw = () => patch(view, `
     <div class="page-head"><div><div class="eyebrow">Einrichtung</div><h1>Einrichtung</h1>

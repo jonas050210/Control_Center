@@ -29,6 +29,21 @@ Inhalt
 
 ---
 
+## 0. Kurz zur Umgebung (bitte zuerst lesen)
+
+- **Betriebssystem: Linux/Ubuntu.** Alle Befehle heißen dort **`python3`** —
+  nicht `python` (das gibt es auf Ubuntu oft gar nicht oder es ist Python 2).
+  Unter Windows wäre es `python`, sonst ist alles gleich.
+- Jeder Befehl wird **im Projektordner** ausgeführt (`cd SandboxAI`); die
+  virtuelle Umgebung (`.venv`) wird von `install.py` angelegt und von
+  `start.py` automatisch benutzt.
+- Auf der Seite **Einrichtung** in der App steht der passende Befehl für dein
+  System immer fertig zum Kopieren.
+- Das Training läuft nur auf der **CPU** (die Grafikkarte hilft dabei nicht,
+  siehe Abschnitt 10).
+
+---
+
 ## 1. Das Wichtigste in einem Absatz
 
 RocketAI trainiert eine eigene neuronale KI für Rocket League. Trainiert wird
@@ -292,7 +307,7 @@ aktuellen KI. Nebeneffekt: Es gibt eine ehrliche Fortschrittszahl — die
   Technik, sondern eine Regel.
 - Für das echte Spiel braucht es **Windows**, eine installierte
   Rocket-League-Version (Steam oder Epic) und den `RLBotServer`
-  (`python install.py` lädt ihn).
+  (`python3 install.py` lädt ihn).
 - Der Bot entscheidet im echten Spiel genauso wie im Training: alle 8 Ticks,
   dieselbe Beobachtung. Der Konverter (`rocketai/rlbot_convert.py`) baut die
   Beobachtung aus den RLBot-Paketen; Tests stellen sicher, dass die Reihenfolge
@@ -360,30 +375,40 @@ bei `latest.pt` weiter.
 
 ## 12. Dateien und Befehle
 
+> **Betriebssystem.** Entwickelt und benutzt wird das Projekt unter
+> **Linux/Ubuntu** (und macOS) – dort heißt der Python-Befehl **`python3`**.
+> Unter **Windows** heißt er **`python`**; alle Befehle sind sonst identisch.
+> Immer zuerst in den Projektordner wechseln (`cd SandboxAI`).
+>
+> Damit du nicht in die Falle läufst: `python` gibt es auf Ubuntu oft gar nicht
+> oder es ist Python 2. Wenn ein Befehl „command not found“ meldet, nimm
+> `python3`. Die App selbst zeigt auf der Seite **Einrichtung** genau den
+> Befehl an, der zu deinem System passt.
+
 **Starten**
 
 ```bash
-python install.py            # einmalig: Pakete, RLBot-Server
-python start.py              # Webbrowser-App
-python -m rocketai doctor    # prüft alles (Python, Torch, RLBot, Lehrer, ...)
-python -m rocketai teacher   # Lehrer laden und prüfen (--test: Testspiel)
+python3 install.py            # einmalig: Pakete, RLBot-Server
+python3 start.py              # Webbrowser-App
+python3 -m rocketai doctor    # prüft alles (Python, Torch, RLBot, Lehrer, ...)
+python3 -m rocketai teacher   # Lehrer laden und prüfen (--test: Testspiel)
 ```
 
 **Trainieren**
 
 ```bash
-python -m rocketai train --preset student --name mein-bot   # mit Lehrer
-python -m rocketai train --preset autopilot --name mein-bot  # ohne Lehrer
-python -m rocketai train --resume mein-bot --steps 100000000
-python -m rocketai eval mein-bot/latest.pt --opponent teacher --games 5
-python -m rocketai replay chaser teacher --seconds 60 --out match.json
+python3 -m rocketai train --preset student --name mein-bot   # mit Lehrer
+python3 -m rocketai train --preset autopilot --name mein-bot  # ohne Lehrer
+python3 -m rocketai train --resume mein-bot --steps 100000000
+python3 -m rocketai eval mein-bot/latest.pt --opponent teacher --games 5
+python3 -m rocketai replay chaser teacher --seconds 60 --out match.json
 ```
 
 **Im echten Spiel**
 
 ```bash
-python -m rocketai play mein-bot/latest.pt --mode psyonix --skill rookie
-python -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
+python3 -m rocketai play mein-bot/latest.pt --mode psyonix --skill rookie
+python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 ```
 
 **Der Aufbau im Repository**
@@ -413,15 +438,17 @@ python -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 
 | Symptom | Ursache / Lösung |
 |---|---|
-| „Der Lehrer konnte nicht geladen werden“ | Kein Internet beim ersten Start. Einmal online gehen (`python -m rocketai teacher`), danach läuft alles offline. |
+| „Der Lehrer konnte nicht geladen werden“ | Kein Internet beim ersten Start. Einmal online gehen (`python3 -m rocketai teacher`), danach läuft alles offline. |
 | „hat sich bei GitHub geändert … wird nicht geladen“ | Die Prüfsumme passt nicht. Das ist Absicht (Sicherheit). RocketAI aktualisieren. |
 | Training läuft nicht los, „simulation process exited unexpectedly“ | Zu wenig Arbeitsspeicher oder ein doppelt gestartetes Training mit gleichem Namen. Prozesse im Formular reduzieren. |
 | Training startet, aber Ballkontakte bleiben bei 0 | Belohnungsstufe 1 nötig, bzw. Lernrate zu hoch. Mit der Vorlage „Autopilot“ starten. |
 | Sehr langsam (unter 500 Schritte/s) | Prozente im Taskmanager prüfen: andere Programme, oder `Simulations-Prozesse` zu hoch eingestellt. |
 | Im echten Spiel trifft die KI nichts | Falsche Stufe: Erst gegen `Beginner` testen. Außerdem muss das Training mindestens Ballkontakt-Niveau erreicht haben. |
-| RLBot findet Rocket League nicht | `python -m rocketai doctor` ausführen; im Spiel „ohne Easy Anti-Cheat“ starten. |
+| RLBot findet Rocket League nicht | `python3 -m rocketai doctor` ausführen; im Spiel „ohne Easy Anti-Cheat“ starten. |
 | Screenshots/3D bleibt schwarz | WebGL im Browser deaktiviert; auf 2D umschalten. |
 | Live-Ansicht zeigt „kein Checkpoint“ | Training braucht mindestens einen Checkpoint (`Checkpoint alle`). |
+| `python: command not found` (Ubuntu) | Auf Linux heißt der Befehl `python3` (siehe Abschnitt 12). |
+| `ModuleNotFoundError: rocketai` | Im falschen Ordner oder ohne `.venv`: `python3 install.py`, dann `python3 start.py`. |
 
 ---
 

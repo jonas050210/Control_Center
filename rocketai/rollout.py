@@ -24,6 +24,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from .config import PYTHON_CMD
 from .env import lookup_table, make_env
 from .model import ActorCritic
 from .teacher import NextoTeacher, TeacherPlayer, canonical_players, encode_compact
@@ -176,7 +177,7 @@ class Collector:
             except Exception as error:  # missing download or broken files
                 raise RuntimeError(
                     f"Der Lehrer konnte nicht geladen werden ({error}). "
-                    "Starte 'python -m rocketai teacher' oder schalte den Lehrer aus."
+                    f"Starte '{PYTHON_CMD} -m rocketai teacher' oder schalte den Lehrer aus."
                 ) from error
             self.teachers = [TeacherPlayer(teacher=network) for _ in self.envs]
         self.obs = [env.reset() for env in self.envs]

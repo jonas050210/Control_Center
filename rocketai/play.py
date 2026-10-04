@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import ROOT, tools_root
+from .config import PYTHON_CMD, ROOT, tools_root
 
 MODES = {
     "psyonix": "Gegen Psyonix-Bots",
@@ -46,7 +46,7 @@ class PlaySettings:
 
             if not teacher_ready():
                 raise ValueError(
-                    "Der Lehrer ist nicht geladen. Einmal 'python -m rocketai teacher' ausführen."
+                    f"Der Lehrer ist nicht geladen. Einmal '{PYTHON_CMD} -m rocketai teacher' ausführen."
                 )
         elif not Path(self.checkpoint).is_file():
             raise ValueError(f"Checkpoint nicht gefunden: {self.checkpoint}")
@@ -205,7 +205,7 @@ def start_match(settings: PlaySettings, wait: bool = True) -> Any:
     server = server_path()
     if not server.exists():
         raise FileNotFoundError(
-            f"RLBotServer fehlt ({server}). Bitte 'python install.py' erneut ausführen."
+            f"RLBotServer fehlt ({server}). Bitte '{PYTHON_CMD} install.py' erneut ausführen."
         )
     config = write_match_files(settings)
     if settings.brain == "policy":

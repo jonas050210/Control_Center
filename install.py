@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """One-time setup for RocketAI.
 
-    python install.py              # everything (recommended)
-    python install.py --no-rlbot   # only training/simulation, no real-game support
+    python3 install.py              # everything (recommended)
+    python3 install.py --no-rlbot   # only training/simulation, no real-game support
+
+Unter Windows heißt der Befehl ``python`` statt ``python3``.
 
 Creates ``.venv``, installs CPU-only PyTorch and RocketAI with all
 dependencies, and downloads RLBotServer (checked by SHA-256) into
@@ -134,6 +136,9 @@ def download_rlbot_server() -> None:
     print(f"    gespeichert: {target} (Prüfsumme ok)")
 
 
+PYTHON_CMD = "python" if sys.platform == "win32" else "python3"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="RocketAI einrichten")
     parser.add_argument(
@@ -153,11 +158,12 @@ def main() -> None:
         except OSError as error:
             print(f"\nRLBotServer konnte nicht geladen werden ({error}).")
             print(
-                "Training geht trotzdem; für das echte Spiel 'python install.py' später erneut ausführen."
+                f"Training geht trotzdem; für das echte Spiel '{PYTHON_CMD} install.py' "
+                "später erneut ausführen."
             )
     say("Prüfe die Installation")
     subprocess.run([str(python), "-m", "rocketai", "doctor"], cwd=ROOT)
-    say("Fertig! Starte die App mit:  python start.py")
+    say(f"Fertig! Starte die App mit:  {PYTHON_CMD} start.py")
 
 
 if __name__ == "__main__":

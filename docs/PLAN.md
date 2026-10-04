@@ -78,7 +78,7 @@ Erste Messungen in der Sandbox (2 CPU-Kerne):
 
 ### Phase 2 – Erstes echtes Training (du, Windows-PC)
 
-1. `python install.py`, dann `python start.py`.
+1. `python3 install.py`, dann `python3 start.py`.
 2. Vorlage **Schnelltest**: prüft in ~2 Minuten, ob alles läuft.
 3. Vorlage **Autopilot** (startet bei Stufe 1, schaltet selbst auf 2 und 3
    um). Laufen lassen; Stufenwechsel erscheinen als gestrichelte Linie in den

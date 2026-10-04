@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from . import __version__
 from .config import (
     PRESETS,
+    PYTHON_CMD,
     ROOT,
     RUN_NAME_PATTERN,
     TrainConfig,
@@ -562,6 +563,7 @@ def create_app() -> FastAPI:
             "scripted": [{"id": key, "label": label} for key, (label, _) in SCRIPTED_BOTS.items()],
             "checkpoints": checkpoints,
             "teacher": describe_teacher(),
+            "python": PYTHON_CMD,
         }
 
     @app.get("/api/play")
@@ -669,7 +671,12 @@ def create_app() -> FastAPI:
     def system() -> dict[str, Any]:
         from .doctor import run_checks
 
-        return {"checks": run_checks(), "runs_folder": str(runs_root()), "version": __version__}
+        return {
+            "checks": run_checks(),
+            "runs_folder": str(runs_root()),
+            "version": __version__,
+            "python": PYTHON_CMD,
+        }
 
     @app.get("/api/events")
     async def events() -> StreamingResponse:

@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import PYTHON_CMD
+
 STEAM_APP_ID = "252950"
 EPIC_APP_NAME = "Sugar"
 RLBOT_PORT = 23234
@@ -221,7 +223,7 @@ def summarize(status: RLStatus) -> RLStatus:
             "server",
             "RLBotServer",
             "warn",
-            "Fehlt – einmal 'python install.py' ausführen (lädt RLBotServer).",
+            f"Fehlt – einmal '{PYTHON_CMD} install.py' ausführen (lädt RLBotServer).",
         )
 
     status.steps = steps

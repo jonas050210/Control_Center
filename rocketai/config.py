@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,15 @@ TICK_SKIP = 8
 TICKS_PER_SECOND = 120
 
 RUN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+#: Auf Linux und macOS heißt der Befehl ``python3``, unter Windows ``python``.
+#: Alle Hinweise an den Benutzer sollen den passenden nennen.
+PYTHON_CMD = "python" if sys.platform == "win32" else "python3"
+
+
+def cli(*args: str) -> str:
+    """Ein fertiger Befehl für die Kommandozeile, z. B. ``python3 -m rocketai doctor``."""
+    return " ".join([PYTHON_CMD, "-m", "rocketai", *args])
 
 
 def runs_root() -> Path:

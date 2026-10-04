@@ -11,6 +11,10 @@ Alles wird über eine lokale Web-App im Browser bedient.
 > sind online, in Casual, Ranked und privaten Online-Matches verboten.
 > RocketAI startet ausschließlich lokale Offline-Matches über RLBot.
 
+> **Befehle:** Alle Beispiele gelten für **Linux/Ubuntu** (und macOS) und
+> benutzen deshalb `python3`. Unter **Windows** heißt der Befehl `python`.
+> Ausgeführt wird alles im Projektordner (Terminal: `cd` in den Ordner).
+
 ## Schnellstart
 
 Voraussetzungen: **Python 3.11–3.13**. Für das echte Spiel zusätzlich
@@ -18,8 +22,8 @@ Voraussetzungen: **Python 3.11–3.13**. Für das echte Spiel zusätzlich
 nicht nötig, trainiert wird auf der CPU.
 
 ```bash
-python install.py   # einmalig: venv, PyTorch (CPU), RocketAI, RLBotServer
-python start.py     # öffnet http://127.0.0.1:8765
+python3 install.py   # einmalig: venv, PyTorch (CPU), RocketAI, RLBotServer
+python3 start.py     # öffnet http://127.0.0.1:8765
 ```
 
 In der App:
@@ -56,15 +60,15 @@ gestopptes Training lässt sich jederzeit fortsetzen.
 ## Ohne Oberfläche
 
 ```bash
-python -m rocketai teacher                                    # Lehrer laden/prüfen (--test: Testspiel)
-python -m rocketai train --preset student --name mein-bot     # mit Lehrer (Nexto)
-python -m rocketai train --preset autopilot --name mein-bot   # ohne Lehrer
-python -m rocketai train --resume mein-bot --steps 200000000 # fortsetzen mit neuem Ziel
-python -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher
-python -m rocketai replay runs/mein-bot/checkpoints/latest.pt chaser --out spiel.json
-python -m rocketai play runs/mein-bot/checkpoints/latest.pt --mode psyonix --skill rookie
-python -m rocketai play --brain teacher --mode psyonix        # Nexto fährt selbst
-python -m rocketai doctor                                    # Installation prüfen
+python3 -m rocketai teacher                                    # Lehrer laden/prüfen (--test: Testspiel)
+python3 -m rocketai train --preset student --name mein-bot     # mit Lehrer (Nexto)
+python3 -m rocketai train --preset autopilot --name mein-bot   # ohne Lehrer
+python3 -m rocketai train --resume mein-bot --steps 200000000 # fortsetzen mit neuem Ziel
+python3 -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher
+python3 -m rocketai replay runs/mein-bot/checkpoints/latest.pt chaser --out spiel.json
+python3 -m rocketai play runs/mein-bot/checkpoints/latest.pt --mode psyonix --skill rookie
+python3 -m rocketai play --brain teacher --mode psyonix        # Nexto fährt selbst
+python3 -m rocketai doctor                                    # Installation prüfen
 ```
 
 ## Wie es funktioniert
@@ -104,8 +108,8 @@ Details, Phasen und Zeitabschätzungen: [docs/PLAN.md](docs/PLAN.md).
 ## Entwicklung
 
 ```bash
-python install.py --dev
-.venv/bin/python -m pytest      # Windows: .venv\Scripts\python -m pytest
+python3 install.py --dev
+.venv/bin/python -m pytest       # Windows: .venv\Scripts\python -m pytest
 .venv/bin/ruff check .
 ```
 
