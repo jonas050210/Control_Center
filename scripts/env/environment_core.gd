@@ -685,7 +685,9 @@ func _emit_motion_sounds(motion: Dictionary, position: Vector3, source_id: int) 
 ## what the policy sees.
 func _build_observation() -> Observation:
 	if not curriculum.perception_enabled():
-		return Observation.build(agent, enemies, arena_half_extent)
+		var obs: Observation = Observation.build(agent, enemies, arena_half_extent)
+		_apply_ground_truth_vision(obs, Observation.rank_alive_enemies(enemies, agent.position))
+		return obs
 	return (
 		Observation
 		. build(
@@ -716,6 +718,34 @@ func _build_observation() -> Observation:
 			}
 		)
 	)
+
+
+## Fills the contract-v5 vision block (indices 106-125) on the levels that run
+## WITHOUT a perception layer.
+##
+## Those levels have no beliefs to read, so without this the block would sit at
+## zero - the vector would claim the agent has no idea how big the enemy looks
+## while handing it that enemy's exact position in the same breath. The agent
+## does have the enemy on its screen there; it simply never had to acquire it
+## first, so the block is measured with the same `vision_reading` the
+## perception layer uses and written by the same `Observation` helper.
+##
+## Nothing else in the observation changes, and the levels still reproduce
+## their old dynamics. The one deliberate consequence is that exposure becomes
+## real at level 5 (`obstacles_cover`), where cover exists before the
+## perception gate does - the level that needs it most.
+##
+## `ranked` is the alive enemies nearest-first, the order the enemy blocks were
+## filled in, so slot 0 is the primary here too.
+func _apply_ground_truth_vision(obs: Observation, ranked: Array) -> void:
+	for rank in range(mini(ranked.size(), Observation.MAX_TRACKED_ENEMIES)):
+		Observation.apply_vision_reading(
+			obs,
+			rank,
+			AgentPerception.ground_truth_reading(
+				ranked[rank], agent, world, lighting, perception.fov_deg
+			)
+		)
 
 
 ## The part of the agent's map knowledge that goes into the observation.

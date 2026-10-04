@@ -6,8 +6,10 @@ extends RefCounted
 
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
+const CurriculumConfig = preload("res://scripts/core/curriculum_config.gd")
 const EnvironmentCore = preload("res://scripts/env/environment_core.gd")
 const Observation = preload("res://scripts/core/observation.gd")
+const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 const SandboxTest = preload("res://tests/sandbox_test.gd")
 
@@ -296,4 +298,47 @@ func test_get_observations_rewards_done_accessors() -> SandboxTest:
 	t.assert_not_null(env.get_observations())
 	t.assert_almost_eq(env.get_rewards(), env.episode.last_reward, 0.0001)
 	t.assert_eq(env.is_done(), env.episode.done)
+	return t
+
+
+## The levels below 6 run without a perception layer, so they have no belief
+## to carry a `screen_box`. The agent still has the enemy on its screen there,
+## so the contract-v5 vision block must still be filled - an empty block would
+## say "I cannot see it" next to the exact position of the same enemy.
+func test_ground_truth_levels_report_the_contact_box() -> SandboxTest:
+	var t := SandboxTest.new("ground_truth_levels_report_the_contact_box")
+	var env := EnvironmentCore.new(0, 1)
+	env.set_curriculum_level(CurriculumConfig.Level.STATIONARY_TARGET)
+	env.reset(5)
+	t.assert_false(
+		env.curriculum.perception_enabled(),
+		"level 1 must be a ground-truth level for this test to mean anything"
+	)
+	env.agent.position = Vector3(0.0, 0.0, 0.0)
+	env.agent.yaw_deg = 0.0
+	env.agent.pitch_deg = 0.0
+	env.enemies[0].alive = true
+	env.enemies[0].position = Vector3(0.0, 0.0, -8.0)
+	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
+	var obs: Observation = env.get_observations()
+	t.assert_gt(
+		obs.primary_enemy_screen_half_width, 0.0, "the enemy dead ahead covers part of the screen"
+	)
+	t.assert_almost_eq(obs.primary_enemy_screen_x, 0.0, 0.05, "it sits under the crosshair")
+	t.assert_true(obs.reticle_on_primary, "the crosshair is inside its box")
+	t.assert_almost_eq(
+		obs.primary_enemy_exposure_fraction,
+		1.0,
+		0.0001,
+		"nothing is in the way on an obstacle-free level"
+	)
+	t.assert_gt(obs.primary_contact_clarity, 0.0, "a lit contact can be made out")
+	# Turn around: the same enemy is now behind the agent, so it has no box at
+	# all - not a box clamped to the edge of the screen.
+	env.agent.yaw_deg = 180.0
+	env.step(Action.idle(), SandboxConfig.SIMULATION_DT)
+	var behind: Observation = env.get_observations()
+	t.assert_almost_eq(behind.primary_enemy_screen_half_width, 0.0, 0.0001)
+	t.assert_almost_eq(behind.primary_enemy_screen_x, 0.0, 0.0001)
+	t.assert_false(behind.reticle_on_primary)
 	return t

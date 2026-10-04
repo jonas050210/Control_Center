@@ -949,6 +949,58 @@ static func _clear_enemy_blocks(obs: Observation) -> void:
 	obs.primary_contact_clarity = 0.0
 
 
+## Writes the contract-v5 vision block of one enemy slot: where the contact's
+## box sits on the agent's screen, how much of the screen it covers, how much
+## of the body is unoccluded, and how much light it is standing in.
+##
+## Split out of `_apply_belief` because beliefs are not the only thing that
+## fills it. The levels that run without a perception layer have no belief to
+## read - yet the agent still has the enemy on its screen there, so they
+## measure the same block directly (see `EnvironmentCore._build_observation`).
+## One writer for both paths, so they cannot drift into two dialects.
+##
+## A reading without a box (a target at or behind the eye, a replay recorded
+## before contract v5, an adapter that does not model geometry) leaves the
+## block at zero, which reads as "no box" - never as a box at the centre of
+## the screen.
+static func apply_vision_reading(obs: Observation, rank: int, reading: Dictionary) -> void:
+	var box: Dictionary = reading.get("screen_box", {})
+	var in_front: bool = bool(box.get("in_front", false))
+	var screen_x: float = float(box.get("center_x", 0.0)) if in_front else 0.0
+	var screen_y: float = float(box.get("center_y", 0.0)) if in_front else 0.0
+	var half_width: float = float(box.get("half_width", 0.0)) if in_front else 0.0
+	var half_height: float = float(box.get("half_height", 0.0)) if in_front else 0.0
+	var exposure: float = clampf(float(reading.get("exposure_fraction", 0.0)), 0.0, 1.0)
+	var illumination: float = clampf(float(reading.get("illumination", 0.0)), 0.0, 1.0)
+	var clarity: float = clampf(float(reading.get("clarity", 0.0)), 0.0, 1.0)
+	var on_reticle: bool = bool(reading.get("reticle_on_target", false))
+
+	match rank:
+		0:
+			obs.primary_enemy_screen_x = screen_x
+			obs.primary_enemy_screen_y = screen_y
+			obs.primary_enemy_screen_half_width = half_width
+			obs.primary_enemy_screen_half_height = half_height
+			obs.primary_enemy_exposure_fraction = exposure
+			obs.primary_enemy_illumination = illumination
+			obs.reticle_on_primary = on_reticle
+			obs.primary_contact_clarity = clarity
+		1:
+			obs.secondary_enemy_screen_x = screen_x
+			obs.secondary_enemy_screen_y = screen_y
+			obs.secondary_enemy_screen_half_width = half_width
+			obs.secondary_enemy_screen_half_height = half_height
+			obs.secondary_enemy_exposure_fraction = exposure
+			obs.secondary_enemy_illumination = illumination
+		2:
+			obs.tertiary_enemy_screen_x = screen_x
+			obs.tertiary_enemy_screen_y = screen_y
+			obs.tertiary_enemy_screen_half_width = half_width
+			obs.tertiary_enemy_screen_half_height = half_height
+			obs.tertiary_enemy_exposure_fraction = exposure
+			obs.tertiary_enemy_illumination = illumination
+
+
 static func _apply_belief(
 	obs: Observation, agent: AgentState, belief: Dictionary, rank: int
 ) -> void:
@@ -964,19 +1016,17 @@ static func _apply_belief(
 		float(belief.get("age", 0.0)) / maxf(SandboxConfig.MEMORY_MAX_AGE, 0.0001), 0.0, 1.0
 	)
 	var elevation: float = clampf(float(belief.get("elevation_deg", 0.0)) / 90.0, -1.0, 1.0)
-	# The vision block is only ever filled from a belief that carries one. A
-	# belief without a `screen_box` (a replay recorded before contract v5, an
-	# adapter that does not model geometry) leaves these at zero, which reads
-	# as "no box" - never as a box at the centre of the screen.
-	var box: Dictionary = belief.get("screen_box", {})
-	var in_front: bool = bool(box.get("in_front", false))
-	var screen_x: float = float(box.get("center_x", 0.0)) if in_front else 0.0
-	var screen_y: float = float(box.get("center_y", 0.0)) if in_front else 0.0
-	var half_width: float = float(box.get("half_width", 0.0)) if in_front else 0.0
-	var half_height: float = float(box.get("half_height", 0.0)) if in_front else 0.0
-	var exposure: float = clampf(float(belief.get("exposure_fraction", 0.0)), 0.0, 1.0)
-	var illumination: float = clampf(float(belief.get("illumination", 0.0)), 0.0, 1.0)
-	var on_reticle: bool = bool(belief.get("reticle_on_target", false))
+	apply_vision_reading(
+		obs,
+		rank,
+		{
+			"screen_box": belief.get("screen_box", {}),
+			"exposure_fraction": belief.get("exposure_fraction", 0.0),
+			"illumination": belief.get("illumination", 0.0),
+			"clarity": belief.get("clarity", 0.0),
+			"reticle_on_target": belief.get("reticle_on_target", false),
+		}
+	)
 
 	match rank:
 		0:
@@ -997,14 +1047,6 @@ static func _apply_belief(
 			obs.primary_enemy_confidence = clampf(float(belief.get("confidence", 0.0)), 0.0, 1.0)
 			obs.primary_enemy_source_visual = int(belief.get("source", 0)) == 1
 			obs.primary_enemy_source_sound = int(belief.get("source", 0)) == 2
-			obs.primary_enemy_screen_x = screen_x
-			obs.primary_enemy_screen_y = screen_y
-			obs.primary_enemy_screen_half_width = half_width
-			obs.primary_enemy_screen_half_height = half_height
-			obs.primary_enemy_exposure_fraction = exposure
-			obs.primary_enemy_illumination = illumination
-			obs.reticle_on_primary = on_reticle
-			obs.primary_contact_clarity = clampf(float(belief.get("clarity", 0.0)), 0.0, 1.0)
 		1:
 			obs.secondary_enemy_relative_position_norm = relative
 			obs.secondary_enemy_distance_norm = distance_norm
@@ -1014,12 +1056,6 @@ static func _apply_belief(
 			obs.secondary_enemy_visible = visible
 			obs.secondary_enemy_info_age_norm = age_norm
 			obs.secondary_enemy_elevation_norm = elevation
-			obs.secondary_enemy_screen_x = screen_x
-			obs.secondary_enemy_screen_y = screen_y
-			obs.secondary_enemy_screen_half_width = half_width
-			obs.secondary_enemy_screen_half_height = half_height
-			obs.secondary_enemy_exposure_fraction = exposure
-			obs.secondary_enemy_illumination = illumination
 		2:
 			obs.tertiary_enemy_relative_position_norm = relative
 			obs.tertiary_enemy_distance_norm = distance_norm
@@ -1029,12 +1065,6 @@ static func _apply_belief(
 			obs.tertiary_enemy_visible = visible
 			obs.tertiary_enemy_info_age_norm = age_norm
 			obs.tertiary_enemy_elevation_norm = elevation
-			obs.tertiary_enemy_screen_x = screen_x
-			obs.tertiary_enemy_screen_y = screen_y
-			obs.tertiary_enemy_screen_half_width = half_width
-			obs.tertiary_enemy_screen_half_height = half_height
-			obs.tertiary_enemy_exposure_fraction = exposure
-			obs.tertiary_enemy_illumination = illumination
 
 
 ## Normalizes a small count onto [0, 1] using a fixed saturation point, so

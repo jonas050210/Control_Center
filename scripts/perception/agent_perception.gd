@@ -218,9 +218,13 @@ static func summarize_contacts(beliefs: Array, slot_count: int) -> Dictionary:
 ## top of a head in a shadow". All three are things a player can see, so all
 ## three are fair game; what is NOT reported is anything the agent could not
 ## perceive (an unseen enemy has no box, not a box at a guessed position).
-## Not static: it reads this perception's own `fov_deg`, which is the cone
-## the agent is looking through and therefore the cone the box lives in.
-func _vision_reading(
+##
+## Static and given the cone explicitly, because it is not only the
+## perception layer that needs it: the levels without a perception layer fill
+## the very same block from ground truth (see
+## `EnvironmentCore._build_observation`), so both paths hand the policy one
+## identical measurement instead of two similar ones.
+static func vision_reading(
 	enemy: EnemyState,
 	world,
 	eye: Vector3,
@@ -229,6 +233,7 @@ func _vision_reading(
 	distance: float,
 	profile: LightingProfile,
 	live: bool,
+	fov_deg: float,
 ) -> Dictionary:
 	var box: Dictionary = PerceptionSystem.target_screen_box(
 		eye, forward, position, enemy.height, enemy.radius, fov_deg
@@ -258,6 +263,36 @@ func _vision_reading(
 	}
 
 
+## The vision reading the levels WITHOUT a perception layer report for one
+## enemy.
+##
+## Those levels build their observation from ground truth, so there is no
+## belief to carry a `screen_box` - and an empty block would say the agent
+## cannot see the enemy whose exact position the same vector reports. It can:
+## it simply never had to acquire the contact first. So the reading is
+## measured here, with the same `vision_reading` the perception layer uses on
+## the levels that do gate vision, and written by the same `Observation`
+## helper - one measurement, two paths.
+##
+## The reading is a live one: on these levels the agent sees the enemy, so it
+## carries exposure, clarity and the reticle, not just the box a memory would
+## keep.
+static func ground_truth_reading(
+	enemy: EnemyState, agent, world, profile: LightingProfile, fov_deg: float
+) -> Dictionary:
+	return vision_reading(
+		enemy,
+		world,
+		agent.get_eye_position(),
+		agent.get_forward_vector(),
+		enemy.position,
+		agent.position.distance_to(enemy.position),
+		profile,
+		true,
+		fov_deg,
+	)
+
+
 func _evaluate_enemy(
 	agent, enemy: EnemyState, world, eye: Vector3, forward: Vector3, dt: float
 ) -> Dictionary:
@@ -283,7 +318,7 @@ func _evaluate_enemy(
 	# perception gate is on: on the legacy levels the agent still sees the
 	# enemy, so it still has a box on its screen - it simply never had to
 	# acquire it first.
-	var reading: Dictionary = _vision_reading(
+	var reading: Dictionary = vision_reading(
 		enemy,
 		world,
 		eye,
@@ -292,6 +327,7 @@ func _evaluate_enemy(
 		float(evaluation["distance"]),
 		lighting,
 		true,
+		fov_deg,
 	)
 	if not enabled:
 		# Legacy path: full ground truth, no latency, no memory.
@@ -380,7 +416,7 @@ func _evaluate_enemy(
 	# agent that lost someone around a corner knows roughly how big they
 	# looked - but nothing that only a live sighting could produce: no
 	# exposure, no clarity, and never a reticle.
-	var remembered_reading: Dictionary = _vision_reading(
+	var remembered_reading: Dictionary = vision_reading(
 		enemy,
 		world,
 		eye,
@@ -389,6 +425,7 @@ func _evaluate_enemy(
 		agent.position.distance_to(remembered),
 		lighting,
 		false,
+		fov_deg,
 	)
 	return {
 		"id": enemy_id,

@@ -91,6 +91,12 @@ pre-world dynamics exactly.
 
 `Observation.to_array()` / `python/sandboxai/contract.py:OBSERVATION_SPEC`.
 
+The table is split into four runs by the notes that belong to particular rows;
+every run has its own header, and the index ranges are contiguous from 0 to
+125 with nothing missing between them.
+
+### Indices 0–15: the agent and the primary contact
+
 | Index | Field | Meaning | Normalization / range |
 | --- | --- | --- | --- |
 | 0–2 | `agent_position_norm` (x,y,z) | Agent world position | x,z / arena half-extent (10 m); y / wall height (3 m) |
@@ -129,6 +135,10 @@ Below level 5 the handling layer is inert and index 15 keeps its original
 meaning exactly, so checkpoints trained before the layer existed are
 unaffected.
 
+### Indices 16–17: combat state and bearing
+
+| Index | Field | Meaning | Normalization / range |
+| --- | --- | --- | --- |
 | 16 | `in_combat` | Primary enemy alive and within weapon range | 0/1 |
 | 17 | `enemy_bearing_norm` | Signed horizontal aim offset to the primary enemy | angle / 180°, in [-1,1]; 0 = dead-center, sign matches `look_yaw_axis` (+ = turn right to face it) |
 
@@ -152,6 +162,10 @@ positive when the contact is **above** the eye, negative below. Yaw itself
 (the agent's `yaw_deg`, and the direction a spawn or the stub controller
 faces) is `atan2(x, -z)` everywhere, so `yaw = 0` looks along `(0, 0, -1)`
 and `yaw = 90` along `+x`. All three formulas live in `VectorMath`.
+### Indices 18–105: the multi-enemy, world, sound, map and object blocks
+
+| Index | Field | Meaning | Normalization / range |
+| --- | --- | --- | --- |
 | 18 | `alive_enemy_count_norm` | How many configured enemies are alive right now | alive / total configured enemies, [0,1] |
 | 19–21 | `secondary_enemy_relative_position_norm` (x,y,z) | 2nd-nearest alive enemy, relative position | as above; zero vector if absent |
 | 22 | `secondary_enemy_distance_norm` | Distance to 2nd-nearest alive enemy | [0,1]; `1.0` (max) if absent |
@@ -229,6 +243,65 @@ and `yaw = 90` along `+x`. All three formulas live in `VectorMath`.
 | 104 | `object_3_visible` | This slot holds a real sighting | 0/1 |
 | 105 | `visible_object_count_norm` | How many objects are visible right now | count / 8, clamped [0,1] |
 
+### Indices 106–125: the contact's box on the agent's screen (contract v5)
+
+Everything above describes a contact as *numbers about a position*: how far,
+which way, how hurt. These last twenty describe it the way a player actually
+experiences it — as a shape on a screen. Each of the three slots reports where
+the contact's box sits (`screen_x` / `screen_y`, its centre in normalised
+device coordinates, so `0, 0` is under the crosshair), how much of the screen
+it covers (`screen_half_width` / `screen_half_height`, which grow as it comes
+closer), how much of the body is not behind cover (`exposure_fraction`), and
+how much light it is standing in (`illumination`). `reticle_on_primary`
+answers "is my crosshair inside that box" — the one comparison a policy should
+not have to spend capacity on — and `primary_contact_clarity` folds
+illumination and distance into one number for "can I make this out at all".
+
+| Index | Field | Meaning | Normalization / range |
+| --- | --- | --- | --- |
+| 106 | `primary_enemy_screen_x` | Where the primary contact's box sits horizontally | screen x, [-1,1]; 0 when not on screen |
+| 107 | `primary_enemy_screen_y` | Where it sits vertically | screen y, [-1,1]; 0 when not on screen |
+| 108 | `primary_enemy_screen_half_width` | Half the screen width it covers | [0,1]; grows as it gets closer, 0 when not on screen |
+| 109 | `primary_enemy_screen_half_height` | Half the screen height it covers | [0,1]; grows as it gets closer, 0 when not on screen |
+| 110 | `primary_enemy_exposure_fraction` | How much of its body is unoccluded | [0,1]; 1 = fully exposed, 0.4 = head and shoulders over cover |
+| 111 | `primary_enemy_illumination` | How much light it is standing in | [0,1]; same scale as `local_illumination`, 0 when not on screen |
+| 112–117 | `secondary_enemy_screen_*`, `secondary_enemy_exposure_fraction`, `secondary_enemy_illumination` | The same six for the secondary contact | as above |
+| 118–123 | `tertiary_enemy_screen_*`, `tertiary_enemy_exposure_fraction`, `tertiary_enemy_illumination` | The same six for the tertiary contact | as above |
+| 124 | `reticle_on_primary` | The crosshair is inside the primary contact's box | 0/1 |
+| 125 | `primary_contact_clarity` | How well the primary contact can be made out at all | illumination × transmittance over the distance, [0,1] |
+
+The geometry comes from one function,
+`PerceptionSystem.target_screen_box()` (`scripts/perception/perception_system.gd`):
+the agent's eye, its forward vector, the contact's feet, height and radius,
+the field of view (`AGENT_FOV_DEG`, 100° horizontal) and the view aspect
+(`AGENT_VIEW_ASPECT`, 16:9). `+x` is the agent's right and `+y` is up, so the
+signs match the bearing and elevation fields above, and both are clamped to
+`[-1, 1]` — the screen. A target at or behind the eye has **no box at all**:
+`in_front` is false and all twenty fields are zero, which reads as "it is not
+on my screen" and never as a box pinned to the middle of it.
+
+Two of these numbers are easy to misread, so they are worth stating once:
+
+- `exposure_fraction` is **not** "is it alive" and **not** "can I see it". It
+  is the share of the sampled body no geometry is covering: `1.0` is a clear
+  silhouette, `0.4` is a head and shoulders over a crate, `0.0` is a contact
+  the agent can see the position of but cannot hit. Aliveness has its own
+  fields, and a contact with no box is all zeros rather than a zero exposure.
+- `illumination` is the light **at the contact**, not at the agent
+  (`local_illumination`, index 65). A lit doorway with the agent standing in
+  shadow is exactly the case the two together describe.
+
+The block is filled from the tick's beliefs — from the same perception the
+visibility flags (38/45/48) describe — so a remembered contact keeps the box
+it had where it was last seen and nothing only a live sighting could produce:
+no exposure, no clarity, and never a reticle. On the levels without a
+perception layer (1–5) there are no beliefs to read, but the agent still has
+the enemy on its screen there, so the block is measured directly from ground
+truth with the same function (`AgentPerception.vision_reading`) and written by
+the same writer (`Observation.apply_vision_reading`). Those levels already
+report the enemy's exact position; claiming there that the agent cannot tell
+how big it looks would be the one dishonest field in the vector.
+
 If no enemy is alive, the primary slot (indices 10–17) falls back to a fixed
 dead-enemy report (`enemy_alive = 0`, `enemy_health_norm = 0`) instead of
 being undefined, so a fully cleared episode still returns a stable
@@ -266,6 +339,32 @@ loadable: `python/sandboxai/dataset.py:action_to_multidiscrete()` pads them
 with `jump = 0`. A v1 **checkpoint**, however, has a 5-head action net and a
 33-input observation head, so it cannot be loaded into a v2 policy — that
 break is real and intentional.
+
+## What changed in contract v5 (the agent's view of a contact)
+
+- Observation grew from 106 to 126 floats. **Indices 0–105 are unchanged in
+  index and meaning.** Everything new is appended (106–125).
+- The action space is **unchanged**: `MultiDiscrete([3,3,3,3,2,2])`.
+- New: every tracked enemy slot reports its silhouette as a box on the
+  agent's own screen — where it sits, how much of the screen it covers, how
+  much of the body is unoccluded, and how much light it stands in — plus
+  `reticle_on_primary` (124) and `primary_contact_clarity` (125). The section
+  above says what each means, and what it deliberately does not mean.
+- Before v5 the vector could say "an enemy is 12 m away, 20° left" and
+  nothing about how big that enemy looks, whether half of it is behind a
+  crate, or whether it is standing in a shadow — so the policy had no way to
+  tell a clear shot at a well-lit target from the top of a head in the dark.
+  All three are things a player can see, so all three are fair game.
+- Still **not** reported: anything the agent could not perceive. An enemy it
+  has never seen gets no box, not a box at a guessed position; a lost contact
+  keeps only the box it last saw. No pixels, no object identities, no ids.
+- The one place the block is *measured* rather than perceived is the levels
+  without a perception layer (1–5), which report enemy positions as ground
+  truth anyway. Exposure therefore becomes real at level 5
+  (`obstacles_cover`), where cover exists before the perception gate does.
+- A v4 checkpoint has a 106-input observation head and cannot be loaded into
+  a v5 policy; nothing has been trained on v4 yet. Replays stamped
+  `contract version 4` stay readable for inspection.
 
 ## What changed in contract v4 (visible objects)
 
