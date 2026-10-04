@@ -44,7 +44,7 @@ engine-coupled part is the label text assignment and the button wiring
   (`SimulationManager.get_last_actions()`).
 - A condensed observation summary (agent health, primary-enemy
   distance/bearing/aliveness, alive-enemy-count fraction, in-combat flag) —
-  not the full 106-float raw vector, to stay readable.
+  not the full 126-float raw vector, to stay readable.
 
 ### Controls
 
@@ -97,8 +97,8 @@ with the best measured throughput and flags where returns start
 diminishing relative to environment-count growth.
 
 `sandboxai benchmark-pipeline` is the staged sweep the Control Center runs.
-It plans a `(environments, workers)` grid of at least 100 configurations up
-to 258 environments and 32 workers, screens each one on the real bridge,
+It plans a `(environments, workers)` grid of up to 100 configurations (the
+sweep ceiling) up to 258 environments and 32 workers, screens each one on the real bridge,
 validates the strongest finalists with a training slice, and writes both a
 report and a recommendation:
 
@@ -112,8 +112,8 @@ sandboxai benchmark-pipeline --budget-mode steps --steps 2000
 
 The automatic default fixes every screening window at **20 seconds after
 startup/warmup**, keeps the entire planned grid, and does not stop early at
-a step target. The user cannot choose the duration in the GUI. For 175
-configurations, screening alone takes at least **58 minutes 20 seconds**;
+a step target. The user cannot choose the duration in the GUI. At the
+100-configuration ceiling, screening alone takes up to **33 minutes 20 seconds**;
 startup/warmup, device checks and the default four PPO finalists add overhead.
 There is no automatic 30-minute cutoff or budget-driven grid thinning.
 
@@ -177,7 +177,7 @@ The first SB3 FPS row has not yet paid an update; later rows have. A large
 stepwise fall after each rollout is therefore expected even with an infinitely
 fast environment.
 
-The compact `(106 -> 128 -> 128)` MLP produces many very small matrix and
+The compact `(126 -> 128 -> 128)` MLP produces many very small matrix and
 distribution operations. On CUDA, launch, host/device transfer and framework
 synchronization overhead dominate these tiny kernels; low utilization and
 ~0.75 GB allocated VRAM are evidence of under-filled hardware, not a request
@@ -293,7 +293,7 @@ levels stay exactly as cheap as they were:
 
 | Level range | Per-step work added vs. the original implementation |
 | --- | --- |
-| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 106 floats instead of 33 (the extra 73 are written from already-computed values or left at their "no information" defaults). |
+| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 126 floats instead of 33 (the extra 93 are written from already-computed values or left at their "no information" defaults). |
 | 5 | Collision + ground queries per character (O(obstacles) axis-separated box tests), `EnemyBrain` instead of `update_ai()`. |
 | 6 | Adds per-enemy FOV + line-of-sight: 2 ray samples per enemy per tick, each O(obstacles). |
 | 7 | Adds sound: bounded at `SOUND_MAX_ACTIVE = 24` events, each sampled with one occluder count per listener. |

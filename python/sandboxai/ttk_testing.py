@@ -16,6 +16,15 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from .ttk_vision import (
+    FrameError,
+    analyze_frame,
+    decode_png,
+    detect_figures,
+    lift_shadows,
+    visibility_view,
+    write_png,
+)
 from .wsl import is_wsl, normalize_host_path, wsl_to_windows_path
 
 __all__ = [
@@ -1040,12 +1049,14 @@ def capture_roblox_screenshot(project_root: str | Path) -> dict[str, Any]:
 
             image = ImageGrab.grab(bbox=bbox)
             image.save(out_path)
-            return {
-                "ok": True,
-                "path": str(out_path),
-                "window_captured": bool(bbox),
-                "resolution": f"{image.width}x{image.height}",
-            }
+            return _with_frame_analysis(
+                {
+                    "ok": True,
+                    "path": str(out_path),
+                    "window_captured": bool(bbox),
+                    "resolution": f"{image.width}x{image.height}",
+                }
+            )
         except Exception:
             pass
     if host_bridge():
@@ -1057,12 +1068,14 @@ def capture_roblox_screenshot(project_root: str | Path) -> dict[str, Any]:
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 return {"ok": False, "error": f"screenshot capture failed: {exc}"}
             if code == 0 and out_path.is_file():
-                return {
-                    "ok": True,
-                    "path": str(out_path),
-                    "window_captured": bool(bbox),
-                    "resolution": "window" if bbox else "screen",
-                }
+                return _with_frame_analysis(
+                    {
+                        "ok": True,
+                        "path": str(out_path),
+                        "window_captured": bool(bbox),
+                        "resolution": "window" if bbox else "screen",
+                    }
+                )
             return {
                 "ok": False,
                 "error": f"screenshot capture failed: {output or 'PowerShell wrote no file'}",
@@ -1386,11 +1399,139 @@ def _read_png_dimensions(path: Path) -> tuple[int, int] | None:
     return None
 
 
+def capture_preview(
+    image_path: str | Path,
+    *,
+    lift: bool = True,
+    contacts: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Load a capture as something a GUI can draw: frame, boxes, numbers.
+
+    Separate from :func:`analyze_roblox_ttk_screenshot` because the two
+    answer different questions and cost different amounts: the analysis
+    returns the report, this returns the *pixels* - several megabytes of
+    them at 1080p - for the one widget that shows them.
+
+    ``lift`` picks which frame comes back (the raw capture or the
+    shadow-lifted one); ``contacts`` reuses boxes an analysis already
+    found, so toggling the lift re-paints instead of re-detecting.
+    """
+    target = Path(image_path)
+    try:
+        frame = decode_png(target.read_bytes())
+    except FrameError as exc:
+        return {"ok": False, "error": f"the capture could not be read: {exc}", "image": None}
+    except OSError as exc:
+        return {"ok": False, "error": f"the capture could not be opened: {exc}", "image": None}
+    try:
+        enhanced = lift_shadows(frame)
+    except FrameError as exc:
+        return {"ok": False, "error": f"the capture could not be lifted: {exc}", "image": None}
+    boxes = list(contacts or [])
+    if not boxes:
+        boxes = [box.as_dict() for box in detect_figures(frame, enhanced=enhanced)]
+    height, width = frame.shape[:2]
+    return {
+        "ok": True,
+        "error": None,
+        "image": enhanced if lift else frame,
+        "boxes": boxes,
+        "visibility": visibility_view(frame, enhanced),
+        "width": int(width),
+        "height": int(height),
+    }
+
+
+def _with_frame_analysis(result: dict[str, Any]) -> dict[str, Any]:
+    """Add the contact boxes to a capture the moment it is written.
+
+    The operator's question at capture time is not "did the file land" but
+    "is the enemy in view", and the answer is only a second away - so the
+    boxes are ready in the same result instead of waiting for a second
+    click on Analyze.
+    """
+    analysis = _analyze_capture_file(Path(str(result["path"])))
+    if not analysis.get("ok"):
+        return {**result, "analysis": None, "analysis_error": analysis.get("error")}
+    return {
+        **result,
+        "analysis": analysis,
+        "analysis_error": None,
+        "annotated_path": analysis.get("annotated_path"),
+        "contact_count": int(analysis.get("contact_count") or 0),
+        "contacts": list(analysis.get("contacts") or []),
+    }
+
+
+def _analyze_capture_file(target: Path) -> dict[str, Any]:
+    """Read the pixels of one capture and box what stands out in it.
+
+    Splits the two failure modes a capture can have, because they need
+    different answers from the operator: a frame that cannot be decoded
+    (16-bit, interlaced, corrupt) is a *file* problem, while a frame that
+    decodes but shows nothing is a *game* problem - and reporting the
+    second as the first would send someone looking for a broken PNG.
+
+    The annotated copy is written next to the capture so the boxes can be
+    opened in any image viewer, not only inside the Control Center.
+    """
+    try:
+        frame = decode_png(target.read_bytes())
+    except FrameError as exc:
+        return {"ok": False, "error": f"the capture could not be read: {exc}"}
+    except OSError as exc:
+        return {"ok": False, "error": f"the capture could not be opened: {exc}"}
+    try:
+        report = analyze_frame(frame)
+    except FrameError as exc:
+        return {"ok": False, "error": f"the capture could not be analysed: {exc}"}
+    destination = target.with_name(f"{target.stem}.analysis.png")
+    annotated_path: str | None = None
+    try:
+        write_png(report["annotated"], destination)
+        annotated_path = str(destination)
+    except OSError:
+        # The boxes live in the analysis either way; only the file that lets
+        # a human open them in a viewer is missing.
+        annotated_path = None
+    return {
+        "ok": True,
+        "contacts": report["contact_rows"],
+        "contact_count": int(report["contact_count"]),
+        "annotated_path": annotated_path,
+        "visibility": report["visibility"],
+    }
+
+
+def _contact_summary(analysis: dict[str, Any] | None, reason: str | None) -> str:
+    """One clause for the status line: how many contacts, or why not."""
+    if analysis is None:
+        return f"not analysed ({reason})" if reason else "not analysed"
+    count = int(analysis.get("contact_count") or 0)
+    if count == 0:
+        return "no contact stood out"
+    if count == 1:
+        return "1 contact boxed"
+    return f"{count} contacts boxed"
+
+
 def analyze_roblox_ttk_screenshot(
     project_root: str | Path,
     image_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Inspect a captured Roblox TTK Testing screenshot for HUD & resolution telemetry."""
+    """Inspect a captured Roblox TTK Testing screenshot.
+
+    Reports what the file is (size, resolution, HUD scale) *and* what the
+    frame shows: the figures that stand out, each with the box the
+    detector drew, the score it earned and how much it contrasts with what
+    is around it, plus how dark the capture was before and after the
+    shadow lift. An annotated copy of the frame is written next to the
+    capture.
+
+    Nothing here is recognised - no model, no Roblox knowledge. The
+    detector boxes what stands out and reports the numbers it used, so a
+    box can be judged instead of trusted.
+    """
     root = Path(project_root).expanduser().resolve()
     target: Path | None = None
     if image_path is not None and str(image_path).strip():
@@ -1421,11 +1562,15 @@ def analyze_roblox_ttk_screenshot(
         if (width, height) == (1920, 1080)
         else ("widescreen-16:9" if aspect and abs(aspect - 1.778) < 0.05 else "custom-viewport")
     )
-    summary = (
-        f"{target.name} ({width}x{height} px, {hud_scale}, {size_bytes // 1024} KB)"
+    size_text = (
+        f"{width}x{height} px, {hud_scale}, {size_bytes // 1024} KB"
         if width and height
-        else f"{target.name} ({size_bytes} bytes)"
+        else f"{size_bytes} bytes"
     )
+
+    analysis = _analyze_capture_file(target)
+    reason = None if analysis.get("ok") else str(analysis.get("error") or "")
+    summary = f"{target.name} ({size_text}, {_contact_summary(analysis if analysis.get('ok') else None, reason)})"
     return {
         "ok": True,
         "path": str(target),
@@ -1436,4 +1581,9 @@ def analyze_roblox_ttk_screenshot(
         "hud_layout": hud_scale,
         "size_bytes": size_bytes,
         "summary": summary,
+        "analysis": analysis if analysis.get("ok") else None,
+        "analysis_error": reason,
+        "annotated_path": (analysis or {}).get("annotated_path"),
+        "contact_count": int(analysis.get("contact_count") or 0),
+        "contacts": list(analysis.get("contacts") or []),
     }

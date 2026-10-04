@@ -8,6 +8,7 @@ import json
 import tempfile
 import unittest
 import unittest.mock
+from pathlib import Path
 
 from sandboxai.cli import main
 from sandboxai.ttk_testing import (
@@ -133,6 +134,137 @@ class CliTests(unittest.TestCase):
             self.assertTrue(res["ok"])
             self.assertEqual((res["width"], res["height"]), (1920, 1080))
             self.assertEqual(res["hud_layout"], "1080p-native")
+
+
+class ScreenshotAnalysisTests(unittest.TestCase):
+    """The capture is read, not just measured.
+
+    Reading the IHDR alone used to be the whole analysis, which meant a
+    frame too dark to see anything produced the same report as a clear
+    one. These tests write real frames and check what came back.
+    """
+
+    def _write_frame(self, directory: Path, name: str = "ttk_capture.png") -> Path:
+        import numpy as np
+
+        from sandboxai.ttk_vision import encode_png
+
+        height, width = 360, 640
+        rows = np.mgrid[0:height, 0:width][0]
+        rng = np.random.default_rng(21)
+        background = np.clip(
+            12 + 26 * (rows / height) + rng.normal(0, 1.5, (height, width)), 0, 255
+        )
+        frame = np.repeat(background[:, :, None], 3, axis=2).astype(np.uint8)
+        frame[125:275, 138:182] = (58, 44, 38)
+        frame[145:275, 410:450] = (96, 70, 60)
+        path = directory / name
+        path.write_bytes(encode_png(frame))
+        return path
+
+    def test_a_capture_is_boxed_and_the_annotated_copy_is_written(self) -> None:
+        from sandboxai.ttk_testing import analyze_roblox_ttk_screenshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_dir = Path(tmp) / ".sandboxai" / "ttk_captures"
+            shot_dir.mkdir(parents=True)
+            self._write_frame(shot_dir)
+            result = analyze_roblox_ttk_screenshot(tmp)
+
+            self.assertTrue(result["ok"])
+            self.assertGreaterEqual(result["contact_count"], 1)
+            self.assertEqual(len(result["contacts"]), result["contact_count"])
+            self.assertIsNone(result["analysis_error"])
+            self.assertIn("boxed", result["summary"])
+            # The annotated copy lands next to the capture, so it has to be
+            # checked while the capture's directory still exists.
+            annotated = Path(str(result["annotated_path"]))
+            self.assertTrue(annotated.is_file(), "the annotated copy must be written")
+            self.assertEqual(annotated.parent, shot_dir)
+        for contact in result["contacts"]:
+            self.assertTrue(contact["on_screen"])
+            self.assertIn("score", contact)
+
+    def test_the_visibility_of_a_dark_capture_is_reported_honestly(self) -> None:
+        from sandboxai.ttk_testing import analyze_roblox_ttk_screenshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_dir = Path(tmp) / ".sandboxai" / "ttk_captures"
+            shot_dir.mkdir(parents=True)
+            path = self._write_frame(shot_dir)
+            result = analyze_roblox_ttk_screenshot(tmp, path)
+
+        visibility = result["analysis"]["visibility"]
+        self.assertGreater(visibility["shadow_fraction"], 0.5)
+        self.assertLess(visibility["enhanced_shadow_fraction"], visibility["shadow_fraction"])
+
+    def test_the_preview_returns_the_pixels_and_can_reuse_found_boxes(self) -> None:
+        import tempfile
+
+        from sandboxai.ttk_testing import capture_preview
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_dir = Path(tmp) / ".sandboxai" / "ttk_captures"
+            shot_dir.mkdir(parents=True)
+            path = self._write_frame(shot_dir)
+
+            raw = capture_preview(path, lift=False)
+            lifted = capture_preview(path, lift=True)
+            reused = capture_preview(
+                path, lift=True, contacts=[{"x": 1, "y": 2, "width": 30, "height": 40}]
+            )
+
+        self.assertTrue(raw["ok"])
+        self.assertEqual((raw["width"], raw["height"]), (640, 360))
+        self.assertEqual(raw["image"].shape, (360, 640, 3))
+        self.assertTrue(raw["boxes"], "with no contacts given the frame is read again")
+        self.assertGreater(
+            float(lifted["image"].mean()),
+            float(raw["image"].mean()),
+            "the lifted frame is the brighter one - that is the whole point",
+        )
+        self.assertEqual(reused["boxes"], [{"x": 1, "y": 2, "width": 30, "height": 40}])
+        # The numbers that say whether the frame was readable at all come
+        # back with it, and they do not flatter it: this scene is dark.
+        self.assertGreater(raw["visibility"]["shadow_fraction"], 0.5)
+        self.assertLess(
+            raw["visibility"]["enhanced_shadow_fraction"],
+            raw["visibility"]["shadow_fraction"],
+        )
+
+    def test_a_preview_of_an_unreadable_frame_says_why(self) -> None:
+        import tempfile
+
+        from sandboxai.ttk_testing import capture_preview
+
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "not_there.png"
+            result = capture_preview(missing)
+
+        self.assertFalse(result["ok"])
+        self.assertIsNone(result["image"])
+        self.assertIn("could not be opened", str(result["error"]))
+
+    def test_a_frame_that_cannot_be_decoded_says_so_and_still_reports_the_file(self) -> None:
+        import struct
+
+        from sandboxai.ttk_testing import analyze_roblox_ttk_screenshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shot_dir = Path(tmp) / ".sandboxai" / "ttk_captures"
+            shot_dir.mkdir(parents=True)
+            ihdr = struct.pack(">IIBBBBB", 1920, 1080, 16, 2, 0, 0, 0)
+            (shot_dir / "ttk_deep.png").write_bytes(
+                b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr
+            )
+            result = analyze_roblox_ttk_screenshot(tmp)
+
+        self.assertTrue(result["ok"], "the file was found; only its pixels are unreadable")
+        self.assertEqual((result["width"], result["height"]), (1920, 1080))
+        self.assertIsNone(result["analysis"])
+        self.assertEqual(result["contact_count"], 0)
+        self.assertIn("not analysed", result["summary"])
+        self.assertIn("could not be read", str(result["analysis_error"]))
 
 
 class WindowsHostBridgeTests(unittest.TestCase):

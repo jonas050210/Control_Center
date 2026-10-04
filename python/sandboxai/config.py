@@ -371,7 +371,7 @@ class TrainingConfig:
     ## historical behavior (inference coupled to the training device).
     ## Setting "cpu" with device="cuda" removes the per-step host<->device
     ## round trip that makes CUDA ~2.5x slower than CPU for this tiny
-    ## (106 -> 128 -> 128) policy; the PPO update itself still runs on the
+    ## (126 -> 128 -> 128) policy; the PPO update itself still runs on the
     ## configured device. Opt-in because the sampled rollout actions (and
     ## therefore the training trajectory) then follow the CPU RNG stream
     ## instead of the CUDA one - deterministic and reproducible either

@@ -250,6 +250,17 @@ bar alone was not enough: the next poll overwrites it, so an action could
 succeed and the operator would still be guessing. *Open Captures* opens the
 folder the screenshots land in.
 
+A capture is **shown**, not just named: the card draws the frame with a box
+around every figure that stands out in it, and *Lift shadows* switches
+between the raw capture and the same frame re-lit from its own local
+illumination — which is what makes a player standing in an unlit corridor
+readable on screen. The caption says what the frame is and how dark it was
+(`1920x1080 · 2 boxed · 63% in shadow -> 35%`). The boxes are heuristics,
+not recognition: each one carries the score and contrast it was chosen for,
+so an operator can judge it instead of trusting it. An annotated copy is
+written next to the capture as a PNG, for anyone who would rather open it
+in an image viewer.
+
 Focus, Screenshot and Analyze HUD are disabled until a Roblox client is
 running, because pressing them without one used to answer with a platform
 error nobody could act on. They work under WSL as well as on native
@@ -327,8 +338,8 @@ GUI. Fast topologies cannot finish early at a step target, and an overall
 budget does not shorten windows or thin the candidate grid. **Cancel** is
 available while running; screening checks it between vector steps.
 
-The plan states its size and minimum screening duration before Start. For
-175 configurations, the measurement windows alone total **58 minutes
+The plan states its size and minimum screening duration before Start. At the
+100-configuration ceiling the measurement windows alone total **33 minutes
 20 seconds**, plus startup/warmup, device checks and PPO validation. This is
 not the former 30-minute overall budget. Actual elapsed time is reported;
 a vector step or PPO update finishes safely if it crosses a window boundary.
@@ -394,17 +405,19 @@ sandboxai benchmark-pipeline --budget-mode steps --steps 2000
 sandboxai benchmark-pipeline --show        # print the persisted recommendation
 ```
 
-### Evaluations
-
-Win/loss/timeout outcomes, combat and accuracy diagnostics,
-action-head/zero-shot checks, and multi-run comparison over the
-evaluations the CLI writes.
-
 ### Runs / Checkpoints
 
 A browser over the on-disk run artifacts (state with evidence, progress,
 checkpoint and evaluation inventory, log sizes, manifest provenance),
 read through `run_inspection.py`.
+
+Evaluations are started from the selected run, not from a page of their
+own: **Evaluate latest** / **Evaluate best** run the frozen-weights
+battery (episodes, environments, device) on that run's checkpoint, the
+card lists every evaluation this run has, and selecting one - or several,
+for a comparison - prints its win/loss/timeout outcomes, combat and
+accuracy diagnostics and action-head/zero-shot checks. The evaluation is
+a property of a run, so it is read next to the run it measures.
 
 ### Stats
 
@@ -421,7 +434,7 @@ them into the current contract's table. The page shows the three tracked contact
 distance, bearing, elevation, health, visibility, in-FOV/LOS, information
 age, confidence and whether the belief came from vision or hearing), the
 world objects and memory rows around the agent, the hearing summary, the
-recorded action per component, the raw 106-value observation vector, and
+recorded action per component, the raw 126-value observation vector, and
 the TTK Testing evidence manifest (what is verified about the real game and
 what still needs a manual measurement). Listing a large folder is bounded
 work: a replay's header and tick count are read in one pass and cached behind

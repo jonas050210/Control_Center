@@ -100,6 +100,17 @@ client. A host with neither reports that, instead of pretending the button
 worked. `screenshots` are written to the Windows form of the captures
 directory so they appear at the POSIX path Python expects.
 
+**Reading a capture.** `ttk_testing` reads the pixels of a screenshot the
+operator took: it lifts the shadows (each pixel compared with the
+illumination around it, colour carried through as chromaticity) and boxes
+the regions that stand out from their surroundings. That is the whole of
+it. The boxes are shape-and-contrast heuristics on one image — a player,
+but just as happily a lamp post — and each carries the score and contrast
+it was chosen for. They are *not* game state, not a hitbox, and not a
+calibration source: nothing may be promoted to a Roblox fact because a box
+appeared. What the capture can establish is still only what a human
+looking at the same picture could establish.
+
 ## Implementation matrix
 
 | Status | Mechanic | Allowed project behavior |

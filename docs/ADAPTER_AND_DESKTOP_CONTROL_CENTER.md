@@ -45,9 +45,10 @@ Desktop Control Center (Tk, control_center_desktop.py)
   re-parsed.
 * **Runs & checkpoints** - `list_runs()` / `inspect_run()` reuse
   `run_inspection.py` verbatim. `discover_checkpoints()` flattens every run's
-  checkpoint inventory (`latest`/`best`/`final`) across the whole output root
-  for a single-page picker.
-* **Evaluations** - `discover_evaluations()` indexes every
+  checkpoint inventory (`latest`/`best`/`final`) across the whole output root;
+  the desktop page resolves `latest`/`best` for the *selected* run instead of
+  showing that picker, which is why there is no Evaluations page.
+* **Evaluations** - `discover_evaluations(run=...)` indexes a run's
   `evaluations/latest.json` and checkpoint-battery `step_*/summary.json`;
   `evaluation_detail()` returns one summary's full structured content
   (win/loss/timeout rate, kills/deaths/damage, accuracy, shots
@@ -151,7 +152,7 @@ Launch with `python3 main.py` from the repository root, or
 `tools/windows/start_control_center.bat` for a Windows launcher). It uses
 Tkinter from the standard library only (Windows-first, no paid/cloud
 dependency) and never renders the game. Pages: **Dashboard**, **Training**,
-**Benchmarks**, **Evaluations**, **Runs / Checkpoints**, **Stats**,
+**Benchmarks**, **Runs / Checkpoints** (evaluations included), **Stats**,
 **System / Telemetry**, **Settings**. The shell is one fixed navigation
 rail (it is not switchable and it does not collapse: a collapsed rail
 traded the page titles for two-letter codes to win ~160 px), with

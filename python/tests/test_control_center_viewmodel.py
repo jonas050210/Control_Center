@@ -919,20 +919,25 @@ def test_budget_view_rejects_unusable_values():
 def test_auto_benchmark_plan_reaches_the_wide_ladder():
     view = vm.benchmark_mode_view("auto", minutes_raw="30", cpu_count=32)
     assert view["errors"] == []
-    assert view["environments"][-1] == 258
-    assert view["environments"][-3:] == [224, 256, 258]
+    assert view["environments"][-1] == 128
+    # The knee between 64 and 128 is bracketed by its own rung, so the sweep
+    # never has to report it as "somewhere between two doublings".
+    assert 96 in view["environments"]
     # The worker ladder must probe past the conservative auto recommendation:
     # that recommendation is what produced the 64-env / 4-worker runs that
     # left the CPU at 10-20 %.
-    assert 32 in view["workers"]
-    # The whole point of the wide sweep: enough measurements to find the
-    # knee instead of guessing between two rungs.
-    assert view["expected_configurations"] >= 100
+    assert 20 in view["workers"]
+    assert max(view["workers"]) > 16
+    # Enough measurements to find the knee - and never more than the sweep's
+    # own ceiling, however wide the host is.
+    assert 90 <= view["expected_configurations"] <= 100
+    assert view["configuration_limit"] == 100
     assert "environments_note" in view
 
 
 def test_auto_benchmark_plan_is_the_pipeline_ladder():
     from sandboxai.benchmark_pipeline import (
+        cap_candidates,
         default_environment_counts,
         default_worker_counts,
         plan_candidates,
@@ -940,11 +945,12 @@ def test_auto_benchmark_plan_is_the_pipeline_ladder():
 
     view = vm.benchmark_mode_view("auto", minutes_raw="30", cpu_count=32)
     assert view["environments"] == list(default_environment_counts(32))
-    assert view["workers"] == list(default_worker_counts(256, 32))
+    assert view["workers"] == list(default_worker_counts(128, 32))
     # The promised count is the pipeline's own count, not a second rule that
-    # would drift from it.
+    # would drift from it - including the ceiling, which the pipeline applies
+    # to the very same grid.
     assert view["expected_configurations"] == len(
-        plan_candidates(view["environments"], view["workers"], cpu_count=32)
+        cap_candidates(plan_candidates(view["environments"], view["workers"], cpu_count=32))
     )
     fixed = vm.benchmark_mode_view("auto", minutes_raw="1", steps_raw="1", cpu_count=32)
     assert fixed["minutes"] is None
@@ -1031,7 +1037,7 @@ def test_observation_field_rows_come_from_the_contract():
     # A multi-value field reports its index range, not just its start.
     ranged = [row for row in rows if "\u2013" in row["index"]]
     assert ranged, "vector fields must show their index range"
-    assert sum(1 for row in rows) and OBSERVATION_FIELD_COUNT == 106
+    assert sum(1 for row in rows) and OBSERVATION_FIELD_COUNT == 126
 
 
 def test_observation_field_rows_decode_a_recorded_vector():
@@ -1194,17 +1200,17 @@ def test_table_signature_sees_only_what_a_table_renders():
 def test_replay_contract_view_labels_a_foreign_recording():
     """A replay from an older contract stays readable and says so."""
     current = vm.replay_contract_view(
-        {"contract_match": True, "recorded_observation_dim": 106, "current_observation_dim": 106}
+        {"contract_match": True, "recorded_observation_dim": 126, "current_observation_dim": 126}
     )
     assert current["matches"] is True
-    assert "106 floats" in current["text"]
+    assert "126 floats" in current["text"]
 
     older = vm.replay_contract_view(
-        {"contract_match": False, "recorded_observation_dim": 84, "current_observation_dim": 106}
+        {"contract_match": False, "recorded_observation_dim": 84, "current_observation_dim": 126}
     )
     assert older["matches"] is False
     assert "older contract" in older["text"]
-    assert "84 floats" in older["text"] and "current 106" in older["text"]
+    assert "84 floats" in older["text"] and "current 126" in older["text"]
     assert "not comparable" in older["text"]
 
     # A result without the keys (older adapter payload) must not read as a

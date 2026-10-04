@@ -53,6 +53,7 @@ from sandboxai.control_center_theme import (
     UiPreferences,
     UiScale,
     apply_ttk_styles,
+    contrast_ratio,
     get_theme,
     normalize_accent,
     readable_on,
@@ -152,8 +153,97 @@ class ThemeTests(unittest.TestCase):
         with patch.dict("sys.modules", {"tkinter": tkinter, "tkinter.ttk": ttk}):
             style = apply_ttk_styles(Root(), THEMES["corz"])
 
-        self.assertEqual(style.configured["TCombobox"]["fieldbackground"], THEMES["corz"].card)
-        self.assertEqual(style.configured["TCombobox"]["foreground"], THEMES["corz"].text)
+        theme = THEMES["corz"]
+        self.assertEqual(style.configured["TCombobox"]["fieldbackground"], theme.field_surface()[0])
+        self.assertEqual(style.configured["TCombobox"]["foreground"], theme.text)
+
+    def test_input_fields_are_inset_and_outlined_not_painted_over(self) -> None:
+        """A field must not be the colour of the surface it sits on.
+
+        Entries and comboboxes used to take ``theme.card`` - exactly the card
+        they are placed on - so every input on the Settings page was a black
+        rectangle distinguishable only by a 1 px border a few percent off the
+        background. The fill is now derived (inset) and the border is derived
+        to carry the contrast, and focusing a field repaints that border in
+        the accent.
+        """
+        for name in THEME_NAMES:
+            theme = THEMES[name]
+            field, field_border = theme.field_surface()
+            with self.subTest(theme=name):
+                self.assertNotEqual(field, theme.card, "the fill must differ from the card")
+                self.assertGreaterEqual(
+                    contrast_ratio(field_border, theme.card),
+                    1.8,
+                    "the border is what makes the field findable",
+                )
+                # Text typed into the field still has to be readable on it.
+                self.assertGreaterEqual(contrast_ratio(theme.text, field), 4.5)
+                # Dark themes inset (darker fill), light themes lift
+                # (lighter fill): the field has to read as a recess either
+                # way, not as a patch of the page background.
+                card_is_dark = contrast_ratio(theme.card, "#ffffff") > 4.0
+                fill_is_darker = contrast_ratio(field, "#000000") < contrast_ratio(
+                    theme.card, "#000000"
+                )
+                self.assertEqual(fill_is_darker, card_is_dark, (field, theme.card))
+
+    def test_every_input_control_shares_one_field_surface(self) -> None:
+        """Entries, comboboxes, spinboxes and tables: one derived surface.
+
+        A second, separately maintained fill is a second fill that drifts, so
+        the whole family takes the surface the theme derives - and the table's
+        empty-state label takes it too, or the hint sits in a visible
+        rectangle on top of the table.
+        """
+
+        class RecordingStyle:
+            def __init__(self, _root):
+                self.configured: dict[str, dict[str, object]] = {}
+                self.mapped: dict[str, dict[str, object]] = {}
+
+            def theme_use(self, _name):
+                return "clam"
+
+            def configure(self, name, **options):
+                self.configured.setdefault(name, {}).update(options)
+
+            def map(self, name, **options):
+                self.mapped.setdefault(name, {}).update(options)
+
+        class Root:
+            def configure(self, **_options):
+                pass
+
+            def option_add(self, *_args):
+                pass
+
+        tkinter = ModuleType("tkinter")
+        ttk = ModuleType("tkinter.ttk")
+        ttk.Style = RecordingStyle  # type: ignore[attr-defined]
+        tkinter.ttk = ttk  # type: ignore[attr-defined]
+        theme = THEMES["corz"]
+        with patch.dict("sys.modules", {"tkinter": tkinter, "tkinter.ttk": ttk}):
+            style = apply_ttk_styles(Root(), theme)
+
+        field, field_border = theme.field_surface()
+        for control in ("TEntry", "TCombobox", "TSpinbox", "Treeview"):
+            with self.subTest(control=control):
+                self.assertEqual(style.configured[control]["fieldbackground"], field)
+        # The three input controls carry a border - it is what makes them
+        # findable - and repaint it in the accent while focused. A table is
+        # deliberately borderless and only shares the surface.
+        for control in ("TEntry", "TCombobox", "TSpinbox"):
+            with self.subTest(control=control):
+                self.assertEqual(style.configured[control]["bordercolor"], field_border)
+                border_states = dict(style.mapped[control]["bordercolor"])
+                self.assertEqual(border_states["focus"], theme.accent)
+        # The empty-table overlay sits on the table's own field.
+        self.assertEqual(style.configured["Empty.TLabel"]["background"], field)
+        # Field labels live on card bodies; at ``panel`` they painted a
+        # darker rectangle around their text.
+        self.assertEqual(style.configured["FieldTitle.TLabel"]["background"], theme.card)
+        self.assertEqual(style.configured["FieldHelp.TLabel"]["background"], theme.card)
 
 
 class PreferencesTests(unittest.TestCase):

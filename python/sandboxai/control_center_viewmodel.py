@@ -2129,6 +2129,8 @@ def _automatic_benchmark_plan(
     from .benchmark_pipeline import (
         FIXED_MEASUREMENT_SECONDS,
         MAX_DEFAULT_ENVIRONMENTS,
+        MAX_SCREEN_CONFIGS,
+        cap_candidates,
         default_environment_counts,
         default_worker_counts,
         plan_candidates,
@@ -2168,9 +2170,12 @@ def _automatic_benchmark_plan(
     # ``worker <= environment`` rule of our own: the pipeline also drops
     # pairs the launcher would refuse, and a plan that promises 175
     # configurations while the sweep measures 150 is how the window's plan
-    # and the run's report stopped agreeing.
-    planned = plan_candidates(environments, workers, cpu_count=logical)
+    # and the run's report stopped agreeing. The ceiling is applied with the
+    # pipeline's own helper too, so the number under the Start button is the
+    # number the report will carry.
+    planned = cap_candidates(plan_candidates(environments, workers, cpu_count=logical))
     view["expected_configurations"] = len(planned)
+    view["configuration_limit"] = MAX_SCREEN_CONFIGS
     view["per_config_seconds"] = FIXED_MEASUREMENT_SECONDS
     view["screening_measurement_seconds"] = len(planned) * FIXED_MEASUREMENT_SECONDS
     view["summary"] = (
