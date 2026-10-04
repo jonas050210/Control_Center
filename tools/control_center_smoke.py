@@ -1937,7 +1937,7 @@ def _exercise_palette_shortcuts(app: object) -> None:
     reopen().event_generate("<Control-Key-4>")
     if app._palette_window.winfo_exists():
         raise AssertionError("a page accelerator must close the palette")
-    if app._current is None or app._current.title != "Evaluations":
+    if app._current is None or app._current.title != "Runs / Checkpoints":
         raise AssertionError("Ctrl+4 must switch to the fourth page")
     app.show_page("Dashboard")
 
@@ -1946,11 +1946,10 @@ def _exercise_page_handlers(app: object) -> None:
     """Call the selection handlers the tests cannot reach without a display."""
 
     empty = Event()
-    app.show_page("Evaluations")
-    app.pages["Evaluations"]._on_eval_select(empty)
-    app.pages["Evaluations"]._on_checkpoint_select(empty)
     app.show_page("Runs / Checkpoints")
     app.pages["Runs / Checkpoints"]._on_select(empty)
+    app.pages["Runs / Checkpoints"]._on_evaluation_select(empty)
+    app.pages["Runs / Checkpoints"]._evaluate_prepared()
     app.show_page("Settings")
     app.pages["Settings"]._on_select_ttk_mechanic(empty)
     app.pages["Settings"]._browse_godot()
@@ -2056,16 +2055,7 @@ def _assert_unchanged_tables_are_not_rebuilt(app: object) -> None:
     table) with the same result twice and then with a real change.
     """
 
-    evaluations = app.pages["Evaluations"]  # type: ignore[attr-defined]
-    checkpoints = [
-        {
-            "run_id": "run-a",
-            "kind": "latest",
-            "path": "/tmp/run-a/checkpoints/latest.zip",
-            "bytes": 1024,
-            "modified_utc": "2026-10-01T00:00:00Z",
-        }
-    ]
+    runs = app.pages["Runs / Checkpoints"]  # type: ignore[attr-defined]
     summaries = [
         {
             "path": "/tmp/run-a/evaluations/latest.json",
@@ -2077,25 +2067,21 @@ def _assert_unchanged_tables_are_not_rebuilt(app: object) -> None:
             "modified_utc": "2026-10-01T00:00:00Z",
         }
     ]
-    evaluations._on_checkpoints(checkpoints, None)
-    evaluations._on_evaluations(summaries, None)
-    checkpoint_writes = _count_table_writes(evaluations.checkpoint_tree)
-    evaluation_writes = _count_table_writes(evaluations.eval_tree)
+    runs._on_evaluations(summaries, None)
+    _drain(app)
+    evaluation_writes = _count_table_writes(runs.evaluation_tree)
 
-    evaluations._on_checkpoints([dict(entry) for entry in checkpoints], None)
-    evaluations._on_evaluations([dict(entry) for entry in summaries], None)
-    if checkpoint_writes["delete"] or checkpoint_writes["insert"]:
-        raise AssertionError("an unchanged checkpoint table was rebuilt")
+    runs._on_evaluations([dict(entry) for entry in summaries], None)
     if evaluation_writes["delete"] or evaluation_writes["insert"]:
         raise AssertionError("an unchanged evaluation table was rebuilt")
 
-    evaluations._on_evaluations([dict(summaries[0], mean_episode_reward=2.0)], None)
+    runs._on_evaluations([dict(summaries[0], mean_episode_reward=2.0)], None)
+    _drain(app)
     if not evaluation_writes["insert"]:
         raise AssertionError("a changed evaluation must rebuild its table")
     if evaluation_writes["delete"] != 1:
         raise AssertionError("a rebuild must clear the table exactly once")
 
-    runs = app.pages["Runs / Checkpoints"]  # type: ignore[attr-defined]
     report = {
         "run_id": "run-a",
         "status": {"state": "running"},
@@ -2119,12 +2105,13 @@ def _assert_unchanged_tables_are_not_rebuilt(app: object) -> None:
     # table does exactly that) must not grow the theme bookkeeping: the list
     # is replayed entry by entry on every theme switch, so it is a leak and a
     # slowdown in one.
-    before = len(evaluations._tag_roles)
+    before = len(runs._tag_roles)
     for reward in (0.1, 0.2, 0.3, 0.4, 0.5):
-        evaluations._on_evaluations([dict(summaries[0], mean_episode_reward=reward)], None)
-    if len(evaluations._tag_roles) != before:
+        runs._on_evaluations([dict(summaries[0], mean_episode_reward=reward)], None)
+    _drain(app)
+    if len(runs._tag_roles) != before:
         raise AssertionError(
-            f"re-registering a tag grew the theme list ({before} -> {len(evaluations._tag_roles)})"
+            f"re-registering a tag grew the theme list ({before} -> {len(runs._tag_roles)})"
         )
 
 
@@ -2132,7 +2119,7 @@ def _exercise_stats(app: object) -> None:
     """Drive the Stats page with a synthetic detailed replay.
 
     The page is the one place that decodes a recording end to end (header ->
-    tick -> the 106-float vector -> contacts/objects/hearing/action), so the
+    tick -> the 126-float vector -> contacts/objects/hearing/action), so the
     smoke run feeds it a replay shaped exactly like ``adapter.replay_stats``
     returns instead of only checking that the page exists.
     """
@@ -2167,7 +2154,7 @@ def _exercise_stats(app: object) -> None:
         "action": [2, 1, 0, 1, 1, 0],
         "reward": 0.25,
         "done": False,
-        "observation": [0.5] * 106,
+        "observation": [0.5] * 126,
         "events": [{"kind": "combat", "tick": 1, "data": {"damage_taken": 5.0}}],
     }
     stats._on_replay_stats(replay, None)
@@ -2327,7 +2314,7 @@ def run_smoke() -> int:
         app.show_page("Benchmarks")
         _exercise_benchmarks(app.pages["Benchmarks"])
         _drain(app)
-        for title in ("Dashboard", "Evaluations", "Runs / Checkpoints", "System / Telemetry"):
+        for title in ("Dashboard", "Runs / Checkpoints", "Stats", "System / Telemetry"):
             app.show_page(title)
             app.pages[title].refresh()
             _drain(app)

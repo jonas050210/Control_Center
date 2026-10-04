@@ -17,7 +17,7 @@ action and the reward, plus every discrete event. That is enough to *re-run*
 the episode (the environment is seeded and the action stream is complete),
 so observations are reconstructable rather than stored. ``DETAILED``
 additionally stores the observation vector per tick for offline analysis
-and for determinism verification without an engine. Storing 106 floats per
+and for determinism verification without an engine. Storing 126 floats per
 tick at 60 Hz is ~1.6 MB/minute/agent, which is why it is not the default.
 
 **Versioned and validated.** ``REPLAY_FORMAT_VERSION`` is bumped whenever
@@ -54,7 +54,7 @@ REPLAY_MAGIC: str = "sandboxai.replay"
 ##   1 - initial format: header + tick/event records, 6-component
 ##       MultiDiscrete action. Each file stamps the observation contract it
 ##       was recorded under (format 1 was introduced with contract v3 / 84
-##       floats and is still the format used by contract v4 / 106 floats);
+##       floats and is still the format used by contract v5 / 126 floats);
 ##       loading a replay never requires the current contract to match.
 REPLAY_FORMAT_VERSION: int = 1
 

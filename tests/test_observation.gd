@@ -149,3 +149,63 @@ func test_observation_alive_enemy_count_norm_reflects_alive_fraction() -> Sandbo
 	var obs := Observation.build(agent, [alive_enemy, dead_enemy], SandboxConfig.ARENA_HALF_EXTENT)
 	t.assert_almost_eq(obs.alive_enemy_count_norm, 0.5, 0.001)
 	return t
+
+
+## The contract-v5 vision block has exactly one writer, and both the belief
+## path and the ground-truth path go through it - so this pins down the one
+## thing they share.
+func test_apply_vision_reading_fills_one_slot() -> SandboxTest:
+	var t := SandboxTest.new("apply_vision_reading_fills_one_slot")
+	var obs := Observation.new()
+	(
+		Observation
+		. apply_vision_reading(
+			obs,
+			1,
+			{
+				"screen_box":
+				{
+					"in_front": true,
+					"center_x": 0.25,
+					"center_y": -0.5,
+					"half_width": 0.125,
+					"half_height": 0.75,
+				},
+				"exposure_fraction": 0.5,
+				"illumination": 0.25,
+				"clarity": 0.75,
+				"reticle_on_target": true,
+			}
+		)
+	)
+	t.assert_almost_eq(obs.secondary_enemy_screen_x, 0.25, 0.0001)
+	t.assert_almost_eq(obs.secondary_enemy_screen_y, -0.5, 0.0001)
+	t.assert_almost_eq(obs.secondary_enemy_screen_half_width, 0.125, 0.0001)
+	t.assert_almost_eq(obs.secondary_enemy_screen_half_height, 0.75, 0.0001)
+	t.assert_almost_eq(obs.secondary_enemy_exposure_fraction, 0.5, 0.0001)
+	t.assert_almost_eq(obs.secondary_enemy_illumination, 0.25, 0.0001)
+	t.assert_almost_eq(obs.primary_contact_clarity, 0.0, 0.0001, "clarity belongs to rank 0")
+	t.assert_almost_eq(
+		obs.primary_enemy_screen_x, 0.0, 0.0001, "and the other slots are left alone"
+	)
+	return t
+
+
+## A reading without a box - a target at or behind the eye, a replay recorded
+## before contract v5, an adapter that does not model geometry - must read as
+## "no box", never as a box at the centre of the screen.
+func test_apply_vision_reading_zeroes_a_reading_without_a_box() -> SandboxTest:
+	var t := SandboxTest.new("apply_vision_reading_zeroes_a_reading_without_a_box")
+	var obs := Observation.new()
+	obs.primary_enemy_screen_x = 0.5
+	obs.primary_enemy_screen_half_width = 0.5
+	obs.reticle_on_primary = true
+	Observation.apply_vision_reading(
+		obs, 0, {"screen_box": {"in_front": false}, "exposure_fraction": 1.0}
+	)
+	t.assert_almost_eq(obs.primary_enemy_screen_x, 0.0, 0.0001)
+	t.assert_almost_eq(obs.primary_enemy_screen_y, 0.0, 0.0001)
+	t.assert_almost_eq(obs.primary_enemy_screen_half_width, 0.0, 0.0001)
+	t.assert_almost_eq(obs.primary_enemy_screen_half_height, 0.0, 0.0001)
+	t.assert_false(obs.reticle_on_primary)
+	return t

@@ -41,6 +41,8 @@ from .control_center_ui import (
     StatusDot,
 )
 from .control_center_widgets import (
+    AgentView,
+    CaptureView,
     LineChart,
     LogPanel,
     PhaseStepper,
@@ -50,6 +52,7 @@ from .control_center_widgets import (
     _scrollable_table,
     refresh_table_empty,
 )
+from .ttk_testing import capture_preview
 
 
 def state_colors(theme: Theme) -> dict[str, str]:
@@ -123,6 +126,22 @@ class Page(ttk.Frame):
         # Recording the (tree, tag, role) triples here means a page cannot
         # forget: ``on_theme`` replays the list.
         self._tag_roles: list[tuple[Any, str, str]] = []
+        # Capture preview state. Only the pages that can photograph the
+        # client fill these in (through :func:`build_capture_preview`); the
+        # defaults keep every other page free of a None check, because a
+        # page is asked to refresh things it does not own.
+        self.capture_view: CaptureView | None = None
+        self.capture_path: str | None = None
+        self.capture_contacts: list[dict[str, Any]] = []
+        #: Whether the preview shows the raw capture or the shadow-lifted
+        #: one. Created by :func:`build_capture_preview`, which is the only
+        #: place a page gets a preview at all.
+        self.capture_lift_var: tk.BooleanVar | None = None
+
+    def refresh_capture_preview(self) -> None:
+        """Re-paint the frame preview from the capture that is already loaded."""
+        if self.capture_view is not None:
+            load_capture_preview(self, self.capture_path, list(self.capture_contacts))
 
     @property
     def palette(self) -> Theme:
@@ -468,6 +487,88 @@ def roblox_captures_dir(project_root: Path | str) -> Path:
     return directory
 
 
+def build_capture_preview(parent: tk.Misc, page: Page, *, height: int = 210) -> CaptureView:
+    """The frame preview and its one switch, for either page that captures.
+
+    Two pages can photograph the client, and both used to answer with a
+    line of text naming a file. The preview is the same widget with the
+    same one switch - "lift shadows" - because the question behind it is
+    the same too: *is the enemy in this picture*, and can I see it.
+    """
+    view = CaptureView(parent, bus=page.app.bus, height=height)
+    view.pack(fill="x", pady=(page.app.px(8, minimum=4), 0))
+    controls = ttk.Frame(parent, style="CardInner.TFrame")
+    controls.pack(fill="x", pady=(page.app.px(4, minimum=2), 0))
+    page.capture_lift_var = tk.BooleanVar(value=True)
+    ttk.Checkbutton(
+        controls,
+        text="Lift shadows",
+        variable=page.capture_lift_var,
+        command=page.refresh_capture_preview,
+    ).pack(side="left")
+    ttk.Button(
+        controls,
+        text="Open capture",
+        style="Ghost.TButton",
+        command=lambda: (
+            _open_in_file_manager(Path(page.capture_path)) if page.capture_path else None
+        ),
+    ).pack(side="right")
+    page.capture_view = view
+    return view
+
+
+def load_capture_preview(page: Page, path: str | None, contacts: list[dict[str, Any]]) -> None:
+    """Fill the preview from a capture, in the background.
+
+    Decoding and lifting a 1080p frame takes most of a second, which is
+    far too long for the Tk thread; the last capture and its boxes are
+    remembered so "lift shadows" re-paints what is already loaded instead
+    of reading the file again.
+    """
+    page.capture_path = path
+    page.capture_contacts = list(contacts)
+    view = getattr(page, "capture_view", None)
+    if view is None:
+        return
+    if not path:
+        view.clear()
+        return
+    lift = bool(page.capture_lift_var.get()) if page.capture_lift_var is not None else True
+
+    def _work() -> dict[str, Any]:
+        return capture_preview(path, lift=lift, contacts=page.capture_contacts)
+
+    def _done(result: dict[str, Any] | None, error: BaseException | None) -> None:
+        current = getattr(page, "capture_view", None)
+        if current is None:
+            return
+        if error is not None or not result or not result.get("ok"):
+            reason = (
+                str(error)
+                if error is not None
+                else str((result or {}).get("error") or "the frame could not be read")
+            )
+            current.clear(f"this capture cannot be shown: {reason}")
+            return
+        visibility = result.get("visibility") or {}
+        shadow = visibility.get("shadow_fraction")
+        lifted = visibility.get("enhanced_shadow_fraction")
+        darkness = (
+            f"{shadow:.0%} in shadow -> {lifted:.0%}"
+            if isinstance(shadow, (int, float)) and isinstance(lifted, (int, float))
+            else ""
+        )
+        count = len(result.get("boxes") or [])
+        note = f"{result['width']}x{result['height']} · {count} boxed"
+        if darkness:
+            note = f"{note} · {darkness}"
+        current.set_frame(result.get("image"), result.get("boxes") or (), message=note)
+
+    view.set_frame(None, (), message="reading the capture…")
+    page.app.background.submit(_work, _done)
+
+
 class ActiveRunStrip(ttk.Frame):
     """Compact list of live processes with a Stop button, shown on the Dashboard.
 
@@ -551,7 +652,7 @@ class ActiveRunStrip(ttk.Frame):
         self.app.background.submit(lambda: self.adapter.agents.stop(agent_id), done)
 
     def _open_page(self, kind: str) -> None:
-        page = {"benchmark": "Benchmarks", "evaluation": "Evaluations"}.get(kind, "Training")
+        page = {"benchmark": "Benchmarks", "evaluation": "Runs / Checkpoints"}.get(kind, "Training")
         if page in self.app.pages:
             self.app.show_page(page)
 
@@ -751,6 +852,10 @@ class DashboardPage(Page):
         # Launch is the one action that works without a client; the three
         # window helpers start disabled and the status probe enables them.
         self._set_roblox_window_actions(False)
+        # What the last capture shows. "Screenshot" and "Analyze HUD" both
+        # used to end in a line of text naming a file, leaving the only
+        # question that matters - is the enemy in the picture - unanswered.
+        build_capture_preview(card.body, self, height=190)
         return card
 
     def _set_roblox_result(
@@ -896,8 +1001,11 @@ class DashboardPage(Page):
                 self.app.set_status(
                     f"Screenshot failed: {error or (result or {}).get('error')}", error=True
                 )
-            else:
-                self.app.set_status(f"Captured Roblox screenshot: {result.get('path')}")
+                return
+            self.app.set_status(f"Captured Roblox screenshot: {result.get('path')}")
+            load_capture_preview(
+                self, str(result.get("path") or ""), list(result.get("contacts") or [])
+            )
 
         self.app.background.submit(self.adapter.capture_roblox_screenshot, _done)
 
@@ -1024,8 +1132,15 @@ class DashboardPage(Page):
                 "This run has neither best_eval.zip nor latest.zip yet.",
             )
             return
-        self.app.show_page("Evaluations")
-        self.app.pages["Evaluations"].select_checkpoint(str(target))
+        # Evaluating is a question about one run, so the Dashboard hands the
+        # run over to the page that owns it instead of switching to a page
+        # whose only job was to hold the checkpoint path.
+        runs = self.app.pages.get("Runs / Checkpoints")
+        if runs is None:
+            return
+        self.app.show_page("Runs / Checkpoints")
+        runs.select_run(self._last_run_dir)
+        runs.prepare_evaluation(str(target))
 
     def _export_latest_run_report(self) -> None:
         if not self._last_run_dir:
@@ -1053,19 +1168,27 @@ class DashboardPage(Page):
         self.app.set_status(f"Exported TTK combat profile: {res.get('path')}", toast=True)
 
     def _analyze_roblox_screenshot(self) -> None:
+        """Read the newest capture - in the background, not on the Tk thread.
+
+        This used to be a direct call, which was fine while the analysis
+        was an IHDR read. Reading the pixels of a 1080p capture takes the
+        better part of a second, and a second of frozen window is exactly
+        the complaint the background runner exists to prevent.
+        """
         if not hasattr(self.adapter, "analyze_roblox_screenshot"):
             return
-        try:
-            res = self.adapter.analyze_roblox_screenshot()
-        except Exception as exc:
-            self._set_roblox_result("Analyze HUD", None, exc)
-            self.app.set_status(f"HUD analysis failed: {exc}", error=True)
-            return
-        self._set_roblox_result("Analyze HUD", res)
-        if not res.get("ok"):
-            self.app.set_status(str(res.get("error") or "No screenshot found"), error=True)
-            return
-        self.app.set_status(f"TTK HUD analysis: {res.get('summary')}", toast=True)
+
+        def _done(res: dict[str, Any] | None, error: BaseException | None) -> None:
+            self._set_roblox_result("Analyze HUD", res, error)
+            if error is not None or not res or not res.get("ok"):
+                self.app.set_status(
+                    f"HUD analysis failed: {error or (res or {}).get('error')}", error=True
+                )
+                return
+            self.app.set_status(f"TTK HUD analysis: {res.get('summary')}", toast=True)
+            load_capture_preview(self, str(res.get("path") or ""), list(res.get("contacts") or []))
+
+        self.app.background.submit(self.adapter.analyze_roblox_screenshot, _done)
 
 
 class TrainingPage(Page):
@@ -2126,8 +2249,8 @@ class BenchmarkPage(Page):
         intro.bind("<Configure>", resize_intro_description, add=True)
 
         # What is about to happen, in numbers, before anything is measured.
-        # A sweep of 175 configurations is a long-running action and the
-        # operator is entitled to know its size before pressing Start.
+        # A sweep of a hundred configurations is a long-running action and
+        # the operator is entitled to know its size before pressing Start.
         self.plan_label = ttk.Label(
             intro,
             text="",
@@ -2292,7 +2415,8 @@ class BenchmarkPage(Page):
             text=(
                 f"{plan['expected_configurations']} configurations   ·   "
                 f"up to {max(plan['environments'])} environments   ·   "
-                f"up to {max(plan['workers'])} workers\n"
+                f"up to {max(plan['workers'])} workers   ·   "
+                f"ceiling {plan.get('configuration_limit', 100)}\n"
                 f"Fixed {vm.format_number(per_config, 0)} s per configuration   ·   "
                 f"at least {vm.format_duration(plan['screening_measurement_seconds'])} screening "
                 "+ startup/warmup + PPO validation"
@@ -2654,364 +2778,20 @@ class BenchmarkPage(Page):
             )
 
 
-class EvaluationPage(Page):
-    title = "Evaluations"
-    subtitle = "Evaluates a frozen checkpoint with the existing evaluator; action-head diagnostics included."
+def _evaluation_idle_text(run_dir: str | None) -> str:
+    """What the evaluation card says before the operator picks a report.
 
-    CHECKPOINT_COLUMNS = (
-        ("run_id", "Run", 140),
-        ("kind", "Kind", 80),
-        ("path", "Path", 320),
-        ("modified_utc", "Modified", 160),
+    ``run_dir`` is the selected run, or ``None`` when the selection was
+    cleared - the two cases differ, and "select a run first" is the useful
+    half of the answer.
+    """
+    if run_dir is None:
+        return "Select a run above; its evaluations appear here."
+    return (
+        f"Evaluations of {Path(run_dir).name} appear here as they finish.\n"
+        "Press Evaluate latest or Evaluate best to run the frozen-weights "
+        "battery on this run's checkpoint."
     )
-    EVAL_COLUMNS = (
-        ("path", "Path", 260),
-        ("timesteps", "Timesteps", 90),
-        ("episodes", "Episodes", 80),
-        ("win_rate", "Win rate", 80),
-        ("loss_rate", "Loss rate", 80),
-        ("mean_episode_reward", "Reward", 80),
-    )
-
-    def build(self) -> None:
-        # Two columns of cards over a plain grid. A panedwindow here would
-        # re-arrange both halves whenever a table (or a chart) reports a new
-        # requested size, which is a feedback loop with content that sizes
-        # itself - the layout has exactly two sensible columns and does not
-        # need a movable sash to express that.
-        split = ttk.Frame(self)
-        split.pack(fill="both", expand=True)
-        split.columnconfigure(0, weight=1, uniform="eval")
-        split.columnconfigure(1, weight=1, uniform="eval")
-        split.rowconfigure(0, weight=1)
-
-        left_area = ScrollArea(split, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
-        left_area.grid(row=0, column=0, sticky="nsew")
-        left = left_area.body
-
-        checkpoint_card = self.card(left, "Checkpoints", "Pick the checkpoint to evaluate")
-        checkpoint_card.pack(fill="both", expand=True)
-        self.checkpoint_tree = _scrollable_table(
-            checkpoint_card.body,
-            self.CHECKPOINT_COLUMNS,
-            bus=self.app.bus,
-            expand=False,
-            empty_text="No checkpoints yet.\nTrain a run, then evaluate its checkpoints here.",
-        )
-
-        form = self.card(left, "Run evaluation on the selected checkpoint")
-        form.pack(fill="x", pady=(self.app.px(10, minimum=5), 0))
-        self.episodes_var = tk.StringVar(value="20")
-        self.env_count_var = tk.StringVar(value="1")
-        self.device_var = tk.StringVar(value="auto")
-        for row, (label, var, kind) in enumerate(
-            (
-                ("Episodes", self.episodes_var, "entry"),
-                ("Environment count", self.env_count_var, "entry"),
-                ("Device", self.device_var, "choice"),
-            )
-        ):
-            ttk.Label(form.body, text=label, style="FieldTitle.TLabel").grid(
-                row=row, column=0, sticky="w", pady=2
-            )
-            if kind == "choice":
-                ttk.Combobox(
-                    form.body,
-                    textvariable=var,
-                    values=("auto", "cpu", "cuda"),
-                    state="readonly",
-                    width=16,
-                ).grid(row=row, column=1, sticky="w", padx=(self.app.px(8, minimum=4), 0))
-            else:
-                ttk.Entry(form.body, textvariable=var, width=18).grid(
-                    row=row, column=1, sticky="w", padx=(self.app.px(8, minimum=4), 0)
-                )
-        self.run_button = ttk.Button(
-            form.body, text="Start evaluation", command=self._start, style="Primary.TButton"
-        )
-        self.run_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        self.selected_checkpoint_label = ttk.Label(
-            left,
-            text="selected checkpoint: none",
-            style="FieldHelp.TLabel",
-            wraplength=self.app.px(420, minimum=260),
-        )
-        self.selected_checkpoint_label.pack(anchor="w", pady=(self.app.px(6, minimum=3), 0))
-        self.state_label = ttk.Label(left, text="", style="FieldHelp.TLabel")
-        self.state_label.pack(anchor="w")
-
-        right_area = ScrollArea(split, self.app.bus, style="Content.TFrame", scale_px=self.app.px)
-        right_area.grid(row=0, column=1, sticky="nsew", padx=(self.app.px(12, minimum=6), 0))
-        right = right_area.body
-
-        results_card = self.card(right, "Evaluation results", "Select multiple rows to compare")
-        results_card.pack(fill="both", expand=True)
-        self.eval_tree = _scrollable_table(
-            results_card.body,
-            self.EVAL_COLUMNS,
-            bus=self.app.bus,
-            expand=False,
-            empty_text="No evaluations recorded yet.\nPick a checkpoint on the left and press Start evaluation.",
-        )
-        self.eval_tree.configure(selectmode="extended")
-        self.eval_tree.bind("<<TreeviewSelect>>", self._on_eval_select)
-
-        detail_card = self.card(right, "Structured result / comparison")
-        detail_card.pack(fill="both", expand=True, pady=(self.app.px(10, minimum=5), 0))
-        self.detail_text = tk.Text(
-            detail_card.body,
-            wrap="word",
-            state="disabled",
-            height=18,
-            font=self.app.bus.font("mono"),
-            background=self.palette.panel,
-            foreground=self.palette.text,
-            insertbackground=self.palette.text,
-            selectbackground=self.palette.accent_soft,
-            relief="flat",
-            borderwidth=0,
-            padx=self.app.px(10, minimum=6),
-            pady=self.app.px(10, minimum=6),
-        )
-        self.detail_text.pack(fill="both", expand=True)
-
-        self._checkpoint_paths: dict[str, str] = {}
-        self._checkpoint_signature: tuple[tuple[Any, ...], ...] | None = None
-        self._eval_paths: dict[str, str] = {}
-        self._evaluation_signature: tuple[tuple[Any, ...], ...] | None = None
-        self._selected_evaluation_paths: tuple[str, ...] = ()
-        self._evaluation_detail_generation = 0
-        self.selected_checkpoint: str | None = None
-        self.checkpoint_tree.bind("<<TreeviewSelect>>", self._on_checkpoint_select)
-        self.process_id: str | None = None
-
-    #: The keys both inventories render; also their table identity.
-    CHECKPOINT_KEYS = ("run_id", "kind", "path", "modified_utc")
-    EVALUATION_KEYS = (
-        "path",
-        "timesteps",
-        "episodes",
-        "mean_episode_reward",
-        "win_rate",
-        "loss_rate",
-    )
-
-    def select_checkpoint(self, path: str) -> None:
-        self.selected_checkpoint = path
-        self.selected_checkpoint_label.configure(text=f"selected checkpoint: {path}")
-
-    def refresh(self) -> None:
-        self.submit_poll("checkpoint-list", self.adapter.discover_checkpoints, self._on_checkpoints)
-        self.submit_poll("evaluation-list", self.adapter.discover_evaluations, self._on_evaluations)
-        process_id = self.process_id
-        if process_id:
-            self.submit_poll(
-                "evaluation-status",
-                lambda: self.adapter.process_status(process_id),
-                lambda status, error: self._on_process_status(process_id, status, error),
-            )
-
-    def _on_checkpoints(
-        self, entries: list[dict[str, Any]] | None, error: BaseException | None
-    ) -> None:
-        if error is not None or entries is None:
-            self.report_error("Checkpoint list refresh failed", error or RuntimeError("unknown"))
-            return
-        # Same rule as the runs table: an unchanged list is left alone, which
-        # is the only way the operator's row selection survives a poll tick
-        # (deleting the rows clears the highlight, even when the very same
-        # rows are re-inserted).
-        signature = vm.table_signature(entries, self.CHECKPOINT_KEYS)
-        if signature == self._checkpoint_signature:
-            return
-        self._checkpoint_signature = signature
-        self.checkpoint_tree.delete(*self.checkpoint_tree.get_children())
-        self._checkpoint_paths.clear()
-        for entry in entries:
-            item_id = self.checkpoint_tree.insert(
-                "",
-                "end",
-                values=(
-                    entry["run_id"],
-                    entry["kind"],
-                    entry["path"],
-                    entry.get("modified_utc") or "n/a",
-                ),
-            )
-            self._checkpoint_paths[item_id] = entry["path"]
-        refresh_table_empty(self.checkpoint_tree)
-        self.set_hint(
-            ""
-            if (entries or self.selected_checkpoint)
-            else (
-                "Nothing to evaluate yet. Training writes checkpoints into its run "
-                "directory; they appear here as soon as one exists."
-            )
-        )
-
-    def _on_checkpoint_select(self, _event: object) -> None:
-        selection = self.checkpoint_tree.selection()
-        if selection:
-            self.selected_checkpoint = self._checkpoint_paths.get(selection[0])
-
-    def _start(self) -> None:
-        if not self.selected_checkpoint:
-            messagebox.showwarning(
-                "Checkpoint required", "Select a checkpoint from the list on the left."
-            )
-            return
-        try:
-            episodes = int(self.episodes_var.get())
-            environment_count = int(self.env_count_var.get())
-        except ValueError:
-            messagebox.showerror(
-                "Invalid evaluation configuration",
-                "Episodes and environment count must be integers.",
-            )
-            return
-        checkpoint = self.selected_checkpoint
-        device = self.device_var.get()
-
-        def _launch() -> dict[str, Any]:
-            return self.adapter.start_evaluation(
-                checkpoint, episodes=episodes, environment_count=environment_count, device=device
-            )
-
-        self.run_button.configure(state="disabled")
-        self.app.background.submit(_launch, self._on_started)
-
-    def _on_started(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
-        self.run_button.configure(state="normal")
-        if error is not None or result is None:
-            messagebox.showerror("Evaluation could not start", str(error))
-            return
-        self.process_id = result["process_id"]
-        self.app.set_status(f"Evaluation started ({self.process_id[:8]})")
-
-    def _on_process_status(
-        self,
-        process_id: str,
-        status: dict[str, Any] | None,
-        error: BaseException | None,
-    ) -> None:
-        if process_id != self.process_id or error is not None or status is None:
-            return
-        self.state_label.configure(
-            text=f"evaluation process: {status.get('state')}",
-            foreground=state_colors(self.palette).get(
-                str(status.get("state", "")), self.palette.text_dim
-            ),
-        )
-        if status.get("state") in ("finished", "failed"):
-            self.process_id = None
-
-    def _on_evaluations(
-        self, entries: list[dict[str, Any]] | None, error: BaseException | None
-    ) -> None:
-        if error is not None or entries is None:
-            self.report_error("Evaluation list refresh failed", error or RuntimeError("unknown"))
-            return
-        signature = vm.table_signature(entries, self.EVALUATION_KEYS)
-        if signature == self._evaluation_signature:
-            return
-        self._evaluation_signature = signature
-        selected = set(self._selected_evaluation_paths)
-        restored_paths: list[str] = []
-        self.eval_tree.delete(*self.eval_tree.get_children())
-        self.tag_style(self.eval_tree, "best-eval", "ok")
-        self._eval_paths.clear()
-        best_reward = max(
-            (
-                float(e["mean_episode_reward"])
-                for e in entries
-                if isinstance(e.get("mean_episode_reward"), (int, float))
-            ),
-            default=None,
-        )
-        for entry in entries:
-            path = str(entry["path"])
-            reward_val = entry.get("mean_episode_reward")
-            is_best = (
-                best_reward is not None
-                and isinstance(reward_val, (int, float))
-                and float(reward_val) >= best_reward
-            )
-            item_id = self.eval_tree.insert(
-                "",
-                "end",
-                tags=("best-eval",) if is_best else (),
-                values=(
-                    path,
-                    vm.format_number(entry.get("timesteps")),
-                    vm.format_number(entry.get("episodes")),
-                    vm.format_fraction_as_percent(entry.get("win_rate")),
-                    vm.format_fraction_as_percent(entry.get("loss_rate")),
-                    vm.format_number(reward_val, 3),
-                ),
-            )
-            self._eval_paths[item_id] = path
-            if path in selected:
-                self.eval_tree.selection_add(item_id)
-                restored_paths.append(path)
-        refresh_table_empty(self.eval_tree)
-        restored = tuple(restored_paths)
-        if restored != self._selected_evaluation_paths:
-            self._selected_evaluation_paths = restored
-            self._evaluation_detail_generation += 1
-            if not restored:
-                self._clear_evaluation_detail()
-
-    def _on_eval_select(self, _event: object) -> None:
-        selection = self.eval_tree.selection()
-        paths = tuple(
-            self._eval_paths[item_id] for item_id in selection if item_id in self._eval_paths
-        )
-        if paths == self._selected_evaluation_paths:
-            return
-        self._selected_evaluation_paths = paths
-        self._evaluation_detail_generation += 1
-        generation = self._evaluation_detail_generation
-        if not paths:
-            self._clear_evaluation_detail()
-            return
-        self.app.background.submit(
-            lambda: [self.adapter.evaluation_detail(path) for path in paths],
-            lambda details, error: self._on_details(paths, generation, details, error),
-        )
-
-    def _clear_evaluation_detail(self) -> None:
-        self.detail_text.configure(state="normal")
-        self.detail_text.delete("1.0", "end")
-        self.detail_text.configure(state="disabled")
-
-    def _on_details(
-        self,
-        paths: tuple[str, ...],
-        generation: int,
-        details: list[dict[str, Any]] | None,
-        error: BaseException | None,
-    ) -> None:
-        # A slow comparison from an earlier multi-selection must never
-        # overwrite the report for the selection the operator currently sees.
-        if (
-            paths != self._selected_evaluation_paths
-            or generation != self._evaluation_detail_generation
-        ):
-            return
-        if error is not None or details is None:
-            self.report_error("Evaluation detail failed", error or RuntimeError("unknown"))
-            return
-        self.detail_text.configure(state="normal")
-        self.detail_text.delete("1.0", "end")
-        if len(details) == 1:
-            tactical = vm.tactical_combat_profile_view(details[0])
-            self.detail_text.insert(
-                "end", _render_evaluation_detail(vm.evaluation_view(details[0]), tactical)
-            )
-        else:
-            rows = vm.evaluation_comparison_rows(details)
-            self.detail_text.insert("end", _render_evaluation_comparison(rows))
-        self.detail_text.configure(state="disabled")
 
 
 def _render_evaluation_detail(view: dict[str, Any], tactical: dict[str, Any] | None = None) -> str:
@@ -3208,12 +2988,122 @@ class RunsPage(Page):
             style="Primary.TButton",
         ).pack(side="left", padx=(8, 0))
 
+        # Evaluations used to own a page of their own. What an operator
+        # actually does is "evaluate *this* run", so the battery lives where
+        # the run already is instead of behind a page switch that only ever
+        # carried a checkpoint path across.
+        evaluation_card = self.card(
+            paned,
+            "Evaluate this run",
+            "Frozen weights, no optimizer: pick latest or best, then read the report",
+        )
+        evaluation_card.pack(fill="x", pady=(self.app.px(12, minimum=6), 0))
+        form = ttk.Frame(evaluation_card.body, style="CardInner.TFrame")
+        form.pack(fill="x")
+        self.evaluation_episodes_var = tk.StringVar(value="20")
+        self.evaluation_env_count_var = tk.StringVar(value="1")
+        self.evaluation_device_var = tk.StringVar(value="auto")
+        for column, (label, var, choices) in enumerate(
+            (
+                ("Episodes", self.evaluation_episodes_var, None),
+                ("Environments", self.evaluation_env_count_var, None),
+                ("Device", self.evaluation_device_var, ("auto", "cpu", "cuda")),
+            )
+        ):
+            ttk.Label(form, text=label, style="FieldTitle.TLabel").grid(
+                row=0, column=column * 2, sticky="w", padx=(0, self.app.px(6, minimum=3))
+            )
+            if choices:
+                ttk.Combobox(
+                    form,
+                    textvariable=var,
+                    values=choices,
+                    state="readonly",
+                    width=8,
+                ).grid(row=1, column=column * 2, sticky="w")
+            else:
+                ttk.Entry(form, textvariable=var, width=8).grid(
+                    row=1, column=column * 2, sticky="w"
+                )
+        self.evaluation_run_button = ttk.Button(
+            form,
+            text="Evaluate latest",
+            command=self._evaluate,
+        )
+        self.evaluation_run_button.grid(
+            row=1, column=6, sticky="w", padx=(self.app.px(12, minimum=6), 0)
+        )
+        self.evaluation_best_button = ttk.Button(
+            form,
+            text="Evaluate best",
+            command=self._evaluate_best,
+            style="Primary.TButton",
+        )
+        self.evaluation_best_button.grid(
+            row=1, column=7, sticky="w", padx=(self.app.px(6, minimum=3), 0)
+        )
+        # Only enabled once another page handed a checkpoint over (the
+        # Dashboard's "Evaluate best checkpoint" does). It keeps that exact
+        # path instead of re-resolving one, which may not be the same file.
+        self.evaluation_prepared_button = ttk.Button(
+            form,
+            text="Evaluate handed-over checkpoint",
+            command=self._evaluate_prepared,
+            state="disabled",
+        )
+        self.evaluation_prepared_button.grid(
+            row=1, column=8, sticky="w", padx=(self.app.px(6, minimum=3), 0)
+        )
+        self.evaluation_state_label = ttk.Label(
+            evaluation_card.body,
+            text="no evaluation running",
+            style="FieldHelp.TLabel",
+            justify="left",
+            wraplength=self.app.px(760, minimum=320),
+        )
+        self.evaluation_state_label.pack(anchor="w", pady=(self.app.px(6, minimum=3), 0))
+        self.evaluation_tree = _scrollable_table(
+            evaluation_card.body,
+            self.EVALUATION_COLUMNS,
+            bus=self.app.bus,
+            expand=False,
+            empty_text=(
+                "No evaluations for this run yet.\n"
+                "Select a run and press Evaluate latest or Evaluate best."
+            ),
+        )
+        self.evaluation_tree.configure(selectmode="extended")
+        self.evaluation_tree.bind("<<TreeviewSelect>>", self._on_evaluation_select)
+        self.evaluation_detail_text = tk.Text(
+            evaluation_card.body,
+            wrap="word",
+            state="disabled",
+            height=14,
+            font=self.app.bus.font("mono"),
+            background=self.palette.panel,
+            foreground=self.palette.text,
+            insertbackground=self.palette.text,
+            selectbackground=self.palette.accent_soft,
+            relief="flat",
+            borderwidth=0,
+            padx=self.app.px(10, minimum=6),
+            pady=self.app.px(10, minimum=6),
+        )
+        self.evaluation_detail_text.pack(fill="x", pady=(self.app.px(8, minimum=4), 0))
+
         self._row_to_dir: dict[str, str] = {}
         self._selected_run_dir: str | None = None
         self._selected_run_report: dict[str, Any] | None = None
         self._run_detail_generation = 0
         self._pending_run_selection: str | None = None
         self._rows_signature: tuple[tuple[Any, ...], ...] | None = None
+        self._evaluation_paths: dict[str, str] = {}
+        self._evaluation_signature: tuple[tuple[Any, ...], ...] | None = None
+        self._selected_evaluation_paths: tuple[str, ...] = ()
+        self._evaluation_detail_generation = 0
+        self._evaluation_process_id: str | None = None
+        self._prepared_checkpoint: Path | None = None
+        self._render_evaluation_text(_evaluation_idle_text(None))
 
     #: The row keys whose values are rendered; also the identity of the table.
     COLUMN_KEYS = (
@@ -3227,6 +3117,25 @@ class RunsPage(Page):
         "reward",
         "win_rate",
         "modified_utc",
+    )
+
+    EVALUATION_COLUMNS = (
+        ("name", "Evaluation", 220),
+        ("timesteps", "Timesteps", 90),
+        ("episodes", "Episodes", 80),
+        ("win_rate", "Win rate", 80),
+        ("loss_rate", "Loss rate", 80),
+        ("mean_episode_reward", "Reward", 80),
+    )
+
+    #: The keys of one evaluation entry; also the identity of its table.
+    EVALUATION_KEYS = (
+        "path",
+        "timesteps",
+        "episodes",
+        "mean_episode_reward",
+        "win_rate",
+        "loss_rate",
     )
 
     def select_run(self, run_dir: str) -> None:
@@ -3253,6 +3162,23 @@ class RunsPage(Page):
 
     def refresh(self) -> None:
         self.submit_poll("run-list", self.adapter.list_runs, self._on_runs)
+        # Evaluations belong to the selected run, so the list is re-read with
+        # it; with no selection there is nothing meaningful to show and the
+        # table keeps its "select a run" empty state.
+        if self._selected_run_dir is not None and hasattr(self.adapter, "discover_evaluations"):
+            run_dir = self._selected_run_dir
+            self.submit_poll(
+                "evaluation-list",
+                lambda: self.adapter.discover_evaluations(run_dir),
+                self._on_evaluations,
+            )
+        process_id = self._evaluation_process_id
+        if process_id:
+            self.submit_poll(
+                "evaluation-status",
+                lambda: self.adapter.process_status(process_id),
+                self._on_evaluation_status,
+            )
 
     def _on_runs(self, result: dict[str, Any] | None, error: BaseException | None) -> None:
         if error is not None or result is None:
@@ -3340,6 +3266,9 @@ class RunsPage(Page):
         self._selected_run_report = None
         self._run_detail_generation += 1
         generation = self._run_detail_generation
+        self._evaluation_signature = None
+        self._evaluation_detail_generation += 1
+        self._render_evaluation_text(_evaluation_idle_text(run_dir))
         self.app.background.submit(
             lambda: self.adapter.inspect_run(run_dir),
             lambda report, error: self._on_detail(run_dir, generation, report, error),
@@ -3354,11 +3283,14 @@ class RunsPage(Page):
         self._selected_run_dir = None
         self._selected_run_report = None
         self._run_detail_generation += 1
+        self._evaluation_signature = None
+        self._evaluation_detail_generation += 1
         self.detail_text.configure(state="normal")
         self.detail_text.delete("1.0", "end")
         self.detail_text.configure(state="disabled")
         self.run_reward_chart.set_points([])
         self.run_fps_chart.set_points([])
+        self._render_evaluation_text(_evaluation_idle_text(None))
 
     def _on_detail(
         self,
@@ -3410,8 +3342,7 @@ class RunsPage(Page):
         if target is None:
             messagebox.showinfo("No checkpoint yet", "This run has no checkpoints/latest.zip yet.")
             return
-        self.app.show_page("Evaluations")
-        self.app.pages["Evaluations"].select_checkpoint(str(target))
+        self._start_evaluation(target)
 
     def _evaluate_best(self) -> None:
         if not self._selected_run_dir:
@@ -3423,8 +3354,227 @@ class RunsPage(Page):
                 "This run has neither best_eval.zip nor latest.zip yet.",
             )
             return
-        self.app.show_page("Evaluations")
-        self.app.pages["Evaluations"].select_checkpoint(str(target))
+        self._start_evaluation(target)
+
+    def prepare_evaluation(self, checkpoint: str | Path) -> None:
+        """Takes over a checkpoint another page already resolved.
+
+        The Dashboard's "Evaluate best checkpoint" knows which file it means;
+        re-deriving "best" here could pick a different one a moment later, so
+        the path travels with the navigation and this page just offers to run
+        it as it is.
+        """
+        target = Path(checkpoint)
+        self._prepared_checkpoint = target
+        self.evaluation_prepared_button.configure(state="normal")
+        self.evaluation_state_label.configure(
+            text=f"checkpoint handed over: {target.name} — press Evaluate handed-over checkpoint",
+            foreground=self.palette.text,
+        )
+
+    def _evaluate_prepared(self) -> None:
+        if self._prepared_checkpoint is None:
+            return
+        if not self._prepared_checkpoint.is_file():
+            messagebox.showinfo(
+                "Checkpoint gone",
+                f"{self._prepared_checkpoint} no longer exists.\n"
+                "Use Evaluate latest or Evaluate best to pick a current one.",
+            )
+            self._prepared_checkpoint = None
+            self.evaluation_prepared_button.configure(state="disabled")
+            return
+        self._start_evaluation(self._prepared_checkpoint)
+
+    # -- evaluation battery ------------------------------------------------
+
+    def _start_evaluation(self, checkpoint: Path) -> None:
+        """Launches the frozen-weights evaluator on one checkpoint of this run.
+
+        The two buttons differ only in *which* checkpoint they resolve; the
+        reading of the form and the launch itself are this one path, so the
+        numbers the operator typed cannot apply to one button only.
+        """
+        try:
+            episodes = int(self.evaluation_episodes_var.get())
+            environment_count = int(self.evaluation_env_count_var.get())
+        except ValueError:
+            messagebox.showerror(
+                "Invalid evaluation configuration",
+                "Episodes and environment count must be integers.",
+            )
+            return
+        if episodes < 1 or environment_count < 1:
+            messagebox.showerror(
+                "Invalid evaluation configuration",
+                "Episodes and environment count must be at least 1.",
+            )
+            return
+        device = self.evaluation_device_var.get()
+        path = str(checkpoint)
+
+        def _launch() -> dict[str, Any]:
+            return self.adapter.start_evaluation(
+                path,
+                episodes=episodes,
+                environment_count=environment_count,
+                device=device,
+            )
+
+        self._set_evaluation_buttons("disabled")
+        self.app.background.submit(_launch, self._on_evaluation_started)
+
+    def _set_evaluation_buttons(self, state: str) -> None:
+        self.evaluation_run_button.configure(state=state)
+        self.evaluation_best_button.configure(state=state)
+        # A handed-over checkpoint stays available for a re-run, so it is
+        # only re-enabled when it actually has a path behind it.
+        if self._prepared_checkpoint is not None or state == "disabled":
+            self.evaluation_prepared_button.configure(state=state)
+
+    def _on_evaluation_started(
+        self, result: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        self._set_evaluation_buttons("normal")
+        if error is not None or result is None:
+            messagebox.showerror("Evaluation could not start", str(error))
+            self.evaluation_state_label.configure(
+                text=f"evaluation could not start: {error}", foreground=self.palette.error
+            )
+            return
+        self._evaluation_process_id = result["process_id"]
+        self.evaluation_state_label.configure(
+            text=f"evaluation {self._evaluation_process_id[:8]}: starting",
+            foreground=self.palette.text_dim,
+        )
+        self.app.set_status(f"Evaluation started ({self._evaluation_process_id[:8]})")
+
+    def _on_evaluation_status(
+        self, status: dict[str, Any] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or status is None:
+            return
+        state = str(status.get("state") or "")
+        short_id = (self._evaluation_process_id or "")[:8]
+        self.evaluation_state_label.configure(
+            text=f"evaluation {short_id}: {state}",
+            foreground=state_colors(self.palette).get(state, self.palette.text_dim),
+        )
+        if state in ("finished", "failed"):
+            # Force the next poll to rebuild the table: a finished
+            # evaluation writes a new summary that this list must show.
+            self._evaluation_signature = None
+            self._evaluation_process_id = None
+
+    def _on_evaluations(
+        self, entries: list[dict[str, Any]] | None, error: BaseException | None
+    ) -> None:
+        if error is not None or entries is None:
+            self.report_error("Evaluation list refresh failed", error or RuntimeError("unknown"))
+            return
+        signature = vm.table_signature(entries, self.EVALUATION_KEYS)
+        if signature == self._evaluation_signature:
+            return
+        self._evaluation_signature = signature
+        selected = set(self._selected_evaluation_paths)
+        restored: list[str] = []
+        self.evaluation_tree.delete(*self.evaluation_tree.get_children())
+        self.tag_style(self.evaluation_tree, "best-eval", "ok")
+        self._evaluation_paths.clear()
+        best_reward = max(
+            (
+                float(entry["mean_episode_reward"])
+                for entry in entries
+                if isinstance(entry.get("mean_episode_reward"), (int, float))
+            ),
+            default=None,
+        )
+        for entry in entries:
+            path = str(entry["path"])
+            reward = entry.get("mean_episode_reward")
+            is_best = (
+                best_reward is not None
+                and isinstance(reward, (int, float))
+                and float(reward) >= best_reward
+            )
+            item_id = self.evaluation_tree.insert(
+                "",
+                "end",
+                tags=("best-eval",) if is_best else (),
+                values=(
+                    Path(path).parent.name
+                    if Path(path).name == "summary.json"
+                    else Path(path).name,
+                    vm.format_number(entry.get("timesteps")),
+                    vm.format_number(entry.get("episodes")),
+                    vm.format_fraction_as_percent(entry.get("win_rate")),
+                    vm.format_fraction_as_percent(entry.get("loss_rate")),
+                    vm.format_number(reward, 3),
+                ),
+            )
+            self._evaluation_paths[item_id] = path
+            if path in selected:
+                self.evaluation_tree.selection_add(item_id)
+                restored.append(path)
+        refresh_table_empty(self.evaluation_tree)
+        if tuple(restored) != self._selected_evaluation_paths:
+            self._selected_evaluation_paths = tuple(restored)
+            self._evaluation_detail_generation += 1
+            self._on_evaluation_select(None)
+
+    def _on_evaluation_select(self, _event: object) -> None:
+        paths = tuple(
+            self._evaluation_paths[item_id]
+            for item_id in self.evaluation_tree.selection()
+            if item_id in self._evaluation_paths
+        )
+        if paths == self._selected_evaluation_paths and _event is not None:
+            return
+        self._selected_evaluation_paths = paths
+        self._evaluation_detail_generation += 1
+        generation = self._evaluation_detail_generation
+        if not paths:
+            self._render_evaluation_text(
+                "Select one evaluation to read its report, or several to compare them."
+            )
+            return
+        self.app.background.submit(
+            lambda: [self.adapter.evaluation_detail(path) for path in paths],
+            lambda details, error: self._on_evaluation_details(paths, generation, details, error),
+        )
+
+    def _on_evaluation_details(
+        self,
+        paths: tuple[str, ...],
+        generation: int,
+        details: list[dict[str, Any]] | None,
+        error: BaseException | None,
+    ) -> None:
+        # A slow comparison from an earlier multi-selection must never
+        # overwrite the report for the selection the operator now sees.
+        if (
+            paths != self._selected_evaluation_paths
+            or generation != self._evaluation_detail_generation
+        ):
+            return
+        if error is not None or details is None:
+            self.report_error("Evaluation detail failed", error or RuntimeError("unknown"))
+            return
+        if len(details) == 1:
+            tactical = vm.tactical_combat_profile_view(details[0])
+            self._render_evaluation_text(
+                _render_evaluation_detail(vm.evaluation_view(details[0]), tactical)
+            )
+        else:
+            self._render_evaluation_text(
+                _render_evaluation_comparison(vm.evaluation_comparison_rows(details))
+            )
+
+    def _render_evaluation_text(self, text: str) -> None:
+        self.evaluation_detail_text.configure(state="normal")
+        self.evaluation_detail_text.delete("1.0", "end")
+        self.evaluation_detail_text.insert("end", text)
+        self.evaluation_detail_text.configure(state="disabled")
 
     def _clone_to_training(self) -> None:
         report = self._selected_run_report
@@ -3929,7 +4079,10 @@ class SettingsPage(Page):
             command=lambda _value: self._on_radius_changed(),
             background=self.palette.card,
             foreground=self.palette.text,
-            troughcolor=self.palette.panel,
+            troughcolor=self.palette.field_surface()[0],
+            # Without this the slider turns Tk's default light grey while it
+            # is being dragged, which is the brightest thing on a dark page.
+            activebackground=self.palette.accent,
             highlightthickness=0,
             showvalue=True,
             length=self.app.px(150, minimum=110),
@@ -4417,6 +4570,10 @@ class SettingsPage(Page):
             add="+",
         )
 
+        # The capture preview: the same question the Training page asks
+        # after a screenshot, and therefore the same widget and switch.
+        build_capture_preview(roblox_box, self, height=200)
+
         # ---- Interactive TTK & DPS Calculator + 1-Click Presets ---------
         calc_row = ttk.Frame(roblox_box, style="Surface.TFrame")
         calc_row.pack(fill="x", pady=(2, 4))
@@ -4716,10 +4873,11 @@ class SettingsPage(Page):
                 self.app.set_status(
                     f"Screenshot failed: {error or (res or {}).get('error')}", error=True
                 )
-            else:
-                self.app.set_status(f"Saved screenshot: {res.get('path')}")
-                if self._selected_mechanic:
-                    self.mechanic_notes_var.set(f"screenshot: {res.get('path')}")
+                return
+            self.app.set_status(f"Saved screenshot: {res.get('path')}")
+            if self._selected_mechanic:
+                self.mechanic_notes_var.set(f"screenshot: {res.get('path')}")
+            load_capture_preview(self, str(res.get("path") or ""), list(res.get("contacts") or []))
 
         self.app.background.submit(self.adapter.capture_roblox_screenshot, _done)
 
@@ -4827,7 +4985,7 @@ class StatsPage(Page):
     enemies, what objects are around the agent, and why did the policy do
     that?" - with the *same* numbers the network gets. Two honest sources:
 
-    * ``contract.OBSERVATION_SPEC`` is the contract itself (all 106 fields,
+    * ``contract.OBSERVATION_SPEC`` is the contract itself (all 126 fields,
       their meaning and their normalisation), so the table is complete even
       before a single replay exists;
     * a recorded replay is the only thing that can show real values. Only
@@ -4873,6 +5031,8 @@ class StatsPage(Page):
         ("info_age", "Age", 60),
         ("confidence", "Confidence", 85),
         ("source", "Source", 70),
+        ("exposure", "Exposure", 70),
+        ("clarity", "Clarity", 70),
     )
 
     # The declared widths are *minimums*: Tk's own column stretching fills
@@ -4937,9 +5097,24 @@ class StatsPage(Page):
             max_span=3,
         ),
         WidgetSpec(
+            "agent_view",
+            "The agent's own screen",
+            "Where the three contacts fall in its field of view, and how readable they were.",
+            default_span=3,
+            max_span=3,
+        ),
+        WidgetSpec(
+            "guide",
+            "How to read this page",
+            "What a tick is, what 'norm' means, and where the values come from.",
+            default_span=3,
+            max_span=3,
+            removable=False,
+        ),
+        WidgetSpec(
             "vector",
             "Observation vector (raw)",
-            "All 106 fields, grouped, exactly as the contract defines them.",
+            "All 126 fields, grouped, exactly as the contract defines them.",
             default_span=3,
             max_span=3,
         ),
@@ -4980,6 +5155,8 @@ class StatsPage(Page):
         board = self.board(area.body)
         board.add("source", self._build_source_card)
         board.add("summary", self._build_summary_card)
+        board.add("agent_view", self._build_agent_view_card)
+        board.add("guide", self._build_guide_card)
         board.add("vector", self._build_vector_card)
         board.add("contacts", self._build_contacts_card)
         board.add("world", self._build_world_card)
@@ -5003,6 +5180,7 @@ class StatsPage(Page):
         self._fill_world(None)
         self._fill_audio(None)
         self._fill_action(None)
+        self._fill_agent_view(None)
 
     # -- cards -------------------------------------------------------------
 
@@ -5113,6 +5291,64 @@ class StatsPage(Page):
         )
         self._draw_tactical_radar(None, None)
         return card
+
+    def _build_guide_card(self, parent: tk.Misc) -> tk.Widget:
+        """The page's own legend: 126 decoded fields mean nothing without it.
+
+        The complaint about this page was never that it lacked numbers. It
+        was that a table of normalised values with no statement of the
+        normalisation reads as noise, so the scaling is written out once,
+        from the contract itself.
+        """
+        card = self.card(
+            parent,
+            "How to read this page",
+            "Every number below is one of the values the policy received",
+        )
+        ttk.Label(
+            card.body,
+            text="\n\n".join(f"• {line}" for line in vm.stats_guide_lines()),
+            style="CardLabel.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        ).pack(anchor="w")
+        return card
+
+    def _build_agent_view_card(self, parent: tk.Misc) -> tk.Widget:
+        """What the agent sees, from the numbers it was handed.
+
+        A radar shows where contacts are in the world. This shows where they
+        are *on its screen* - which is the only place a policy can act from
+        - and lights each box by how readable the target was, so "in the
+        picture" and "readable" stay different facts.
+        """
+        card = self.card(
+            parent,
+            "The agent's own screen",
+            "Contacts in the agent's field of view — centre is under the crosshair",
+        )
+        self.agent_view = AgentView(card.body, bus=self.app.bus, height=210)
+        self.agent_view.pack(fill="x")
+        self.agent_view_notes = ttk.Label(
+            card.body,
+            text="",
+            style="FieldHelp.TLabel",
+            justify="left",
+            wraplength=self.app.px(900, minimum=420),
+        )
+        self.agent_view_notes.pack(anchor="w", fill="x", pady=(self.app.px(6, minimum=3), 0))
+        return card
+
+    def _fill_agent_view(self, observation: Any) -> None:
+        if getattr(self, "agent_view", None) is None:
+            return
+        model = vm.agent_view_model(observation)
+        self.agent_view.set_contacts(
+            model["contacts"],
+            reticle=model["reticle_on_primary"],
+            note=model["summary"],
+        )
+        self.agent_view_notes.configure(text="   ·   ".join(model["notes"]))
 
     def _build_vector_card(self, parent: tk.Misc) -> tk.Widget:
         card = self.card(
@@ -5383,6 +5619,7 @@ class StatsPage(Page):
         self._fill_world(result.get("observation"))
         self._fill_audio(result.get("observation"))
         self._fill_action(result.get("action"))
+        self._fill_agent_view(result.get("observation"))
         self._draw_tactical_radar(result.get("observation"), result.get("action"))
 
     def _clear_decode(self) -> None:
@@ -5409,6 +5646,7 @@ class StatsPage(Page):
         self._fill_world(None)
         self._fill_audio(None)
         self._fill_action(None)
+        self._fill_agent_view(None)
         self._draw_tactical_radar(None, None)
 
     def _draw_tactical_radar(self, observation: Any, action: Any) -> None:
@@ -5660,11 +5898,13 @@ class StatsPage(Page):
         )
 
 
+#: The page order in the sidebar. Evaluations are deliberately absent: the
+#: page only ever existed to carry a checkpoint path somewhere else, and the
+#: battery itself now lives on the Runs page next to the run it measures.
 PAGE_CLASSES: tuple[type[Page], ...] = (
     DashboardPage,
     TrainingPage,
     BenchmarkPage,
-    EvaluationPage,
     RunsPage,
     StatsPage,
     SystemPage,

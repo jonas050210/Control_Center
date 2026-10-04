@@ -84,8 +84,12 @@ PAGE_API = (
 )
 
 
+def _module_source() -> str:
+    return PAGES_SOURCE.read_text(encoding="utf-8")
+
+
 def _module_tree() -> ast.Module:
-    return ast.parse(PAGES_SOURCE.read_text(encoding="utf-8"))
+    return ast.parse(_module_source())
 
 
 def _page_classes(tree: ast.Module) -> dict[str, ast.ClassDef]:
@@ -703,6 +707,61 @@ class GeometryFeedbackTests(unittest.TestCase):
             body,
             "the card must not derive a requested height from its body's request",
         )
+
+    def test_both_pages_that_capture_show_the_frame(self) -> None:
+        """A screenshot the GUI cannot show is a screenshot it cannot explain.
+
+        Two pages can photograph the client, and both used to answer with a
+        line of text naming a file. The preview is built from one helper so
+        the two cannot drift apart in what they show.
+        """
+        tree = _module_tree()
+        callers: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id == "build_capture_preview"
+                ):
+                    callers.append(node.name)
+                    break
+        self.assertEqual(
+            sorted(callers),
+            ["_build_roblox_ttk_section", "_build_workflow"],
+            "the Training page and the Settings Roblox card each build the capture "
+            "preview; anything else means a third copy of the same question",
+        )
+
+    def test_every_capture_result_feeds_the_preview(self) -> None:
+        """Both capture entry points end in a picture, not in a filename."""
+        tree = _module_tree()
+        fed = 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for child in ast.walk(node):
+                if (
+                    isinstance(child, ast.Call)
+                    and isinstance(child.func, ast.Name)
+                    and child.func.id == "load_capture_preview"
+                ):
+                    fed += 1
+        self.assertGreaterEqual(
+            fed, 3, "capture, HUD analysis and the Settings capture all fill the preview"
+        )
+
+    def test_the_hud_analysis_runs_off_the_tk_thread(self) -> None:
+        # Reading the pixels of a 1080p capture takes about a second. Calling
+        # it directly froze the window for exactly as long.
+        classes = _page_classes(_module_tree())
+        node = _find_method(classes["DashboardPage"], "_analyze_roblox_screenshot")
+        assert node is not None, "DashboardPage._analyze_roblox_screenshot is gone"
+        body = ast.get_source_segment(_module_source(), node) or ""
+        self.assertIn("background.submit", body)
+        self.assertNotIn("self.adapter.analyze_roblox_screenshot()", body)
 
     def test_every_table_explains_its_empty_state(self) -> None:
         """A table with only headings reads like a broken one."""

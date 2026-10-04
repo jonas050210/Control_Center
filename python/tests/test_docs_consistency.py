@@ -127,8 +127,8 @@ class EngineVersionTests(unittest.TestCase):
 class ObservationDimensionTests(unittest.TestCase):
     """Prose must repeat the observation width, not invent its own.
 
-    The v4 object block changed the width from 84 to 106 and nine living
-    documents still claimed 84. ``AGENTS.md`` asks that a number written
+    The v5 vision block changed the width from 106 to 126 and the living
+    documents still claimed 106. ``AGENTS.md`` asks that a number written
     into prose be checkable, so this test is the check: every
     "<N>-float" / "<N> float" / "<N>-field" / "<N> to 128 to 128" mention
     in a living document must use ``contract.OBSERVATION_FIELD_COUNT``.

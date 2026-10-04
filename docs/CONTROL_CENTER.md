@@ -199,13 +199,13 @@ rail anyway (the branch was dead), a collapsed rail replaced the page
 titles with two-letter codes (DB, TR, BM, ...) to win back about 160 px
 and then needed a shortcut sheet at the bottom to stay readable, and
 supporting the switch meant every shell change destroyed and rebuilt all
-eight pages. A preferences or preset file written by an older build that
+seven pages. A preferences or preset file written by an older build that
 still names a removed shell is repaired to the rail on load.
 
 ## Keyboard
 
-`Ctrl+K` opens the command palette, `Ctrl+1..8` jump straight to a page
-(the window has eight), `F11` maximizes and restores, `Escape` closes the
+`Ctrl+K` opens the command palette, `Ctrl+1..7` jump straight to a page
+(the window has seven), `F11` maximizes and restores, `Escape` closes the
 palette, and `Up`/`Down` move its selection. The palette
 carries those bindings itself in addition to the shell's, because Tk gives a
 second toplevel its own bindtags - and pressing `Ctrl+K` twice reuses the
@@ -249,6 +249,17 @@ did - `Screenshot - .sandboxai/ttk_captures/roblox_….png`, `Analyze HUD -
 bar alone was not enough: the next poll overwrites it, so an action could
 succeed and the operator would still be guessing. *Open Captures* opens the
 folder the screenshots land in.
+
+A capture is **shown**, not just named: the card draws the frame with a box
+around every figure that stands out in it, and *Lift shadows* switches
+between the raw capture and the same frame re-lit from its own local
+illumination — which is what makes a player standing in an unlit corridor
+readable on screen. The caption says what the frame is and how dark it was
+(`1920x1080 · 2 boxed · 63% in shadow -> 35%`). The boxes are heuristics,
+not recognition: each one carries the score and contrast it was chosen for,
+so an operator can judge it instead of trusting it. An annotated copy is
+written next to the capture as a PNG, for anyone who would rather open it
+in an image viewer.
 
 Focus, Screenshot and Analyze HUD are disabled until a Roblox client is
 running, because pressing them without one used to answer with a platform
@@ -327,8 +338,8 @@ GUI. Fast topologies cannot finish early at a step target, and an overall
 budget does not shorten windows or thin the candidate grid. **Cancel** is
 available while running; screening checks it between vector steps.
 
-The plan states its size and minimum screening duration before Start. For
-175 configurations, the measurement windows alone total **58 minutes
+The plan states its size and minimum screening duration before Start. At the
+100-configuration ceiling the measurement windows alone total **33 minutes
 20 seconds**, plus startup/warmup, device checks and PPO validation. This is
 not the former 30-minute overall budget. Actual elapsed time is reported;
 a vector step or PPO update finishes safely if it crosses a window boundary.
@@ -394,21 +405,41 @@ sandboxai benchmark-pipeline --budget-mode steps --steps 2000
 sandboxai benchmark-pipeline --show        # print the persisted recommendation
 ```
 
-### Evaluations
-
-Win/loss/timeout outcomes, combat and accuracy diagnostics,
-action-head/zero-shot checks, and multi-run comparison over the
-evaluations the CLI writes.
-
 ### Runs / Checkpoints
 
 A browser over the on-disk run artifacts (state with evidence, progress,
 checkpoint and evaluation inventory, log sizes, manifest provenance),
 read through `run_inspection.py`.
 
+Evaluations are started from the selected run, not from a page of their
+own: **Evaluate latest** / **Evaluate best** run the frozen-weights
+battery (episodes, environments, device) on that run's checkpoint, the
+card lists every evaluation this run has, and selecting one - or several,
+for a comparison - prints its win/loss/timeout outcomes, combat and
+accuracy diagnostics and action-head/zero-shot checks. The evaluation is
+a property of a run, so it is read next to the run it measures.
+
 ### Stats
 
-What the policy actually receives, decoded from a recording. The contract
+What the policy actually receives, decoded from a recording - and, since the
+complaint was that none of it could be read, what the numbers *mean*. A
+**How to read this page** card states the scaling once, from the contract's
+own constants: what a tick is (126 values in, 6 out), that "norm" is a
+division by a fixed maximum rather than a percentage (a distance of 0.50 is
+14 m, because the arena diagonal is 28 m; counts are divided by 8), that
+signed values are directions and unsigned ones are amounts, and that a
+contact's position is always relative to the agent.
+
+**The agent's own screen** draws the same vector as a picture: the three
+contacts where they fall in the agent's field of view, each as the box the
+engine reported and lit by how readable the target was - because "inside
+the cone with a clear line" and "a readable target" are different facts,
+and only the second one is what the policy can act on. The contacts table
+carries the same two numbers as columns (*Exposure*, *Clarity*). Centre of
+the drawing is under the crosshair, so it is a view and not a map: a
+contact behind the agent has no box and is not drawn at all.
+
+The contract
 table (`contract.OBSERVATION_SPEC`) is complete without any recording; a
 replay is the only thing that can show real values, and only
 `--replay-detail detailed` stores the observation vector per tick - a light
@@ -421,7 +452,7 @@ them into the current contract's table. The page shows the three tracked contact
 distance, bearing, elevation, health, visibility, in-FOV/LOS, information
 age, confidence and whether the belief came from vision or hearing), the
 world objects and memory rows around the agent, the hearing summary, the
-recorded action per component, the raw 106-value observation vector, and
+recorded action per component, the raw 126-value observation vector, and
 the TTK Testing evidence manifest (what is verified about the real game and
 what still needs a manual measurement). Listing a large folder is bounded
 work: a replay's header and tick count are read in one pass and cached behind
@@ -523,7 +554,7 @@ unless the prerequisites are missing (`2`) or the window failed to build
 
 **Polling.** One timer drives the window (600 ms). Each tick refreshes the
 **visible page only** - every page's `refresh()` submits background reads
-(run directories, benchmark history, the replay list), so running all eight
+(run directories, benchmark history, the replay list), so running all seven
 would keep reading artifacts for a window nobody is looking at. The headless
 smoke harness pins that behaviour by counting `refresh()` calls per page and
 fails if a hidden page is polled; the adapter's Godot-runtime probe is cached

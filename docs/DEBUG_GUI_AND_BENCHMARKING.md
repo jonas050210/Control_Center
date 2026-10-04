@@ -23,10 +23,51 @@ logic living in two pure, dependency-free functions:
   node is touched; this is what `tests/test_debug_overlay.gd` exercises.
 - `DebugOverlay.format_lines(telemetry: Dictionary) -> PackedStringArray` —
   pure text formatting.
+- `DebugOverlay.contact_boxes(env) -> Array` — the enemies the agent can
+  actually see right now, each as a screen-space box in normalised device
+  coordinates. Also pure, and unit tested the same way.
 
-`_process()` just calls both and assigns the result to a `Label`, so the only
-engine-coupled part is the label text assignment and the button wiring
-(both trivial, no gameplay logic).
+`_process()` calls the telemetry pair, assigns the result to a `Label`, and
+moves the contact boxes; the only engine-coupled parts are the label text
+assignment, the rectangles themselves and the button wiring (all trivial, no
+gameplay logic).
+
+### Contact boxes: "what can the agent see"
+
+Pressing nothing at all, the overlay frames every enemy the agent currently
+has **in view** with a thin rectangle, and prints `in view: N` (plus the mean
+exposure of those contacts) in the text panel. The rule is the vision
+system's own, not a distance guessed by the GUI:
+
+- The perception levels (6-10) build a belief per enemy every tick, and the
+  overlay reads the very same `screen_box` the observation vector is built
+  from - so a box here and a box in the Control Center's Stats page cannot
+  disagree.
+- The legacy levels (1-4) run without a perception layer and their
+  observation carries no boxes, so there the geometry is evaluated directly
+  through the agent's own cone (`fov_deg`) and reach (`vision_range`).
+- Either way an enemy is framed only when it is in the field of view, within
+  reach and has a clear line. A contact that is merely *remembered* - seen a
+  second ago, behind cover now - gets no box, and neither does a corpse.
+  "In view" is not "alive", and the overlay never pretends otherwise.
+
+Colour is the second fact: **orange** is a clear contact (the agent can shoot
+what it is looking at), **green** is a contact that is partly behind cover
+(exposure < 1.0 — it sees the target, it just cannot hit all of it). The
+stroke is thin and hollow on purpose: the box frames the enemy, it does not
+paint over it.
+
+One caveat, stated rather than hidden: the boxes are exact at the project's
+16:9 window. Stretch the window and the vertical axis stays exact while the
+horizontal one scales, because the engine locks the vertical field of view
+(`keep_aspect = KEEP_HEIGHT`) while the contract defines its cone
+horizontally - the two only coincide at one aspect ratio.
+
+This is the in-engine twin of the TTK silhouette boxes
+([`TTK_TESTING_REFERENCE.md`](TTK_TESTING_REFERENCE.md)): there the boxes come
+from the pixels of a captured frame, here they come from the simulation that
+would have produced those pixels. Same question, same answer: what is on the
+screen, and how readable is it.
 
 ### What it shows
 
@@ -36,6 +77,8 @@ engine-coupled part is the label text assignment and the button wiring
 - Episode number, timestep (step count within the episode).
 - Agent HP, position, aim yaw/pitch, weapon-ready flag.
 - Per-enemy list: index, AI state (idle/chase/attack/dead), HP, position.
+- How many of those enemies the agent actually has in view right now, and the
+  mean exposure of those contacts (see "Contact boxes" below).
 - Shots fired/hit, accuracy, kills (episode + lifetime total), deaths
   (episode + lifetime total).
 - Episode cumulative reward, last-step reward, reward breakdown (from
@@ -44,7 +87,7 @@ engine-coupled part is the label text assignment and the button wiring
   (`SimulationManager.get_last_actions()`).
 - A condensed observation summary (agent health, primary-enemy
   distance/bearing/aliveness, alive-enemy-count fraction, in-combat flag) —
-  not the full 106-float raw vector, to stay readable.
+  not the full 126-float raw vector, to stay readable.
 
 ### Controls
 
@@ -62,7 +105,10 @@ methods — the overlay adds no new simulation behavior:
   was judged not worth the extra surface area.
 - **Level -/+** — calls `SimulationManager.set_curriculum_level(new_level)`.
 - **`< Env` / `Env >`** — changes which environment's telemetry is
-  displayed; does not touch simulation state.
+  displayed and which one the camera looks through; does not touch
+  simulation state. The two are the same environment on purpose: the
+  contact boxes are screen-space, so drawing them for one environment over
+  another's picture would put the rectangles where nothing is.
 
 ### Headless independence
 
@@ -97,10 +143,13 @@ with the best measured throughput and flags where returns start
 diminishing relative to environment-count growth.
 
 `sandboxai benchmark-pipeline` is the staged sweep the Control Center runs.
-It plans a `(environments, workers)` grid of at least 100 configurations up
-to 258 environments and 32 workers, screens each one on the real bridge,
-validates the strongest finalists with a training slice, and writes both a
-report and a recommendation:
+It plans a `(environments, workers)` grid of up to 100 configurations (the
+sweep ceiling) - up to 128 environments and 20 workers in the automatic
+sweep, since a desktop stops scaling past 128 sharded environments - screens
+each one on the real bridge, validates the strongest finalists with a
+training slice, and writes both a report and a recommendation. Push mode is
+the deliberate exception: it keeps climbing to 258 environments and 48
+workers to find the plateau instead of guessing where it is:
 
 ```bash
 sandboxai benchmark-pipeline              # fixed automatic windows
@@ -112,8 +161,8 @@ sandboxai benchmark-pipeline --budget-mode steps --steps 2000
 
 The automatic default fixes every screening window at **20 seconds after
 startup/warmup**, keeps the entire planned grid, and does not stop early at
-a step target. The user cannot choose the duration in the GUI. For 175
-configurations, screening alone takes at least **58 minutes 20 seconds**;
+a step target. The user cannot choose the duration in the GUI. At the
+100-configuration ceiling, screening alone takes up to **33 minutes 20 seconds**;
 startup/warmup, device checks and the default four PPO finalists add overhead.
 There is no automatic 30-minute cutoff or budget-driven grid thinning.
 
@@ -177,7 +226,7 @@ The first SB3 FPS row has not yet paid an update; later rows have. A large
 stepwise fall after each rollout is therefore expected even with an infinitely
 fast environment.
 
-The compact `(106 -> 128 -> 128)` MLP produces many very small matrix and
+The compact `(126 -> 128 -> 128)` MLP produces many very small matrix and
 distribution operations. On CUDA, launch, host/device transfer and framework
 synchronization overhead dominate these tiny kernels; low utilization and
 ~0.75 GB allocated VRAM are evidence of under-filled hardware, not a request
@@ -293,7 +342,7 @@ levels stay exactly as cheap as they were:
 
 | Level range | Per-step work added vs. the original implementation |
 | --- | --- |
-| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 106 floats instead of 33 (the extra 73 are written from already-computed values or left at their "no information" defaults). |
+| 1–4 | None. `world` is `null`, `AgentPerception.update()` is never called, `SoundBus.tick()` is never called, and `Observation.build()` takes the original 3-argument path. The only difference is that the observation array is 126 floats instead of 33 (the extra 93 are written from already-computed values or left at their "no information" defaults). |
 | 5 | Collision + ground queries per character (O(obstacles) axis-separated box tests), `EnemyBrain` instead of `update_ai()`. |
 | 6 | Adds per-enemy FOV + line-of-sight: 2 ray samples per enemy per tick, each O(obstacles). |
 | 7 | Adds sound: bounded at `SOUND_MAX_ACTIVE = 24` events, each sampled with one occluder count per listener. |

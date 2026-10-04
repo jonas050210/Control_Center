@@ -23,11 +23,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 # Semantic compatibility boundary shared by training, datasets, checkpoints,
 # evaluation, and replay provenance. Shape checks alone cannot detect reordered
 # or reinterpreted fields.
-CONTRACT_VERSION: int = 4
+CONTRACT_VERSION: int = 5
 
 
 @dataclass(frozen=True)
@@ -649,6 +650,154 @@ OBSERVATION_SPEC: tuple[ObservationField, ...] = (
         "How many objects are currently visible (capped like every count field)",
         "count / COUNT_NORMALIZER, saturated at 1.0",
     ),
+    # -- contract v5: the vision block -------------------------------------
+    # What a contact LOOKS LIKE from where the agent stands, in the
+    # coordinates of the agent's own screen (the view spans [-1, 1] on both
+    # axes; +x is right, the sign every bearing field uses, +y is up). Before
+    # v5 the vector could place a contact but not size it: "an enemy at 12 m"
+    # and "an enemy at 12 m with only its head over a crate, standing in a
+    # shadow" produced the same numbers. Zero on all six means "not on my
+    # screen", never "in the middle of my screen".
+    ObservationField(
+        106,
+        1,
+        "primary_enemy_screen_x",
+        "Where the primary contact's box sits horizontally on the agent's screen",
+        "normalised device x / horizontal half-FOV tangent, [-1, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        107,
+        1,
+        "primary_enemy_screen_y",
+        "Where the primary contact's box sits vertically on the agent's screen",
+        "normalised device y / vertical half-FOV tangent, [-1, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        108,
+        1,
+        "primary_enemy_screen_half_width",
+        "Half the screen width the primary contact covers",
+        "[0, 1]; grows as it gets closer, 0 when not on screen",
+    ),
+    ObservationField(
+        109,
+        1,
+        "primary_enemy_screen_half_height",
+        "Half the screen height the primary contact covers",
+        "[0, 1]; grows as it gets closer, 0 when not on screen",
+    ),
+    ObservationField(
+        110,
+        1,
+        "primary_enemy_exposure_fraction",
+        "How much of the primary contact's body is unoccluded",
+        "[0, 1]; 1 = fully exposed, 0.4 = head and shoulders over cover",
+    ),
+    ObservationField(
+        111,
+        1,
+        "primary_enemy_illumination",
+        "How much light the primary contact is standing in",
+        "[0, 1]; the same scale as local_illumination, 0 when not on screen",
+    ),
+    ObservationField(
+        112,
+        1,
+        "secondary_enemy_screen_x",
+        "Where the secondary contact's box sits horizontally",
+        "normalised device x, [-1, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        113,
+        1,
+        "secondary_enemy_screen_y",
+        "Where the secondary contact's box sits vertically",
+        "normalised device y, [-1, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        114,
+        1,
+        "secondary_enemy_screen_half_width",
+        "Half the screen width the secondary contact covers",
+        "[0, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        115,
+        1,
+        "secondary_enemy_screen_half_height",
+        "Half the screen height the secondary contact covers",
+        "[0, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        116,
+        1,
+        "secondary_enemy_exposure_fraction",
+        "How much of the secondary contact's body is unoccluded",
+        "[0, 1]",
+    ),
+    ObservationField(
+        117,
+        1,
+        "secondary_enemy_illumination",
+        "How much light the secondary contact is standing in",
+        "[0, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        118,
+        1,
+        "tertiary_enemy_screen_x",
+        "Where the tertiary contact's box sits horizontally",
+        "normalised device x, [-1, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        119,
+        1,
+        "tertiary_enemy_screen_y",
+        "Where the tertiary contact's box sits vertically",
+        "normalised device y, [-1, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        120,
+        1,
+        "tertiary_enemy_screen_half_width",
+        "Half the screen width the tertiary contact covers",
+        "[0, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        121,
+        1,
+        "tertiary_enemy_screen_half_height",
+        "Half the screen height the tertiary contact covers",
+        "[0, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        122,
+        1,
+        "tertiary_enemy_exposure_fraction",
+        "How much of the tertiary contact's body is unoccluded",
+        "[0, 1]",
+    ),
+    ObservationField(
+        123,
+        1,
+        "tertiary_enemy_illumination",
+        "How much light the tertiary contact is standing in",
+        "[0, 1]; 0 when not on screen",
+    ),
+    ObservationField(
+        124,
+        1,
+        "reticle_on_primary",
+        "The crosshair is inside the primary contact's box",
+        "boolean 0/1; the one comparison a policy should not have to learn",
+    ),
+    ObservationField(
+        125,
+        1,
+        "primary_contact_clarity",
+        "How well the primary contact can be made out at all",
+        "illumination at the contact x transmittance over the distance, [0, 1]",
+    ),
 )
 
 ## The engine build this contract is implemented and tested against.
@@ -663,6 +812,15 @@ GODOT_VERSION: str = "4.7.2"
 OBSERVATION_FIELD_COUNT: int = sum(field.width for field in OBSERVATION_SPEC)
 OBSERVATION_LOW: float = -1.0
 OBSERVATION_HIGH: float = 1.0
+
+## The agent's view geometry, mirrored from ``SandboxConfig`` (``AGENT_FOV_
+## DEG`` / ``AGENT_VIEW_ASPECT``). The vision block is expressed in the
+## coordinates of that view, so anything that DRAWS the block - the Control
+## Center's agent view, an export, a test - needs the same cone and aspect the
+## engine used. ``python/tests/test_contract.py`` fails if these drift from
+## the Godot constants, which is the only reason repeating them is safe.
+AGENT_FOV_DEG: float = 100.0
+AGENT_VIEW_ASPECT: float = 16.0 / 9.0
 ## Enemies beyond this rank still exist and affect reward/simulation, but are
 ## not individually reported in the observation vector.
 OBSERVATION_MAX_TRACKED_ENEMIES: int = 3
@@ -680,6 +838,12 @@ OBSERVATION_MAX_TRACKED_OBJECTS: int = 3
 ## Mirrors ``Observation.COUNT_NORMALIZER``; a drift test parses the GDScript
 ## constant, and the Control Center's Stats page converts back with it.
 OBSERVATION_COUNT_NORMALIZER: int = 8
+## Every ``*_distance_norm`` is divided by this, so a Stats-page reader can
+## turn a normalised distance back into metres. Mirrors
+## ``SandboxConfig.ARENA_MAX_DISTANCE`` (the arena's own diagonal:
+## ``ARENA_HALF_EXTENT * 2 * sqrt(2)``); a drift test parses the GDScript
+## constant and fails if the two disagree.
+OBSERVATION_DISTANCE_NORMALIZER_METERS: float = 28.284
 ## ``Obstacle.Kind`` (``scripts/world/obstacle.gd``) in declaration order.
 ## ``object_k_kind_norm`` is this ordinal divided by ``len(...) - 1``; the order
 ## is a wire detail, so ``test_contract.py`` parses the GDScript enum and fails
@@ -776,6 +940,32 @@ OBSERVATION_GROUPS: dict[str, tuple[str, ...]] = {
         "object_3_kind_norm",
         "object_3_visible",
         "visible_object_count_norm",
+    ),
+    # The detector reading: what a contact looks like on the agent's own
+    # screen. It sits in its own group because it is the one block that is
+    # only meaningful while a contact is actually being seen - every field
+    # here reads zero, not "unknown", when nothing is on screen.
+    "vision": (
+        "primary_enemy_screen_x",
+        "primary_enemy_screen_y",
+        "primary_enemy_screen_half_width",
+        "primary_enemy_screen_half_height",
+        "primary_enemy_exposure_fraction",
+        "primary_enemy_illumination",
+        "secondary_enemy_screen_x",
+        "secondary_enemy_screen_y",
+        "secondary_enemy_screen_half_width",
+        "secondary_enemy_screen_half_height",
+        "secondary_enemy_exposure_fraction",
+        "secondary_enemy_illumination",
+        "tertiary_enemy_screen_x",
+        "tertiary_enemy_screen_y",
+        "tertiary_enemy_screen_half_width",
+        "tertiary_enemy_screen_half_height",
+        "tertiary_enemy_exposure_fraction",
+        "tertiary_enemy_illumination",
+        "reticle_on_primary",
+        "primary_contact_clarity",
     ),
     "sound": (
         "second_sound_bearing_norm",
@@ -884,6 +1074,60 @@ def observation_slice(observation: Sequence[float], name: str) -> list[float]:
     """Reads a (possibly multi-value) observation field by name."""
     index, width = OBSERVATION_INDEX[name]
     return [float(value) for value in observation[index : index + width]]
+
+
+#: The three individually tracked contacts, in slot order. Slot 0 is the
+#: primary - the contact target selection picked, NOT simply the nearest one
+#: (that is only true with perception gating off, i.e. below curriculum
+#: level 6).
+CONTACT_SLOTS: tuple[str, ...] = ("primary", "secondary", "tertiary")
+
+
+def contact_vision(observation: Sequence[float] | None, slot: int | str = 0) -> dict[str, Any]:
+    """The vision block for one tracked contact, decoded by name.
+
+    Returns the box the contact covers on the agent's screen
+    (``screen_x``/``screen_y`` centre, ``half_width``/``half_height`` extents,
+    all in the view's [-1, 1] normalised device coordinates), plus
+    ``exposure_fraction`` and ``illumination``. ``on_screen`` is the engine's
+    own answer to "is this contact being seen at all": with no perception
+    data every value is zero, which must be read as *not on screen* rather
+    than as a box in the middle of the view.
+
+    ``None`` (or a vector too short for this contract) yields an empty
+    reading with ``on_screen=False`` - never a guess.
+    """
+    name = slot if isinstance(slot, str) else CONTACT_SLOTS[int(slot)]
+    empty: dict[str, Any] = {
+        "slot": name,
+        "on_screen": False,
+        "screen_x": 0.0,
+        "screen_y": 0.0,
+        "half_width": 0.0,
+        "half_height": 0.0,
+        "exposure_fraction": 0.0,
+        "illumination": 0.0,
+    }
+    if observation is None:
+        return empty
+    prefix = f"{name}_enemy"
+    try:
+        reading: dict[str, Any] = {
+            "slot": name,
+            "screen_x": observation_value(observation, f"{prefix}_screen_x"),
+            "screen_y": observation_value(observation, f"{prefix}_screen_y"),
+            "half_width": observation_value(observation, f"{prefix}_screen_half_width"),
+            "half_height": observation_value(observation, f"{prefix}_screen_half_height"),
+            "exposure_fraction": observation_value(observation, f"{prefix}_exposure_fraction"),
+            "illumination": observation_value(observation, f"{prefix}_illumination"),
+        }
+    except (KeyError, IndexError):
+        return empty
+    # A contact with no box at all is not on screen. The engine zeroes the
+    # whole block in that case, so "no extent" is the honest test - checking
+    # the centre would call a contact dead ahead "off screen".
+    reading["on_screen"] = reading["half_width"] > 0.0 and reading["half_height"] > 0.0
+    return reading
 
 
 def validate_observation_spec() -> None:

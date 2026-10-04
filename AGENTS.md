@@ -266,7 +266,7 @@ Ubuntu under Windows 11 (WSL), i7-12700F (8P + 4E cores), RTX 4060 Ti,
 32 GB RAM, Godot 4.7.2.
 
 **A GPU does not help this workload, and that is expected.** The policy is
-106 → 128 → 128. Per-step kernel launches and host↔device transfers cost
+126 → 128 → 128. Per-step kernel launches and host↔device transfers cost
 more than the arithmetic saves; the maintainer measured CPU at roughly
 twice the throughput and that matches `README.md:403-405`, which offers
 `--inference-device cpu` for exactly this reason. Do not "fix" this and

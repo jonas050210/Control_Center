@@ -145,23 +145,34 @@ It provides:
   host-scaled measurement pipeline: it checks runtime capabilities, compares
   environment/worker/device candidates, validates the strongest results, and
   applies the fastest stable recommendation to the launch deck. The sweep
-  measures at least 100 configurations per run, up to 258 environments and
-  32 workers, with a fixed **20-second measurement window per configuration**
-  after startup/warmup. No duration control or 30-minute total cutoff is
-  exposed: 175 configurations need 58 minutes 20 seconds of screening alone.
+  measures up to 100 configurations per run (the sweep ceiling), up to 128
+  environments and 20 workers, with a fixed **20-second measurement window per
+  configuration** after startup/warmup. No duration control or 30-minute total
+  cutoff is exposed: at the 100-configuration ceiling the measurement windows
+  alone total **33 minutes 20 seconds** of screening. A **Push** sweep
+  continues past the automatic ceiling on purpose (up to 258 environments and
+  48 workers) to measure where throughput stops improving.
   Live telemetry separates **Simulation Steps/s** from **PPO Training Steps/s**;
   **FPS / env** is the simulation rate per environment, not render FPS.
   Separate charts, latency, stability and progress accompany the measured
   configurations and full report remain available for review and are
   persisted. Advanced sweep controls remain available to scripted callers,
   not in the GUI.
-- **Evaluations** - win/loss/timeout, combat, accuracy and
-  action-head/zero-shot diagnostics plus multi-run comparison
-- **Runs / Checkpoints** - a browser over the on-disk run artifacts
+- **Runs / Checkpoints** - a browser over the on-disk run artifacts, and the
+  place evaluations are run from: the frozen-weights battery (episodes,
+  environments, device) starts on the selected run's latest or best
+  checkpoint, and its win/loss/timeout outcomes, combat and accuracy
+  diagnostics, action-head/zero-shot checks and multi-run comparison appear
+  in the same card. Evaluations are a question about one run, so they live
+  with the run instead of on a page of their own
 - **Stats** - every value the policy receives, decoded from a real
   recording: the three tracked contacts (enemy position, distance,
-  bearing, health, visibility/source), the world objects around the agent,
-  hearing, memory, the raw observation vector and the recorded action.
+  bearing, health, visibility/source, exposure and clarity), the world
+  objects around the agent, hearing, memory, the raw observation vector
+  and the recorded action. A **How to read this page** card states the
+  scaling (what "norm" divides by, which values are directions), and
+  **the agent's own screen** draws the same vector as a picture: where
+  the contacts fall in the field of view and how readable each one was.
   The contract table is complete without a recording; a light replay is
   labelled as such instead of being rendered with zeros that would look
   like data
@@ -352,7 +363,7 @@ sandboxai bc-train --dataset training/datasets/human_demo.jsonl \
 
 The trainer starts one Godot headless process containing the requested number
 of independent environments and uses a `MultiDiscrete([3,3,3,3,2,2])` action
-space. The structured observation is a 106-float `Box` (see
+space. The structured observation is a 126-float `Box` (see
 [`docs/OBSERVATION_ACTION_CONTRACT.md`](docs/OBSERVATION_ACTION_CONTRACT.md)
 for the full field-by-field table, including the multi-enemy tracking
 fields added for curriculum levels with more than one enemy).
@@ -401,7 +412,7 @@ see [`docs/DEBUG_GUI_AND_BENCHMARKING.md`](docs/DEBUG_GUI_AND_BENCHMARKING.md)):
 - `--inference-device cpu` (default `auto`): run rollout/evaluation policy
   inference on CPU while PPO updates stay on `--device`. On CUDA hardware
   this removes the per-step host<->device round trip that makes GPU training
-  *slower* than CPU for the tiny (106 -> 128 -> 128) policy.
+  *slower* than CPU for the tiny (126 -> 128 -> 128) policy.
 - `--env-workers N|auto` (default 1): host the environments in N independent
   headless Godot processes instead of one. Shard *k* owns a contiguous slice
   of the environments and is launched with that slice's base seed, which is

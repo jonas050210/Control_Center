@@ -221,3 +221,104 @@ func test_reaction_archetypes_are_ordered_and_never_instant_by_default() -> Sand
 	t.assert_almost_eq(instant.total_engagement_latency(), 0.0)
 	t.assert_eq(ReactionProfile.archetype_name(ReactionProfile.Archetype.VETERAN), "veteran")
 	return t
+
+
+func test_target_screen_box_is_centred_dead_ahead_and_grows_with_closeness() -> SandboxTest:
+	var t := SandboxTest.new("target_screen_box_is_centred_dead_ahead_and_grows_with_closeness")
+	var eye := Vector3(0.0, 1.6, 0.0)
+	var height := 1.8
+	var radius := 0.45
+	var box: Dictionary = PerceptionSystem.target_screen_box(
+		eye, FORWARD, Vector3(0.0, 0.0, -10.0), height, radius
+	)
+	t.assert_true(bool(box["in_front"]), "a target ten metres ahead is in front")
+	t.assert_almost_eq(float(box["center_x"]), 0.0, 0.001, "dead ahead is x = 0")
+	# A body standing on the floor has its centre at 0.9 m, below the 1.6 m
+	# eye, so its box sits slightly under the middle of the screen - and a
+	# target whose centre IS at eye height sits exactly on it.
+	t.assert_lt(float(box["center_y"]), 0.0, "a standing body's centre is below the eye")
+	var eye_level: Dictionary = PerceptionSystem.target_screen_box(
+		eye, FORWARD, Vector3(0.0, 0.7, -10.0), height, radius
+	)
+	t.assert_almost_eq(float(eye_level["center_y"]), 0.0, 0.001, "eye height is y = 0")
+	t.assert_almost_eq(float(box["depth"]), 10.0, 0.001)
+	t.assert_gt(float(box["half_width"]), 0.0)
+	t.assert_gt(float(box["half_height"]), 0.0)
+	# Half the height over half the depth is the tangent of the angle it
+	# subtends, so a target twice as close covers twice the screen.
+	var near: Dictionary = PerceptionSystem.target_screen_box(
+		eye, FORWARD, Vector3(0.0, 0.0, -5.0), height, radius
+	)
+	t.assert_almost_eq(
+		float(near["half_height"]), float(box["half_height"]) * 2.0, 0.001, "closer means bigger"
+	)
+	t.assert_almost_eq(
+		float(near["half_width"]), float(box["half_width"]) * 2.0, 0.001, "closer means wider"
+	)
+	return t
+
+
+func test_target_screen_box_signs_follow_the_bearing_convention() -> SandboxTest:
+	var t := SandboxTest.new("target_screen_box_signs_follow_the_bearing_convention")
+	var eye := Vector3(0.0, 1.6, 0.0)
+	# +x is the agent's RIGHT, the same side a positive bearing names; +y is
+	# up. A box drawn from these numbers must not need a per-axis flip, or
+	# the Control Center paints the contact on the wrong side of the crate.
+	var right: Dictionary = PerceptionSystem.target_screen_box(
+		eye, FORWARD, Vector3(4.0, 0.0, -10.0), 1.8, 0.45
+	)
+	t.assert_gt(float(right["center_x"]), 0.0, "a target to the right is +x")
+	var left: Dictionary = PerceptionSystem.target_screen_box(
+		eye, FORWARD, Vector3(-4.0, 0.0, -10.0), 1.8, 0.45
+	)
+	t.assert_lt(float(left["center_x"]), 0.0, "a target to the left is -x")
+	var above: Dictionary = PerceptionSystem.target_screen_box(
+		eye, FORWARD, Vector3(0.0, 4.0, -10.0), 1.8, 0.45
+	)
+	t.assert_gt(float(above["center_y"]), 0.0, "a target above the eye is +y")
+	return t
+
+
+func test_target_screen_box_has_no_box_behind_the_eye() -> SandboxTest:
+	var t := SandboxTest.new("target_screen_box_has_no_box_behind_the_eye")
+	var box: Dictionary = PerceptionSystem.target_screen_box(
+		Vector3(0.0, 1.6, 0.0), FORWARD, Vector3(0.0, 0.0, 10.0), 1.8, 0.45
+	)
+	t.assert_false(bool(box["in_front"]), "a target behind the eye is not on the screen")
+	t.assert_almost_eq(float(box["center_x"]), 0.0, 0.0)
+	t.assert_almost_eq(float(box["half_width"]), 0.0, 0.0)
+	t.assert_almost_eq(float(box["half_height"]), 0.0, 0.0)
+	# Zero has to mean "not on my screen". Clamping the centre to the screen
+	# edge instead would report a target behind the agent as one on its left.
+	t.assert_almost_eq(float(box["depth"]), 0.0, 0.0)
+	return t
+
+
+func test_exposure_fraction_separates_exposed_from_partly_covered() -> SandboxTest:
+	var t := SandboxTest.new("test_exposure_fraction_separates_exposed_from_partly_covered")
+	var eye := Vector3(0.0, 1.6, 0.0)
+	var feet := Vector3(0.0, 0.0, -6.0)
+	# No world: there is nothing to occlude anything, so the whole body shows.
+	t.assert_almost_eq(PerceptionSystem.exposure_fraction(null, eye, feet, 1.8), 1.0, 0.0)
+	var open_world: ArenaWorld = ArenaWorld.create(10.0)
+	t.assert_almost_eq(
+		PerceptionSystem.exposure_fraction(open_world, eye, feet, 1.8),
+		1.0,
+		0.0,
+		"an unobstructed target is fully exposed"
+	)
+	# A chest-high wall three metres in front of a target six metres away.
+	# The eye is at 1.6 m, so the sight lines to the target's legs and chest
+	# cross z = -3 below 1.25 m and are blocked, while the ones to its head
+	# and shoulders pass over it. `los_clear` says "visible" either way,
+	# because one clear sample is enough for a boolean; only the fraction can
+	# say how much of the body is actually behind cover.
+	var blocked: ArenaWorld = ArenaWorld.create(10.0)
+	blocked.add_box(Vector3(0.0, 0.625, -3.0), Vector3(4.0, 0.625, 0.3), Obstacle.Kind.HIGH_COVER)
+	var exposure: float = PerceptionSystem.exposure_fraction(blocked, eye, feet, 1.8)
+	t.assert_gt(exposure, 0.0, "the head and shoulders still clear the cover")
+	t.assert_lt(exposure, 1.0, "the legs and chest do not")
+	# Five samples: shin / knee / chest / shoulder / head. The wall takes the
+	# first two, so three of five remain - the number the policy gets.
+	t.assert_almost_eq(exposure, 0.6, 0.001)
+	return t

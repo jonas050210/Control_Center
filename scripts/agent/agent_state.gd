@@ -232,7 +232,7 @@ func apply_action(action: Action, dt: float, arena_half_extent: float, world = n
 ## Recoil deliberately moves the REAL aim (and therefore `agent_forward`
 ## in the observation) rather than a cosmetic offset: that is what makes it
 ## something the policy can perceive and counter with the look axes without
-## adding a single field to the 106-float contract.
+## adding a single field to the 126-float contract.
 func apply_recoil(pitch_kick_deg: float, yaw_kick_deg: float) -> void:
 	if pitch_kick_deg == 0.0 and yaw_kick_deg == 0.0:
 		return

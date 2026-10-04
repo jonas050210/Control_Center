@@ -2129,6 +2129,8 @@ def _automatic_benchmark_plan(
     from .benchmark_pipeline import (
         FIXED_MEASUREMENT_SECONDS,
         MAX_DEFAULT_ENVIRONMENTS,
+        MAX_SCREEN_CONFIGS,
+        cap_candidates,
         default_environment_counts,
         default_worker_counts,
         plan_candidates,
@@ -2168,9 +2170,12 @@ def _automatic_benchmark_plan(
     # ``worker <= environment`` rule of our own: the pipeline also drops
     # pairs the launcher would refuse, and a plan that promises 175
     # configurations while the sweep measures 150 is how the window's plan
-    # and the run's report stopped agreeing.
-    planned = plan_candidates(environments, workers, cpu_count=logical)
+    # and the run's report stopped agreeing. The ceiling is applied with the
+    # pipeline's own helper too, so the number under the Start button is the
+    # number the report will carry.
+    planned = cap_candidates(plan_candidates(environments, workers, cpu_count=logical))
     view["expected_configurations"] = len(planned)
+    view["configuration_limit"] = MAX_SCREEN_CONFIGS
     view["per_config_seconds"] = FIXED_MEASUREMENT_SECONDS
     view["screening_measurement_seconds"] = len(planned) * FIXED_MEASUREMENT_SECONDS
     view["summary"] = (
@@ -2391,6 +2396,8 @@ def contact_rows(observation: Any) -> list[dict[str, Any]]:
     source). That is exactly what this table shows, so an operator can see
     when the policy is aiming at a memory instead of a sighting.
     """
+    from .contract import contact_vision
+
     rows: list[dict[str, Any]] = []
     for slot, label in _CONTACT_SLOTS:
         prefix = f"{slot}_enemy_"
@@ -2417,6 +2424,14 @@ def contact_rows(observation: Any) -> list[dict[str, Any]]:
         from_sound = (
             _obs_scalar(observation, "primary_enemy_source_sound") if slot == "primary" else None
         )
+        # The vision block (contract v5): how much of the body the agent can
+        # actually see, and how readable it is. A contact can be "visible" in
+        # the old sense - inside the cone, line of sight clear - and still be
+        # a sliver behind cover in the dark, which is the case these two
+        # columns exist to separate.
+        reading = contact_vision(observation, slot)
+        exposure = reading["exposure_fraction"] if reading["on_screen"] else None
+        clarity = _obs_scalar(observation, "primary_contact_clarity") if slot == "primary" else None
         if alive is None and not position and distance is None:
             state = "not tracked"
         elif alive is not None and alive < 0.5:
@@ -2447,6 +2462,8 @@ def contact_rows(observation: Any) -> list[dict[str, Any]]:
                 "info_age": _format_fraction(age),
                 "confidence": _format_fraction(confidence),
                 "source": source,
+                "exposure": _format_fraction(exposure, 2),
+                "clarity": _format_fraction(clarity, 2),
             }
         )
     return rows
@@ -2663,6 +2680,132 @@ def _nearest_object_suffix(observation: Any) -> str:
     if visible is None or visible < 0.5:
         return ""
     return f" ({_object_kind_label(_obs_scalar(observation, 'object_1_kind_norm'))})"
+
+
+def stats_guide_lines() -> tuple[str, ...]:
+    """How to read the Stats page, in as many lines as it takes.
+
+    The page answers "what did the policy receive" with the contract's own
+    numbers, which is exactly why it read as gibberish: a table of 126
+    normalised fields with no statement of what the normalisation is. These
+    lines are the missing statement, and every number in them comes from
+    the contract rather than from prose, so they cannot fall out of date.
+    """
+    from .contract import (
+        ACTION_NVEC,
+        OBSERVATION_COUNT_NORMALIZER,
+        OBSERVATION_DISTANCE_NORMALIZER_METERS,
+        OBSERVATION_FIELD_COUNT,
+    )
+
+    return (
+        f"One tick = one decision: {OBSERVATION_FIELD_COUNT} numbers in, "
+        f"{ACTION_NVEC} numbers out. The tables below are that vector, decoded.",
+        f"'norm' means divided by a fixed maximum, not a percentage: a distance of "
+        f"0.50 is {OBSERVATION_DISTANCE_NORMALIZER_METERS / 2:.0f} m, because the arena "
+        f"diagonal is {OBSERVATION_DISTANCE_NORMALIZER_METERS:.0f} m. Counts are divided "
+        f"by {OBSERVATION_COUNT_NORMALIZER}.",
+        "Signed values (-1…1) are directions: bearing -0.25 is a quarter of the way to "
+        "the left, +1 is straight behind. Unsigned ones (0…1) are amounts.",
+        "Contacts are relative to the agent - never a world position. 'remembered' means "
+        "the last sighting, with an age, not a current one.",
+        "The tables are complete without a recording: the field list is the contract. "
+        "Only the values need a replay, and only a detailed one stores the vector.",
+    )
+
+
+def agent_view_model(observation: Any) -> dict[str, Any]:
+    """The agent's own screen, rebuilt from the vector it was given.
+
+    The Stats page can list every number the policy receives and still not
+    answer the question an operator actually asks: *what did it see*. This
+    is that answer - the three contacts drawn where they fall in the
+    agent's field of view, each with how much of it was exposed and how
+    brightly it was lit, because "the enemy was in the picture" and "the
+    enemy was a readable target" are different facts.
+
+    Coordinates are the contract's normalised device coordinates (-1 left
+    to +1 right, -1 bottom to +1 top), so the drawing is the view and not
+    a map: a contact at x=0 is under the crosshair whatever the agent is
+    looking at.
+
+    Honesty rules, matching the engine:
+
+    * a contact with no box is *not tracked*, never a box in the middle;
+    * a remembered contact keeps its box but has zero exposure and zero
+      clarity - it is drawn dim, because that is what a memory is;
+    * with no observation at all the view is empty rather than invented.
+    """
+    slots: list[dict[str, Any]] = []
+    notes: list[str] = []
+    if observation is None:
+        return {
+            "available": False,
+            "contacts": [],
+            "reticle_on_primary": False,
+            "notes": ["No observation loaded — select a detailed replay to see this tick."],
+            "summary": "no observation",
+        }
+    from .contract import OBSERVATION_DISTANCE_NORMALIZER_METERS, contact_vision
+
+    reticle = (_obs_scalar(observation, "reticle_on_primary") or 0.0) >= 0.5
+    for index, (slot, label) in enumerate(_CONTACT_SLOTS):
+        reading = contact_vision(observation, slot)
+        distance = _obs_scalar(observation, f"{slot}_enemy_distance_norm")
+        visible = _obs_scalar(observation, f"{slot}_enemy_visible")
+        clarity = _obs_scalar(observation, "primary_contact_clarity") if slot == "primary" else None
+        metres = distance * OBSERVATION_DISTANCE_NORMALIZER_METERS if distance is not None else None
+        if not reading["on_screen"]:
+            state = "not tracked" if index > 0 else "no box this tick"
+        elif visible is not None and visible < 0.5:
+            state = "remembered"
+        else:
+            state = "seen"
+        slots.append(
+            {
+                "slot": slot,
+                "label": label,
+                "index": index,
+                "on_screen": bool(reading["on_screen"]),
+                "screen_x": float(reading["screen_x"]),
+                "screen_y": float(reading["screen_y"]),
+                "half_width": float(reading["half_width"]),
+                "half_height": float(reading["half_height"]),
+                "exposure": float(reading["exposure_fraction"]),
+                "illumination": float(reading["illumination"]),
+                "clarity": clarity,
+                "distance": distance,
+                "distance_m": metres,
+                "state": state,
+                "box_text": (
+                    f"{2.0 * reading['half_height']:.2f} x {2.0 * reading['half_width']:.2f}"
+                    if reading["on_screen"]
+                    else "n/a"
+                ),
+                "distance_text": (f"{metres:.1f} m" if metres is not None else "n/a"),
+            }
+        )
+    for entry in slots:
+        if not entry["on_screen"]:
+            notes.append(f"{entry['label']}: {entry['state']}")
+        elif entry["state"] == "remembered":
+            notes.append(
+                f"{entry['label']}: remembered, not seen — the box is where it was, "
+                f"{entry['distance_text']} away"
+            )
+    if reticle and slots and slots[0]["on_screen"]:
+        notes.append("crosshair is on the closest contact")
+    elif slots and slots[0]["on_screen"]:
+        notes.append("crosshair is not on the closest contact")
+    return {
+        "available": True,
+        "contacts": slots,
+        "reticle_on_primary": reticle,
+        "notes": notes,
+        "summary": (
+            f"{sum(1 for slot in slots if slot['on_screen'])} of {len(slots)} contacts on screen"
+        ),
+    }
 
 
 def observation_summary_view(observation: Any) -> dict[str, Any]:

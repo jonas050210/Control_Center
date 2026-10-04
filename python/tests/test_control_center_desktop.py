@@ -300,13 +300,16 @@ class ControlCenterConstructionTests(unittest.TestCase):
             "Dashboard",
             "Training",
             "Benchmarks",
-            "Evaluations",
             "Runs / Checkpoints",
             "Stats",
             "System / Telemetry",
             "Settings",
         }
         assert "Agents" not in titles, "the Agents page is replaced by Training"
+        # Evaluations were folded into Runs / Checkpoints: the page only ever
+        # carried a checkpoint path somewhere else, and a page whose whole
+        # job is a navigation hop is a page the operator has to learn.
+        assert "Evaluations" not in titles
 
     def test_header_has_no_theme_or_layout_switchers(self):
         """The top-right header stays clean and has no native selector fields."""
@@ -432,9 +435,8 @@ class ControlCenterConstructionTests(unittest.TestCase):
         for title, attribute in (
             ("Training", "tree"),
             ("Benchmarks", "tree"),
-            ("Evaluations", "checkpoint_tree"),
-            ("Evaluations", "eval_tree"),
             ("Runs / Checkpoints", "tree"),
+            ("Runs / Checkpoints", "evaluation_tree"),
         ):
             self.app.show_page(title)
             page = self.app.pages[title]
@@ -601,7 +603,7 @@ class ControlCenterConstructionTests(unittest.TestCase):
         self.app.update()
         press(self.app._palette_window, "<Control-Key-4>")
         self.assertFalse(self.app._palette_window.winfo_exists())
-        self.assertEqual(self.app._current.title, "Evaluations")
+        self.assertEqual(self.app._current.title, "Runs / Checkpoints")
 
     def test_the_wheel_scrolls_a_page_from_anywhere_over_its_content(self):
         """The wheel must not need the pointer to be over the bare canvas.
@@ -944,15 +946,15 @@ class ControlCenterConstructionTests(unittest.TestCase):
 
     def test_evaluation_and_run_details_reject_late_selections(self):
         """Slow disk reads must not overwrite the newer selected detail pane."""
-        self.app.show_page("Evaluations")
-        evaluation = self.app.pages["Evaluations"]
-        evaluation._selected_evaluation_paths = ("evaluation-new.json",)
-        evaluation._evaluation_detail_generation = 4
-        evaluation._on_details(("evaluation-old.json",), 3, [{}], None)
-        self.assertEqual(evaluation.detail_text.get("1.0", "end-1c"), "")
-
         self.app.show_page("Runs / Checkpoints")
         runs = self.app.pages["Runs / Checkpoints"]
+        runs._selected_evaluation_paths = ("evaluation-new.json",)
+        runs._evaluation_detail_generation = 4
+        before = runs.evaluation_detail_text.get("1.0", "end-1c")
+        runs._on_evaluation_details(("evaluation-old.json",), 3, [{}], None)
+        self.assertEqual(runs.evaluation_detail_text.get("1.0", "end-1c"), before)
+        self.assertNotEqual(before, "")
+
         runs._selected_run_dir = "run-new"
         runs._run_detail_generation = 4
         runs._on_detail("run-old", 3, {}, None)

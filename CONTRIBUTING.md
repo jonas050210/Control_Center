@@ -23,7 +23,7 @@ silent edit:
 
 | Contract | Value | Source of truth |
 | --- | --- | --- |
-| Observation vector | exactly **106** floats in `[-1, 1]` | `python/sandboxai/contract.py`, `scripts/core/observation.gd` |
+| Observation vector | exactly **126** floats in `[-1, 1]` | `python/sandboxai/contract.py`, `scripts/core/observation.gd` |
 | Action space | exactly `MultiDiscrete([3,3,3,3,2,2])` | `python/sandboxai/contract.py`, `scripts/core/action.gd` |
 | Engine target | Godot **4.7.2** | `python/sandboxai/contract.py::GODOT_VERSION` |
 

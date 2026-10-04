@@ -1,6 +1,6 @@
 # Python module map
 
-`sandboxai` is a flat package: all 52 modules sit directly under
+`sandboxai` is a flat package: all 53 modules sit directly under
 `python/sandboxai/`. That is deliberate. Every module's import path is
 public API - it appears in the docs, in user scripts and in saved run
 manifests - so rearranging the files into subpackages would rewrite
@@ -92,6 +92,7 @@ frozen.
 | [`action_audit`](../python/sandboxai/action_audit.py) | Low-overhead policy-action diagnostics for training and evaluation. |
 | [`ttk`](../python/sandboxai/ttk.py) | Manually measured time-to-kill (TTK) trials: schema, validation, statistics. |
 | [`ttk_testing`](../python/sandboxai/ttk_testing.py) | Verified TTK Testing mechanics, evidence sources and calibration gates. |
+| [`ttk_vision`](../python/sandboxai/ttk_vision.py) | Seeing a captured frame: reading pixels, lifting shadow, boxing figures. |
 
 ## Runs, artifacts and telemetry
 

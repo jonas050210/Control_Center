@@ -5,6 +5,7 @@ extends RefCounted
 ## Explicit dependencies keep standalone/headless execution independent of the editor class cache.
 const Action = preload("res://scripts/core/action.gd")
 const AgentState = preload("res://scripts/agent/agent_state.gd")
+const AgentView = preload("res://scripts/agent/agent_view.gd")
 const SandboxConfig = preload("res://scripts/core/sandbox_config.gd")
 
 const SandboxTest = preload("res://tests/sandbox_test.gd")
@@ -123,4 +124,20 @@ func test_take_damage_reduces_health_and_kills_at_zero() -> SandboxTest:
 
 	var post_death_damage := agent.take_damage(10.0)
 	t.assert_almost_eq(post_death_damage, 0.0, 0.001, "no further damage can be applied once dead")
+	return t
+
+
+## The camera a human plays through has to show the cone the agent's
+## observation describes, or the crosshair sits over enemies the agent cannot
+## see. Godot's `fov` is vertical with the default `keep_aspect` while the
+## contract's is horizontal, so they only agree after the aspect conversion -
+## which is what this pins down.
+func test_play_camera_shows_the_cone_the_contract_describes() -> SandboxTest:
+	var t := SandboxTest.new("play_camera_shows_the_cone_the_contract_describes")
+	var vertical: float = AgentView.vertical_fov_deg()
+	var horizontal: float = rad_to_deg(
+		2.0 * atan(tan(deg_to_rad(vertical) * 0.5) * SandboxConfig.AGENT_VIEW_ASPECT)
+	)
+	t.assert_almost_eq(horizontal, SandboxConfig.AGENT_FOV_DEG, 0.01)
+	t.assert_almost_eq(vertical, 67.67, 0.01, "100 degrees horizontal is ~67.7 vertical at 16:9")
 	return t

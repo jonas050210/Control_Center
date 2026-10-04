@@ -9,6 +9,7 @@ gap statically: they parse the GDScript sources and fail loudly when the
 Godot-side constants/field layout no longer match the Python contract.
 """
 
+import math
 import re
 import unittest
 from pathlib import Path
@@ -16,13 +17,19 @@ from pathlib import Path
 from sandboxai.contract import (
     ACTION_NVEC,
     ACTION_SPEC,
+    AGENT_FOV_DEG,
+    AGENT_VIEW_ASPECT,
+    CONTACT_SLOTS,
     OBJECT_KIND_NAMES,
     OBSERVATION_COUNT_NORMALIZER,
+    OBSERVATION_DISTANCE_NORMALIZER_METERS,
     OBSERVATION_FIELD_COUNT,
     OBSERVATION_HIGH,
     OBSERVATION_LOW,
     OBSERVATION_MAX_TRACKED_ENEMIES,
     OBSERVATION_SPEC,
+    contact_vision,
+    observation_index,
     validate_observation_spec,
 )
 
@@ -35,7 +42,7 @@ class ObservationContractTests(unittest.TestCase):
 
     def test_observation_field_count_matches_godot_contract(self):
         # Mirrors Observation.FIELD_COUNT in scripts/core/observation.gd.
-        self.assertEqual(OBSERVATION_FIELD_COUNT, 106)
+        self.assertEqual(OBSERVATION_FIELD_COUNT, 126)
 
     def test_observation_bounds_are_symmetric_and_normalized(self):
         self.assertEqual(OBSERVATION_LOW, -1.0)
@@ -105,6 +112,95 @@ class GodotSourceDriftTests(unittest.TestCase):
             "to_array() must pre-allocate the packed array to FIELD_COUNT",
         )
 
+    def test_the_vision_block_gives_every_tracked_contact_the_same_six_values(self):
+        """Box, exposure and illumination for the primary AND the extras.
+
+        A detector reading that only exists for the primary contact would
+        make slots 2 and 3 second-class: the policy could reason about how
+        well it can see its main target and nothing else, which is exactly
+        the situation that made multi-enemy fights unreadable before v5.
+        """
+        expected = (
+            "_screen_x",
+            "_screen_y",
+            "_screen_half_width",
+            "_screen_half_height",
+            "_exposure_fraction",
+            "_illumination",
+        )
+        start = 106
+        for slot in CONTACT_SLOTS:
+            prefix = f"{slot}_enemy"
+            for offset, suffix in enumerate(expected):
+                with self.subTest(field=prefix + suffix):
+                    self.assertEqual(observation_index(prefix + suffix), start + offset)
+            start += len(expected)
+        self.assertEqual(observation_index("reticle_on_primary"), 124)
+        self.assertEqual(observation_index("primary_contact_clarity"), 125)
+
+    def test_contact_vision_reads_a_box_and_reports_off_screen_honestly(self):
+        """Zero means "not on my screen", never "in the middle of it".
+
+        The whole block reads zero when a contact is not being seen, so the
+        test for "is there a box" has to be the extent, not the centre: a
+        contact dead ahead has centre 0 too, and calling it off screen would
+        be the same lie in the other direction.
+        """
+        width = OBSERVATION_FIELD_COUNT
+        reading = contact_vision([0.0] * width, 0)
+        self.assertFalse(reading["on_screen"])
+        self.assertEqual(reading["exposure_fraction"], 0.0)
+
+        seen = [0.0] * width
+        index = observation_index("primary_enemy_screen_half_height")
+        seen[index] = 0.2
+        seen[observation_index("primary_enemy_screen_half_width")] = 0.08
+        seen[observation_index("primary_enemy_screen_x")] = 0.25
+        seen[observation_index("primary_enemy_exposure_fraction")] = 0.6
+        seen[observation_index("primary_enemy_illumination")] = 0.35
+        reading = contact_vision(seen, "primary")
+        self.assertTrue(reading["on_screen"])
+        self.assertAlmostEqual(reading["screen_x"], 0.25)
+        self.assertAlmostEqual(reading["half_height"], 0.2)
+        self.assertAlmostEqual(reading["exposure_fraction"], 0.6)
+        # The other slots are untouched and must say so rather than borrow
+        # the primary's numbers.
+        self.assertFalse(contact_vision(seen, "secondary")["on_screen"])
+
+    def test_contact_vision_refuses_to_guess_without_an_observation(self):
+        """No vector, no box - and a short vector is no vector.
+
+        An old replay may well carry 106 floats instead of 126; decoding it
+        against the v5 contract has to produce "not on screen", not values
+        read out of the wrong fields.
+        """
+        for empty in (None, [], [0.5] * 106):
+            with self.subTest(observation=type(empty).__name__):
+                reading = contact_vision(empty, 0)
+                self.assertFalse(reading["on_screen"])
+                self.assertEqual(reading["half_width"], 0.0)
+
+    def test_view_geometry_matches_the_godot_constants(self):
+        """The box is drawn in the engine's cone, not a similar-looking one.
+
+        The Control Center draws the vision block, so it needs the same
+        horizontal cone and aspect `PerceptionSystem.target_screen_box` used.
+        A drift here would not fail a single test - the window would simply
+        draw every box slightly the wrong size and shape.
+        """
+        source = self._godot_source("scripts/core/sandbox_config.gd")
+        fov = re.search(r"const AGENT_FOV_DEG:\s*float\s*=\s*([0-9.]+)", source)
+        aspect = re.search(
+            r"const AGENT_VIEW_ASPECT:\s*float\s*=\s*([0-9.]+)\s*/\s*([0-9.]+)", source
+        )
+        self.assertIsNotNone(fov, "SandboxConfig.AGENT_FOV_DEG declaration not found")
+        self.assertIsNotNone(aspect, "SandboxConfig.AGENT_VIEW_ASPECT declaration not found")
+        assert fov is not None and aspect is not None  # narrowing for type checkers
+        self.assertAlmostEqual(float(fov.group(1)), AGENT_FOV_DEG)
+        # The Godot side spells the aspect as a ratio of two literals; divide
+        # them here rather than trusting a second copy of the number.
+        self.assertAlmostEqual(float(aspect.group(1)) / float(aspect.group(2)), AGENT_VIEW_ASPECT)
+
     def test_count_normalizer_matches_the_godot_constant(self):
         """Every count field is "count / N, clamped"; N must be one number.
 
@@ -117,6 +213,24 @@ class GodotSourceDriftTests(unittest.TestCase):
         self.assertIsNotNone(match, "Observation.COUNT_NORMALIZER declaration not found")
         assert match is not None  # narrowing for type checkers
         self.assertEqual(int(match.group(1)), OBSERVATION_COUNT_NORMALIZER)
+
+    def test_distance_normalizer_matches_the_godot_arena_diagonal(self):
+        """Metres on the Stats page must be the engine's metres.
+
+        ``*_distance_norm`` is "distance / arena diagonal", so the number
+        that turns it back into metres is the arena's own diagonal. A drift
+        would not fail a single test - the GUI would just report every
+        contact at the wrong range.
+        """
+        source = self._godot_source("scripts/core/sandbox_config.gd")
+        half = re.search(r"const ARENA_HALF_EXTENT:\s*float\s*=\s*([0-9.]+)", source)
+        maximum = re.search(r"const ARENA_MAX_DISTANCE:\s*float\s*=\s*([^\n]+)", source)
+        self.assertIsNotNone(half, "SandboxConfig.ARENA_HALF_EXTENT declaration not found")
+        self.assertIsNotNone(maximum, "SandboxConfig.ARENA_MAX_DISTANCE declaration not found")
+        assert half is not None and maximum is not None  # narrowing for type checkers
+        expression = maximum.group(1).strip().replace("ARENA_HALF_EXTENT", half.group(1))
+        engine_value = math.prod(float(part) for part in expression.split("*") if part.strip())
+        self.assertAlmostEqual(engine_value, OBSERVATION_DISTANCE_NORMALIZER_METERS, places=2)
 
     def test_object_kind_names_match_the_godot_enum_order(self):
         """``object_k_kind_norm`` is only readable if the ordinals agree.
@@ -313,5 +427,6 @@ class ObservationGroupTests(unittest.TestCase):
                 "target",
                 "exploration",
                 "objects",
+                "vision",
             },
         )
