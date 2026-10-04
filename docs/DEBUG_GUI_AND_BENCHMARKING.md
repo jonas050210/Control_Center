@@ -135,9 +135,12 @@ diminishing relative to environment-count growth.
 
 `sandboxai benchmark-pipeline` is the staged sweep the Control Center runs.
 It plans a `(environments, workers)` grid of up to 100 configurations (the
-sweep ceiling) up to 258 environments and 32 workers, screens each one on the real bridge,
-validates the strongest finalists with a training slice, and writes both a
-report and a recommendation:
+sweep ceiling) - up to 128 environments and 20 workers in the automatic
+sweep, since a desktop stops scaling past 128 sharded environments - screens
+each one on the real bridge, validates the strongest finalists with a
+training slice, and writes both a report and a recommendation. Push mode is
+the deliberate exception: it keeps climbing to 258 environments and 48
+workers to find the plateau instead of guessing where it is:
 
 ```bash
 sandboxai benchmark-pipeline              # fixed automatic windows

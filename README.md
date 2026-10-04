@@ -145,11 +145,13 @@ It provides:
   host-scaled measurement pipeline: it checks runtime capabilities, compares
   environment/worker/device candidates, validates the strongest results, and
   applies the fastest stable recommendation to the launch deck. The sweep
-  measures up to 100 configurations per run (the sweep ceiling), up to 258
-  environments and 32 workers, with a fixed **20-second measurement window per
+  measures up to 100 configurations per run (the sweep ceiling), up to 128
+  environments and 20 workers, with a fixed **20-second measurement window per
   configuration** after startup/warmup. No duration control or 30-minute total
   cutoff is exposed: at the 100-configuration ceiling the measurement windows
-  alone total **33 minutes 20 seconds** of screening.
+  alone total **33 minutes 20 seconds** of screening. A **Push** sweep
+  continues past the automatic ceiling on purpose (up to 258 environments and
+  48 workers) to measure where throughput stops improving.
   Live telemetry separates **Simulation Steps/s** from **PPO Training Steps/s**;
   **FPS / env** is the simulation rate per environment, not render FPS.
   Separate charts, latency, stability and progress accompany the measured

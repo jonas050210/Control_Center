@@ -280,7 +280,7 @@ MIN_DEFAULT_ENVIRONMENTS = 128
 
 
 def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
-    """Environment ladder scaled to the host (128 to 258 environments).
+    """Environment ladder scaled to the host (always the full 128 rungs).
 
     Not a recommendation — it is the sweep the pipeline will *measure*, and
     the screening budget thins it (``fit_candidates_to_budget``), so the
@@ -293,8 +293,10 @@ def default_environment_counts(cpu_count: int | None = None) -> tuple[int, ...]:
     # Environments are sharded across workers, so a wide environment count is
     # cheap - the workers are what consume cores. A modest host therefore
     # still gets to *measure* the wide topologies instead of never trying
-    # them (floor of 128), while anything from a 20-thread desktop up reaches
-    # the full 258 and lets the screening budget decide what actually runs.
+    # them (floor of 128). The ladder used to reach 258; the rungs above 128
+    # cost six of every ten minutes of a sweep and never won one, because a
+    # topology that wide is oversubscribed by an order of magnitude on a
+    # desktop. Push mode is where the wide rungs live now.
     cap = max(MIN_DEFAULT_ENVIRONMENTS, min(MAX_DEFAULT_ENVIRONMENTS, physical * 32))
     counts = [value for value in DEFAULT_ENVIRONMENT_LADDER if value <= cap]
     if cap not in counts:

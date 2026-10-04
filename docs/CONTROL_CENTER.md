@@ -199,13 +199,13 @@ rail anyway (the branch was dead), a collapsed rail replaced the page
 titles with two-letter codes (DB, TR, BM, ...) to win back about 160 px
 and then needed a shortcut sheet at the bottom to stay readable, and
 supporting the switch meant every shell change destroyed and rebuilt all
-eight pages. A preferences or preset file written by an older build that
+seven pages. A preferences or preset file written by an older build that
 still names a removed shell is repaired to the rail on load.
 
 ## Keyboard
 
-`Ctrl+K` opens the command palette, `Ctrl+1..8` jump straight to a page
-(the window has eight), `F11` maximizes and restores, `Escape` closes the
+`Ctrl+K` opens the command palette, `Ctrl+1..7` jump straight to a page
+(the window has seven), `F11` maximizes and restores, `Escape` closes the
 palette, and `Up`/`Down` move its selection. The palette
 carries those bindings itself in addition to the shell's, because Tk gives a
 second toplevel its own bindtags - and pressing `Ctrl+K` twice reuses the
@@ -554,7 +554,7 @@ unless the prerequisites are missing (`2`) or the window failed to build
 
 **Polling.** One timer drives the window (600 ms). Each tick refreshes the
 **visible page only** - every page's `refresh()` submits background reads
-(run directories, benchmark history, the replay list), so running all eight
+(run directories, benchmark history, the replay list), so running all seven
 would keep reading artifacts for a window nobody is looking at. The headless
 smoke harness pins that behaviour by counting `refresh()` calls per page and
 fails if a hidden page is polled; the adapter's Godot-runtime probe is cached
