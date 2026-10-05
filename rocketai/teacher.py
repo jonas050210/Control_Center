@@ -615,8 +615,13 @@ class TeacherLabeler:
 
 
 def teacher_weight_at(steps: int, start: float, final: float, decay_steps: int) -> float:
-    """Der Anteil, mit dem der Lehrer anfangs mitspricht (fällt mit der Zeit)."""
-    if start <= 0 and final <= 0:
+    """Der Anteil, mit dem der Lehrer anfangs mitspricht (fällt mit der Zeit).
+
+    ``start`` ist der Hauptschalter: ist er 0, bleibt der Lehrer aus — ein
+    übrig gebliebener ``final``-Wert darf ihn nicht nachträglich ansteigen
+    lassen (in der Oberfläche heißt „Nachahmung: Aus“ genau das).
+    """
+    if start <= 0:
         return 0.0
     if decay_steps <= 0:
         return float(start)

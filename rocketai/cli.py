@@ -22,6 +22,8 @@ def _cmd_train(args: argparse.Namespace) -> int:
         "seed": args.seed,
         "teacher_opponent_prob": args.teacher_opponent,
         "teacher_weight": args.teacher_weight,
+        "teacher_final_weight": args.teacher_final_weight,
+        "teacher_decay_steps": args.teacher_decay_steps,
     }
     if args.resume:
         paths = run_paths(args.resume)
@@ -195,7 +197,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Anteil der Trainings-Matches gegen den Lehrer (z. B. 0.25)",
     )
-    train.add_argument("--teacher-weight", type=float, help="Gewicht der Nachahmung (0 = aus)")
+    train.add_argument(
+        "--teacher-weight", type=float, help="Gewicht der Nachahmung am Anfang (0 = aus)"
+    )
+    train.add_argument(
+        "--teacher-final-weight",
+        type=float,
+        help="Gewicht der Nachahmung am Ende (Standard 0 = ganz auslaufen, nur mit "
+        "--teacher-weight > 0 sinnvoll)",
+    )
+    train.add_argument(
+        "--teacher-decay-steps",
+        type=int,
+        help="Schritte, nach denen die Nachahmung ihren Endwert erreicht (0 = nie abfallen)",
+    )
     train.set_defaults(func=_cmd_train)
 
     ev = sub.add_parser("eval", help="Checkpoint gegen eingebaute Gegner testen")
@@ -253,7 +268,9 @@ def build_parser() -> argparse.ArgumentParser:
     bench = sub.add_parser("benchmark", help="Messen, wie schnell dieser Rechner trainiert")
     bench.add_argument("--seconds", type=float, default=6.0, help="Messdauer pro Einstellung")
     bench.add_argument("--workers", type=int, default=0, help="0 = automatisch")
-    bench.add_argument("--envs", type=int, default=1, help="Spiele pro Prozess")
+    bench.add_argument(
+        "--envs", type=int, default=0, help="Spiele pro Prozess (0 = automatisch testen)"
+    )
     bench.add_argument("--team-size", type=int, default=1, choices=(1, 2, 3))
     bench.add_argument("--no-update", action="store_true", help="Lernschritt nicht messen")
     bench.add_argument("--json", action="store_true", help="Ergebnis zusätzlich als JSON")

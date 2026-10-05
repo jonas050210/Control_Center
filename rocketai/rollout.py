@@ -61,17 +61,27 @@ class Batch:
         """Batches mehrerer Worker zu einem zusammenlegen.
 
         Wichtig: ``teacher_rows`` sind Zeilennummern **innerhalb** des Batches
-        des jeweiligen Workers. Beim Zusammenlegen müssen sie um die Länge der
-        vorherigen Batches verschoben werden, sonst lernt die KI vom Lehrer für
-        die falschen Spielsituationen — und zwar nur, wenn mehr als ein Worker
-        läuft (bei einem Worker fällt der Fehler nicht auf).
+        des jeweiligen Workers. Beim Zusammenlegen müssen sie um die Länge
+        **aller** vorherigen Batches verschoben werden, sonst lernt die KI vom
+        Lehrer für die falschen Spielsituationen — und zwar nur, wenn mehr als
+        ein Worker läuft (bei einem Worker fällt der Fehler nicht auf).
+
+        Der Versatz zählt deshalb jeden Stapel mit, auch die ohne Lehrer-Daten:
+        Ein Worker, der in dieser Runde nichts aufgezeichnet hat, verschiebt
+        sonst die Zeilen *aller* folgenden Worker um seine eigene Länge.
         """
         stats = merge_stats([b.stats for b in batches])
-        with_teacher = [b for b in batches if b.teacher_states is not None]
+        states: list[np.ndarray] = []
         rows: list[np.ndarray] = []
+        slots: list[np.ndarray] = []
+        previous: list[np.ndarray] = []
         offset = 0
-        for batch in with_teacher:
-            rows.append(np.asarray(batch.teacher_rows, dtype=np.int64) + offset)
+        for batch in batches:
+            if batch.teacher_states is not None:
+                states.append(batch.teacher_states)
+                rows.append(np.asarray(batch.teacher_rows, dtype=np.int64) + offset)
+                slots.append(np.asarray(batch.teacher_slots, dtype=np.int64))
+                previous.append(batch.teacher_previous)
             offset += len(batch)
         return Batch(
             obs=np.concatenate([b.obs for b in batches]),
@@ -81,16 +91,10 @@ class Batch:
             returns=np.concatenate([b.returns for b in batches]),
             values=np.concatenate([b.values for b in batches]),
             stats=stats,
-            teacher_states=(
-                np.concatenate([b.teacher_states for b in with_teacher]) if with_teacher else None
-            ),
+            teacher_states=(np.concatenate(states) if states else None),
             teacher_rows=(np.concatenate(rows) if rows else None),
-            teacher_slots=(
-                np.concatenate([b.teacher_slots for b in with_teacher]) if with_teacher else None
-            ),
-            teacher_previous=(
-                np.concatenate([b.teacher_previous for b in with_teacher]) if with_teacher else None
-            ),
+            teacher_slots=(np.concatenate(slots) if slots else None),
+            teacher_previous=(np.concatenate(previous) if previous else None),
         )
 
 
