@@ -4,10 +4,13 @@ Ein lokales Control Center für eine Bibliothek digitaler Projekte und Ideen. Du
 
 ## Starten
 
-Voraussetzung: **Python 3.9 oder neuer**; es werden keine externen Python-Pakete benötigt.
+Voraussetzung: **Python 3.9 oder neuer** unter Ubuntu/WSL; es werden keine externen Python-Pakete benötigt. Ein Windows-Starthelfer ist nicht mehr Teil des Projekts.
 
-- **Windows:** `start.cmd` doppelklicken.
-- **Ubuntu / WSL:** im Projektordner `python3 start.py` ausführen.
+Im Projektordner ausführen:
+
+```bash
+python3 start.py
+```
 
 Standardadresse: <http://127.0.0.1:8765>. Ist der Port belegt, sucht sich Control Center automatisch den nächsten freien Port und zeigt ihn an. Mit `Ctrl+C` wird der Server beendet.
 
@@ -28,7 +31,7 @@ python3 start.py --version            # Version anzeigen
 3. **Verbinden & einlesen** verknüpft passende Einträge und nimmt übrige vorhandene Unterordner in die Bibliothek auf. Es werden keine Projektdateien erstellt, kopiert oder verschoben.
 4. Klicke bei einem verbundenen Projekt auf **Projekt öffnen**. Enthält sein Ordner eine `index.html`, wird diese geladen; andernfalls erscheint eine Dateiansicht, in der du die Ordnerstruktur durchgehen kannst.
 
-Der eingebaute Ordnerbrowser funktioniert auf allen Systemen; ist ein Systemdialog verfügbar (Windows/macOS/mit tkinter), wird dieser zuerst benutzt.
+Der eingebaute Ordnerbrowser funktioniert ohne zusätzliche Pakete (kein tkinter nötig); ist ein Systemdialog verfügbar, wird dieser zuerst benutzt.
 
 ## Bibliothek bedienen
 
@@ -76,7 +79,7 @@ python3 start.py --host 0.0.0.0 --port 8765 --no-browser
 | „Ordner wählen“ meldet „System-Dateiauswahl nicht verfügbar“ | Kein Problem: danach öffnet sich automatisch der eingebaute Ordnerbrowser. |
 | Ein Projekt zeigt „Ordner fehlt“ | **Verbinden & einlesen** erneut ausführen, oder im Bearbeiten-Dialog einen Ordner zuweisen. |
 | Dateien eines Projekts lassen sich nicht öffnen | Projektdateien werden nur auf dem PC ausgeliefert, auf dem sie liegen (loopback-only). |
-| Python fehlt (Windows) | `start.cmd` meldet das und bleibt offen: Python von <https://www.python.org/downloads/> installieren. |
+| „python3: command not found“ | Python 3.9+ installieren (`sudo apt install python3`) oder mit `python3 --version` prüfen. |
 
 ## Tests
 

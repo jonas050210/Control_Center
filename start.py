@@ -571,7 +571,7 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
     def _scan_workspace_projects(self) -> tuple[list[dict[str, object]], int, int, list[str]]:
         workspace = self._workspace_path()
         if not workspace.is_dir():
-            raise ValueError("Der verbundene Hauptordner ist nicht vorhanden. Wähle bitte den Ordner auf deinem Desktop erneut aus.")
+            raise ValueError("Der verbundene Hauptordner ist nicht vorhanden. Wähle bitte den Ordner mit deinen Projekten erneut aus.")
         candidates = self._candidate_directories(workspace)
         signatures: dict[Path, str] = {}
         by_signature: dict[str, list[Path]] = {}
@@ -972,7 +972,7 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/projects":
             if not self.workspace_configured:
-                self._send_error_json(409, "Verbinde zuerst den vorhandenen Desktop-Hauptordner mit deinen Projekten.")
+                self._send_error_json(409, "Verbinde zuerst den vorhandenen Hauptordner mit deinen Projekten.")
                 return
             if not isinstance(payload, dict):
                 self._send_error_json(400, "Projekt-Daten fehlen.")

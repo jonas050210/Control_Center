@@ -115,7 +115,6 @@ index.html    Seitenstruktur und Einstiegspunkt
 styles.css    dunkles Layout, limettengrüner Akzent, responsive GUI
 app.js        Bibliothek, Liste/Raster, Bearbeiten-Dialog, Ordnerbrowser, Projektstart, JSON-Transfer
 start.py      Python-Standardbibliothek: lokale API, Scan-Logik und loopback-only Projektserver
-start.cmd     Starthelfer für Windows (mit Python-Prüfung)
 tests/        Unittest-Suite (Start, API, Scan, Sicherheit, Sicherungen)
 README.md     Kurzstart, Bedienung und Fehlerbehebung
 project.md    Projektvision, Funktionsumfang und Roadmap
@@ -144,7 +143,6 @@ Beim JSON-Export wird `folderPath` ausgelassen beziehungsweise zurückgesetzt, d
 
 Voraussetzung ist Python 3.
 
-- Windows: `start.cmd` starten.
 - Ubuntu/WSL: `python3 start.py` im Projektordner ausführen.
 - Standardadresse: `http://127.0.0.1:8765`.
 - Optionales LAN-Read-only: `python3 start.py --host 0.0.0.0 --port 8765 --no-browser`.
@@ -155,7 +153,7 @@ Auf dem Handy im selben WLAN wird die LAN-IP des Rechners mit Port `8765` geöff
 
 ### Nächste Ausbaustufe — Alltagstauglichkeit
 
-- Desktop-Ordnerauswahl und Bibliotheksscan auf Windows, macOS und Ubuntu/WSL prüfen.
+- Ordnerauswahl und Bibliotheksscan unter Ubuntu/WSL prüfen (Pfadangaben für WSL und Windows-Laufwerke).
 - Sonderfälle bei Namen, doppelten Ordnern und großen Projektdateien testen.
 - Ergänzen, wie ein Projekt ohne `index.html` seine passende Startseite mitteilt.
 - Metadaten aus dem Projektordner lesen (README-Auszug, git-Stand, Größe, erkannter Stack) und in Karte, Liste und Suche nutzen.

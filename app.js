@@ -283,7 +283,7 @@
       <button class="button small" type="button" data-action="backups">${icon("history")} Sicherungen</button>
       <button class="button small" type="button" data-action="import">${icon("upload")} Import</button>
       <button class="button small" type="button" data-action="export">${icon("download")} Export</button>
-      <button class="button primary" type="button" data-action="new-project" ${state.workspaceConfigured ? "" : "disabled title=\"Verbinde zuerst deinen Desktop-Projektordner\""}>${icon("plus")} Neues Projekt</button>
+      <button class="button primary" type="button" data-action="new-project" ${state.workspaceConfigured ? "" : "disabled title=\"Verbinde zuerst deinen Projektordner\""}>${icon("plus")} Neues Projekt</button>
     </div>`;
   }
 
@@ -296,7 +296,7 @@
           <div><span class="workspace-kicker">DEIN PROJEKTORDNER</span><h2>Ordner mit deinen Projekten verbinden</h2>
           <p>Wähle den Ordner, in dem deine Projektordner liegen. Versteckte Ordner und Build-Ordner werden übersprungen; umbenannte Ordner werden wiedererkannt.</p></div>
         </div>
-        ${state.readOnly ? `<div class="workspace-readonly-note">Die Arena-Vorschau kann nicht auf deinen Desktop zugreifen. Starte Control Center auf deinem PC, um den lokalen Projektordner zu verbinden.</div>` : `<form id="workspace-form" class="workspace-form"><label for="workspace-path">Hauptordner</label><div class="workspace-input-row"><input id="workspace-path" name="path" type="text" value="${escapeHtml(workspace)}" placeholder="z. B. C:\\\\Users\\\\Du\\\\Desktop\\\\Meine Projekte" required><button class="button" type="button" data-action="choose-workspace">${icon("folder")} Ordner wählen</button><button class="button primary" type="submit">Verbinden &amp; einlesen ${icon("arrow")}</button></div><small>Control Center legt keine Dateien in deinen Projektordnern ab. „Ordner wählen“ nutzt den Dateidialog des Systems, falls verfügbar, sonst den eingebauten Ordnerbrowser.</small></form>`}
+        ${state.readOnly ? `<div class="workspace-readonly-note">Die Arena-Vorschau läuft in einer Sandbox und kann nicht auf deine Dateien zugreifen. Starte Control Center auf deinem Rechner, um den lokalen Projektordner zu verbinden.</div>` : `<form id="workspace-form" class="workspace-form"><label for="workspace-path">Hauptordner</label><div class="workspace-input-row"><input id="workspace-path" name="path" type="text" value="${escapeHtml(workspace)}" placeholder="z. B. /home/du/projekte" required><button class="button" type="button" data-action="choose-workspace">${icon("folder")} Ordner wählen</button><button class="button primary" type="submit">Verbinden &amp; einlesen ${icon("arrow")}</button></div><small>Control Center legt keine Dateien in deinen Projektordnern ab. „Ordner wählen“ nutzt den eingebauten Ordnerbrowser.</small></form>`}
       </section>`;
   }
 
@@ -337,7 +337,7 @@
     const items = sortProjects(filterProjects(state.projects));
     const emptyAction = state.readOnly ? "" : state.workspaceConfigured
       ? `<button class="button small" type="button" data-action="new-project">${icon("plus")} Eintrag hinzufügen</button>`
-      : `<button class="button small" type="button" data-action="choose-workspace">${icon("folder")} Desktop-Ordner wählen</button>`;
+      : `<button class="button small" type="button" data-action="choose-workspace">${icon("folder")} Projektordner wählen</button>`;
     const emptyTitle = state.query
       ? "Keine Treffer"
       : state.filter === "ideas" ? "Noch keine Ideen"
@@ -388,7 +388,7 @@
     if (localPill) {
       const pillTitle = localPill.querySelector("b");
       const pillText = localPill.querySelector("small");
-      if (pillTitle) pillTitle.textContent = state.readOnly ? "Desktop nicht verfügbar" : "Lokale Projektbibliothek";
+      if (pillTitle) pillTitle.textContent = state.readOnly ? "Dateien nicht verfügbar" : "Lokale Projektbibliothek";
       if (pillText) pillText.textContent = state.readOnly ? "Starte die App auf deinem PC" : "Projektdateien bleiben bei dir";
     }
     page.innerHTML = renderPage();
@@ -537,7 +537,7 @@
   async function commandData(query = "") {
     const commands = [];
     if (!state.readOnly) {
-      commands.push({ kind: "action", id: "connect-workspace", title: "Projektordner verbinden", detail: "Vorhandene Ordner einlesen", icon: "folder", terms: "desktop ordner verbinden sync einlesen" });
+      commands.push({ kind: "action", id: "connect-workspace", title: "Projektordner verbinden", detail: "Vorhandene Ordner einlesen", icon: "folder", terms: "ordner verbinden sync einlesen projektordner" });
       if (state.workspaceConfigured) commands.push({ kind: "action", id: "new-project", title: "Eintrag hinzufügen", detail: "Idee oder Projekt erfassen", icon: "plus", terms: "create new idee hinzufügen" });
       commands.push({ kind: "action", id: "export", title: "Bibliothek exportieren", detail: "JSON-Sicherung herunterladen", icon: "download", terms: "backup sichern export" });
       commands.push({ kind: "action", id: "import", title: "Sicherung importieren", detail: "JSON-Bibliothek wiederherstellen", icon: "upload", terms: "restore import" });
@@ -748,7 +748,7 @@
   }
 
   async function createProject(form) {
-    if (!state.workspaceConfigured) return showToast("Verbinde zuerst deinen Desktop-Hauptordner.", true);
+    if (!state.workspaceConfigured) return showToast("Verbinde zuerst deinen Projektordner.", true);
     const formData = new FormData(form);
     const payload = {
       title: String(formData.get("name") || "").trim(),
