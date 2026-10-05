@@ -357,16 +357,21 @@ class Trainer:
     def train(self) -> None:
         config = self.config
         cpu = os.cpu_count() or 2
-        # Der Lernprozess braucht nur wenige Threads: Die Simulationen sollen
-        # die Kerne behalten, sonst kämpfen beim Update 40 Threads um 20 CPUs.
-        torch.set_num_threads(config.torch_threads or max(1, min(8, cpu // 4)))
+        # Während des Lernschritts ist die Sammlung beendet: alle
+        # Simulationsprozesse warten. Der Lernprozess darf deshalb fast alle
+        # Kerne benutzen. Vorher nahm er nur ein Viertel (max. 8) – auf einem
+        # 16-Kern-Rechner lernte er dann mit 4 Threads, während ~11 Kerne leer
+        # liefen, und genau dieser Lernschritt war der Engpass.
+        torch_threads = config.torch_threads or max(1, cpu - 1)
+        torch.set_num_threads(torch_threads)
         workers = config.resolved_workers()
         self.paths.control.unlink(missing_ok=True)
         self.status("starting", message=f"Starte {workers} Simulations-Prozesse")
         self.log(
             f"Training '{config.name}': {config.team_size}v{config.team_size}, Stufe {config.reward_stage}, "
             f"{workers} Prozesse x {config.envs_per_worker} Spiele, Ziel {config.total_steps:,} Schritte, "
-            f"{config.obs_size} Beobachtungen, Lernen auf {self.device.type.upper()}"
+            f"{config.obs_size} Beobachtungen, Lernen auf {self.device.type.upper()} "
+            f"mit {torch_threads} Threads ({cpu} Kerne erkannt)"
         )
         for hint in config.hints():
             self.log(f"Hinweis: {hint}")

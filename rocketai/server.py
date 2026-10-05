@@ -381,7 +381,7 @@ class LiveRequest(BaseModel):
 class BenchmarkRequest(BaseModel):
     seconds: float = 6.0
     workers: int = 0  # 0 = automatisch
-    envs_per_worker: int = 1
+    envs_per_worker: int = 0  # 0 = automatisch testen (1, 2, 4 Spiele pro Prozess)
     team_size: int = 1
     with_update: bool = True
 
@@ -688,7 +688,7 @@ def create_app() -> FastAPI:
             report = run_benchmark(
                 seconds=seconds,
                 workers=request.workers,
-                envs_per_worker=max(1, min(8, request.envs_per_worker)),
+                envs_per_worker=max(0, min(8, request.envs_per_worker)),
                 team_size=request.team_size,
                 with_update=request.with_update,
             )
