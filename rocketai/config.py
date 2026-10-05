@@ -135,8 +135,6 @@ class TrainConfig:
             problems.append("past_pool_size must be at least 1")
         if not 0 <= self.teacher_weight <= 10 or not 0 <= self.teacher_final_weight <= 10:
             problems.append("teacher_weight and teacher_final_weight must be in [0, 10]")
-        if self.teacher_weight <= 0 and self.teacher_final_weight > 0:
-            problems.append("teacher_final_weight needs teacher_weight > 0; 0 = teacher off")
         if self.envs_per_worker > 64:
             problems.append("envs_per_worker above 64 is not useful (memory per match)")
         if any(size > 4096 for size in self.hidden_sizes):
@@ -175,8 +173,13 @@ class TrainConfig:
 
     @property
     def teacher_labels(self) -> bool:
-        """Does the teacher label training steps (imitation learning)?"""
-        return self.teacher_weight > 0 or self.teacher_final_weight > 0
+        """Does the teacher label training steps (imitation learning)?
+
+        ``teacher_weight`` is the master switch: at 0 the teacher is off, even
+        if ``teacher_final_weight`` still carries an old value (for example
+        because "Nachahmung: Aus" was chosen in the UI).
+        """
+        return self.teacher_weight > 0
 
     def hints(self) -> list[str]:
         """Nicht-tödliche Hinweise: läuft, ist aber vermutlich nicht das, was du willst."""
@@ -203,6 +206,21 @@ class TrainConfig:
             hints.append(
                 "checkpoint_every_steps liegt über total_steps: es wird nur am Ende gespeichert."
             )
+        if self.reward_stage == 1 and self.episode_seconds >= 180:
+            hints.append(
+                "Lange Episoden auf Stufe 1 ("
+                f"{self.episode_seconds:.0f} s): Die Episoden enden meist am "
+                f"no_touch_seconds-Limit ({self.no_touch_seconds:.0f} s), nicht am Zeitlimit. "
+                "Kürzere Limits sind gemessen aber kein Gewinn (siehe docs/WISSEN.md 5.1): "
+                "mit 10 statt 30 s verliert der Balljäger-Bot ~9 % seiner Ballkontakte je "
+                "Simulationszeit, und eine junge KI (erster Kontakt im Median nach ~20 s) "
+                "verliert ihre Chance ganz."
+            )
+        if self.teacher_weight <= 0 < self.teacher_final_weight:
+            hints.append(
+                "teacher_final_weight wird ignoriert: teacher_weight ist 0, damit ist der "
+                "Lehrer aus (0 = aus, für Nachahmung einen Startwert > 0 setzen)."
+            )
         if self.teacher_labels and not self.auto_curriculum and self.reward_stage == 1:
             hints.append(
                 "Lehrer-Nachahmung auf Belohnungsstufe 1: der Lehrer spielt schon komplett, "
@@ -218,6 +236,12 @@ class TrainConfig:
             hints.append(
                 "teacher_samples ist größer als steps_per_iteration: es werden alle Schritte "
                 "vom Lehrer bewertet."
+            )
+        if self.steps_per_iteration > 200_000:
+            hints.append(
+                "steps_per_iteration über 200 000: Ein Stapel dieses Umfangs liegt komplett im "
+                "Speicher (~0,8 MB je 1 000 Schritte, mit Lehrer-Zielen mehr) und wird pro Runde "
+                "zu den Simulationsprozessen geschickt. 20 000-200 000 sind ein guter Bereich."
             )
         if self.minibatch_size > self.steps_per_iteration:
             hints.append(

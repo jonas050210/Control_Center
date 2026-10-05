@@ -23,9 +23,18 @@ def test_obs_size_matches_padding():
     assert TrainConfig(teacher_weight=1.0).teacher_labels is True
 
 
-def test_teacher_without_start_weight_is_rejected():
-    with pytest.raises(ValueError):
-        TrainConfig(teacher_weight=0.0, teacher_final_weight=0.1).validate()
+def test_teacher_final_weight_without_start_weight_is_ignored():
+    """teacher_weight ist der Hauptschalter: 0 heißt aus (auch mit Rest-Endwert).
+
+    Vorher war das ein Fehler — die Oberfläche konnte „Nachahmung: Aus“ bei der
+    Vorlage „Schüler mit Lehrer“ deshalb gar nicht starten.
+    """
+    config = TrainConfig(teacher_weight=0.0, teacher_final_weight=0.1)
+    config.validate()  # darf nicht werfen
+    assert config.teacher_labels is False
+    assert config.teacher_weight_at(0) == 0.0
+    assert config.teacher_weight_at(10_000_000) == 0.0
+    assert any("teacher_final_weight" in hint for hint in config.hints())
 
 
 def test_hints_are_not_errors():

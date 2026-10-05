@@ -175,3 +175,88 @@ def test_external_training_is_shown_with_owner(client):
     entry = next(r for r in after if r["name"] == "von-hand")
     assert entry["status"]["state"] != "extern"
     assert entry["status"]["owner"] is None
+
+
+def test_resume_can_change_schedule_options(client):
+    """Beim Fortsetzen lassen sich Stufe, Lehrer und Prozesse ändern.
+
+    Vorher ging nur ein neues Gesamtziel — alles andere musste man von Hand in
+    ``runs/<name>/config.json`` schreiben.
+    """
+    paths = make_run("umbau")
+    response = client.post(
+        "/api/runs/umbau/resume",
+        json={
+            "total_steps": 200_000_000,
+            "reward_stage": 2,
+            "teacher_opponent_prob": 0.25,
+            "teacher_weight": 0.0,
+            "n_workers": 6,
+            "envs_per_worker": 3,
+            "episode_seconds": 90,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert client.started == ["umbau"]
+    config = TrainConfig.load(paths.config)
+    assert config.total_steps == 200_000_000
+    assert config.reward_stage == 2
+    assert config.teacher_opponent_prob == 0.25
+    assert config.teacher_weight == 0.0
+    assert config.n_workers == 6 and config.envs_per_worker == 3
+    assert config.episode_seconds == 90
+    # Die Nachahmung ist damit wirklich aus (Hauptschalter).
+    assert config.teacher_labels is False
+
+
+def test_resume_rejects_bad_options_and_a_goal_below_the_current_step(client):
+    paths = make_run("ziele")
+    too_small = client.post("/api/runs/ziele/resume", json={"total_steps": 500})
+    assert too_small.status_code == 400
+    assert "über dem erreichten Stand" in too_small.json()["detail"]
+    broken = client.post("/api/runs/ziele/resume", json={"reward_stage": 7})
+    assert broken.status_code == 400
+    assert client.started == []  # nichts gestartet, nichts kaputt geschrieben
+    assert TrainConfig.load(paths.config).reward_stage == 1
+
+
+def test_interrupted_runs_can_all_be_resumed(client, tmp_path):
+    from rocketai.trainer import write_json
+
+    paths = make_run("kaputt")
+    # Zustand "running", aber kein Prozess und kein Herzschlag mehr.
+    write_json(paths.status, {"state": "running", "steps": 1000, "updated": 0.0})
+    runs = client.get("/api/runs").json()
+    assert next(r for r in runs if r["name"] == "kaputt")["status"]["state"] == "interrupted"
+    body = client.post("/api/runs/resume-interrupted").json()
+    assert body["started"] == ["kaputt"]
+    assert client.started == ["kaputt"]
+
+
+def test_status_shows_heartbeat_age_and_staleness(client):
+    """Ein "laufender" Run ohne Lebenszeichen bekommt Alter und Warnhinweis."""
+    import time
+
+    from rocketai.trainer import write_json
+
+    paths = make_run("herz")
+    write_json(
+        paths.status,
+        {"state": "running", "steps": 500, "updated": time.time() - 400},
+    )
+    status = client.get("/api/runs/herz").json()["status"]
+    assert status["state"] == "interrupted"
+    assert status["stale"] is True
+    assert 390 < status["heartbeat_seconds"] < 420
+
+    # Frischer Herzschlag: nicht abgestanden, kein Warnhinweis.
+    write_json(paths.status, {"state": "running", "steps": 500, "updated": time.time()})
+    fresh = client.get("/api/runs/herz").json()["status"]
+    assert fresh["stale"] is False
+    assert fresh["heartbeat_seconds"] < 5
+
+    # Fertige Runs sind nie "abgestanden", auch wenn sie alt sind.
+    write_json(paths.status, {"state": "finished", "steps": 9, "updated": 1.0})
+    done = client.get("/api/runs/herz").json()["status"]
+    assert done["stale"] is False
+    assert done["heartbeat_seconds"] > 1000

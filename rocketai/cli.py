@@ -22,6 +22,11 @@ def _cmd_train(args: argparse.Namespace) -> int:
         "seed": args.seed,
         "teacher_opponent_prob": args.teacher_opponent,
         "teacher_weight": args.teacher_weight,
+        "teacher_final_weight": args.teacher_final_weight,
+        "teacher_decay_steps": args.teacher_decay_steps,
+        "epochs": args.epochs,
+        "steps_per_iteration": args.steps_per_iteration,
+        "device": args.device,
     }
     if args.resume:
         paths = run_paths(args.resume)
@@ -111,7 +116,12 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     from .server import serve
 
-    serve(host=args.host, port=args.port, open_browser=not args.no_browser)
+    serve(
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+        resume_interrupted=args.resume_interrupted,
+    )
     return 0
 
 
@@ -191,11 +201,33 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--stage", type=int, choices=(1, 2, 3), help="Belohnungsstufe")
     train.add_argument("--seed", type=int)
     train.add_argument(
+        "--epochs",
+        type=int,
+        help="wie oft ein Stapel durchgekaut wird (weniger = schneller, z. B. 1-2)",
+    )
+    train.add_argument(
+        "--steps-per-iteration", type=int, help="Schritte pro Update (größer = längere Runden)"
+    )
+    train.add_argument("--device", choices=("auto", "cpu", "cuda"), help="wo der Lernschritt läuft")
+    train.add_argument(
         "--teacher-opponent",
         type=float,
         help="Anteil der Trainings-Matches gegen den Lehrer (z. B. 0.25)",
     )
-    train.add_argument("--teacher-weight", type=float, help="Gewicht der Nachahmung (0 = aus)")
+    train.add_argument(
+        "--teacher-weight", type=float, help="Gewicht der Nachahmung am Anfang (0 = aus)"
+    )
+    train.add_argument(
+        "--teacher-final-weight",
+        type=float,
+        help="Gewicht der Nachahmung am Ende (Standard 0 = ganz auslaufen, nur mit "
+        "--teacher-weight > 0 sinnvoll)",
+    )
+    train.add_argument(
+        "--teacher-decay-steps",
+        type=int,
+        help="Schritte, nach denen die Nachahmung ihren Endwert erreicht (0 = nie abfallen)",
+    )
     train.set_defaults(func=_cmd_train)
 
     ev = sub.add_parser("eval", help="Checkpoint gegen eingebaute Gegner testen")
@@ -217,6 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--no-browser", action="store_true")
+    sv.add_argument(
+        "--resume-interrupted",
+        action="store_true",
+        help="unterbrochene Trainings beim Start automatisch fortsetzen",
+    )
     sv.set_defaults(func=_cmd_serve)
 
     pl = sub.add_parser("play", help="Im echten Rocket League spielen (RLBot, offline)")
@@ -253,7 +290,9 @@ def build_parser() -> argparse.ArgumentParser:
     bench = sub.add_parser("benchmark", help="Messen, wie schnell dieser Rechner trainiert")
     bench.add_argument("--seconds", type=float, default=6.0, help="Messdauer pro Einstellung")
     bench.add_argument("--workers", type=int, default=0, help="0 = automatisch")
-    bench.add_argument("--envs", type=int, default=1, help="Spiele pro Prozess")
+    bench.add_argument(
+        "--envs", type=int, default=0, help="Spiele pro Prozess (0 = automatisch testen)"
+    )
     bench.add_argument("--team-size", type=int, default=1, choices=(1, 2, 3))
     bench.add_argument("--no-update", action="store_true", help="Lernschritt nicht messen")
     bench.add_argument("--json", action="store_true", help="Ergebnis zusätzlich als JSON")

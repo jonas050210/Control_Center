@@ -253,9 +253,22 @@ class PlaySession:
         self.message = "Match beendet"
 
 
+def require_rlbot() -> None:
+    """Klartext, wenn RLBot fehlt oder die falsche Reihe installiert ist."""
+    from .doctor import RLBOT_PARTS, rlbot_check
+
+    check = rlbot_check()
+    if not check["ok"]:
+        raise RuntimeError(
+            f"{check['detail']} Der Bot importiert {', '.join(RLBOT_PARTS)}; "
+            f"installiert wird das mit '{PYTHON_CMD} install.py'."
+        )
+
+
 def start_match(settings: PlaySettings, wait: bool = True) -> Any:
     """Write the configs, start RLBotServer (and RL) and the match. Returns the MatchManager."""
     settings.validate()
+    require_rlbot()
     from rlbot.managers import MatchManager
 
     server = server_path()

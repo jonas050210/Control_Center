@@ -33,6 +33,49 @@ def _python_check(version: tuple[int, int] | None = None) -> tuple[bool, str]:
     return ok, detail
 
 
+#: Genau diese Reihe liefert ``rlbot.flat`` und ``rlbot.managers``, die der Bot
+#: importiert. Die stabile 1.x-Reihe (z. B. 1.68) heißt genauso, hat aber beide
+#: Module nicht — ein reines "rlbot ist installiert" würde das übersehen.
+#: tests/test_doctor.py hält den Wert mit pyproject.toml synchron.
+RLBOT_REQUIREMENT = "rlbot==2.0.0b56"
+
+#: Was der Bot zwingend importiert.
+RLBOT_PARTS = ("rlbot.flat", "rlbot.managers")
+
+
+def rlbot_check(find_spec: Any = importlib.util.find_spec) -> dict[str, Any]:
+    """Passt das installierte RLBot-Paket zum Bot? (Nur fürs echte Spiel nötig.)"""
+    if find_spec("rlbot") is None:
+        return {
+            "screen": "rlbot",
+            "label": "RLBot-Python (für das echte Spiel)",
+            "ok": False,
+            "detail": f"nicht installiert – nur fürs echte Spiel nötig ({PYTHON_CMD} install.py)",
+            "required": False,
+        }
+    _, version = _module("rlbot")
+    missing = [name.split(".")[-1] for name in RLBOT_PARTS if find_spec(name) is None]
+    if missing:
+        return {
+            "screen": "rlbot",
+            "label": "RLBot-Python (für das echte Spiel)",
+            "ok": False,
+            "detail": (
+                f"Version {version} passt nicht: {' und '.join(missing)} fehlt. "
+                f"Der Bot braucht {RLBOT_REQUIREMENT} — "
+                f"'{PYTHON_CMD} -m pip install {RLBOT_REQUIREMENT}'."
+            ),
+            "required": False,
+        }
+    return {
+        "screen": "rlbot",
+        "label": "RLBot-Python (für das echte Spiel)",
+        "ok": True,
+        "detail": f"{version} (flat + managers vorhanden)",
+        "required": False,
+    }
+
+
 def teacher_check() -> dict[str, Any]:
     from .teacher import describe_teacher
 
@@ -84,8 +127,8 @@ def run_checks() -> list[dict[str, Any]]:
     ):
         ok, detail = _module(key)
         add(key, label, ok, detail)
-    ok, detail = _module("rlbot")
-    add("rlbot", "RLBot-Python (für das echte Spiel)", ok, detail, required=False)
+    rlbot = rlbot_check()
+    add("rlbot", rlbot["label"], rlbot["ok"], rlbot["detail"], required=False)
     server = server_path()
     add(
         "rlbot_server",

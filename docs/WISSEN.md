@@ -39,8 +39,9 @@ Inhalt
   `start.py` automatisch benutzt.
 - Auf der Seite **Einrichtung** in der App steht der passende Befehl für dein
   System immer fertig zum Kopieren.
-- Das Training läuft nur auf der **CPU** (die Grafikkarte hilft dabei nicht,
-  siehe Abschnitt 10).
+- Die **Simulation** läuft immer auf der **CPU** (dort zählt jeder Kern). Der
+  **Lernschritt** kann auf einer NVIDIA-Grafikkarte laufen (`python3 install.py
+  --cuda`, Einstellung `device`), siehe Abschnitt 10.
 
 ---
 
@@ -116,10 +117,11 @@ Sekunde sinnvoll). Wichtig: Das wird in der Simulation **genauso** eingestellt
 wie über RLBot, inklusive der einen Tick Verzögerung, die RLBot technisch
 bedingt hat. Sonst fährt die KI im echten Spiel an allem vorbei.
 
-**Das Netz** ist ein klassisches kleines Netz: 172 Eingaben → drei Schichten
-(512, 512, 256) → 90 Werte für die Aktionen, plus ein zweiter Kopf, der den
-Wert der Situation schätzt (der „Kritiker“, siehe Abschnitt 4). Es hat rund
-500.000 Parameter. Nexto hat Millionen — aber ein größeres Netz braucht
+**Das Netz** ist ein klassisches kleines Netz: 184 Eingaben (mit den
+Zusatzwerten; 172 ohne, siehe Abschnitt 2) → drei Schichten (512, 512, 256) →
+90 Werte für die Aktionen, plus ein zweiter Kopf, der den Wert der Situation
+schätzt (der „Kritiker“, siehe Abschnitt 4). Es hat rund 1,0 Mio. Parameter
+(davon ~512.000 im Akteur). Nexto hat Millionen — aber ein größeres Netz braucht
 proportional mehr Daten, es ist also keine Wunderwaffe.
 
 ---
@@ -162,23 +164,51 @@ gibt es Stufen:
 
 | Stufe | Name | Was zählt |
 |---|---|---|
-| 1 | Ballkontakt | Ball berühren, Ball in Richtung Gegnertor, kleine Zusatzpunkte |
+| 1 | Ballkontakt | Ball berühren (Gewicht 10), auf den Ball zufahren, zum Ball schauen; ein Tor zählt 20 |
 | 2 | Tore | deutliches Signal fürs Angreifen und Tore |
 | 3 | Komplettes Spiel | Verteidigen, Tore, Boost, Tempo |
 
-Zusätzlich gibt es **Form-Noten** (z. B. Tempo, Ballkontrolle, nicht herumstehen)
-und Strafen (Eigentor, nicht bewegen). Details: `rocketai/rewards.py`.
+Die Stufen bestehen aus genau acht Bestandteilen (`rocketai/rewards.py`,
+`STAGE_WEIGHTS`): `speed_to_ball` (Tempo in Ballrichtung),
+`face_ball` (Ausrichtung), `touch` (Ballberührung), `in_air`
+(winziger Anreiz, nicht nur zu fahren), `ball_to_goal` (Ballgeschwindigkeit
+Richtung Tor — in Stufe 1 **noch 0**, in Stufe 2 Gewicht 2, in Stufe 3
+Gewicht 3), `goal` (Tor, minus bei Gegentor), `boost_keep` (nur Stufe 3) und
+`air_touch` (nur Stufe 3). Die frühere Beschreibung („Form-Noten“, Strafen für
+„nicht bewegen“) war falsch: einen Gegentor-Term gibt es über `goal = -1`, alles
+andere sind positive Formsignale.
 
 **Autopilot**: Statt selbst zu entscheiden, wann die Stufe wechselt, kannst du
 den Autopilot anschalten. Er wechselt, wenn die Zahlen aus den letzten 20
 Updates es zeigen:
 
-- Stufe 1 → 2: mindestens 15 Ballkontakte pro Minute und mindestens 10 Mio.
-  Schritte.
+- Stufe 1 → 2: mindestens **10 eigene** Ballkontakte pro Minute (Schnitt der
+  letzten 20 Updates) und mindestens 10 Mio. Schritte.
 - Stufe 2 → 3: mindestens 1 Tor pro Minute und mindestens 50 Mio. Schritte.
 
 Die Messung: Ein Mini-Lauf mit künstlich niedrigen Schwellen lief durch
 (Stufenfolge 1, 1, 2, 2, 3), die Umschaltung selbst ist also getestet.
+
+### 5.1 Episodenlänge auf Stufe 1: gemessen, nicht geraten
+
+Der frühere Hinweis „Kurze Episoden bringen in der Anfangsphase mehr
+Ballkontakte pro Stunde“ war eine **Vermutung** („oft probiert“). Nachgemessen
+in dieser Umgebung (je 20 Spiele, Seed 21, Stufe 1, 50 % Kickoff):
+
+| Einstellung | Spieler | Ballkontakte je Episode | Ballkontakte je 1.000 Sim-Sekunden | Episodenlänge | erster Kontakt |
+|---|---|---|---|---|---|
+| 300 s / 30 s ohne Kontakt | Balljäger-Bot | 19,7 | **387,5** | 50,7 s | 2,9 s (95 % der Spiele) |
+| 300 s / 30 s ohne Kontakt | KI nach 2 Mio. Schritten | 0,2 | **6,7** | 30,0 s | 20,1 s (5 %) |
+| 60 s / 10 s ohne Kontakt | Balljäger-Bot | 6,4 | **354,4** | 18,1 s | 2,9 s (95 %) |
+| 60 s / 10 s ohne Kontakt | KI nach 2 Mio. Schritten | 0,0 | **0,0** | 10,0 s | nie |
+
+Ergebnis: **Kürzere Limits kosten Kontakte.** Beim Balljäger sinkt die Ausbeute
+um ~9 %, und die junge KI verliert jede Chance, weil sie den Ball im Median erst
+nach ~20 s erreicht — bei 10 s ist das Spiel vorher vorbei. Der Hinweis im
+Programm sagt das jetzt so; wer es trotzdem probiert, vergleicht die Kontakte je
+1.000 Simulationssekunden, nicht die Zahl der Episoden. (Ob kürzere Episoden das
+*Lernen* beschleunigen, ist damit nicht widerlegt — nur der Mechanismus, mit dem
+der Hinweis argumentiert hat. Ein Lernvergleich über mehrere Stunden steht aus.)
 
 ---
 
@@ -226,8 +256,13 @@ Wunschzahlen stehen:
 |---|---|
 | Lehrer gegen „Balljäger“ (eingebauter Bot), 60 s | **6:0**, 60 zu 14 Ballkontakte |
 | Geschwindigkeit des Lehrers | ~3.500 Antworten/s (2 Kerne), ~640 Entscheidungen/s im Live-Spiel |
-| Training gegen den Lehrer (Anteil 40 %) | Ballkontakte der KI steigen von ~1 auf **51–93 pro Minute** |
+| Training gegen den Lehrer (Anteil 40 %) | Ballkontakte der KI steigen von ~1 auf 51–93 pro Minute — **mit dem alten Zähler** gemessen, der die Kontakte beider Teams addierte. Mit getrennten Zahlen („eigene“ vs. „Gegner“) muss das neu gemessen werden; die Richtung (viel mehr Ballkontakte) bleibt richtig. |
 | Nachahmung allein (reine Kreuzentropie, 20.000 Beispiele, mehrere Netze) | Abweichung fällt nur von 4,50 auf ~3,7–4,0 statt auf die Zielgröße 2,9 |
+| **Eine Lehrer-Antwort** (Mikromessung, 500 bis 40.000 Fragen am Stück) | rund **250 µs** — praktisch unabhängig von der Stapelgröße, also ~4.000 Antworten/s auf 2 Kernen |
+| **Aufzeichnen einer Spielsituation** (in den Simulationsprozessen) | 8,4 µs und 324 Bytes (81 Werte) — ca. 160-mal billiger als eine Antwort. Ohne Stichprobe wären das bei 50.000 Schritten je Runde 0,42 s und 16 MB Ballast, von denen nur 6.000 gefragt werden |
+| **Nachahmung an** (4.000 Schritte je Runde, alles beantwortet) | Lernphase 0,75 s → **1,88 s**, Gesamttempo 1.196 → **842 Schritte/s (−30 %)**. Die Mehrzeit ist fast genau die Lehrerzeit (1,15 s für 4.000 Antworten) |
+| **Lehrer nur als Gegner** (25 % der Spiele) | 1.212 statt 1.196 Schritte/s — **praktisch gratis**, weil der Lehrer das Auto übernimmt, dessen Netz-Aufruf dafür entfällt |
+| **Standard-Dosis** (6.000 Fragen je 50.000 Schritte) | ~1,5 s Antworten + ~0,05 s Aufzeichnen (6.250 Situationen à 8,4 µs) je Runde ⇒ **~5 % Tempo** statt 30 % |
 
 **Ehrliche Einordnung.** Das Spielen **gegen** den Lehrer ist der Durchbruch:
 Es erzeugt ein um Größenordnungen dichteres Lernsignal (viele Ballkontakte
@@ -240,6 +275,17 @@ flachen Netzen) verbesserten die Abweichung nur mäßig. Deshalb:
 
 - Standard ist: **gegen den Lehrer spielen (25 %)** + Nachahmung als Beigabe
   (100 % → 10 %).
+- Die Aufzeichnung wird gestreut: Es wird nur jede *k*-te Situation
+  aufgezeichnet (``k`` = Schritte je Runde ÷ ``teacher_samples``, abgerundet),
+  damit die Simulationsprozesse keinen Ballast durch die Pipe schicken, den der
+  Lernprozess nie fragt. Die Stichprobe liegt gleichmäßig über die Schritte,
+  nicht als Block am Rundenanfang.
+- **Korrektur an einer früheren Aussage:** Diese Streuung gab es schon vorher,
+  sie rechnete aber mit dem Anteil *eines* Prozesses statt mit der ganzen Runde
+  — bei 2 Prozessen landete dadurch etwa die doppelte Dosis im Vorrat
+  (12.500 statt 6.000 Situationen). Jetzt wird mit dem Gesamtbudget gerechnet;
+  gemessen mit 2 Prozessen sind es 6.250 aufgezeichnete zu 6.000 gefragten
+  (Messwert ``teacher_recorded``, neu in ``metrics.jsonl``).
 - Die Nachahmung ist kein Versprechen auf Grand-Champion-Niveau. Der ehrliche
   Weg zu „richtig gut“ bleibt: gegen den Lehrer trainieren, lange und mit
   vielen Kernen.
@@ -295,7 +341,8 @@ diesem Pool (Standard: 20 %, 5 Stände). Trainiert wird nur auf der Seite der
 aktuellen KI. Nebeneffekt: Es gibt eine ehrliche Fortschrittszahl — die
 **Siegquote gegen ältere Versionen**. Über 50 % heißt wirklich besser.
 
-**Messwerte aus einem Testlauf** (2 Kerne, ca. 4 Mio. Schritte):
+**Messwerte aus einem Testlauf** (2 Kerne, ca. 4 Mio. Schritte, ebenfalls noch
+mit dem alten, teamübergreifenden Zähler):
 
 | Schritte | Ballkontakte/min |
 |---|---|
@@ -303,9 +350,22 @@ aktuellen KI. Nebeneffekt: Es gibt eine ehrliche Fortschrittszahl — die
 | 3,25 Mio. | 10,0 |
 | 4,0 Mio. | ~15 |
 
+Für neue Läufe zählt nur die Zeile „eigene Ballkontakte“ (und daneben
+„Gegner“) in den Kurven — siehe Abschnitt 11.
+
 ---
 
 ## 8. Das echte Rocket League (RLBot)
+
+**Welche RLBot-Version?** `install.py` installiert genau `rlbot==2.0.0b56`
+(so steht es in `pyproject.toml`). Das ist wichtig: Die stabile 1.x-Reihe
+(z. B. 1.68.0) heißt genauso, hat aber die Module `rlbot.flat` und
+`rlbot.managers` nicht, die der Bot importiert — das Spielen bricht dann mit
+einem Import-Fehler ab. `rocketai doctor` und die Einrichtungs-Seite prüfen das
+jetzt und nennen den passenden Befehl; `rocketai play` sagt vor dem Start
+Bescheid, statt tief im Code zu scheitern. Ein Test hält den Hinweis im Doctor
+mit `pyproject.toml` synchron.
+
 
 - RLBot ist eine von Psyonix offiziell erlaubte Schnittstelle. Sie schickt
   120-mal pro Sekunde den Spielzustand und nimmt Steuerbefehle entgegen.
@@ -350,9 +410,32 @@ Wichtig, damit keine falschen Erwartungen entstehen:
 
 Grobe Erfahrungswerte für **Schritte** (RLGym-Community). Die Zeit hängt vom
 Rechner ab — deshalb gibt es `python3 -m rocketai benchmark` (oder den Knopf
-*Einrichtung → Geschwindigkeit messen*). Gemessen in der 2-Kern-Sandbox:
-~2 100 Schritte/s pro Simulationsprozess (≈ 70× Echtzeit), mit zwei Prozessen
-~4 200 Schritte/s, dazu ein PPO-Lernschritt mit ~20 000 Schritten/s.
+*Einrichtung → Geschwindigkeit messen*).
+
+**Die wichtigste Zahl ist das Ende-zu-Ende-Tempo.** Sammeln und Lernen laufen
+im selben Prozess *nacheinander*: Erst spielt die KI (Simulation, alle
+Simulationsprozesse arbeiten), dann rechnet sie über genau diese Daten
+`epochs` mal nach — und **währenddessen stehen alle Simulationsprozesse
+still**. Ein Stapel von `S` Schritten braucht deshalb
+
+```
+S / Sim-Tempo  +  epochs · S / Lern-Tempo
+```
+
+Sekunden. Die reine Simulationsrate (z. B. „4 200 Schritte/s“) ist also *nicht*
+das, was du bekommst: Bei 3 Epochen und einem Lernschritt mit 20 000
+Schritten/s bleiben von 4 200 nur rund **2 600 Schritte/s** übrig, von 31 000
+(16 Kerne) nur rund 5 500. Ab etwa 8 Kernen bringt es deshalb fast nichts mehr,
+weitere Simulationsprozesse aufzumachen — der Lernschritt ist dann der
+Engpass. Genau diese Rechnung steckt jetzt in jeder Zeitangabe der App
+(`report["effective"]` im Benchmark, `steps_per_second` im Protokoll).
+
+**Lern-Threads.** Während des Lernschritts sind alle Simulationsprozesse
+blockiert, der Lernprozess darf deshalb fast alle Kerne nehmen: Standard ist
+`torch_threads = Kerne − 1` (Einstellung im Formular, 0 = automatisch). Vorher
+nahm er nur ein Viertel der Kerne (höchstens 8) — auf einem 16-Kern-Rechner
+lernte er dann mit 4 Threads, während ~11 Kerne warteten. Das war einer der
+größten Bremsklötze.
 
 | Stufe | Schritte (Erfahrungswerte) |
 |---|---|
@@ -362,18 +445,57 @@ Rechner ab — deshalb gibt es `python3 -m rocketai benchmark` (oder den Knopf
 | Gold/Platin | Milliarden |
 | Mit Lehrer (gegen ihn gespielt) | 10–100 Mio. |
 
-Ehrliche Einordnung: Bei einigen zehntausend Schritten pro Sekunde sind diese
-Zahlen an einem Tag „abgearbeitet“. Ob die KI dann wirklich gut spielt,
-entscheidet nicht die Rechenleistung, sondern ob Belohnung, Startbedingungen
-und Bewertung stimmen. Genau deshalb zeigt die Oberfläche jetzt nach Team
-getrennte Kennzahlen und den Echtzeit-Faktor.
+Gemessen in dieser 2-Kern-Sandbox (echte Messung, `rocketai benchmark`):
 
-Mehr Kerne = fast proportional schneller; zwei Kerne sind ein
-Anschauungsbeispiel. Eine Grafikkarte beschleunigt nur den Lernschritt, nicht
-die Simulation (die läuft auf der CPU). Der Webbrowser darf zu sein, das
-Training läuft im Hintergrund weiter (es ist ein eigener Prozess). Läuft der
-PC aus/standby, pausiert alles — nach dem Neustart erneut starten und es macht
-bei `latest.pt` weiter.
+| Einstellung | Schritte/s | Echtzeit |
+|---|---|---|
+| 1 Prozess × 1 Spiel | 1 353 | 43× |
+| 1 Prozess × 2 Spiele | 1 668 | 52× |
+| 1 Prozess × 4 Spiele | 1 903 | 42× |
+| Lernschritt (5 000 Schritte × 3 Epochen) | 14 700–16 400 | – |
+| **Ende-zu-Ende** | **1 371** | – |
+
+Zwei Dinge sieht man daran gut: **Mehr Spiele pro Prozess** sind schneller als
+eines (1,4×, weil sich die Startkosten der Prozesse teilen) — genau das wurde
+vorher nicht gemessen, und die Empfehlung fiel dadurch zu niedrig aus. Und vom
+Simulationstempo bleibt Ende-zu-Ende nur ein Teil übrig (hier 72 % Simulation,
+28 % Lernen).
+
+Wie die beiden Phasen mit Kernen skalieren (dieselbe Sandbox, je 4 s):
+
+| Kerne/Threads | Simulation (Schritte/s) | Lernschritt (Schritte/s) |
+|---|---|---|
+| 1 | 1 656 (1 Prozess × 1 Spiel) | 16 982 (1 Thread) |
+| 2 | 4 177 (2 Prozesse × 2 Spiele) | 33 269 (2 Threads) |
+
+Beide skalieren hier fast linear. Das ist die ehrliche Begründung dafür, dass
+**Überlappung** (sammeln und lernen gleichzeitig) *nicht* eingebaut ist: Sie
+bringt nur etwas, wenn eine Phase früher sättigt als die andere (z. B. wenn
+zusätzliche Simulationsprozesse wegen Speicherbandbreite nichts mehr bringen,
+die Lern-Threads aber noch Luft haben). Ob das auf deinem Rechner so ist, zeigt
+der Benchmark-Vergleich „1/2/4 Prozesse“ — die Empfehlung sagt es im Klartext
+(„skaliert gut“ bzw. „bringt kaum etwas“). Steht eine Phase still, während die
+andere rechnet, wäre Überlappung der nächste große Schritt (siehe
+`docs/PLAN.md`, Phase 8).
+
+Ehrliche Einordnung: Bei einigen tausend Schritten pro Sekunde sind die
+Schrittzahlen oben *nicht* an einem Tag „abgearbeitet“ — für 200 Mio. Schritte
+braucht diese Sandbox rund zwei Tage. Ob die KI dann wirklich gut spielt,
+entscheidet nicht die Rechenleistung, sondern ob Belohnung, Startbedingungen
+und Bewertung stimmen. Deshalb zeigt die Oberfläche nach Team getrennte
+Kennzahlen, den Echtzeit-Faktor und die **Tempo-Zerlegung** (Sammeln vs.
+Lernen).
+
+Mehr Kerne = fast proportional schneller, aber nur bis der Lernschritt
+dominiert (siehe oben). Eine Grafikkarte beschleunigt nur den Lernschritt,
+nicht die Simulation. Der Webbrowser darf zu sein, das Training läuft im
+Hintergrund weiter (es ist ein eigener Prozess).
+
+**Läuft der PC aus / Standby oder stürzt etwas ab:** Das Training pausiert. Die
+Oberfläche zeigt solche Runs als „Unterbrochen“ mit einem Knopf *Jetzt
+fortsetzen*; ohne Oberfläche geht es mit `python3 start.py --resume-interrupted`
+weiter (setzt beim letzten `latest.pt` an). Für unbeaufsichtigte Nächte kann man
+das in die Windows-Aufgabenplanung eintragen.
 
 ---
 
@@ -382,8 +504,31 @@ bei `latest.pt` weiter.
 - **Eigene Ballkontakte pro Minute** steigt zügig: unter 5 → läuft nicht
   richtig; über 10 → die KI trifft den Ball zuverlässig. Die Zeile „Gegner“
   daneben gehört der anderen Seite: Steigt nur sie, wird die KI nicht besser.
+- **Erster Ballkontakt** (Karte „Eigene Ballkontakte“): Wann erreicht die KI
+  den Ball zum ersten Mal, und in wie vielen Spielen überhaupt („x % der Spiele
+  berührt“)? Das ist die **stabilere** Zahl für die Anfangsphase — Kontakte pro
+  Minute schwankt stark, solange nur wenige Spiele einen Treffer haben.
+  Referenz, gemessen in dieser Umgebung: Der eingebaute Balljäger-Bot braucht
+  im Median **2,7 s** und trifft in 11 von 12 Spielen; eine KI nach 50.000
+  Schritten trifft in 0 von 12 und nähert sich mit 25 statt 1.372
+  Feldeinheiten/s.
+- **Anfangsphase dauert.** Gemessen auf 2 Kernen (Lernexperiment: 2 Prozesse ×
+  2 Spiele, **2.257 Schritte/s = 122× Echtzeit**): Nach **2 Mio. Schritten**
+  (rund 15 Minuten hier) ist die Belohnung pro Episode von 34 auf **80**
+  gestiegen und die erklärte Varianz von 0 auf 0,6 — aber die KI berührt den
+  Ball erst in ~5–7 % der Spiele (Median nach 20 s) und kommt auf **6,7
+  Ballkontakte je 1.000 Simulationssekunden**, während der Balljäger-Bot 387
+  schafft. Das ist **kein Fehler**, sondern die Strecke: Kapitel 10 nennt
+  20–50 Mio. Schritte für „fährt zum Ball und trifft ihn“, 2 Mio. sind davon
+  4–10 %. Auf einem Rechner mit mehr Kernen sinkt die Wartezeit entsprechend
+  (das eigene Ende-zu-Ende-Tempo sagt es genau: 20 Mio. ÷ Tempo).
 - **Eigene Tore pro Minute** kommt später. 1+ ist der Punkt zum Weiterdrehen;
   **Gegentore** sollten dabei nicht stärker wachsen als die eigenen.
+- **Tempo-Zerlegung** (Training-Seite, Karte „Tempo-Zerlegung“): Zeigt, wie
+  viel Zeit des letzten Updates das Sammeln und wie viel das Lernen gebraucht
+  hat. Über 50 % Lernen heißt: Der Lernschritt bremst — dann helfen weniger
+  Epochen, mehr `torch_threads` oder eine Grafikkarte, aber *keine* weiteren
+  Simulationsprozesse.
 - **Echtzeit-Faktor** (`x… Echtzeit` im Protokoll, `realtime_factor` in den
   Messwerten) zeigt, wie viel simulierte Spielzeit pro Sekunde läuft — kein
   Lernfortschritt, sondern Tempo.
@@ -413,9 +558,15 @@ bei `latest.pt` weiter.
 
 **Starten**
 
+Unter **Windows** geht es auch ohne Kommandozeile: `install.cmd` einmal
+doppelklicken, danach `start.cmd` (Optionen werden durchgereicht, z. B.
+`start.cmd --port 9000 --host 0.0.0.0`). Fehlt Python, sagt `install.cmd`, wo
+es es herunterlädt.
+
 ```bash
 python3 install.py            # einmalig: Pakete, RLBot-Server
 python3 start.py              # Webbrowser-App
+python3 start.py --resume-interrupted   # ... und unterbrochene Trainings fortsetzen
 python3 -m rocketai doctor    # prüft alles (Python, Torch, RLBot, Lehrer, ...)
 python3 -m rocketai teacher   # Lehrer laden und prüfen (--test: Testspiel)
 ```
@@ -426,7 +577,10 @@ python3 -m rocketai teacher   # Lehrer laden und prüfen (--test: Testspiel)
 python3 -m rocketai train --preset student --name mein-bot   # mit Lehrer
 python3 -m rocketai train --preset autopilot --name mein-bot  # ohne Lehrer
 python3 -m rocketai train --resume mein-bot --steps 100000000
-python3 -m rocketai eval mein-bot/latest.pt --opponent teacher --games 5
+# Lehrer als Gegner, Nachahmung aus (schnellste Kombination):
+python3 -m rocketai train --resume mein-bot --teacher-opponent 0.25 --teacher-weight 0 \
+        --teacher-final-weight 0 --steps 500000000
+python3 -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent teacher --games 5
 python3 -m rocketai replay chaser teacher --seconds 60 --out match.json
 python3 -m rocketai benchmark                                # Tempo dieses Rechners
 ```
@@ -434,7 +588,7 @@ python3 -m rocketai benchmark                                # Tempo dieses Rech
 **Im echten Spiel**
 
 ```bash
-python3 -m rocketai play mein-bot/latest.pt --mode psyonix --skill rookie
+python3 -m rocketai play runs/mein-bot/checkpoints/latest.pt --mode psyonix --skill rookie
 python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 ```
 
@@ -453,12 +607,12 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 | `rocketai/opponents.py` | Einfache Bots (Balljäger, Verteidiger) + Spieler-Fabrik |
 | `rocketai/match.py` | Matches, Bewertungen, Replays |
 | `rocketai/live.py` | Live-Spiele für die 3D-Ansicht |
-| `rocketai/server.py`, `web/` | Lokale Web-App |
+| `rocketai/server.py`, `web/` | Lokale Web-App (Tempo-Zerlegung, Fortsetzen mit Einstellungen, Auto-Fortsetzen) |
 | `rocketai/rlbot_convert.py`, `rlbot_bot/` | Brücke zum echten Spiel |
 | `rocketai/play.py` | Startet Matches in Rocket League (eine Bot-Datei je Auto, eindeutige Kennungen) |
 | `rocketai/runtime.py` | Datesperre pro Run: verhindert zwei Trainingsprozesse auf demselben Run |
 | `rocketai/benchmark.py` | Misst Schritte/s, Echtzeit-Faktor und Lernschritt |
-| `tests/` | 100 Tests (Umgebung, Training, Lehrer, Server, RLBot, Sperre, Zufallszustand) |
+| `tests/` | 120 gesammelte Tests. Mit `rlbot==2.0.0b56` **und** geladenem Lehrer laufen alle 120 durch (hier verifiziert); fehlt eins von beiden, werden die betroffenen Tests übersprungen statt rot |
 | `docs/PLAN.md` | Der Entwicklungsplan |
 | `docs/WISSEN.md` | Diese Datei |
 
@@ -468,6 +622,10 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 
 | Symptom | Ursache / Lösung |
 |---|---|
+| Training zeigt „Unterbrochen“ | Der Prozess läuft nicht mehr (Absturz, Neustart, Herunterfahren). Übersicht → *Jetzt fortsetzen*, oder `python3 start.py --resume-interrupted`; es geht beim letzten `latest.pt` weiter. |
+| „Neues Ziel muss über dem erreichten Stand liegen“ | Der Run ist schon so weit. Ein größeres Gesamtziel angeben (der Dialog schlägt eines vor); es zählt der Checkpoint-Stand, nicht der (evtl. ältere) Status. |
+| Fortsetzen ändert nichts an Stufe/Lehrer | Über den Dialog auf der Training-Seite (oder `--stage`, `--teacher-opponent`, `--teacher-weight`) lässt sich das beim Start neu setzen; „Autopilot“ überschreibt die Stufe später trotzdem. |
+| Tempo bricht ein, wenn der Lernschritt läuft | Das ist normal: Sammeln und Lernen laufen nacheinander, während des Lernens stehen die Simulationsprozesse. Die Karte „Tempo-Zerlegung“ zeigt den Anteil; hilft: `torch_threads`, Grafikkarte, weniger Epochen. |
 | „Der Lehrer konnte nicht geladen werden“ | Kein Internet beim ersten Start. Einmal online gehen (`python3 -m rocketai teacher`), danach läuft alles offline. |
 | „hat sich bei GitHub geändert … wird nicht geladen“ | Die Prüfsumme passt nicht. Das ist Absicht (Sicherheit). RocketAI aktualisieren. |
 | Training läuft nicht los, „simulation process exited unexpectedly“ | Zu wenig Arbeitsspeicher oder ein doppelt gestartetes Training mit gleichem Namen. Prozesse im Formular reduzieren. |

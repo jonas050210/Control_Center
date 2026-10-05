@@ -16,7 +16,15 @@ import numpy as np
 import pytest
 import torch
 
-from rocketai.benchmark import CHUNK_STEPS, format_report, measure_update
+from rocketai.benchmark import (
+    CHUNK_STEPS,
+    advice,
+    effective_steps_per_second,
+    format_report,
+    measure_update,
+    plan_combos,
+    suggested_config,
+)
 from rocketai.config import TrainConfig, run_paths
 from rocketai.model import (
     ActorCritic,
@@ -86,6 +94,40 @@ def test_concat_moves_teacher_rows_to_the_combined_batch():
     assert merged.teacher_rows.max() < len(merged)
     # Ohne den Versatz zeigte die letzte Zeile auf die falsche Situation.
     assert merged.teacher_rows[-1] != second.teacher_rows[-1]
+
+
+def test_concat_counts_workers_without_teacher_data_too():
+    """Ein Worker ohne aufgezeichnete Situationen darf die Zeilen nicht verschieben.
+
+    Der Versatz wurde früher nur über die Stapel *mit* Lehrer-Daten summiert.
+    Ein Stapel ohne Daten verschob damit alle folgenden Zeilen nach vorne — die
+    KI hätte vom Lehrer für die falschen Situationen gelernt.
+    """
+    empty = Batch(
+        obs=np.zeros((5, 4), np.float32),
+        actions=np.zeros(5, np.int64),
+        log_probs=np.zeros(5, np.float32),
+        advantages=np.zeros(5, np.float32),
+        returns=np.zeros(5, np.float32),
+        values=np.zeros(5, np.float32),
+    )
+    with_teacher = Batch(
+        obs=np.zeros((4, 4), np.float32),
+        actions=np.zeros(4, np.int64),
+        log_probs=np.zeros(4, np.float32),
+        advantages=np.zeros(4, np.float32),
+        returns=np.zeros(4, np.float32),
+        values=np.zeros(4, np.float32),
+        teacher_states=np.zeros((2, 3), np.float32),
+        teacher_rows=np.array([0, 2], np.int64),
+        teacher_slots=np.array([0, 0], np.int64),
+        teacher_previous=np.zeros((2, 8), np.float32),
+    )
+    merged = Batch.concat([empty, with_teacher])
+    assert len(merged) == 9
+    # Der zweite Stapel beginnt bei Zeile 5: 0 + 5 = 5, 2 + 5 = 7
+    assert merged.teacher_rows.tolist() == [5, 7]
+    assert merged.teacher_rows.max() < len(merged)
 
 
 def test_multiworker_collection_keeps_teacher_rows_in_range():
@@ -365,3 +407,101 @@ def test_lock_does_not_block_reading_the_pid_file(tmp_path, monkeypatch):
         # Die Schutzzdatei trägt nur die Sperre, die Inhaltsdatei bleibt lesbar.
         assert paths.root.joinpath("trainer.lock.guard").exists()
     assert lock_owner(paths.root) is None
+
+
+def test_effective_speed_counts_the_learning_step():
+    """Zeitangaben müssen sammeln *und* lernen enthalten, nicht nur die Simulation."""
+    # 10.000 Schritte/s sammeln, 20.000 Schritte/s lernen, 3 Epochen:
+    # 1/(1/10000 + 3/20000) = 4000 Schritte/s
+    assert effective_steps_per_second(10_000, 20_000, 3) == pytest.approx(4_000)
+    # Ohne gemessenen Lernschritt bleibt die Simulationsrate stehen.
+    assert effective_steps_per_second(10_000, 0, 3) == 10_000
+    assert effective_steps_per_second(0, 20_000, 3) == 0.0
+
+
+def test_plan_combos_tests_games_per_process_too():
+    combos = plan_combos(8)
+    assert (8, 4) in combos and (4, 1) in combos
+    # Mit Vorgabe bleibt es bei dieser Spielzahl (kein ungefragter Sweep).
+    assert plan_combos(8, 2) == [(4, 2), (8, 2)]
+    assert plan_combos(1) == [(1, 1), (1, 2), (1, 4)]
+
+
+def test_advice_does_not_mix_workers_and_envs():
+    """Nur gleiche Einstellungen vergleichen – sonst lobt der Bericht das Falsche."""
+
+    def entry(workers, envs, sps):
+        return {
+            "workers": workers,
+            "envs_per_worker": envs,
+            "steps_per_second": sps,
+            "decisions_per_second": sps / 2,
+            "realtime_factor": sps / 40,
+        }
+
+    report = {
+        "best": entry(1, 4, 2000),
+        "scale": [entry(1, 1, 1400), entry(1, 2, 1700), entry(1, 4, 2000)],
+        "effective": {"steps_per_second": 1500, "simulation_share": 0.7, "update_share": 0.3},
+        "steps_per_day": 1500 * 86_400,
+        "update_cpu": {"steps_per_second": 16000, "device": "cpu", "threads": 3},
+    }
+    tips = advice(report)
+    assert not any("skaliert gut mit mehr Prozessen" in tip for tip in tips)
+    assert any("Spiele pro Prozess" in tip for tip in tips)
+    assert any("Ende-zu-Ende" in tip for tip in tips)
+
+
+def test_suggested_config_uses_measured_values_and_end_to_end_speed():
+    """Die Empfehlung darf gute Werte nicht verschlechtern und rechnet ehrlich."""
+    report = {
+        "torch_threads_recommended": 15,
+        "best": {"workers": 12, "envs_per_worker": 4, "steps_per_second": 31_000},
+        "effective": {"steps_per_second": 5_500},
+    }
+    config = suggested_config(report)
+    assert config.n_workers == 12
+    assert config.envs_per_worker == 4  # vorher setzte die Empfehlung hier 1
+    assert config.torch_threads == 15
+    # Rund 20 Minuten sammeln+lernen bei 5 500 Schritte/s — gedeckelt, damit
+    # ein Stapel nicht unbegrenzt Speicher frisst (200 000 ≈ 150 MB).
+    assert config.steps_per_iteration == min(200_000, int(5_500 * 1_200))
+    small = suggested_config({**report, "effective": {"steps_per_second": 300}})
+    assert small.steps_per_iteration >= 20_000
+    config.validate()
+
+
+def test_teacher_stride_uses_the_round_budget():
+    """Der Vorrat richtet sich nach der ganzen Runde, nicht nach einem Prozess."""
+    from rocketai.rollout import teacher_stride
+
+    assert teacher_stride(50_000, 0) == 1  # 0 = jeder Schritt
+    assert teacher_stride(0, 6_000) == 1
+    assert teacher_stride(50_000, 6_000) == 8
+    assert teacher_stride(20_000, 6_000) == 3
+    # Mehr Fragen als Schritte: alles aufzeichnen.
+    assert teacher_stride(4_000, 20_000) == 1
+    # Abgerundet, damit der Vorrat die gefragte Dosis noch hergibt.
+    for steps, samples in ((50_000, 6_000), (20_000, 6_000), (100_000, 1_000)):
+        assert steps // teacher_stride(steps, samples) >= samples
+
+
+def test_first_touch_summary_separates_time_from_share():
+    """Ein fehlender Kontakt darf den Mittelwert nicht schönrechnen."""
+    from rocketai.trainer import first_touch_summary
+
+    assert first_touch_summary([]) == {"first_touch_seconds": None, "touched_share": None}
+    episodes = [
+        {"first_touch": 3.0},
+        {"first_touch": 5.0},
+        {"first_touch": None},
+        {"first_touch": 4.0},
+    ]
+    summary = first_touch_summary(episodes)
+    assert summary["first_touch_seconds"] == 4.0
+    assert summary["touched_share"] == 0.75
+    # Kein einziges Spiel berührt: Anteil 0, keine Zeit.
+    assert first_touch_summary([{"first_touch": None}]) == {
+        "first_touch_seconds": None,
+        "touched_share": 0.0,
+    }

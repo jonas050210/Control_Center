@@ -27,6 +27,11 @@ python3 install.py   # einmalig: venv, PyTorch (CPU), RocketAI, RLBotServer
 python3 start.py     # öffnet http://127.0.0.1:8765
 ```
 
+**Windows ohne Kommandozeile:** einmal `install.cmd` doppelklicken, danach
+`start.cmd`. Beide liegen im Projektordner und reichen Optionen durch
+(z. B. `start.cmd --port 9000 --host 0.0.0.0`, damit auch das Handy im selben
+WLAN zuschauen kann). Fehlt Python, sagt `install.cmd` genau, was zu tun ist.
+
 Mit NVIDIA-Grafikkarte lohnt `python3 install.py --cuda`: Dann installiert
 RocketAI die CUDA-Variante von PyTorch, und der **Lernschritt** läuft auf der
 Grafikkarte (die Physik-Simulation bleibt auf der CPU — dort zählt jeder Kern).
@@ -51,8 +56,8 @@ In der App:
 
 | Seite | Was sie zeigt |
 | --- | --- |
-| Übersicht | Status in drei Schritten, aktive Trainings, letzte Replays, Rocket-League-Status |
-| Training | alle Runs; pro Run Prognose (wann welches Niveau), Kurven mit Checkpoint- und Stufenwechsel-Markern (u. a. Siegquote gegen ältere Versionen, Neugier), Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen |
+| Übersicht | Status in drei Schritten, aktive Trainings, letzte Replays, Rocket-League-Status; unterbrochene Trainings erscheinen als Banner mit *Jetzt fortsetzen* |
+| Training | alle Runs; pro Run Prognose (wann welches Niveau), **Tempo-Zerlegung** (wie viel Zeit sammeln, wie viel lernen), Kurven mit Checkpoint- und Stufenwechsel-Markern (u. a. Siegquote gegen ältere Versionen, Neugier), Checkpoints, Bewertungen, Protokoll, Stoppen/Fortsetzen mit Einstellungen |
 | **Live** | die KI spielt in Echtzeit in 3D (5 Kameras, 2D umschaltbar) – daneben ihr „Gehirn“: gewählte Aktion, Sicherheit, Controller-Eingaben, Erwartung des Kritikers, Top-5-Alternativen, ein Eingabe-Verlauf der letzten 5 Sekunden und **„Was die KI sieht“** (Ballabstand, Ballhöhe, Drehung, Boost, Gefahr am eigenen Tor …). Bei mehreren KI-Autos per Klick auf das Auto-Kärtchen umschalten. Tore mit Effekt und „TOR!“-Einblendung. „Folgt dem Training“ lädt jeden neuen Checkpoint automatisch |
 | Arena | Replay-Player in 3D oder 2D (Zeitleiste mit Toren, 0,5–4×) und neue Simulations-Matches |
 | Spielen | Rocket-League-Check (installiert? Steam/Epic? läuft es – normal oder im Bot-Modus?) und Match-Start im echten Spiel. Wählbar, wer fährt: **deine KI** oder der **Lehrer (Nexto)** |
@@ -61,7 +66,9 @@ In der App:
 Tastenkürzel in Live/Arena: `1`–`5` Kamera, `V` 3D/2D, `F` Vollbild, Leertaste Pause (Replay), `←`/`→` ±5 s.
 
 Training läuft als eigener Prozess weiter, auch wenn der Browser zu ist. Ein
-gestopptes Training lässt sich jederzeit fortsetzen.
+gestopptes Training lässt sich jederzeit fortsetzen. Umgekehrt hält sich die
+**Live-Ansicht** selbst an: Wird der Tab geschlossen (45 Sekunden keine
+Abfrage), endet das Live-Spiel und kostet keine Rechenzeit mehr.
 
 ## Ohne Oberfläche
 
@@ -73,8 +80,11 @@ python3 -m rocketai train --resume mein-bot --steps 200000000 # fortsetzen mit n
 python3 -m rocketai eval runs/mein-bot/checkpoints/latest.pt --opponent chaser teacher
 python3 -m rocketai replay runs/mein-bot/checkpoints/latest.pt chaser --out spiel.json
 python3 -m rocketai benchmark                                 # Tempo dieses Rechners messen
+python3 start.py --resume-interrupted                         # nach Absturz/Neustart: unterbrochene Trainings fortsetzen
 python3 -m rocketai play runs/mein-bot/checkpoints/latest.pt --mode psyonix --skill rookie
 python3 -m rocketai play --brain teacher --mode psyonix        # Nexto fährt selbst
+python3 -m rocketai train --resume mein-bot --teacher-opponent 0.25 --teacher-weight 0 \
+        --teacher-final-weight 0 --steps 500000000            # Lehrer als Gegner, Nachahmung aus
 python3 -m rocketai doctor                                    # Installation prüfen
 ```
 
@@ -91,6 +101,12 @@ python3 -m rocketai doctor                                    # Installation pr�
   ausgewiesen: „eigene Ballkontakte“ gehören der lernenden KI, „Gegner“
   der anderen Seite. Vorher zählte die Anzeige die Kontakte **aller** Autos —
   dadurch stieg die Zahl auch dann, wenn nur der Gegner am Ball war.
+- **Tempo:** Sammeln und Lernen laufen im selben Prozess nacheinander — während
+  eines Lernschritts stehen die Simulationsprozesse still. Deshalb rechnen alle
+  Zeitangaben mit dem **Ende-zu-Ende-Tempo** (sammeln + lernen), das
+  `rocketai benchmark` in der Zeile *Ende-zu-Ende* ausgibt. Der Lernprozess
+  nimmt dabei `torch_threads = Kerne − 1` (im Formular einstellbar), weil ihm
+  in dieser Zeit die Kerne allein gehören.
 - **Gegner-Pool:** Ein Teil der Spiele läuft gegen die letzten 5 gespeicherten
   Checkpoints. Nur die aktuelle KI lernt daraus; die Siegquote zeigt, ob neue
   Versionen wirklich besser werden.
@@ -121,14 +137,19 @@ python3 -m rocketai doctor                                    # Installation pr�
   *Einrichtung*) misst auf dem eigenen Rechner Schritte/s, Echtzeit-Faktor und
   die Dauer eines Lernschritts.
 
-Gemessen (2-Kern-Sandbox, `rocketai benchmark`): rund 2 100 Schritte/s pro
-Simulationsprozess (ca. 70× Echtzeit), mit 2 Prozessen etwa 4 200 Schritte/s;
-ein PPO-Lernschritt läuft mit ~20 000 Schritten/s. Der Balljäger wird vom
-Lehrer 6:0 geschlagen. Wie stark Trainingsspiele gegen den Lehrer wirklich
-helfen, muss mit den **getrennten** Kennzahlen neu gemessen werden: die früher
-genannten „51–93 Ballkontakte pro Minute“ wurden noch mit dem alten Zähler
-ermittelt, der die Kontakte beider Teams addierte. Die Nachahmung allein ist
-schwach – warum, steht ausführlich in [docs/WISSEN.md](docs/WISSEN.md).
+Gemessen (2-Kern-Sandbox, `rocketai benchmark`): 1 353 Schritte/s mit einem
+Prozess und einem Spiel, **1 903 Schritte/s** mit vier Spielen pro Prozess
+(1,4× mehr — das teilt sich die Startkosten der Prozesse), ein PPO-Lernschritt
+mit ~15 000 Schritten/s. Entscheidend ist die letzte Zeile: **Ende-zu-Ende
+bleiben 1 371 Schritte/s**, weil Sammeln und Lernen nacheinander laufen und
+während des Lernens alle Simulationsprozesse warten. Die früher genannten
+„4 200 Schritte/s“ waren die reine Simulationsrate — daher kommen die
+optimistischen Zeitangaben von damals. Der Balljäger wird vom Lehrer 6:0
+geschlagen. Wie stark Trainingsspiele gegen den Lehrer wirklich helfen, muss
+mit den **getrennten** Kennzahlen neu gemessen werden: die früher genannten
+„51–93 Ballkontakte pro Minute“ wurden noch mit dem alten Zähler ermittelt, der
+die Kontakte beider Teams addierte. Die Nachahmung allein ist schwach – warum,
+steht ausführlich in [docs/WISSEN.md](docs/WISSEN.md).
 
 **Alles Wissen zum Projekt** (wie die KI sieht und lernt, der Lehrer,
 Zeitabschätzungen, Fehlerbehebung, Glossar): [docs/WISSEN.md](docs/WISSEN.md).
@@ -139,7 +160,9 @@ Details, Phasen und Zeitabschätzungen: [docs/PLAN.md](docs/PLAN.md).
 ```bash
 python3 install.py --dev
 .venv/bin/python -m pytest       # Windows: .venv\Scripts\python -m pytest
+                                 # 120 Tests (mit RLBot-Paket 2.0.0b56 und Lehrer alle grün)
 .venv/bin/ruff check .
+.venv/bin/ruff format --check .
 ```
 
 Trainingsdaten (`runs/`), heruntergeladene Werkzeuge (`tools/`) und lokale
