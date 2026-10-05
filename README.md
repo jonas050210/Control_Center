@@ -66,7 +66,9 @@ In der App:
 Tastenkürzel in Live/Arena: `1`–`5` Kamera, `V` 3D/2D, `F` Vollbild, Leertaste Pause (Replay), `←`/`→` ±5 s.
 
 Training läuft als eigener Prozess weiter, auch wenn der Browser zu ist. Ein
-gestopptes Training lässt sich jederzeit fortsetzen.
+gestopptes Training lässt sich jederzeit fortsetzen. Umgekehrt hält sich die
+**Live-Ansicht** selbst an: Wird der Tab geschlossen (45 Sekunden keine
+Abfrage), endet das Live-Spiel und kostet keine Rechenzeit mehr.
 
 ## Ohne Oberfläche
 
