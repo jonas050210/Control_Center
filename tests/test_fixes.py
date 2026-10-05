@@ -23,6 +23,7 @@ from rocketai.benchmark import (
     format_report,
     measure_update,
     plan_combos,
+    suggested_config,
 )
 from rocketai.config import TrainConfig, run_paths
 from rocketai.model import (
@@ -449,3 +450,22 @@ def test_advice_does_not_mix_workers_and_envs():
     assert not any("skaliert gut mit mehr Prozessen" in tip for tip in tips)
     assert any("Spiele pro Prozess" in tip for tip in tips)
     assert any("Ende-zu-Ende" in tip for tip in tips)
+
+
+def test_suggested_config_uses_measured_values_and_end_to_end_speed():
+    """Die Empfehlung darf gute Werte nicht verschlechtern und rechnet ehrlich."""
+    report = {
+        "torch_threads_recommended": 15,
+        "best": {"workers": 12, "envs_per_worker": 4, "steps_per_second": 31_000},
+        "effective": {"steps_per_second": 5_500},
+    }
+    config = suggested_config(report)
+    assert config.n_workers == 12
+    assert config.envs_per_worker == 4  # vorher setzte die Empfehlung hier 1
+    assert config.torch_threads == 15
+    # Rund 20 Minuten sammeln+lernen bei 5 500 Schritte/s — gedeckelt, damit
+    # ein Update nicht unbegrenzt Speicher und Zeit frisst.
+    assert config.steps_per_iteration == min(1_000_000, int(5_500 * 1_200))
+    small = suggested_config({**report, "effective": {"steps_per_second": 300}})
+    assert small.steps_per_iteration >= 20_000
+    config.validate()

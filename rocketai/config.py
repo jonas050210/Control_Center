@@ -206,6 +206,13 @@ class TrainConfig:
             hints.append(
                 "checkpoint_every_steps liegt über total_steps: es wird nur am Ende gespeichert."
             )
+        if self.reward_stage == 1 and self.episode_seconds >= 180:
+            hints.append(
+                "Lange Episoden auf Stufe 1 ("
+                f"{self.episode_seconds:.0f} s): Kurze Episoden bringen in der Anfangsphase deutlich "
+                "mehr Ballkontakte pro Stunde — oft probiert: episode_seconds 60, "
+                "no_touch_seconds 10. Die Situationen sind dann weniger abwechslungsreich."
+            )
         if self.teacher_weight <= 0 < self.teacher_final_weight:
             hints.append(
                 "teacher_final_weight wird ignoriert: teacher_weight ist 0, damit ist der "

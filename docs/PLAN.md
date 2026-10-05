@@ -76,8 +76,10 @@ Replays, Web-App, Installer/Starter, RLBot-Bot samt Konverter, Tests, CI.
 
 Erste Messungen in der Sandbox (2 CPU-Kerne):
 
-- Tempo: ~4 200 Schritte/s mit 2 Prozessen (ca. 2 100 pro Prozess, ~70×
-  Echtzeit); ein PPO-Lernschritt schafft ~20 000 Schritte/s
+- Tempo (**reine Simulation**, ohne Lernschritt): ~4 200 Schritte/s mit 2
+  Prozessen (ca. 2 100 pro Prozess, ~70× Echtzeit); ein PPO-Lernschritt
+  schafft ~20 000 Schritte/s. Ende-zu-Ende gerechnet bleibt davon deutlich
+  weniger (siehe Phase 7).
 - PPO-Diagnose: Nach dem Trennen des Gradient-Clippings stieg die KL pro
   Update von ~0,00004 auf ~0,002–0,003; die Clip-Rate liegt bei 1–2 %.
 - Skript-Bots: Der Balljäger schlägt „Stillstand“ und „Zufall“ deutlich;
@@ -123,25 +125,21 @@ Woran man Fortschritt erkennt:
 - Optional schnelleres Lernen über `rlgym-learn` (Rust-Worker), falls der
   eigene Lerner zum Engpass wird.
 
-## Grobe Erwartung
+### Phase 5 – Der Lehrer (Nexto)  [erledigt]
 
-**Nicht die Rechenleistung ist der Engpass, sondern ob das Lernziel stimmt.**
-Die Simulation ist auf einem normalen PC einige zehntausend Schritte pro
-Sekunde schnell (gemessen: ~2 100 pro Prozess). Damit sind die unten genannten
-Schrittzahlen oft an einem Tag erreicht — ob die KI dabei wirklich besser
-spielt, entscheiden Belohnung, Startbedingungen und Bewertung.
+- [x] Nextos Netz laden (TorchScript), Dateien per SHA-256 pruefen, lokal
+      unter `tools/nexto` ablegen (nicht im Repo, GPL)
+- [x] Uebersetzer von unserem Spielzustand in Nextos Beobachtung
+      (Test: Abweichung < 1e-4 gegen Nextos eigene Funktion)
+- [x] Lehrer als Spieler: Live-Ansicht, Replays, echte Spiele (RLBot)
+- [x] Lehrer als Trainingsgegner (`teacher_opponent_prob`)
+- [x] Nachahmung als Zusatzsignal (`teacher_weight`, faellt ueber das Training)
+- [x] Messungen, ehrliche Einordnung und Wissensdokumentation in docs/WISSEN.md
+- [ ] Optional spaeter: Lehrer in ein groesseres Aufmerksamkeitsnetz destillieren,
+      damit die Nachahmung wirklich traegt
 
-| Stand | Schritte (grob, Erfahrungswerte) |
-| --- | --- |
-| fährt zum Ball, trifft ihn | 20–50 Mio. |
-| schießt gezielt Tore | 100–300 Mio. |
-| schlägt Psyonix Rookie/Pro | 0,3–1 Mrd. |
-| Gold/Platin-Niveau | mehrere Mrd. |
 
-Das echte Tempo zeigt `python3 -m rocketai benchmark` bzw. der Knopf auf der
-Einrichtungsseite; die Zeiten in der App werden damit gerechnet.
-
-## Phase 6 – Funktion und Ehrlichkeit (fertig)
+### Phase 6 – Funktion und Ehrlichkeit (fertig)
 
 - [x] Multi-Worker-Fehler behoben: `teacher_rows` werden beim Zusammenlegen der
       Worker-Stapel verschoben (vorher lernte die KI vom Lehrer für die falschen
@@ -162,6 +160,82 @@ Einrichtungsseite; die Zeiten in der App werden damit gerechnet.
       „KI gegen sich selbst“) — vorher startete der zweite Bot ohne Auto
 - [x] Oberfläche: „Was die KI sieht“, getrennte Kennzahlen, Hinweise, Messwerte
 
+### Phase 7 – Tempo und Werkzeuge (fertig)
+
+Gemessen in der 2-Kern-Sandbox, `rocketai benchmark` (echte Messung):
+
+| Einstellung | Schritte/s | Echtzeit |
+|---|---|---|
+| 1 Prozess × 1 Spiel | 1 353 | 43× |
+| 1 Prozess × 2 Spiele | 1 668 | 52× |
+| 1 Prozess × 4 Spiele | 1 903 | 42× |
+| Lernschritt (5 000 Schritte × 3 Epochen, 1 Thread) | 14 700–16 400 | – |
+| **Ende-zu-Ende (sammeln + lernen)** | **1 371** | – |
+
+- [x] **Ende-zu-Ende-Tempo** gemessen und zur Grundlage aller Zeitangaben
+      gemacht: Ein Stapel braucht `S/Sim + epochs·S/Lern` Sekunden, weil
+      Sammeln und Lernen nacheinander laufen und während des Lernens alle
+      Simulationsprozesse stehen. Vorher waren Prognosen 2–6× zu optimistisch.
+- [x] **Lern-Threads**: Standard jetzt `Kerne − 1` (vorher ein Viertel, max. 8)
+      — auf 16 Kernen warteten während des Lernens ~11 Kerne.
+- [x] **Benchmark** testet auch *Spiele pro Prozess* (1/2/4) und vergleicht nur
+      gleiche Einstellungen; Empfehlung setzt den Wert nicht mehr auf 1 zurück.
+- [x] **Tempo-Zerlegung** in der Oberfläche (Sammeln vs. Lernen) samt
+      Klartext-Hinweis, was gerade bremst.
+- [x] **Fortsetzen mit Einstellungen**: Stufe, Lehrer als Gegner, Nachahmung,
+      Prozesse, Spiele pro Prozess, Episodenlänge — ohne `config.json` von Hand.
+      Der erreichte Stand kommt aus dem Checkpoint, nicht aus `status.json`.
+- [x] **Auto-Fortsetzen**: Banner „Unterbrochen“ mit *Jetzt fortsetzen* und
+      `start.py --resume-interrupted` (z. B. per Aufgabenplanung nach Reboot).
+- [x] **Zwei Fehler behoben:** `teacher_rows` wurden bei mehreren Workern falsch
+      verschoben, wenn ein Worker nichts aufzeichnete; `teacher_weight = 0`
+      schaltete die Nachahmung nicht ab (Validierungsfehler, dadurch in der
+      Oberfläche nicht wählbar).
+- [x] **Dokumentation ehrlich nachgezogen** (u. a. 172→184 Eingaben,
+      15→10 Ballkontakte Schwelle, erfundene „Form-Noten“ entfernt,
+      Testzahl, CPU/GPU-Satz, veraltete Messwerte gekennzeichnet).
+
+### Nächste Schritte (Phase 8, Kandidaten)
+
+- **Sammeln und Lernen überlappen** (Worker und Lerner parallel, z. B. mit
+  einer Warteschlange): Der Gewinn ist **nicht automatisch** — solange beide
+  Phasen mit mehr Kernen schneller werden, ist die Summe (heutiges Verhalten)
+  genauso schnell wie das Maximum. Er lohnt erst, wenn eine Phase sättigt
+  (typisch: Simulation ab ~8-12 Prozessen wegen Speicherbandbreite, während die
+  Lern-Threads noch Luft haben). Vor dem Umbau auf dem Zielrechner messen:
+  `rocketai benchmark` zeigt die Sättigung im Vergleich 1/2/4 Prozesse.
+  Der Umbau braucht einen zweiten Puffer und einen Versatz von einer Runde
+  (die KI sammelt mit dem Stand von vor dem Update) — deshalb bewusst noch
+  nicht eingebaut.
+- **Episodenlängen je Stufe** in den Vorlagen (Stufe 1 kurz: mehr Ballkontakte
+  pro Stunde) — gemessen werden muss, ob es das Lernen wirklich beschleunigt.
+- **Zufallsstarts-Anteil** als Einstellung (mehr Situationen pro Stunde).
+- **Elo-Rangliste** aller Checkpoints in der Arena (Turniermodus).
+
+## Grobe Erwartung
+
+**Nicht die Rechenleistung ist der Engpass, sondern ob das Lernziel stimmt.**
+Die *Simulation* schafft auf einem normalen PC schnell ein paar tausend
+Schritte pro Sekunde und Kern; Ende-zu-Ende (sammeln + lernen) bleibt davon ein
+deutlich kleinerer Teil übrig, weil der Lernschritt die Zeit der Simulations-
+prozesse blockiert. Auf mehreren Kernen liegt man realistisch bei einigen
+tausend bis wenigen zehntausend Schritten pro Sekunde — die Schrittzahlen unten
+sind damit in Stunden bis Tagen erreicht, nicht in Wochen. Ob die KI dabei
+wirklich besser spielt, entscheiden Belohnung, Startbedingungen und Bewertung.
+
+| Stand | Schritte (grob, Erfahrungswerte) |
+| --- | --- |
+| fährt zum Ball, trifft ihn | 20–50 Mio. |
+| schießt gezielt Tore | 100–300 Mio. |
+| schlägt Psyonix Rookie/Pro | 0,3–1 Mrd. |
+| Gold/Platin-Niveau | mehrere Mrd. |
+
+Das echte Tempo zeigt `python3 -m rocketai benchmark` bzw. der Knopf auf der
+Einrichtungsseite. Wichtig ist dort die Zeile **Ende-zu-Ende**: Simulation und
+Lernschritt laufen nacheinander, deshalb liegt sie deutlich unter der reinen
+Simulationsrate (Sandbox-Beispiel: 1 903 → 1 371 Schritte/s). Die Zeiten in der
+App rechnen mit dieser Zahl.
+
 ## Grenzen und Risiken
 
 - **RLBot v5 ist eine Vorabversion** (Server `v5.0.0-rc17`, Python-Paket
@@ -171,17 +245,3 @@ Einrichtungsseite; die Zeiten in der App werden damit gerechnet.
   dem Sprung, Boost-Pad-Restzeit, Handbremse). Das ist Standard bei
   RLGym-Bots, kann aber in Einzelfällen anders reagieren als im Training.
 - **Nur Windows** für das echte Spiel; trainieren geht auch unter Linux.
-
-
-## Phase 5 - Der Lehrer (Nexto)  [erledigt]
-
-- [x] Nextos Netz laden (TorchScript), Dateien per SHA-256 pruefen, lokal
-      unter `tools/nexto` ablegen (nicht im Repo, GPL)
-- [x] Uebersetzer von unserem Spielzustand in Nextos Beobachtung
-      (Test: Abweichung < 1e-4 gegen Nextos eigene Funktion)
-- [x] Lehrer als Spieler: Live-Ansicht, Replays, echte Spiele (RLBot)
-- [x] Lehrer als Trainingsgegner (`teacher_opponent_prob`)
-- [x] Nachahmung als Zusatzsignal (`teacher_weight`, faellt ueber das Training)
-- [x] Messungen, ehrliche Einordnung und Wissensdokumentation in docs/WISSEN.md
-- [ ] Optional spaeter: Lehrer in ein groesseres Aufmerksamkeitsnetz destillieren,
-      damit die Nachahmung wirklich traegt

@@ -362,7 +362,7 @@ async function pageNewRun() {
           </div>
           <details class="advanced"><summary>Erweiterte Einstellungen</summary>
             <div class="grid cols-3">
-              ${numberField("n_workers", "Simulations-Prozesse", v.n_workers, "0 = automatisch. Empfehlung: 12–16 (ein paar Kerne für Windows und den Lernprozess frei lassen)")}
+              ${numberField("n_workers", "Simulations-Prozesse", v.n_workers, `0 = automatisch (${cpus} Kerne erkannt, nimmt Kerne − 1). Der Lernprozess bekommt eigene Threads, deshalb muss man hier nichts freihalten — bei einem trägen Windows 1–2 weniger probieren und die „Tempo-Zerlegung“ beobachten.`)}
               ${numberField("torch_threads", "Threads des Lernprozesses", v.torch_threads, "0 = automatisch (wenige Threads, damit die Simulationen die Kerne behalten)")}
               ${numberField("envs_per_worker", "Spiele pro Prozess", v.envs_per_worker)}
               ${numberField("steps_per_iteration", "Schritte pro Update", v.steps_per_iteration)}

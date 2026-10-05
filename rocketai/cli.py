@@ -24,6 +24,9 @@ def _cmd_train(args: argparse.Namespace) -> int:
         "teacher_weight": args.teacher_weight,
         "teacher_final_weight": args.teacher_final_weight,
         "teacher_decay_steps": args.teacher_decay_steps,
+        "epochs": args.epochs,
+        "steps_per_iteration": args.steps_per_iteration,
+        "device": args.device,
     }
     if args.resume:
         paths = run_paths(args.resume)
@@ -197,6 +200,15 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--team-size", type=int, choices=(1, 2, 3))
     train.add_argument("--stage", type=int, choices=(1, 2, 3), help="Belohnungsstufe")
     train.add_argument("--seed", type=int)
+    train.add_argument(
+        "--epochs",
+        type=int,
+        help="wie oft ein Stapel durchgekaut wird (weniger = schneller, z. B. 1-2)",
+    )
+    train.add_argument(
+        "--steps-per-iteration", type=int, help="Schritte pro Update (größer = längere Runden)"
+    )
+    train.add_argument("--device", choices=("auto", "cpu", "cuda"), help="wo der Lernschritt läuft")
     train.add_argument(
         "--teacher-opponent",
         type=float,
