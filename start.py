@@ -20,6 +20,7 @@ import unicodedata
 import uuid
 import webbrowser
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from functools import partial
 from hashlib import sha256
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -525,6 +526,37 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             direct.append(directory)
         return direct[:MAX_SCAN_DIRECTORIES]
 
+    def _fuzzy_match(self, title: str, candidates: list[Path], used: set[Path]) -> Path | None:
+        """Recognise a renamed folder by name similarity ("Alpha" -> "Alpha2").
+
+        Only used when path, content fingerprint and exact name did not match,
+        and only when exactly one folder is clearly the closest one.
+        """
+        wanted = title.strip().casefold()
+        wanted_slug = safe_slug(title)
+        best_score = 0.0
+        best_path: Path | None = None
+        runner_up = 0.0
+        for directory in candidates:
+            if directory in used:
+                continue
+            score = SequenceMatcher(None, wanted, directory.name.casefold()).ratio()
+            directory_slug = safe_slug(directory.name)
+            if wanted_slug and directory_slug and (directory_slug.startswith(wanted_slug) or wanted_slug.startswith(directory_slug)):
+                score = max(score, 0.75)
+            if score < 0.6:
+                continue
+            if score > best_score:
+                runner_up = best_score
+                best_score = score
+                best_path = directory
+            elif score > runner_up:
+                runner_up = score
+        if best_path is None or best_score - runner_up < 0.04:
+            return None
+        used.add(best_path)
+        return best_path
+
     def _known_folder(self, project: dict[str, object]) -> Path | None:
         """The stored folder even when it lives outside the current workspace."""
         raw = project.get("folderPath")
@@ -581,6 +613,9 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                     matched = take(by_name, str(project["title"]).strip().casefold(), used)
                 if matched is None:
                     matched = take(by_slug, safe_slug(str(project["title"])), used)
+                if matched is None:
+                    # Folder renamed and changed at the same time ("Alpha" -> "Alpha2").
+                    matched = self._fuzzy_match(str(project["title"]), candidates, used)
             if matched is not None:
                 changed = project.get("folderPath") != str(matched)
                 project["folderPath"] = str(matched)

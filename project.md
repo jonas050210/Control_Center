@@ -60,7 +60,7 @@ Der Fokus liegt auf **digitalen Spielen, Simulationen und Softwareprojekten**. D
 
 - Versteckte Ordner (`.git`, `.cache`, …) sowie Build- und Abhängigkeitsordner (`node_modules`, `venv`, `dist`, …) werden übersprungen.
 - Projekte eine Ebene tiefer werden gefunden, ohne den Gruppierungsordner selbst als Projekt aufzunehmen.
-- Umbenannte oder verschobene Ordner werden über einen Fingerabdruck des Ordnerinhalts wiedererkannt — ohne Duplikate und ohne Dateien im Projektordner anzulegen.
+- Umbenannte oder verschobene Ordner werden wiedererkannt — zuerst über den Pfad, dann über einen Fingerabdruck des Ordnerinhalts und danach über ähnliche Namen („Alpha“ → „Alpha2“) — ohne Duplikate und ohne Dateien im Projektordner anzulegen. Wird ein Ordner komplett anders benannt, bleibt der Eintrag erhalten und kann im Bearbeiten-Dialog neu verknüpft werden.
 - Namen ohne lateinische Buchstaben bleiben unterscheidbar.
 - Ungeeignete Workspaces (Laufwerkswurzel) werden abgelehnt, der Benutzerordner erzeugt eine Warnung.
 

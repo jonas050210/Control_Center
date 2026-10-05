@@ -239,6 +239,26 @@ class TestWorkspaceScan(ControlCenterTestCase):
         entry = next(item for item in body["projects"] if item["title"] == "Alpha")
         self.assertTrue(entry["folderPath"].endswith("Alpha Neu"))
 
+    def test_renamed_and_changed_folder_keeps_its_entry(self) -> None:
+        folder = self.make_project("Alpha", {"main.py": "print(1)"})
+        self.scan()
+        renamed = folder.rename(self.workspace / "Alpha2")
+        (renamed / "extra.txt").write_text("neu", encoding="utf-8")
+        body = self.scan()
+        self.assertEqual(body["added"], 0)
+        self.assertEqual(body["linked"], 1)
+        entry = next(item for item in body["projects"] if item["title"] == "Alpha")
+        self.assertTrue(entry["folderPath"].endswith("Alpha2"))
+
+    def test_similar_folders_are_not_swapped(self) -> None:
+        self.make_project("Spiel", {"main.py": "a"})
+        self.make_project("Spiele", {"main.py": "b"})
+        body = self.scan()
+        self.assertEqual(body["added"], 2)
+        links = {item["title"]: Path(item["folderPath"]).name for item in body["projects"]}
+        self.assertEqual(links["Spiel"], "Spiel")
+        self.assertEqual(links["Spiele"], "Spiele")
+
     def test_non_latin_names_are_linked(self) -> None:
         self.make_project("日本語", {"main.py": "print(1)"})
         status, body = request(self.base, "/api/projects", "POST", {"title": "日本語"})

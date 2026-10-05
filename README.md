@@ -52,7 +52,7 @@ Bibliotheksdaten liegen lokal in `~/.control_center/projects.json`. Der verbunde
 
 - Versteckte Ordner (`.git`, `.cache`, …) und Build-/Abhängigkeitsordner (`node_modules`, `venv`, `dist`, …) werden übersprungen.
 - Projekte, die in einem Gruppierungsordner eine Ebene tiefer liegen, werden gefunden, ohne die Gruppe selbst als Projekt aufzunehmen (Gruppe ohne erkennbare Projekte bleibt ein Eintrag).
-- **Umbenannte oder verschobene Ordner werden wiedererkannt** (über einen Fingerabdruck des Ordnerinhalts, ohne Dateien im Projektordner anzulegen) — es entstehen keine Duplikate.
+- **Umbenannte oder verschobene Ordner werden wiedererkannt** — über den Pfad, einen Fingerabdruck des Ordnerinhalts und als letzte Stufe über ähnliche Namen („Alpha“ → „Alpha2“). Es entstehen keine Duplikate, und es werden keine Dateien im Projektordner angelegt. Wird ein Ordner ganz anders benannt, bleibt der Eintrag erhalten und lässt sich im Bearbeiten-Dialog neu verknüpfen.
 - Namen ohne lateinische Buchstaben (z. B. japanisch, kyrillisch) bleiben unterscheidbar.
 - Ein Workspace auf Laufwerksebene wird abgelehnt, der Benutzerordner gibt eine Warnung.
 
