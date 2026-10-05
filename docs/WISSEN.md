@@ -189,6 +189,27 @@ Updates es zeigen:
 Die Messung: Ein Mini-Lauf mit künstlich niedrigen Schwellen lief durch
 (Stufenfolge 1, 1, 2, 2, 3), die Umschaltung selbst ist also getestet.
 
+### 5.1 Episodenlänge auf Stufe 1: gemessen, nicht geraten
+
+Der frühere Hinweis „Kurze Episoden bringen in der Anfangsphase mehr
+Ballkontakte pro Stunde“ war eine **Vermutung** („oft probiert“). Nachgemessen
+in dieser Umgebung (je 20 Spiele, Seed 21, Stufe 1, 50 % Kickoff):
+
+| Einstellung | Spieler | Ballkontakte je Episode | Ballkontakte je 1.000 Sim-Sekunden | Episodenlänge | erster Kontakt |
+|---|---|---|---|---|---|
+| 300 s / 30 s ohne Kontakt | Balljäger-Bot | 19,7 | **387,5** | 50,7 s | 2,9 s (95 % der Spiele) |
+| 300 s / 30 s ohne Kontakt | KI nach 2 Mio. Schritten | 0,2 | **6,7** | 30,0 s | 20,1 s (5 %) |
+| 60 s / 10 s ohne Kontakt | Balljäger-Bot | 6,4 | **354,4** | 18,1 s | 2,9 s (95 %) |
+| 60 s / 10 s ohne Kontakt | KI nach 2 Mio. Schritten | 0,0 | **0,0** | 10,0 s | nie |
+
+Ergebnis: **Kürzere Limits kosten Kontakte.** Beim Balljäger sinkt die Ausbeute
+um ~9 %, und die junge KI verliert jede Chance, weil sie den Ball im Median erst
+nach ~20 s erreicht — bei 10 s ist das Spiel vorher vorbei. Der Hinweis im
+Programm sagt das jetzt so; wer es trotzdem probiert, vergleicht die Kontakte je
+1.000 Simulationssekunden, nicht die Zahl der Episoden. (Ob kürzere Episoden das
+*Lernen* beschleunigen, ist damit nicht widerlegt — nur der Mechanismus, mit dem
+der Hinweis argumentiert hat. Ein Lernvergleich über mehrere Stunden steht aus.)
+
 ---
 
 ## 6. Der Lehrer (Nexto)
@@ -237,6 +258,11 @@ Wunschzahlen stehen:
 | Geschwindigkeit des Lehrers | ~3.500 Antworten/s (2 Kerne), ~640 Entscheidungen/s im Live-Spiel |
 | Training gegen den Lehrer (Anteil 40 %) | Ballkontakte der KI steigen von ~1 auf 51–93 pro Minute — **mit dem alten Zähler** gemessen, der die Kontakte beider Teams addierte. Mit getrennten Zahlen („eigene“ vs. „Gegner“) muss das neu gemessen werden; die Richtung (viel mehr Ballkontakte) bleibt richtig. |
 | Nachahmung allein (reine Kreuzentropie, 20.000 Beispiele, mehrere Netze) | Abweichung fällt nur von 4,50 auf ~3,7–4,0 statt auf die Zielgröße 2,9 |
+| **Eine Lehrer-Antwort** (Mikromessung, 500 bis 40.000 Fragen am Stück) | rund **250 µs** — praktisch unabhängig von der Stapelgröße, also ~4.000 Antworten/s auf 2 Kernen |
+| **Aufzeichnen einer Spielsituation** (in den Simulationsprozessen) | 8,4 µs und 324 Bytes (81 Werte) — ca. 160-mal billiger als eine Antwort. Ohne Stichprobe wären das bei 50.000 Schritten je Runde 0,42 s und 16 MB Ballast, von denen nur 6.000 gefragt werden |
+| **Nachahmung an** (4.000 Schritte je Runde, alles beantwortet) | Lernphase 0,75 s → **1,88 s**, Gesamttempo 1.196 → **842 Schritte/s (−30 %)**. Die Mehrzeit ist fast genau die Lehrerzeit (1,15 s für 4.000 Antworten) |
+| **Lehrer nur als Gegner** (25 % der Spiele) | 1.212 statt 1.196 Schritte/s — **praktisch gratis**, weil der Lehrer das Auto übernimmt, dessen Netz-Aufruf dafür entfällt |
+| **Standard-Dosis** (6.000 Fragen je 50.000 Schritte) | ~1,5 s Antworten + ~0,05 s Aufzeichnen (6.250 Situationen à 8,4 µs) je Runde ⇒ **~5 % Tempo** statt 30 % |
 
 **Ehrliche Einordnung.** Das Spielen **gegen** den Lehrer ist der Durchbruch:
 Es erzeugt ein um Größenordnungen dichteres Lernsignal (viele Ballkontakte
@@ -249,6 +275,17 @@ flachen Netzen) verbesserten die Abweichung nur mäßig. Deshalb:
 
 - Standard ist: **gegen den Lehrer spielen (25 %)** + Nachahmung als Beigabe
   (100 % → 10 %).
+- Die Aufzeichnung wird gestreut: Es wird nur jede *k*-te Situation
+  aufgezeichnet (``k`` = Schritte je Runde ÷ ``teacher_samples``, abgerundet),
+  damit die Simulationsprozesse keinen Ballast durch die Pipe schicken, den der
+  Lernprozess nie fragt. Die Stichprobe liegt gleichmäßig über die Schritte,
+  nicht als Block am Rundenanfang.
+- **Korrektur an einer früheren Aussage:** Diese Streuung gab es schon vorher,
+  sie rechnete aber mit dem Anteil *eines* Prozesses statt mit der ganzen Runde
+  — bei 2 Prozessen landete dadurch etwa die doppelte Dosis im Vorrat
+  (12.500 statt 6.000 Situationen). Jetzt wird mit dem Gesamtbudget gerechnet;
+  gemessen mit 2 Prozessen sind es 6.250 aufgezeichnete zu 6.000 gefragten
+  (Messwert ``teacher_recorded``, neu in ``metrics.jsonl``).
 - Die Nachahmung ist kein Versprechen auf Grand-Champion-Niveau. Der ehrliche
   Weg zu „richtig gut“ bleibt: gegen den Lehrer trainieren, lange und mit
   vielen Kernen.
@@ -319,6 +356,16 @@ Für neue Läufe zählt nur die Zeile „eigene Ballkontakte“ (und daneben
 ---
 
 ## 8. Das echte Rocket League (RLBot)
+
+**Welche RLBot-Version?** `install.py` installiert genau `rlbot==2.0.0b56`
+(so steht es in `pyproject.toml`). Das ist wichtig: Die stabile 1.x-Reihe
+(z. B. 1.68.0) heißt genauso, hat aber die Module `rlbot.flat` und
+`rlbot.managers` nicht, die der Bot importiert — das Spielen bricht dann mit
+einem Import-Fehler ab. `rocketai doctor` und die Einrichtungs-Seite prüfen das
+jetzt und nennen den passenden Befehl; `rocketai play` sagt vor dem Start
+Bescheid, statt tief im Code zu scheitern. Ein Test hält den Hinweis im Doctor
+mit `pyproject.toml` synchron.
+
 
 - RLBot ist eine von Psyonix offiziell erlaubte Schnittstelle. Sie schickt
   120-mal pro Sekunde den Spielzustand und nimmt Steuerbefehle entgegen.
@@ -457,6 +504,24 @@ das in die Windows-Aufgabenplanung eintragen.
 - **Eigene Ballkontakte pro Minute** steigt zügig: unter 5 → läuft nicht
   richtig; über 10 → die KI trifft den Ball zuverlässig. Die Zeile „Gegner“
   daneben gehört der anderen Seite: Steigt nur sie, wird die KI nicht besser.
+- **Erster Ballkontakt** (Karte „Eigene Ballkontakte“): Wann erreicht die KI
+  den Ball zum ersten Mal, und in wie vielen Spielen überhaupt („x % der Spiele
+  berührt“)? Das ist die **stabilere** Zahl für die Anfangsphase — Kontakte pro
+  Minute schwankt stark, solange nur wenige Spiele einen Treffer haben.
+  Referenz, gemessen in dieser Umgebung: Der eingebaute Balljäger-Bot braucht
+  im Median **2,7 s** und trifft in 11 von 12 Spielen; eine KI nach 50.000
+  Schritten trifft in 0 von 12 und nähert sich mit 25 statt 1.372
+  Feldeinheiten/s.
+- **Anfangsphase dauert.** Gemessen auf 2 Kernen (Lernexperiment: 2 Prozesse ×
+  2 Spiele, **2.257 Schritte/s = 122× Echtzeit**): Nach **2 Mio. Schritten**
+  (rund 15 Minuten hier) ist die Belohnung pro Episode von 34 auf **80**
+  gestiegen und die erklärte Varianz von 0 auf 0,6 — aber die KI berührt den
+  Ball erst in ~5–7 % der Spiele (Median nach 20 s) und kommt auf **6,7
+  Ballkontakte je 1.000 Simulationssekunden**, während der Balljäger-Bot 387
+  schafft. Das ist **kein Fehler**, sondern die Strecke: Kapitel 10 nennt
+  20–50 Mio. Schritte für „fährt zum Ball und trifft ihn“, 2 Mio. sind davon
+  4–10 %. Auf einem Rechner mit mehr Kernen sinkt die Wartezeit entsprechend
+  (das eigene Ende-zu-Ende-Tempo sagt es genau: 20 Mio. ÷ Tempo).
 - **Eigene Tore pro Minute** kommt später. 1+ ist der Punkt zum Weiterdrehen;
   **Gegentore** sollten dabei nicht stärker wachsen als die eigenen.
 - **Tempo-Zerlegung** (Training-Seite, Karte „Tempo-Zerlegung“): Zeigt, wie
@@ -542,7 +607,7 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 | `rocketai/play.py` | Startet Matches in Rocket League (eine Bot-Datei je Auto, eindeutige Kennungen) |
 | `rocketai/runtime.py` | Datesperre pro Run: verhindert zwei Trainingsprozesse auf demselben Run |
 | `rocketai/benchmark.py` | Misst Schritte/s, Echtzeit-Faktor und Lernschritt |
-| `tests/` | 100 gesammelte Tests (92 laufen hier durch, 8 werden übersprungen: 1× RLBot-Paket nicht installiert, 7× Lehrer nicht geladen) |
+| `tests/` | 120 gesammelte Tests. Mit `rlbot==2.0.0b56` **und** geladenem Lehrer laufen alle 120 durch (hier verifiziert); fehlt eins von beiden, werden die betroffenen Tests übersprungen statt rot |
 | `docs/PLAN.md` | Der Entwicklungsplan |
 | `docs/WISSEN.md` | Diese Datei |
 

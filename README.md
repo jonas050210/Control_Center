@@ -153,7 +153,7 @@ Details, Phasen und Zeitabschätzungen: [docs/PLAN.md](docs/PLAN.md).
 ```bash
 python3 install.py --dev
 .venv/bin/python -m pytest       # Windows: .venv\Scripts\python -m pytest
-                                 # 100 Tests; 8 davon übersprungen ohne RLBot-Paket/Lehrer
+                                 # 120 Tests (mit RLBot-Paket 2.0.0b56 und Lehrer alle grün)
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 ```

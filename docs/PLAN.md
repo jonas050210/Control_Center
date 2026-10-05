@@ -197,6 +197,12 @@ Gemessen in der 2-Kern-Sandbox, `rocketai benchmark` (echte Messung):
 
 ### Nächste Schritte (Phase 8, Kandidaten)
 
+- **Erledigt in Phase 7b:** Herzschlag-Alter in API und Anzeige
+  („kein Lebenszeichen seit X“), Lehrerkosten gemessen (Tabelle in
+  `WISSEN.md` 6.3, Aufzeichnung jetzt gestreut), Live-Ansicht und Bot liefern
+  nachweislich dieselben Entscheidungen, `doctor` prüft die RLBot-Version
+  (die stabile 1.x-Reihe hat `rlbot.flat` nicht), „erster Ballkontakt“ als
+  stabile Fortschrittszahl.
 - **Sammeln und Lernen überlappen** (Worker und Lerner parallel, z. B. mit
   einer Warteschlange): Der Gewinn ist **nicht automatisch** — solange beide
   Phasen mit mehr Kernen schneller werden, ist die Summe (heutiges Verhalten)
@@ -207,8 +213,11 @@ Gemessen in der 2-Kern-Sandbox, `rocketai benchmark` (echte Messung):
   Der Umbau braucht einen zweiten Puffer und einen Versatz von einer Runde
   (die KI sammelt mit dem Stand von vor dem Update) — deshalb bewusst noch
   nicht eingebaut.
-- **Episodenlängen je Stufe** in den Vorlagen (Stufe 1 kurz: mehr Ballkontakte
-  pro Stunde) — gemessen werden muss, ob es das Lernen wirklich beschleunigt.
+- **Episodenlängen je Stufe**: Der Mechanismus ist nachgemessen und spricht
+  **gegen** kurze Limits (Tabelle in `WISSEN.md` 5.1: Balljäger −9 % Kontakte,
+  junge KI verliert jede Chance). Der alte Hinweis „kurz = mehr Kontakte“ ist
+  korrigiert. Offen bleibt nur, ob kürzere Episoden das *Lernen* beschleunigen
+  — dafür braucht es einen Lauf über Stunden, der hier nicht möglich ist.
 - **Zufallsstarts-Anteil** als Einstellung (mehr Situationen pro Stunde).
 - **Elo-Rangliste** aller Checkpoints in der Arena (Turniermodus).
 
