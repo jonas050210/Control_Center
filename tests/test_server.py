@@ -99,3 +99,79 @@ def test_play_and_system_endpoints(client):
     assert client.post("/api/play/start", json={"checkpoint": "demo/nope.pt"}).status_code == 404
     checks = client.get("/api/system").json()["checks"]
     assert any(c["key"] == "torch" and c["ok"] for c in checks)
+
+
+def test_observation_endpoint_describes_what_the_ai_sees(client):
+    from rocketai.config import OBS_BASE_SIZE, OBS_SIZE
+    from rocketai.obs import EXTRA_FEATURES
+
+    data = client.get("/api/obs").json()
+    assert data["size"] == OBS_SIZE
+    assert data["base_size"] == OBS_BASE_SIZE
+    assert data["extra_size"] == len(EXTRA_FEATURES)
+    assert [item["key"] for item in data["extras"]] == list(EXTRA_FEATURES)
+    assert all(item["label"] for item in data["extras"])
+    assert data["decisions_per_second"] == pytest.approx(15.0)
+
+
+def test_system_endpoint_includes_observation_and_benchmark(client):
+    data = client.get("/api/system").json()
+    assert data["observation"]["size"] > data["observation"]["base_size"]
+    assert "benchmark" in data
+
+
+def test_config_check_reports_problems_and_hints(client):
+    ok = client.post("/api/config/check", json={"preset": "quick-test", "overrides": {"name": "x"}})
+    assert ok.status_code == 200
+    body = ok.json()
+    assert body["ok"] is True and body["problems"] == []
+
+    bad = client.post(
+        "/api/config/check",
+        json={"preset": "quick-test", "overrides": {"name": "x", "team_size": 9}},
+    )
+    body = bad.json()
+    assert body["ok"] is False and any("team_size" in problem for problem in body["problems"])
+
+    hinted = client.post(
+        "/api/config/check",
+        json={"preset": "quick-test", "overrides": {"name": "x", "n_workers": 999}},
+    )
+    assert hinted.json()["ok"] is True
+    assert hinted.json()["hints"]
+
+
+def test_run_summary_shows_hints_and_separate_team_stats(client):
+    paths = make_run("mit-hinweisen")
+    config = TrainConfig.load(paths.config)
+    config.n_workers = 9999  # nicht falsch, aber ein Hinweis wert
+    config.save(paths.config)
+    (paths.metrics).write_text(
+        '{"steps": 1000, "touches_per_minute": 2.0, "touches_against_per_minute": 9.0,'
+        ' "goals_per_minute": 0.1, "goals_against_per_minute": 0.7, "realtime_factor": 90.0}\n'
+    )
+    run = client.get("/api/runs/mit-hinweisen").json()
+    assert run["hints"]
+    assert run["last"]["touches_against_per_minute"] == 9.0
+    assert run["last"]["realtime_factor"] == 90.0
+
+
+def test_external_training_is_shown_with_owner(client):
+    """Trainiert die Kommandozeile, zeigt die Oberfläche das klar an.
+
+    Der Server kennt den Prozess dann nicht als eigenen Kindprozess; die
+    Dateisperre samt Prozessnummer liefert die nötigen Angaben.
+    """
+    from rocketai.runtime import TrainLock
+
+    paths = make_run("von-hand")
+    with TrainLock(paths.root, "von-hand"):
+        runs = client.get("/api/runs").json()
+        entry = next(r for r in runs if r["name"] == "von-hand")
+        assert entry["status"]["state"] == "extern"
+        assert entry["status"]["owner"]["alive"] is True
+        assert entry["status"]["owner"]["pid"] > 0
+    after = client.get("/api/runs").json()
+    entry = next(r for r in after if r["name"] == "von-hand")
+    assert entry["status"]["state"] != "extern"
+    assert entry["status"]["owner"] is None

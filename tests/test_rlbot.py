@@ -14,7 +14,13 @@ from rlgym.rocket_league.obs_builders import DefaultObs  # noqa: E402
 from rocketai.config import OBS_PADDING  # noqa: E402
 from rocketai.env import lookup_table, make_env  # noqa: E402
 from rocketai.model import ActorCritic, save_checkpoint  # noqa: E402
-from rocketai.play import PlaySettings, bot_toml, match_toml  # noqa: E402
+from rocketai.play import (  # noqa: E402
+    PlaySettings,
+    agent_ids,
+    bot_toml,
+    config_names,
+    match_toml,
+)
 from rocketai.rlbot_convert import PacketConverter, controls_from_action  # noqa: E402
 
 
@@ -142,13 +148,47 @@ def test_match_toml_is_accepted_by_rlbot(tmp_path, mode):
         '[settings]\nname = "Other"\nagent_id = "x/other"\nrun_command = "other.exe"\n'
     )
     settings = PlaySettings(
-        checkpoint=str(checkpoint), mode=mode, team_size=2, opponent_bot=str(other)
+        checkpoint=str(checkpoint),
+        mode=mode,
+        # Fremde Community-Bots bringen nur eine Kennung mit → nur 1v1.
+        team_size=1 if mode == "bot" else 2,
+        opponent_bot=str(other),
     )
     settings.validate()
-    (tmp_path / "bot.toml").write_text(bot_toml(settings))
+    # Dieselbe Dateiablage wie beim echten Start — inklusive aller Auto-Dateien.
+    written: list[str] = []
+    for team in ("blue", "orange"):
+        for name, agent in zip(
+            config_names(settings, team), agent_ids(settings, team), strict=True
+        ):
+            (tmp_path / name).write_text(bot_toml(settings, agent))
+            written.append(name)
     (tmp_path / "match.toml").write_text(match_toml(settings))
     tomllib.loads(match_toml(settings))
+    assert len(written) == len(set(written))
+    assert len(written) == settings.team_size * (2 if mode == "self" else 1)
     config = load_match_config(tmp_path / "match.toml")
-    assert len(config.player_configurations) == 4
+    expected = (2 if mode == "human" else settings.team_size) + settings.team_size
+    assert len(config.player_configurations) == expected
     ours = config.player_configurations[0].variety
     assert "rocketai" in ours.run_command and str(checkpoint) in ours.run_command
+    # Die Kennung im Match muss zu der im Befehl passen — sonst fährt der Bot nie.
+    # Nur RLBot-Autos (nicht Psyonix/Mensch) haben eine agent_id.
+    rlbot_players = [p for p in config.player_configurations if hasattr(p.variety, "agent_id")]
+    assert rlbot_players
+    if mode == "self":
+        ids = [p.variety.agent_id for p in rlbot_players]
+        assert len(ids) == len(set(ids)), f"doppelte Kennungen: {ids}"
+    for variety in (p.variety for p in rlbot_players):
+        if not variety.agent_id.startswith("rocketai/"):
+            continue  # ein fremder Community-Bot, nicht unsere Datei
+        # Unser Befehl muss dieselbe Kennung tragen wie das Match — sonst
+        # bekommt der laufende Prozess kein Auto zugeteilt.
+        assert f"--agent-id {variety.agent_id}" in variety.run_command
+        matched = [
+            (tmp_path / name).read_text()
+            for name in written
+            if f'agent_id = "{variety.agent_id}"' in (tmp_path / name).read_text()
+        ]
+        assert len(matched) == 1
+        assert f"--agent-id {variety.agent_id}" in matched[0]

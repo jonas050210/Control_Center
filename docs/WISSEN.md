@@ -59,16 +59,26 @@ immer dein eigenes Netz — Nexto liefert nur Beispiele bzw. den Gegner.
 
 ## 2. Wie die KI das Spiel sieht
 
-Die KI „sieht“ kein Bild. Sie bekommt 15-mal pro Sekunde eine **Liste von 172
+Die KI „sieht“ kein Bild. Sie bekommt 15-mal pro Sekunde eine **Liste von 184
 Zahlen** (im Training) bzw. genau dieselbe Liste aus dem echten Spiel (über
-RLBot). Die Zahlen enthalten:
+RLBot). Die Live-Ansicht zeigt sie unter **„Was die KI sieht“**.
+
+Die ersten 172 Zahlen sind der Standardteil (RLGym `DefaultObs`), die letzten
+12 sind eigene Ergänzungen aus `rocketai/obs.py`:
 
 | Bereich | Inhalt |
 |---|---|
-| Ball | Position, Geschwindigkeit, Drehung — je normal und gespiegelt |
-| Autos | Position, Tempo, Drehung, Ausrichtung (Nase oben), Boost, am Boden?, Flip übrig? |
+| Ball | Position, Geschwindigkeit, **Drehung** — je normal und gespiegelt |
+| Autos | Position, Tempo, Drehung, Ausrichtung (Nase oben), Boost, am Boden?, Überschall?, wird gerade geboostet?, Demo-Timer, Flip übrig? |
 | Boost-Pads | welche gerade voll sind |
-| Fläche | Feldgröße zur Normierung |
+| Zusatz (12) | Ball relativ zum Auto (x/y/z), Abstand, Ballgeschwindigkeit, **Balldrehung**, Ballhöhe, „Ball fliegt auf unser Tor zu“, Ball in unserer Hälfte, eigener Boost, Räder am Boden, Überschall |
+
+Die Zusatzwerte sind bewusst einfach und schnell zu rechnen: Sie geben der KI
+Dinge, die sie aus den Rohwerten sonst mühsam lernen müsste (z. B. „der Ball
+kommt auf mein Tor“). Wichtig ist die **Sperre** zwischen Training und echtem
+Spiel: Der Bauplan steckt als Zahl (`obs_size`) im Checkpoint, der RLBot-Bot
+baut deshalb immer genau die Beobachtung, mit der seine Gewichte trainiert
+wurden. Ein Test vergleicht beide Wege Wert für Wert.
 
 Wichtig: Alles wird **relativ zu deinem Auto** sortiert und gedreht, damit die
 KI nicht Blau und Orange doppelt lernen muss. Für sie ist das eigene Tor immer
@@ -338,18 +348,29 @@ Wichtig, damit keine falschen Erwartungen entstehen:
 
 ## 10. Zeit- und Hardware-Erwartungen
 
-Grobe Erfahrungswerte (RLGym-Community, umgerechnet auf normale CPUs):
+Grobe Erfahrungswerte für **Schritte** (RLGym-Community). Die Zeit hängt vom
+Rechner ab — deshalb gibt es `python3 -m rocketai benchmark` (oder den Knopf
+*Einrichtung → Geschwindigkeit messen*). Gemessen in der 2-Kern-Sandbox:
+~2 100 Schritte/s pro Simulationsprozess (≈ 70× Echtzeit), mit zwei Prozessen
+~4 200 Schritte/s, dazu ein PPO-Lernschritt mit ~20 000 Schritten/s.
 
-| Stufe | Schritte | 8 Kerne |
-|---|---|---|
-| Ball treffen | 20–50 Mio. | 0,5–1 h |
-| Tore schießen | 100–300 Mio. | 2–6 h |
-| Psyonix Rookie/Pro schlagen | 0,3–1 Mrd. | 6–20 h |
-| Gold/Platin | Milliarden | Tage |
-| Mit Lehrer (gegen ihn gespielt) | 10–100 Mio. | oft deutlich schneller erste Erfolge |
+| Stufe | Schritte (Erfahrungswerte) |
+|---|---|
+| Ball treffen | 20–50 Mio. |
+| Tore schießen | 100–300 Mio. |
+| Psyonix Rookie/Pro schlagen | 0,3–1 Mrd. |
+| Gold/Platin | Milliarden |
+| Mit Lehrer (gegen ihn gespielt) | 10–100 Mio. |
 
-Wichtig: Mehr Kerne = fast proportional schneller. Zwei Kerne sind kein
-Training, sondern ein Anschauungsbeispiel. Der Webbrowser darf zu sein, das
+Ehrliche Einordnung: Bei einigen zehntausend Schritten pro Sekunde sind diese
+Zahlen an einem Tag „abgearbeitet“. Ob die KI dann wirklich gut spielt,
+entscheidet nicht die Rechenleistung, sondern ob Belohnung, Startbedingungen
+und Bewertung stimmen. Genau deshalb zeigt die Oberfläche jetzt nach Team
+getrennte Kennzahlen und den Echtzeit-Faktor.
+
+Mehr Kerne = fast proportional schneller; zwei Kerne sind ein
+Anschauungsbeispiel. Eine Grafikkarte beschleunigt nur den Lernschritt, nicht
+die Simulation (die läuft auf der CPU). Der Webbrowser darf zu sein, das
 Training läuft im Hintergrund weiter (es ist ein eigener Prozess). Läuft der
 PC aus/standby, pausiert alles — nach dem Neustart erneut starten und es macht
 bei `latest.pt` weiter.
@@ -358,9 +379,14 @@ bei `latest.pt` weiter.
 
 ## 11. Woran erkenne ich, ob es gut läuft?
 
-- **Ballkontakte pro Minute** steigt zügig: unter 5 → läuft nicht richtig;
-  15+ → die KI trifft den Ball zuverlässig.
-- **Tore pro Minute** kommt später. 1+ ist der Punkt zum Weiterdrehen.
+- **Eigene Ballkontakte pro Minute** steigt zügig: unter 5 → läuft nicht
+  richtig; über 10 → die KI trifft den Ball zuverlässig. Die Zeile „Gegner“
+  daneben gehört der anderen Seite: Steigt nur sie, wird die KI nicht besser.
+- **Eigene Tore pro Minute** kommt später. 1+ ist der Punkt zum Weiterdrehen;
+  **Gegentore** sollten dabei nicht stärker wachsen als die eigenen.
+- **Echtzeit-Faktor** (`x… Echtzeit` im Protokoll, `realtime_factor` in den
+  Messwerten) zeigt, wie viel simulierte Spielzeit pro Sekunde läuft — kein
+  Lernfortschritt, sondern Tempo.
 - **Belohnung pro Episode** steigt tendenziell, kann aber stark schwanken (das
   ist normal, es wird geglättet angezeigt).
 - **Siegquote gegen ältere Versionen** sollte um/über 50 % gehen. Dauerhaft
@@ -402,6 +428,7 @@ python3 -m rocketai train --preset autopilot --name mein-bot  # ohne Lehrer
 python3 -m rocketai train --resume mein-bot --steps 100000000
 python3 -m rocketai eval mein-bot/latest.pt --opponent teacher --games 5
 python3 -m rocketai replay chaser teacher --seconds 60 --out match.json
+python3 -m rocketai benchmark                                # Tempo dieses Rechners
 ```
 
 **Im echten Spiel**
@@ -416,6 +443,7 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 | Datei / Ordner | Inhalt |
 |---|---|
 | `rocketai/env.py` | Simulationsumgebung (RocketSim + RLGym) |
+| `rocketai/obs.py` | Was die KI sieht: Basiswerte + 12 Zusatzwerte (und ihre Beschriftungen für die Oberfläche) |
 | `rocketai/rewards.py` | Belohnungen der drei Stufen |
 | `rocketai/model.py` | Netz und Checkpoint-Format |
 | `rocketai/ppo.py` | Der Lernschritt (inkl. Nachahmung des Lehrers) |
@@ -427,8 +455,10 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 | `rocketai/live.py` | Live-Spiele für die 3D-Ansicht |
 | `rocketai/server.py`, `web/` | Lokale Web-App |
 | `rocketai/rlbot_convert.py`, `rlbot_bot/` | Brücke zum echten Spiel |
-| `rocketai/play.py` | Startet Matches in Rocket League |
-| `tests/` | 70 Tests (Umgebung, Training, Lehrer, Server, RLBot) |
+| `rocketai/play.py` | Startet Matches in Rocket League (eine Bot-Datei je Auto, eindeutige Kennungen) |
+| `rocketai/runtime.py` | Datesperre pro Run: verhindert zwei Trainingsprozesse auf demselben Run |
+| `rocketai/benchmark.py` | Misst Schritte/s, Echtzeit-Faktor und Lernschritt |
+| `tests/` | 100 Tests (Umgebung, Training, Lehrer, Server, RLBot, Sperre, Zufallszustand) |
 | `docs/PLAN.md` | Der Entwicklungsplan |
 | `docs/WISSEN.md` | Diese Datei |
 

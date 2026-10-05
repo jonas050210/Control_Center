@@ -44,7 +44,13 @@ def _cmd_train(args: argparse.Namespace) -> int:
     except ValueError as error:
         print(f"Ungültige Einstellungen: {error}", file=sys.stderr)
         return 2
-    train(config)
+    from .runtime import AlreadyRunning
+
+    try:
+        train(config)
+    except AlreadyRunning as error:
+        print(f"{error}\nEin Run darf nur einmal gleichzeitig trainieren.", file=sys.stderr)
+        return 3
     return 0
 
 
@@ -133,6 +139,24 @@ def _cmd_bot(args: argparse.Namespace) -> int:
         + (["--sample"] if args.sample else [])
         + (["--teacher"] if args.teacher else [])
     )
+    return 0
+
+
+def _cmd_benchmark(args: argparse.Namespace) -> int:
+    from .benchmark import format_report, run_benchmark
+
+    report = run_benchmark(
+        seconds=args.seconds,
+        workers=args.workers,
+        envs_per_worker=args.envs,
+        team_size=args.team_size,
+        with_update=not args.no_update,
+    )
+    print(format_report(report))
+    if args.json:
+        import json as _json
+
+        print(_json.dumps(report, indent=2))
     return 0
 
 
@@ -225,6 +249,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     doc = sub.add_parser("doctor", help="Installation prüfen")
     doc.set_defaults(func=_cmd_doctor)
+
+    bench = sub.add_parser("benchmark", help="Messen, wie schnell dieser Rechner trainiert")
+    bench.add_argument("--seconds", type=float, default=6.0, help="Messdauer pro Einstellung")
+    bench.add_argument("--workers", type=int, default=0, help="0 = automatisch")
+    bench.add_argument("--envs", type=int, default=1, help="Spiele pro Prozess")
+    bench.add_argument("--team-size", type=int, default=1, choices=(1, 2, 3))
+    bench.add_argument("--no-update", action="store_true", help="Lernschritt nicht messen")
+    bench.add_argument("--json", action="store_true", help="Ergebnis zusätzlich als JSON")
+    bench.set_defaults(func=_cmd_benchmark)
     return parser
 
 

@@ -30,16 +30,20 @@ from pydantic import BaseModel
 
 from . import __version__
 from .config import (
+    N_ACTIONS,
     PRESETS,
     PYTHON_CMD,
     ROOT,
     RUN_NAME_PATTERN,
+    TICK_SKIP,
+    TICKS_PER_SECOND,
     TrainConfig,
     preset_config,
     run_paths,
     runs_root,
 )
 from .play import BRAINS, LAUNCHERS, MODES, SKILLS, PlaySession, PlaySettings, server_path
+from .runtime import lock_owner
 from .trainer import read_json, write_json
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -160,6 +164,15 @@ class AppState:
             process = self.processes.get(name)
             if process is not None and process.poll() is None:
                 raise HTTPException(409, f"'{name}' trainiert bereits")
+            # Ein Trainer kann auch von der Kommandozeile laufen: die
+            # Dateisperre erkennt ihn, auch wenn dieser Server ihn nicht kennt.
+            owner = lock_owner(run_paths(name).root)
+            if owner and owner.get("alive"):
+                raise HTTPException(
+                    409,
+                    f"'{name}' wird schon trainiert (Prozess {owner['pid']}, "
+                    f"{PYTHON_CMD} -m rocketai train --resume {name})",
+                )
             paths = run_paths(name)
             paths.root.mkdir(parents=True, exist_ok=True)
             paths.control.unlink(missing_ok=True)
@@ -188,7 +201,11 @@ class AppState:
             if state in ("starting", "running", "evaluating"):
                 return "failed" if code else "stopped"
             return state
-        # Not started by this server (or the server restarted): judge by heartbeat.
+        # Nicht von diesem Server gestartet (oder Server neu gestartet): die
+        # Dateisperre sagt, ob wirklich noch jemand trainiert.
+        owner = lock_owner(run_paths(name).root)
+        if owner and owner.get("alive"):
+            return "extern"
         heartbeat_age = time.time() - status.get("updated", 0)
         if state in ("starting", "running", "evaluating") and heartbeat_age > STALE_AFTER_SECONDS:
             return "interrupted"
@@ -226,18 +243,34 @@ def run_summary(name: str) -> dict[str, Any]:
     metrics = _read_jsonl(paths.metrics)
     evaluations = _read_jsonl(paths.evaluations)
     last = metrics[-1] if metrics else {}
+    try:
+        hints = TrainConfig.from_dict(config).hints() if config else []
+    except (ValueError, TypeError):
+        hints = []
     return {
         "name": name,
         "config": config,
-        "status": {**status, "state": STATE.run_state(name, status)},
+        "hints": hints,
+        "status": {
+            **status,
+            "state": STATE.run_state(name, status),
+            # Wer den Run gerade trainiert — auch ein Prozess außerhalb des
+            # Servers (Kommandozeile). Die Oberfläche zeigt das an.
+            "owner": lock_owner(paths.root),
+        },
         "last": {
             key: last.get(key)
             for key in (
                 "steps",
                 "steps_per_second",
+                "realtime_factor",
                 "episode_reward",
                 "touches_per_minute",
+                "touches_against_per_minute",
                 "goals_per_minute",
+                "goals_against_per_minute",
+                "past_win_rate",
+                "teacher_win_rate",
                 "time",
             )
         },
@@ -345,12 +378,29 @@ class LiveRequest(BaseModel):
     match_seconds: float = 300.0
 
 
+class BenchmarkRequest(BaseModel):
+    seconds: float = 6.0
+    workers: int = 0  # 0 = automatisch
+    envs_per_worker: int = 1
+    team_size: int = 1
+    with_update: bool = True
+
+
+class ConfigCheck(BaseModel):
+    """Einstellungen prüfen, ohne einen Run anzulegen."""
+
+    preset: str = "beginner"
+    overrides: dict[str, Any] = {}
+
+
 class LiveControl(BaseModel):
     paused: bool | None = None
     speed: float | None = None
 
 
 _RL_CACHE: dict[str, Any] = {"time": 0.0, "data": None}
+#: Letztes gemessenes Tempo (aus /api/benchmark) — die Oberfläche zeigt es wieder an.
+benchmark_cache: dict[str, Any] = {"time": 0.0, "report": None}
 
 
 def rocket_league_status(refresh: bool = False) -> dict[str, Any]:
@@ -601,6 +651,60 @@ def create_app() -> FastAPI:
         STATE.play.stop()
         return STATE.play.info()
 
+    @app.get("/api/obs")
+    def obs_info() -> dict[str, Any]:
+        """Was die KI sieht: Eingabegröße und die Zusatzwerte im Klartext."""
+        from .config import OBS_BASE_SIZE, OBS_SIZE
+        from .obs import EXTRA_FEATURES, describe_features
+
+        return {
+            "base_size": OBS_BASE_SIZE,
+            "extra_size": len(EXTRA_FEATURES),
+            "size": OBS_SIZE,
+            "extras": describe_features(),
+            "actions": int(N_ACTIONS),
+            "tick_skip": TICK_SKIP,
+            "decisions_per_second": TICKS_PER_SECOND / TICK_SKIP,
+        }
+
+    @app.post("/api/config/check")
+    def config_check(request: ConfigCheck) -> dict[str, Any]:
+        """Vor dem Start prüfen: harte Fehler und freundliche Hinweise getrennt."""
+        try:
+            config = preset_config(request.preset, **request.overrides)
+            config.validate()
+        except (TypeError, ValueError) as error:
+            return {"ok": False, "problems": str(error).split("; "), "hints": []}
+        return {"ok": True, "problems": [], "hints": config.hints(), "config": config.to_dict()}
+
+    @app.post("/api/benchmark", status_code=202)
+    def benchmark_start(request: BenchmarkRequest) -> dict[str, Any]:
+        """Messen, wie schnell *dieser* Rechner trainiert (läuft als Hintergrundauftrag)."""
+        from .benchmark import run_benchmark
+
+        seconds = max(2.0, min(30.0, request.seconds))
+
+        def job() -> dict[str, Any]:
+            report = run_benchmark(
+                seconds=seconds,
+                workers=request.workers,
+                envs_per_worker=max(1, min(8, request.envs_per_worker)),
+                team_size=request.team_size,
+                with_update=request.with_update,
+            )
+            from .benchmark import suggested_config
+
+            report["suggested"] = suggested_config(report).to_dict()
+            benchmark_cache["report"] = report
+            benchmark_cache["time"] = time.time()
+            return report
+
+        return STATE.submit("benchmark", f"Geschwindigkeit messen ({seconds:.0f} s)", job).info()
+
+    @app.get("/api/benchmark")
+    def benchmark_latest() -> dict[str, Any]:
+        return {"report": benchmark_cache.get("report"), "time": benchmark_cache.get("time")}
+
     @app.get("/api/teacher")
     def teacher_status() -> dict[str, Any]:
         from .teacher import describe_teacher
@@ -669,13 +773,21 @@ def create_app() -> FastAPI:
 
     @app.get("/api/system")
     def system() -> dict[str, Any]:
+        from .config import OBS_BASE_SIZE, OBS_SIZE
         from .doctor import run_checks
+        from .obs import describe_features
 
         return {
             "checks": run_checks(),
             "runs_folder": str(runs_root()),
             "version": __version__,
             "python": PYTHON_CMD,
+            "observation": {
+                "size": OBS_SIZE,
+                "base_size": OBS_BASE_SIZE,
+                "extras": describe_features(),
+            },
+            "benchmark": benchmark_cache.get("report"),
         }
 
     @app.get("/api/events")

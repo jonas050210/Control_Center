@@ -18,6 +18,64 @@ from .config import N_ACTIONS, OBS_SIZE
 CHECKPOINT_FORMAT = "rocketai.policy.v1"
 
 
+def resolve_device(name: str = "auto") -> torch.device:
+    """``auto`` = Grafikkarte, wenn eine vorhanden ist, sonst CPU."""
+    if name == "cuda" and not torch.cuda.is_available():
+        raise ValueError(
+            "device='cuda' verlangt eine Grafikkarte mit CUDA. Bitte 'auto' oder 'cpu' nutzen."
+        )
+    if name == "auto":
+        name = "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(name)
+
+
+def seed_everything(seed: int) -> None:
+    """Alle Zufallsquellen auf denselben Startwert setzen (wiederholbare Läufe)."""
+    import random as _random
+
+    _random.seed(seed)
+    np.random.seed(seed % (2**32))
+    torch.manual_seed(seed % (2**32))
+
+
+def rng_payload(rng: np.random.Generator) -> dict[str, Any]:
+    """Zustand der Zufallsgeneratoren für den Checkpoint (Fortsetzen ohne Sprung).
+
+    Ohne diesen Zustand beginnt ein fortgesetztes Training mit neuen Zufallszahlen;
+    dann sind zwei Läufe mit gleichem Startwert nicht mehr vergleichbar.
+    """
+    state = dict(rng.bit_generator.state)
+    inner = dict(state.get("state", {}))
+    return {
+        "numpy_state": int(inner.get("state", 0)),
+        "numpy_inc": int(inner.get("inc", 0)),
+        "numpy_has_uint32": int(state.get("has_uint32", 0)),
+        "numpy_uinteger": int(state.get("uinteger", 0)),
+        "torch": torch.get_rng_state(),
+    }
+
+
+def set_rng_payload(rng: np.random.Generator, payload: dict[str, Any] | None) -> bool:
+    """Zustand aus dem Checkpoint wiederherstellen. True, wenn es geklappt hat."""
+    if not payload:
+        return False
+    try:
+        state = dict(rng.bit_generator.state)
+        state["state"] = {
+            "state": int(payload["numpy_state"]),
+            "inc": int(payload["numpy_inc"]),
+        }
+        state["has_uint32"] = int(payload.get("numpy_has_uint32", 0))
+        state["uinteger"] = int(payload.get("numpy_uinteger", 0))
+        rng.bit_generator.state = state
+        torch_state = payload.get("torch")
+        if torch_state is not None:
+            torch.set_rng_state(torch_state)
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
+
+
 def _mlp(sizes: Sequence[int], out: int) -> nn.Sequential:
     layers: list[nn.Module] = []
     for a, b in zip(sizes[:-1], sizes[1:], strict=False):
@@ -53,19 +111,25 @@ class ActorCritic(nn.Module):
     def value(self, obs: torch.Tensor) -> torch.Tensor:
         return self.critic(obs).squeeze(-1)
 
+    @property
+    def device(self) -> torch.device:
+        """Gerät des Netzes (``cuda``, wenn das Lernen auf der Grafikkarte läuft)."""
+        parameter = next(self.parameters(), None)
+        return parameter.device if parameter is not None else torch.device("cpu")
+
     @torch.no_grad()
     def act(
         self, obs: np.ndarray, deterministic: bool = False
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Batch inference: returns (actions, log-probabilities, values) as numpy arrays."""
-        tensor = torch.as_tensor(obs, dtype=torch.float32)
+        tensor = torch.as_tensor(obs, dtype=torch.float32, device=self.device)
         logits = self.logits(tensor)
         dist = torch.distributions.Categorical(logits=logits)
         actions = torch.argmax(logits, dim=-1) if deterministic else dist.sample()
         return (
-            actions.numpy(),
-            dist.log_prob(actions).numpy(),
-            self.value(tensor).numpy(),
+            actions.cpu().numpy(),
+            dist.log_prob(actions).cpu().numpy(),
+            self.value(tensor).cpu().numpy(),
         )
 
     def evaluate(

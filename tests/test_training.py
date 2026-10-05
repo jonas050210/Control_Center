@@ -59,7 +59,7 @@ def test_collector_and_ppo_update():
     collector = Collector(config.to_dict(), seed=0)
     batch = collector.collect(800)
     assert len(batch) >= 800
-    assert batch.obs.shape == (len(batch), 172)
+    assert batch.obs.shape == (len(batch), config.obs_size)
     assert np.isfinite(batch.advantages).all()
     assert batch.stats["episodes"], "10 s episodes should finish within 800 agent steps"
     model = collector.model

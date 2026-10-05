@@ -28,7 +28,19 @@ jobs:
           ruff check .
           ruff format --check .
       - name: Tests
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q --tb=short > pytest-out.txt 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            # Fehlerzeilen als Annotation zeigen – so sind sie auch ohne Log-Download sichtbar.
+            while IFS= read -r line; do
+              echo "::error title=pytest::$line"
+            done < <(grep -E "^(FAILED|ERROR)|^E " pytest-out.txt | head -20)
+            tail -5 pytest-out.txt
+          fi
+          exit "$code"
       - name: JavaScript syntax
         if: runner.os == 'Linux'
         run: node --check rocketai/web/app.js

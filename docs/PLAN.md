@@ -14,9 +14,12 @@ RLBot v5 gegen Psyonix-Bots, Community-Bots, sich selbst oder dich.
 | Baustein | Datei(en) | Technik | Aufgabe |
 | --- | --- | --- | --- |
 | Konfiguration | `rocketai/config.py` | Dataclass + Vorlagen | alle Trainingsparameter, Ordnerstruktur eines Runs |
-| Simulation | `rocketai/env.py` | RocketSim 2.2 + RLGym 2.0 | Physik ~2 300 Schritte/s pro Prozess; Anstoß- und Zufallsstarts |
+| Simulation | `rocketai/env.py` | RocketSim 2.2 + RLGym 2.0 | Physik ~2 100 Schritte/s pro Prozess (gemessen); Anstoß- und Zufallsstarts |
+| Beobachtung | `rocketai/obs.py` | `DefaultObs` + Zusatzblock | 172 Basiswerte + 12 Zusatzwerte (Ball relativ, Abstand, Drehung, Höhe, Boost, Torgefahr …) = 184; Training und echtes Spiel bauen sie identisch |
+| Laufzeit | `rocketai/runtime.py` | Dateisperre + Lebenszeichen | ein Trainingsprozess pro Run; erkennt auch fremde Trainer (Kommandozeile vs. Weboberfläche) |
+| Messen | `rocketai/benchmark.py` | echte Simulation + PPO | Schritte/s, Entscheidungen/s, Echtzeit-Faktor, Lernschritt (CPU/GPU), Empfehlungen |
 | Belohnungen | `rocketai/rewards.py` | gestuft (Stufe 1–3) | erst Ball treffen, dann Richtung Tor, dann komplettes Spiel |
-| Netz | `rocketai/model.py` | PyTorch-MLP, Actor + Critic getrennt | 172 Beobachtungen → 90 Aktionen; Checkpoint-Format v1 |
+| Netz | `rocketai/model.py` | PyTorch-MLP, Actor + Critic getrennt | 184 Beobachtungen → 90 Aktionen; Checkpoint-Format v1, Gerät frei wählbar (`device`: CPU oder Grafikkarte) |
 | Erfahrung sammeln | `rocketai/rollout.py` | Worker-Prozesse (spawn, Windows-tauglich) | Self-Play, GAE direkt im Worker |
 | Lernen | `rocketai/ppo.py` | PPO mit Clipping, KL-Notstopp | getrenntes Gradient-Clipping für Actor/Critic |
 | Trainingsschleife | `rocketai/trainer.py` | Prozess pro Training | Checkpoints, Messwerte, Bewertung, Replays, Stopp-Datei |
@@ -32,7 +35,7 @@ RLBot v5 gegen Psyonix-Bots, Community-Bots, sich selbst oder dich.
 
 ```
  Simulation (RocketSim)          Training                      Echtes Spiel
- RLGym-Env  --obs 172-->  PPO-Policy (MLP)  --checkpoint-->  RLBot-Bot  <-->  Rocket League
+ RLGym-Env  --obs 184-->  PPO-Policy (MLP)  --checkpoint-->  RLBot-Bot  <-->  Rocket League
             <--Aktion 90--                                   (gleiche Beobachtung,
                                                               gleiche 90 Aktionen,
                                                               8 Ticks pro Entscheidung)
@@ -40,9 +43,11 @@ RLBot v5 gegen Psyonix-Bots, Community-Bots, sich selbst oder dich.
 
 Damit die KI im echten Spiel so spielt wie im Training:
 
-- **Gleiche Beobachtung:** `DefaultObs` mit Platz für bis zu 3v3 (172 Werte).
-  Der Konverter baut daraus denselben `GameState` wie RocketSim. Ein Test
-  vergleicht beide Beobachtungen Wert für Wert.
+- **Gleiche Beobachtung:** `DefaultObs` mit Platz für bis zu 3v3 (172 Werte)
+  plus 12 Zusatzwerte aus `rocketai/obs.py` (184). Der Konverter baut daraus
+  denselben `GameState` wie RocketSim; der Bot wählt den Bauplan anhand der im
+  Checkpoint gespeicherten Größe. Ein Test vergleicht beide Beobachtungen Wert
+  für Wert — für die Basis- und die erweiterte Variante.
 - **Gleiche Aktionen:** Lookup-Tabelle mit 90 Aktionen, jede 8 Ticks gehalten.
 - **Gleiches Timing:** Das Training simuliert RLBots Verzögerung von einem Tick.
 - **Gleiche Boost-Pads:** RLBot nummeriert Pads anders; sie werden über ihre
@@ -53,13 +58,14 @@ Damit die KI im echten Spiel so spielt wie im Training:
 | Datei | Inhalt |
 | --- | --- |
 | `config.json` | alle Einstellungen |
-| `status.json` | Zustand (läuft/fertig/…), Schritte, Tempo, Herzschlag |
+| `status.json` | Zustand (läuft/fertig/…), Schritte, Tempo, Echtzeit-Faktor, Gerät, Herzschlag |
 | `metrics.jsonl` | eine Zeile pro PPO-Runde (Ballkontakte, Tore, Belohnung, KL, …) |
 | `evaluations.jsonl` | Ergebnisse gegen Balljäger und Verteidiger |
 | `checkpoints/` | `<schritte>.pt` und `latest.pt` (mit Optimizer zum Fortsetzen) |
 | `replays/` | aufgezeichnete Bewertungsspiele für die Arena |
 | `train.log`, `process.log` | Protokoll und rohe Prozessausgabe |
 | `control.json` | von der Web-App geschrieben: `{"stop": true}` beendet sauber |
+| `trainer.lock`, `trainer.lock.guard` | Prozessnummer und Dateisperre des laufenden Trainings (verschwinden beim Beenden) |
 
 ## Phasen
 
@@ -70,7 +76,8 @@ Replays, Web-App, Installer/Starter, RLBot-Bot samt Konverter, Tests, CI.
 
 Erste Messungen in der Sandbox (2 CPU-Kerne):
 
-- Tempo: ~4 700 Schritte/s mit 2 Prozessen (ca. 2 350 pro Prozess)
+- Tempo: ~4 200 Schritte/s mit 2 Prozessen (ca. 2 100 pro Prozess, ~70×
+  Echtzeit); ein PPO-Lernschritt schafft ~20 000 Schritte/s
 - PPO-Diagnose: Nach dem Trennen des Gradient-Clippings stieg die KL pro
   Update von ~0,00004 auf ~0,002–0,003; die Clip-Rate liegt bei 1–2 %.
 - Skript-Bots: Der Balljäger schlägt „Stillstand“ und „Zufall“ deutlich;
@@ -91,7 +98,7 @@ Woran man Fortschritt erkennt:
 
 | Signal | gut | Warnzeichen |
 | --- | --- | --- |
-| Ballkontakte/min | steigt über Stunden | bleibt flach > 30 Mio. Schritte |
+| **eigene** Ballkontakte/min | steigt über Stunden | bleibt flach > 30 Mio. Schritte (die Zeile „Gegner“ daneben zeigt, ob nur die andere Seite am Ball ist) |
 | KL pro Update | 0,002–0,02 | dauerhaft < 0,0005 (lernt nicht) oder Notstopps in jeder Runde |
 | Entropie | sinkt langsam von 4,5 | fällt schnell unter 2 (KI wird starr) |
 | Erklärte Varianz | steigt Richtung 0,5–0,9 | bleibt um 0 |
@@ -118,17 +125,42 @@ Woran man Fortschritt erkennt:
 
 ## Grobe Erwartung
 
-Erfahrungswerte der RLGym-Community; Grundlage ist das gemessene Tempo von
-~2 300 Schritten/s pro Prozess, also etwa 15 000/s auf einem 8-Kern-PC.
+**Nicht die Rechenleistung ist der Engpass, sondern ob das Lernziel stimmt.**
+Die Simulation ist auf einem normalen PC einige zehntausend Schritte pro
+Sekunde schnell (gemessen: ~2 100 pro Prozess). Damit sind die unten genannten
+Schrittzahlen oft an einem Tag erreicht — ob die KI dabei wirklich besser
+spielt, entscheiden Belohnung, Startbedingungen und Bewertung.
 
-| Stand | Schritte (grob) | Zeit auf 8 Kernen |
-| --- | --- | --- |
-| fährt zum Ball, trifft ihn | 20–50 Mio. | 0,5–1 h |
-| schießt gezielt Tore | 100–300 Mio. | 2–6 h |
-| schlägt Psyonix Rookie/Pro | 0,3–1 Mrd. | 6–20 h |
-| Gold/Platin-Niveau | mehrere Mrd. | Tage bis Wochen |
+| Stand | Schritte (grob, Erfahrungswerte) |
+| --- | --- |
+| fährt zum Ball, trifft ihn | 20–50 Mio. |
+| schießt gezielt Tore | 100–300 Mio. |
+| schlägt Psyonix Rookie/Pro | 0,3–1 Mrd. |
+| Gold/Platin-Niveau | mehrere Mrd. |
 
-Das echte Tempo zeigt die Web-App nach den ersten Minuten Training.
+Das echte Tempo zeigt `python3 -m rocketai benchmark` bzw. der Knopf auf der
+Einrichtungsseite; die Zeiten in der App werden damit gerechnet.
+
+## Phase 6 – Funktion und Ehrlichkeit (fertig)
+
+- [x] Multi-Worker-Fehler behoben: `teacher_rows` werden beim Zusammenlegen der
+      Worker-Stapel verschoben (vorher lernte die KI vom Lehrer für die falschen
+      Situationen, sobald mehr als ein Prozess lief)
+- [x] Ballkontakte und Tore werden nach Team getrennt ausgewertet („eigene“ vs.
+      „Gegner“); Autopilot-Schwellen entsprechend angepasst
+- [x] `teacher_weight = 0` schaltet den Lehrer wirklich ab (keine Aufzeichnung,
+      kein Laden, keine Restgewichtung)
+- [x] Dateisperre pro Run (`trainer.lock`) gegen doppelte Trainingsprozesse,
+      Anzeige „extern“, wenn die Kommandozeile trainiert
+- [x] Reproduzierbarkeit: Torch-Seed, gespeicherter Zufallszustand, Fortsetzen
+      ohne Sprung
+- [x] Erweiterte Beobachtung (`obs_extras`) inkl. rotierender Bälle bei den
+      Zufallsstarts und identischem Bauplan im echten Spiel
+- [x] Lernen auf der Grafikkarte möglich (`device: auto/cpu/cuda`)
+- [x] `rocketai benchmark` + Knopf in der Oberfläche; Hinweise zu Einstellungen
+- [x] RLBot-Kennungen vereinheitlicht (`--agent-id`, eigene Config für
+      „KI gegen sich selbst“) — vorher startete der zweite Bot ohne Auto
+- [x] Oberfläche: „Was die KI sieht“, getrennte Kennzahlen, Hinweise, Messwerte
 
 ## Grenzen und Risiken
 

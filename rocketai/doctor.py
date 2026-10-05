@@ -49,6 +49,23 @@ def teacher_check() -> dict[str, Any]:
     }
 
 
+def _gpu_check() -> tuple[bool, str]:
+    """Ist eine Grafikkarte für den Lernschritt da? (Kein Muss.)"""
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - ohne PyTorch wird oben schon gemeldet
+        return False, "PyTorch fehlt"
+    try:
+        if torch.cuda.is_available():
+            return True, f"{torch.cuda.get_device_name(0)} – Lernschritt läuft dort automatisch"
+    except Exception as error:  # defekte Treiber
+        return False, f"CUDA-Prüfung fehlgeschlagen: {type(error).__name__}: {error}"
+    detail = "keine NVIDIA-Grafikkarte gefunden – trainiert auf der CPU (völlig okay)"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        detail = "Apple-GPU gefunden (wird derzeit nicht genutzt) – trainiert auf der CPU"
+    return False, detail
+
+
 def run_checks() -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
 
@@ -107,6 +124,23 @@ def run_checks() -> list[dict[str, Any]]:
                 required=False,
             )
     add("cpu", "CPU-Kerne", True, f"{os.cpu_count()} (mehr Kerne = schnelleres Training)")
+    gpu_ok, gpu_detail = _gpu_check()
+    add(
+        "gpu",
+        "Grafikkarte (nur fürs Lernen)",
+        gpu_ok,
+        gpu_detail,
+        required=False,
+    )
+    from .config import OBS_BASE_SIZE, OBS_SIZE
+
+    add(
+        "observation",
+        "Beobachtung der KI",
+        True,
+        f"{OBS_SIZE} Werte pro Auto ({OBS_BASE_SIZE} Basis + {OBS_SIZE - OBS_BASE_SIZE} Zusatz)",
+        required=False,
+    )
     try:
         checks.append(teacher_check())
     except Exception as error:

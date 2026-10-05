@@ -24,6 +24,7 @@ from .config import RUN_NAME_PATTERN, TICK_SKIP, TICKS_PER_SECOND, run_paths
 from .env import make_env
 from .match import frame_of
 from .model import load_checkpoint, model_from_checkpoint
+from .obs import describe_features
 from .opponents import SCRIPTED_BOTS, TEACHER_SPECS, PolicyPlayer, make_player
 
 STEP_SECONDS = TICK_SKIP / TICKS_PER_SECOND
@@ -217,6 +218,8 @@ class LiveManager:
                 "blue": session.blue.info(),
                 "orange": session.orange.info(),
                 "history": session.history[-10:],
+                # Legende für „Was die KI sieht" (siehe rocketai/obs.py).
+                "features": describe_features(),
                 "frames": frames,
                 "events": events,
             }
@@ -225,11 +228,15 @@ class LiveManager:
     def _run(self, session: LiveSession) -> None:
         settings = session.settings
         try:
+            from .match import needs_extras
+
             env = make_env(
                 team_size=settings.team_size,
                 episode_seconds=10_000,
                 no_touch_seconds=10_000,
                 kickoff_probability=1.0,
+                # Beobachtung passend zu den geladenen Checkpoints, nicht global.
+                obs_extras=needs_extras([session.blue.player, session.orange.player]),
             )
             obs = env.reset()
             next_tick = time.perf_counter()
@@ -257,7 +264,7 @@ class LiveManager:
                 state = env.state
                 session.match_clock += STEP_SECONDS
                 frame = frame_of(session.match_clock, state)
-                brain = self._brain(session, env.agents)
+                brain = self._brain(session, env.agents, state)
 
                 goal = None
                 if any(terminated.values()):
@@ -297,14 +304,30 @@ class LiveManager:
             session.running = False
 
     @staticmethod
-    def _brain(session: LiveSession, agents: list[str]) -> list[dict[str, Any]]:
-        """What every AI-controlled car decided this step (``car`` = index in the frame)."""
+    def _brain(session: LiveSession, agents: list[str], state: Any) -> list[dict[str, Any]]:
+        """Was jedes KI-Auto in diesem Schritt entschieden hat (``car`` = Index im Frame).
+
+        Zusätzlich zu Entscheidung/Alternativen kommen hier die *Zusatzwerte der
+        Beobachtung* mit ("Was die KI sieht"): Ballabstand, Ballhöhe, ob der Ball
+        auf das eigene Tor fliegt und so weiter. Es sind dieselben Zahlen, die
+        das Netz als Eingabe bekommt.
+        """
+        from .obs import EXTRA_FEATURES, extra_values
+
         brains = []
         for team, side in enumerate((session.blue, session.orange)):
             info = getattr(side.player, "last_info", None) or {}
             for agent, decision in info.items():
-                if agent in agents:
-                    brains.append({"team": team, "car": agents.index(agent), **decision})
+                if agent not in agents:
+                    continue
+                entry: dict[str, Any] = {"team": team, "car": agents.index(agent), **decision}
+                if state is not None and agent in state.cars:
+                    values = extra_values(agent, state)
+                    entry["sees"] = {
+                        name: round(float(value), 3)
+                        for name, value in zip(EXTRA_FEATURES, values, strict=True)
+                    }
+                brains.append(entry)
         return sorted(brains, key=lambda b: b["car"])
 
     @staticmethod

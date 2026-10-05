@@ -21,7 +21,6 @@ from rlgym.rocket_league.done_conditions import (
     NoTouchTimeoutCondition,
     TimeoutCondition,
 )
-from rlgym.rocket_league.obs_builders import DefaultObs
 from rlgym.rocket_league.sim import RocketSimEngine
 from rlgym.rocket_league.state_mutators import (
     FixedTeamSizeMutator,
@@ -30,6 +29,7 @@ from rlgym.rocket_league.state_mutators import (
 )
 
 from .config import OBS_PADDING, TICK_SKIP
+from .obs import build_obs_builder
 from .rewards import StagedReward
 
 #: Inner field box used for random spawns (keeps cars and ball off the walls).
@@ -74,7 +74,11 @@ class MixedStartMutator(StateMutator[GameState]):
             [rng.uniform(-800, 800), rng.uniform(-800, 800), rng.uniform(0, 400)],
             dtype=np.float32,
         )
-        state.ball.angular_velocity = np.zeros(3, dtype=np.float32)
+        # Auch drehende Bälle: Flugkurven und Prellwinkel sind sonst für die KI
+        # nicht vorhersehbar (Ballrotation steckt in der Beobachtung).
+        state.ball.angular_velocity = np.array(
+            [rng.uniform(-4, 4), rng.uniform(-4, 4), rng.uniform(-4, 4)], dtype=np.float32
+        )
         for car in state.cars.values():
             side = -1 if car.team_num == BLUE_TEAM else 1
             car.physics.position = np.array(
@@ -96,6 +100,7 @@ def make_env(
     no_touch_seconds: float = 30.0,
     kickoff_probability: float = 0.5,
     seed: int | None = None,
+    obs_extras: bool = True,
 ) -> RLGym:
     """A RocketSim match: ``team_size`` cars per side, all controlled by the caller."""
     return RLGym(
@@ -103,7 +108,7 @@ def make_env(
             FixedTeamSizeMutator(blue_size=team_size, orange_size=team_size),
             MixedStartMutator(kickoff_probability, random.Random(seed)),
         ),
-        obs_builder=DefaultObs(zero_padding=OBS_PADDING),
+        obs_builder=build_obs_builder(obs_extras, OBS_PADDING),
         action_parser=RepeatAction(LookupTableAction(), repeats=TICK_SKIP),
         reward_fn=StagedReward(reward_stage),
         termination_cond=GoalCondition(),

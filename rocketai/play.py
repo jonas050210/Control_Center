@@ -60,6 +60,10 @@ class PlaySettings:
             raise ValueError(f"Unbekannter Launcher {self.launcher!r}")
         if self.mode == "bot" and not Path(self.opponent_bot).is_file():
             raise ValueError("Für 'Community-Bot' bitte den Pfad zur bot.toml angeben")
+        if self.mode == "bot" and self.team_size != 1:
+            # Ein fremder Bot bringt genau eine Kennung mit; zweimal dieselbe
+            # Kennung ergibt kein Match.
+            raise ValueError("Community-Bots lassen sich nur 1v1 spielen")
 
 
 def server_path() -> Path:
@@ -75,17 +79,29 @@ def _toml_str(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def bot_toml(settings: PlaySettings) -> str:
+def bot_command(settings: PlaySettings, agent_id: str) -> str:
+    """Der Befehl, mit dem RLBotServer unseren Bot startet."""
     python = sys.executable
     if settings.brain == "teacher":
-        command = f'"{python}" -m rocketai bot --teacher'
+        args = "--teacher"
     else:
-        command = f'"{python}" -m rocketai bot --checkpoint "{Path(settings.checkpoint).resolve()}"'
+        args = f'--checkpoint "{Path(settings.checkpoint).resolve()}"'
+    # Die agent_id muss in beiden Richtungen gleich sein — sonst ordnet RLBot
+    # den laufenden Prozess keinem Auto zu und der Bot bewegt sich nie.
+    return f'"{python}" -m rocketai bot {args} --agent-id {agent_id}'
+
+
+def bot_toml(
+    settings: PlaySettings,
+    agent_id: str = "rocketai/policy",
+    name: str | None = None,
+) -> str:
+    command = bot_command(settings, agent_id)
     return "\n".join(
         [
             "[settings]",
-            f'name = "{BRAINS[settings.brain]}"',
-            f'agent_id = "rocketai/{settings.brain}"',
+            f'name = "{name or BRAINS[settings.brain]}"',
+            f'agent_id = "{agent_id}"',
             f"root_dir = {_toml_str(str(ROOT))}",
             f"run_command = {_toml_str(command)}",
             f"run_command_linux = {_toml_str(command)}",
@@ -98,6 +114,33 @@ def _car(kind: str, team: int, **extra: str) -> list[str]:
     lines = ["[[cars]]", f'type = "{kind}"', f"team = {team}"]
     lines += [f"{key} = {_toml_str(value)}" for key, value in extra.items()]
     return lines + [""]
+
+
+def config_names(settings: PlaySettings, team: str) -> list[str]:
+    """Dateinamen der Bot-Konfigurationen für ein Team (``"blue"``/``"orange"``)."""
+    size = settings.team_size
+    if team == "orange" and settings.mode != "self":
+        return []
+    if size == 1:
+        return ["bot.toml"] if team == "blue" else ["bot-orange.toml"]
+    prefix = "bot" if team == "blue" else "bot-orange"
+    return [f"{prefix}-{index}.toml" for index in range(size)]
+
+
+def agent_ids(settings: PlaySettings, team: str) -> list[str]:
+    """RLBot-Kennungen je Auto.
+
+    Jedes Auto braucht eine **eigene** Kennung: Bei „KI gegen sich selbst“ und
+    im 2v2 laufen mehrere Bot-Prozesse gleichzeitig, und zwei Prozesse mit
+    derselben Kennung bekommen kein Auto zugeteilt. Genau das war der Fehler,
+    durch den der zweite Bot einfach stehen blieb.
+    """
+    size = settings.team_size
+    if team == "orange" and settings.mode != "self":
+        return []
+    if size == 1:
+        return [primary_agent_id(settings)] if team == "blue" else ["rocketai/orange"]
+    return [f"rocketai/{team}-{index}" for index in range(size)]
 
 
 def match_toml(settings: PlaySettings) -> str:
@@ -123,8 +166,9 @@ def match_toml(settings: PlaySettings) -> str:
     ]
     size = settings.team_size
     skill = SKILLS[settings.skill]
-    for _ in range(size):
-        lines += _car("rlbot", 0, config_file="bot.toml")
+    # Ein Auto pro Datei: jedes bekommt eine eigene Kennung (siehe agent_ids).
+    for name in config_names(settings, "blue"):
+        lines += _car("rlbot", 0, config_file=name)
     if settings.mode == "psyonix":
         for _ in range(size):
             lines += _car("psyonix", 1, skill=skill)
@@ -135,16 +179,28 @@ def match_toml(settings: PlaySettings) -> str:
     elif settings.mode == "bot":
         for _ in range(size):
             lines += _car("rlbot", 1, config_file=str(Path(settings.opponent_bot).resolve()))
-    else:  # self
-        for _ in range(size):
-            lines += _car("rlbot", 1, config_file="bot.toml")
+    else:  # self: dieselbe KI, aber je Auto ein eigener Bot-Prozess
+        for name in config_names(settings, "orange"):
+            lines += _car("rlbot", 1, config_file=name)
     return "\n".join(lines)
+
+
+def primary_agent_id(settings: PlaySettings) -> str:
+    """Kennung für das blaue Auto (die eigene KI bzw. der Lehrer)."""
+    return "rocketai/teacher" if settings.brain == "teacher" else "rocketai/policy"
 
 
 def write_match_files(settings: PlaySettings) -> Path:
     folder = match_dir()
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "bot.toml").write_text(bot_toml(settings), encoding="utf-8")
+    for team, label in (("blue", "Blau"), ("orange", "Orange")):
+        for name, agent in zip(
+            config_names(settings, team), agent_ids(settings, team), strict=True
+        ):
+            (folder / name).write_text(
+                bot_toml(settings, agent, name=f"{BRAINS[settings.brain]} ({label})"),
+                encoding="utf-8",
+            )
     path = folder / "match.toml"
     path.write_text(match_toml(settings), encoding="utf-8")
     return path

@@ -3,6 +3,7 @@
 
     python3 install.py              # everything (recommended)
     python3 install.py --no-rlbot   # only training/simulation, no real-game support
+    python3 install.py --cuda       # PyTorch mit CUDA (Lernen auf der Grafikkarte)
 
 Unter Windows heißt der Befehl ``python`` statt ``python3``.
 
@@ -117,9 +118,16 @@ def create_venv() -> Path:
     return python
 
 
-def install_packages(python: Path, with_rlbot: bool, dev: bool) -> None:
-    say("Installiere PyTorch (nur CPU, keine Grafikkarte nötig)")
-    run(python, "-m", "pip", "install", "torch", "--index-url", TORCH_CPU_INDEX)
+def install_packages(python: Path, with_rlbot: bool, dev: bool, cuda: bool = False) -> None:
+    if cuda:
+        # PyTorch mit CUDA: nur der Lernschritt nutzt die Grafikkarte, die
+        # Simulation bleibt auf der CPU. Ohne Angabe wird bewusst die kleine
+        # CPU-Variante installiert (weniger Download, läuft überall).
+        say("Installiere PyTorch mit CUDA (für das Lernen auf der Grafikkarte)")
+        run(python, "-m", "pip", "install", "torch")
+    else:
+        say("Installiere PyTorch (nur CPU, keine Grafikkarte nötig)")
+        run(python, "-m", "pip", "install", "torch", "--index-url", TORCH_CPU_INDEX)
     extras = [name for name, wanted in (("rlbot", with_rlbot), ("dev", dev)) if wanted]
     target = f".[{','.join(extras)}]" if extras else "."
     say("Installiere RocketAI und Abhängigkeiten (RLGym, RocketSim, Web-App)")
@@ -184,11 +192,16 @@ def main() -> None:
     parser.add_argument(
         "--dev", action="store_true", help="zusätzlich Test-Werkzeuge (pytest, ruff)"
     )
+    parser.add_argument(
+        "--cuda",
+        action="store_true",
+        help="PyTorch mit CUDA installieren (Lernen auf einer NVIDIA-Grafikkarte)",
+    )
     args = parser.parse_args()
 
     check_python()
     python = create_venv()
-    install_packages(python, with_rlbot=not args.no_rlbot, dev=args.dev)
+    install_packages(python, with_rlbot=not args.no_rlbot, dev=args.dev, cuda=args.cuda)
     if not args.no_rlbot:
         try:
             download_rlbot_server()

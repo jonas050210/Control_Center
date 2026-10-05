@@ -71,9 +71,10 @@ class PolicyPlayer:
             actions, _, _ = self.model.act(batch, deterministic=self.deterministic)
             return {agent: int(a) for agent, a in zip(agents, actions, strict=True)}
         with torch.no_grad():
-            tensor = torch.as_tensor(batch)
-            probs = torch.softmax(self.model.logits(tensor), dim=-1).numpy()
-            values = self.model.value(tensor).numpy()
+            # Das Netz kann beim Lernen auf der Grafikkarte liegen.
+            tensor = torch.as_tensor(batch, device=self.model.device)
+            probs = torch.softmax(self.model.logits(tensor), dim=-1).cpu().numpy()
+            values = self.model.value(tensor).cpu().numpy()
         if self.deterministic:
             actions = probs.argmax(axis=-1)
         else:

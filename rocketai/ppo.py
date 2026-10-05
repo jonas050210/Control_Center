@@ -33,17 +33,19 @@ def ppo_update(
     """
     rng = rng or np.random.default_rng()
     model.train()
-    obs = torch.as_tensor(batch.obs)
-    actions = torch.as_tensor(batch.actions)
-    old_log_probs = torch.as_tensor(batch.log_probs)
-    returns = torch.as_tensor(batch.returns)
-    advantages = torch.as_tensor(batch.advantages)
+    # Das Netz kann auf der Grafikkarte liegen: alle Stapel dorthin verschieben.
+    device = model.device
+    obs = torch.as_tensor(batch.obs, device=device)
+    actions = torch.as_tensor(batch.actions, device=device)
+    old_log_probs = torch.as_tensor(batch.log_probs, device=device)
+    returns = torch.as_tensor(batch.returns, device=device)
+    advantages = torch.as_tensor(batch.advantages, device=device)
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
     teacher = None
     if teacher_coef and batch.teacher_probs is not None:
         teacher = (
-            torch.as_tensor(batch.teacher_probs, dtype=torch.float32),
-            torch.as_tensor(batch.teacher_mask, dtype=torch.bool),
+            torch.as_tensor(batch.teacher_probs, dtype=torch.float32, device=device),
+            torch.as_tensor(batch.teacher_mask, dtype=torch.bool, device=device),
         )
 
     n = len(batch)
@@ -61,7 +63,7 @@ def ppo_update(
     for _ in range(epochs):
         if stopped_early:
             break
-        order = torch.as_tensor(rng.permutation(n))
+        order = torch.as_tensor(rng.permutation(n), device=device)
         for start in range(0, n, size):
             index = order[start : start + size]
             logits = model.logits(obs[index])

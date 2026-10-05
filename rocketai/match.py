@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from .config import TICK_SKIP, TICKS_PER_SECOND
+from .config import OBS_BASE_SIZE, TICK_SKIP, TICKS_PER_SECOND
 from .env import make_env
 from .opponents import Player
 
@@ -81,6 +81,21 @@ def frame_of(t: float, state: Any) -> list[Any]:
 _frame = frame_of
 
 
+def needs_extras(players: list[Player]) -> bool:
+    """Braucht einer der Spieler die erweiterte Beobachtung?
+
+    Ein Checkpoint weiß selbst, womit er trainiert wurde (``obs_size``), deshalb
+    kann ein Match genau die Beobachtung bauen, die alle Spieler verstehen —
+    auch alte Checkpoints mit 172 Werten laufen weiter.
+    """
+    for player in players:
+        model = getattr(player, "model", None)
+        size = getattr(model, "obs_size", None)
+        if size is not None:
+            return int(size) > OBS_BASE_SIZE
+    return True
+
+
 def play_match(
     blue: Player,
     orange: Player,
@@ -89,14 +104,18 @@ def play_match(
     seconds: float = 120.0,
     record: bool = False,
     seed: int | None = None,
+    obs_extras: bool | None = None,
 ) -> MatchResult:
     """A timed match: kickoff after every goal, like the real game (no overtime)."""
+    if obs_extras is None:
+        obs_extras = needs_extras([blue, orange])
     env = make_env(
         team_size=team_size,
         episode_seconds=seconds + 1,
         no_touch_seconds=seconds + 1,
         kickoff_probability=1.0,
         seed=seed,
+        obs_extras=obs_extras,
     )
     result = MatchResult(blue.name, orange.name, team_size, seconds)
     obs = env.reset()
@@ -141,6 +160,7 @@ def evaluate(
     team_size: int = 1,
     seconds: float = 120.0,
     seed: int = 0,
+    obs_extras: bool | None = None,
 ) -> dict[str, Any]:
     """``games`` matches, switching sides each game; results from the policy's point of view."""
     wins = draws = losses = goals_for = goals_against = 0
@@ -148,7 +168,14 @@ def evaluate(
     for game in range(games):
         policy_blue = game % 2 == 0
         blue, orange = (policy, opponent) if policy_blue else (opponent, policy)
-        result = play_match(blue, orange, team_size=team_size, seconds=seconds, seed=seed + game)
+        result = play_match(
+            blue,
+            orange,
+            team_size=team_size,
+            seconds=seconds,
+            seed=seed + game,
+            obs_extras=obs_extras,
+        )
         mine = result.goals_blue if policy_blue else result.goals_orange
         theirs = result.goals_orange if policy_blue else result.goals_blue
         goals_for += mine

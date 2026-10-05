@@ -37,9 +37,10 @@ export const STATE_LABEL = {
   new: "Neu", starting: "Startet", running: "Trainiert", evaluating: "Bewertet", stopping: "Stoppt",
   stopped: "Gestoppt", finished: "Fertig", failed: "Fehler", interrupted: "Unterbrochen",
   queued: "Wartet", done: "Fertig", idle: "Bereit", live: "Live",
+  extern: "Kommandozeile",
 };
 export const pill = (s, label) => `<span class="pill ${h(s)}">${h(label || STATE_LABEL[s] || s)}</span>`;
-export const ACTIVE = new Set(["starting", "running", "evaluating", "stopping"]);
+export const ACTIVE = new Set(["starting", "running", "evaluating", "stopping", "extern"]);
 export const STAGES = { 1: "Ball treffen", 2: "Tore schießen", 3: "Komplettes Spiel" };
 export const OPPONENT_LABEL = { idle: "Stillstand", random: "Zufall", chaser: "Balljäger", defender: "Verteidiger" };
 export const opponentLabel = (s) => OPPONENT_LABEL[s] || s;

@@ -12,10 +12,17 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: Observation layout shared by training and the real-game bot: DefaultObs
-#: padded for up to 3 cars per team, so one network can play 1v1 to 3v3.
+#: Observation layout shared by training and the real-game bot. The base is
+#: RLGym's ``DefaultObs`` padded for up to 3 cars per team (52 + 20 * 3 * 2 =
+#: 172 values). With ``obs_extras`` a small, clearly documented block is
+#: appended (see :mod:`rocketai.obs`), which is what turns 172 into
+#: :data:`OBS_SIZE_EXTRAS`.
 OBS_PADDING = 3
-OBS_SIZE = 52 + 20 * OBS_PADDING * 2  # 172
+OBS_BASE_SIZE = 52 + 20 * OBS_PADDING * 2  # 172
+#: Extra values per agent added by :class:`rocketai.obs.ExtraObs`.
+OBS_EXTRA_SIZE = 12
+#: Default observation size (with extras, see :data:`OBS_EXTRA_SIZE`).
+OBS_SIZE = OBS_BASE_SIZE + OBS_EXTRA_SIZE  # 184
 #: LookupTableAction size.
 N_ACTIONS = 90
 #: Physics ticks each decision is held for (120 Hz / 8 = 15 decisions per second).
@@ -54,6 +61,10 @@ class TrainConfig:
     n_workers: int = 0  # 0 = auto (CPU cores - 1)
     envs_per_worker: int = 4
     steps_per_iteration: int = 50_000  # agent steps collected before each update
+    #: Extended observation (see rocketai/obs.py): relative ball information,
+    #: distances and the direction towards the opponent goal. Costs 12 extra
+    #: inputs per agent and makes the first hours of learning noticeably faster.
+    obs_extras: bool = True
     # PPO
     learning_rate: float = 3e-4
     gamma: float = 0.99
@@ -71,9 +82,9 @@ class TrainConfig:
     past_pool_size: int = 5  # how many older versions are kept as opponents
     # Curriculum: move to the next reward stage by itself once the bot is ready
     auto_curriculum: bool = False
-    # Teacher: Nexto shows the way (see rocketai/teacher.py). 0 = off.
+    # Teacher: Nexto shows the way (see rocketai/teacher.py). weight 0 = off.
     teacher_weight: float = 0.0  # how strongly the teacher counts at the start
-    teacher_final_weight: float = 0.1  # ... and after the decay
+    teacher_final_weight: float = 0.0  # ... and after the decay
     teacher_decay_steps: int = 50_000_000  # steps until the weight reaches the final value
     teacher_samples: int = 6_000  # teacher answers computed per iteration (0 = every step)
     teacher_opponent_prob: float = 0.0  # share of matches PLAYED AGAINST the teacher
@@ -88,6 +99,9 @@ class TrainConfig:
     eval_games: int = 6
     seed: int = 0
     torch_threads: int = 0  # 0 = auto
+    #: Wo das Netz *lernt*: "auto" nimmt die Grafikkarte, wenn eine da ist.
+    #: Die Simulation selbst läuft immer auf der CPU (RocketSim).
+    device: str = "auto"  # "auto" | "cpu" | "cuda"
 
     def validate(self) -> None:
         problems = []
@@ -121,6 +135,16 @@ class TrainConfig:
             problems.append("past_pool_size must be at least 1")
         if not 0 <= self.teacher_weight <= 10 or not 0 <= self.teacher_final_weight <= 10:
             problems.append("teacher_weight and teacher_final_weight must be in [0, 10]")
+        if self.teacher_weight <= 0 and self.teacher_final_weight > 0:
+            problems.append("teacher_final_weight needs teacher_weight > 0; 0 = teacher off")
+        if self.envs_per_worker > 64:
+            problems.append("envs_per_worker above 64 is not useful (memory per match)")
+        if any(size > 4096 for size in self.hidden_sizes):
+            problems.append("hidden_sizes above 4096 are not useful here")
+        if self.torch_threads < 0:
+            problems.append("torch_threads must be 0 (auto) or more")
+        if self.device not in ("auto", "cpu", "cuda"):
+            problems.append("device must be 'auto', 'cpu' or 'cuda'")
         if self.teacher_decay_steps < 0:
             problems.append("teacher_decay_steps must be 0 (never decay) or more")
         if not 0 <= self.teacher_opponent_prob < 1:
@@ -143,6 +167,64 @@ class TrainConfig:
         return teacher_weight_at(
             steps, self.teacher_weight, self.teacher_final_weight, self.teacher_decay_steps
         )
+
+    @property
+    def obs_size(self) -> int:
+        """Input size of the network for this configuration (see ``obs_extras``)."""
+        return OBS_SIZE if self.obs_extras else OBS_BASE_SIZE
+
+    @property
+    def teacher_labels(self) -> bool:
+        """Does the teacher label training steps (imitation learning)?"""
+        return self.teacher_weight > 0 or self.teacher_final_weight > 0
+
+    def hints(self) -> list[str]:
+        """Nicht-tödliche Hinweise: läuft, ist aber vermutlich nicht das, was du willst."""
+        hints: list[str] = []
+        cores = os.cpu_count() or 2
+        workers = self.resolved_workers()
+        if workers > cores:
+            hints.append(
+                f"{workers} Simulations-Prozesse auf {cores} Kernen: der Rechner ist überlastet, "
+                "besser 'n_workers' auf die Zahl der Kerne setzen."
+            )
+        games = workers * self.envs_per_worker
+        if games > 4 * cores:
+            hints.append(
+                f"{games} Spiele gleichzeitig ({workers} × {self.envs_per_worker}) kosten viel "
+                "Speicher; 2–4 Spiele pro Kern sind ein guter Start."
+            )
+        if self.eval_every_steps and self.eval_every_steps < 10 * self.steps_per_iteration:
+            hints.append(
+                "eval_every_steps ist kleiner als zehn Sammlungen – die Bewertung kostet dann "
+                "mehr Zeit als das Training."
+            )
+        if self.checkpoint_every_steps > self.total_steps:
+            hints.append(
+                "checkpoint_every_steps liegt über total_steps: es wird nur am Ende gespeichert."
+            )
+        if self.teacher_labels and not self.auto_curriculum and self.reward_stage == 1:
+            hints.append(
+                "Lehrer-Nachahmung auf Belohnungsstufe 1: der Lehrer spielt schon komplett, "
+                "sinnvoll ist das erst ab Stufe 2 oder 3."
+            )
+        if self.total_steps > 2_000_000_000:
+            hints.append(
+                "total_steps über 2 Milliarden: das dauert selbst mit vielen Kernen Monate."
+            )
+        if self.past_opponent_prob > 0 and self.past_pool_size < 2:
+            hints.append("past_pool_size 1 lässt der KI nur einen einzigen Gegner.")
+        if self.teacher_labels and self.teacher_samples > self.steps_per_iteration:
+            hints.append(
+                "teacher_samples ist größer als steps_per_iteration: es werden alle Schritte "
+                "vom Lehrer bewertet."
+            )
+        if self.minibatch_size > self.steps_per_iteration:
+            hints.append(
+                "minibatch_size ist größer als steps_per_iteration: es wird mit allen Daten "
+                "in einem Schritt gerechnet."
+            )
+        return hints
 
     def resolved_workers(self) -> int:
         if self.n_workers:

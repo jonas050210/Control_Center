@@ -7,6 +7,7 @@
 - ``checkpoints/``       ``<steps>.pt`` and ``latest.pt``
 - ``replays/``           recorded evaluation matches for the arena view
 - ``control.json``       written by the UI: ``{"stop": true}`` ends training cleanly
+- ``trainer.lock``       file lock: only one training process per run (see runtime.py)
 """
 
 from __future__ import annotations
@@ -24,10 +25,20 @@ import torch
 
 from .config import RunPaths, TrainConfig, run_paths
 from .match import evaluate, play_match, save_replay
-from .model import ActorCritic, load_checkpoint, model_from_checkpoint, save_checkpoint
+from .model import (
+    ActorCritic,
+    load_checkpoint,
+    model_from_checkpoint,
+    resolve_device,
+    rng_payload,
+    save_checkpoint,
+    seed_everything,
+    set_rng_payload,
+)
 from .opponents import PolicyPlayer, make_player
 from .ppo import ppo_update
 from .rollout import Batch, WorkerPool
+from .runtime import TrainLock
 from .teacher import TeacherLabeler
 
 EVAL_OPPONENTS = ("chaser", "defender")
@@ -35,8 +46,11 @@ REPLAY_SECONDS = 60.0
 
 #: Autopilot curriculum: (from stage, metric, threshold, minimum steps). The
 #: average of the last CURRICULUM_WINDOW iterations must reach the threshold.
+#: Die Schwellen beziehen sich auf die *eigenen* Ballkontakte/Tore der KI
+#: (Blau). 10 eigene Kontakte pro Spielminute heißt: die KI ist im Schnitt alle
+#: 6 Sekunden am Ball — vorher zählten hier auch die Kontakte des Gegners mit.
 CURRICULUM = (
-    (1, "touches_per_minute", 15.0, 10_000_000),
+    (1, "touches_per_minute", 10.0, 10_000_000),
     (2, "goals_per_minute", 1.0, 50_000_000),
 )
 CURRICULUM_WINDOW = 20
@@ -65,20 +79,35 @@ def stop_requested(paths: RunPaths) -> bool:
 
 
 def summarize(batch: Batch, update: dict[str, float]) -> dict[str, Any]:
+    """Kennzahlen einer Sammlung.
+
+    Alle „per Minute"-Werte werden nach Team getrennt: ``*_per_minute`` gehört
+    der lernenden KI (Blau), ``*_against_per_minute`` der Gegenseite. Vorher
+    wurden Ballkontakte aller Autos gezählt — die Zahl stieg dadurch auch dann,
+    wenn nur der Gegner den Ball berührte.
+    """
     stats = batch.stats
     episodes = stats["episodes"]
     agent_steps = max(1, stats["agent_steps"])
     game_seconds = sum(e["seconds"] for e in episodes)
+    own_touches = sum(e.get("touches", 0) for e in episodes)
+    other_touches = sum(e.get("touches_other", 0) for e in episodes)
+    goals_own = sum(e.get("goals_own", 0) for e in episodes)
+    goals_other = sum(e.get("goals_other", 0) for e in episodes)
+    minute = 60 / game_seconds if game_seconds else None
     return {
         "episodes": len(episodes),
         "episode_reward": float(np.mean([e["reward"] for e in episodes])) if episodes else None,
         "episode_seconds": game_seconds / len(episodes) if episodes else None,
-        "goals_per_minute": (60 * sum(e["goal"] for e in episodes) / game_seconds)
-        if game_seconds
+        "sim_seconds": game_seconds,
+        "realtime_factor": (game_seconds / stats["collect_seconds"])
+        if stats.get("collect_seconds")
         else None,
-        "touches_per_minute": (60 * sum(e["touches"] for e in episodes) / game_seconds)
-        if game_seconds
-        else None,
+        "goals_per_minute": goals_own * minute if minute else None,
+        "goals_against_per_minute": goals_other * minute if minute else None,
+        "touches_per_minute": own_touches * minute if minute else None,
+        "touches_against_per_minute": other_touches * minute if minute else None,
+        "touches_total": own_touches + other_touches,
         "reward_parts": {k: v / agent_steps for k, v in stats["reward_parts"].items()},
         **past_summary(episodes),
         **teacher_summary(episodes),
@@ -148,7 +177,11 @@ class Trainer:
         self.paths = run_paths(config.name).ensure()
         self._log_handle = self.paths.log.open("a", encoding="utf-8")
         self._echo = log or print
-        self.model = ActorCritic(hidden_sizes=config.hidden_sizes)
+        seed_everything(config.seed)
+        self.device = resolve_device(config.device)
+        self.model = ActorCritic(obs_size=config.obs_size, hidden_sizes=config.hidden_sizes).to(
+            self.device
+        )
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.steps = 0
         self.iteration = 0
@@ -172,20 +205,31 @@ class Trainer:
         self._echo(line)
 
     def _resume(self, path: Path) -> None:
+        # Checkpoints liegen immer auf der CPU; auf das gewählte Gerät kommt das
+        # Netz erst danach (so bleiben sie zwischen CPU und GPU austauschbar).
         payload = load_checkpoint(path)
         if list(payload["hidden_sizes"]) != list(self.config.hidden_sizes):
             raise ValueError(
                 f"run {self.config.name!r} already has a {payload['hidden_sizes']} network; "
                 "use a new run name for a different size"
             )
-        self.model = model_from_checkpoint(payload)
+        self.model = model_from_checkpoint(payload).to(self.device)
+        if int(payload["obs_size"]) != int(self.config.obs_size):
+            raise ValueError(
+                f"Run {self.config.name!r} wurde mit {payload['obs_size']} Beobachtungen "
+                f"trainiert, die Einstellung 'obs_extras' verlangt jetzt {self.config.obs_size}. "
+                "Bitte den alten Wert wiederherstellen oder einen neuen Run starten."
+            )
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
         if "optimizer" in payload:
             self.optimizer.load_state_dict(payload["optimizer"])
             for group in self.optimizer.param_groups:
                 group["lr"] = self.config.learning_rate
         self.steps = int(payload["steps"])
-        self.iteration = int(payload.get("extra", {}).get("iteration", 0))
+        extra = payload.get("extra", {})
+        self.iteration = int(extra.get("iteration", 0))
+        if set_rng_payload(self.rng, extra.get("rng")):
+            self.log("Zufallszustand aus dem Checkpoint übernommen (wiederholbarer Lauf)")
         self.log(f"Fortgesetzt bei {self.steps:,} Schritten aus {path.name}")
 
     def _load_past_pool(self) -> None:
@@ -203,7 +247,8 @@ class Trainer:
         self.pool_changed = True
 
     def _add_snapshot(self) -> None:
-        weights = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
+        # Auf der CPU ablegen: die Gegner-Pools laufen in den Worker-Prozessen.
+        weights = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
         self.past_pool.append((self.steps, weights))
         del self.past_pool[: -self.config.past_pool_size]
         self.pool_changed = True
@@ -235,7 +280,9 @@ class Trainer:
             steps=self.steps,
             config=config,
             optimizer=self.optimizer,
-            extra=extra,
+            # Nur der "latest"-Checkpoint trägt den Zufallszustand: damit setzt
+            # ein abgebrochener Lauf exakt dort fort, wo er aufgehört hat.
+            extra={**extra, "rng": rng_payload(self.rng)},
         )
         prune_checkpoints(self.paths, self.config.keep_checkpoints)
         return target
@@ -282,6 +329,7 @@ class Trainer:
                     games=self.config.eval_games,
                     team_size=self.config.team_size,
                     seed=self.config.seed + self.steps % 10_000,
+                    obs_extras=self.config.obs_extras,
                 )
             )
         record = {"steps": self.steps, "time": time.time(), "results": results}
@@ -292,6 +340,7 @@ class Trainer:
             team_size=self.config.team_size,
             seconds=REPLAY_SECONDS,
             record=True,
+            obs_extras=self.config.obs_extras,
         )
         save_replay(
             self.paths.replays / f"{self.steps}.json",
@@ -316,8 +365,11 @@ class Trainer:
         self.status("starting", message=f"Starte {workers} Simulations-Prozesse")
         self.log(
             f"Training '{config.name}': {config.team_size}v{config.team_size}, Stufe {config.reward_stage}, "
-            f"{workers} Prozesse x {config.envs_per_worker} Spiele, Ziel {config.total_steps:,} Schritte"
+            f"{workers} Prozesse x {config.envs_per_worker} Spiele, Ziel {config.total_steps:,} Schritte, "
+            f"{config.obs_size} Beobachtungen, Lernen auf {self.device.type.upper()}"
         )
+        for hint in config.hints():
+            self.log(f"Hinweis: {hint}")
         pool: WorkerPool | None = None
         next_checkpoint = (
             self.steps // config.checkpoint_every_steps + 1
@@ -344,22 +396,27 @@ class Trainer:
                 "Lehrer aktiv: die KI imitiert Nexto mit "
                 f"{config.teacher_weight_at(self.steps):.0%} Gewicht und trainiert dann selbst weiter"
             )
+        worker_config = {**config.to_dict(), "obs_size": self.model.obs_size}
         try:
-            pool = WorkerPool(workers, config.to_dict(), config.seed + self.iteration)
+            pool = WorkerPool(workers, worker_config, config.seed + self.iteration)
             while self.steps < config.total_steps:
                 if stop_requested(self.paths):
                     state = "stopped"
                     self.log("Stopp angefordert")
                     break
                 tick = time.perf_counter()
-                weights = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
+                weights = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
                 past = None
                 if self.pool_changed and config.past_opponent_prob and self.past_pool:
                     past = [w for _, w in self.past_pool]
-                batch = pool.collect(weights, config.steps_per_iteration, past)
+                # Das Lehrer-Gewicht wird mitgegeben: bei 0 zeichnen die Worker
+                # keine Lehrer-Daten auf (Lehrer wirklich aus).
+                teacher_weight = config.teacher_weight_at(self.steps)
+                batch = pool.collect(
+                    weights, config.steps_per_iteration, past, teacher_weight=teacher_weight
+                )
                 self.pool_changed = self.pool_changed and past is None and bool(self.past_pool)
                 collect_seconds = time.perf_counter() - tick
-                teacher_weight = config.teacher_weight_at(self.steps)
                 teacher_info = self.attach_teacher(batch, teacher_weight)
                 update = ppo_update(
                     self.model,
@@ -390,12 +447,21 @@ class Trainer:
                     **summarize(batch, update),
                 }
                 append_jsonl(self.paths.metrics, metrics)
-                self.status("running", steps_per_second=metrics["steps_per_second"])
+                self.status(
+                    "running",
+                    steps_per_second=metrics["steps_per_second"],
+                    realtime_factor=metrics.get("realtime_factor"),
+                    device=self.device.type,
+                )
                 touches = metrics["touches_per_minute"]
+                against = metrics["touches_against_per_minute"]
                 self.log(
-                    f"#{self.iteration} {self.steps:,} Schritte | {metrics['steps_per_second']:,.0f}/s | "
+                    f"#{self.iteration} {self.steps:,} Schritte | {metrics['steps_per_second']:,.0f}/s "
+                    f"(x{metrics['realtime_factor'] or 0:.0f} Echtzeit) | "
                     f"Belohnung {metrics['episode_reward'] or 0:.2f} | "
-                    f"Ballkontakte/min {touches if touches is not None else 0:.1f}"
+                    f"eigene Ballkontakte/min {touches if touches is not None else 0:.1f} "
+                    f"(Gegner {against if against is not None else 0:.1f}) | "
+                    f"Tore {metrics['goals_per_minute'] or 0:.2f}:{metrics['goals_against_per_minute'] or 0:.2f}"
                     + (
                         f" | gegen ältere Versionen {metrics['past_win_rate']:.0%}"
                         if "past_win_rate" in metrics
@@ -460,4 +526,7 @@ class Trainer:
 
 
 def train(config: TrainConfig) -> None:
-    Trainer(config).train()
+    """Trainieren — mit exklusiver Sperre pro Run (siehe :mod:`rocketai.runtime`)."""
+    paths = run_paths(config.name).ensure()
+    with TrainLock(paths.root, config.name):
+        Trainer(config).train()
