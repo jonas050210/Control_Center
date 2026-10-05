@@ -154,3 +154,24 @@ def test_run_summary_shows_hints_and_separate_team_stats(client):
     assert run["hints"]
     assert run["last"]["touches_against_per_minute"] == 9.0
     assert run["last"]["realtime_factor"] == 90.0
+
+
+def test_external_training_is_shown_with_owner(client):
+    """Trainiert die Kommandozeile, zeigt die Oberfläche das klar an.
+
+    Der Server kennt den Prozess dann nicht als eigenen Kindprozess; die
+    Dateisperre samt Prozessnummer liefert die nötigen Angaben.
+    """
+    from rocketai.runtime import TrainLock
+
+    paths = make_run("von-hand")
+    with TrainLock(paths.root, "von-hand"):
+        runs = client.get("/api/runs").json()
+        entry = next(r for r in runs if r["name"] == "von-hand")
+        assert entry["status"]["state"] == "extern"
+        assert entry["status"]["owner"]["alive"] is True
+        assert entry["status"]["owner"]["pid"] > 0
+    after = client.get("/api/runs").json()
+    entry = next(r for r in after if r["name"] == "von-hand")
+    assert entry["status"]["state"] != "extern"
+    assert entry["status"]["owner"] is None

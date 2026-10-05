@@ -458,7 +458,7 @@ python3 -m rocketai play --brain teacher --mode psyonix   # Nexto spielt
 | `rocketai/play.py` | Startet Matches in Rocket League (eine Bot-Datei je Auto, eindeutige Kennungen) |
 | `rocketai/runtime.py` | Datesperre pro Run: verhindert zwei Trainingsprozesse auf demselben Run |
 | `rocketai/benchmark.py` | Misst Schritte/s, Echtzeit-Faktor und Lernschritt |
-| `tests/` | über 90 Tests (Umgebung, Training, Lehrer, Server, RLBot, Sperre, Zufallszustand) |
+| `tests/` | 100 Tests (Umgebung, Training, Lehrer, Server, RLBot, Sperre, Zufallszustand) |
 | `docs/PLAN.md` | Der Entwicklungsplan |
 | `docs/WISSEN.md` | Diese Datei |
 

@@ -535,3 +535,19 @@ ol.flow span { color: var(--faint); font-size: 12.5px; }
 .hints ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; }
 .hints li { color: var(--muted); font-size: 13px; line-height: 1.5; }
 .hints { border-color: rgba(255, 154, 77, .28); }
+
+/* Hinweis auf externe Steuerung / CLI */
+.ext-note { margin: 6px 0 0; color: var(--muted); }
+
+/* Banner für Benchmark-Vorschläge */
+.banner {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.banner.info {
+  border-color: rgba(90, 160, 255, .35);
+  background: rgba(90, 160, 255, .08);
+}

@@ -251,7 +251,13 @@ def run_summary(name: str) -> dict[str, Any]:
         "name": name,
         "config": config,
         "hints": hints,
-        "status": {**status, "state": STATE.run_state(name, status)},
+        "status": {
+            **status,
+            "state": STATE.run_state(name, status),
+            # Wer den Run gerade trainiert — auch ein Prozess außerhalb des
+            # Servers (Kommandozeile). Die Oberfläche zeigt das an.
+            "owner": lock_owner(paths.root),
+        },
         "last": {
             key: last.get(key)
             for key in (

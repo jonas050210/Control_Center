@@ -128,6 +128,15 @@ function refreshOnSnapshot(fn) {
 
 // ------------------------------------------------------------------ shared bits
 
+// Trainiert ein anderer Prozess als dieser Server (Kommandozeile), dann läuft
+// der Fortschritt hier trotzdem weiter — aber "Stoppen" wirkt nur über die
+// Steuerdatei, also sagen wir klar, wer trainiert.
+function externalNote(st) {
+  const owner = st && st.owner;
+  if (!owner || !owner.alive || st.state !== "extern") return "";
+  return `<p class="faint small ext-note">Ein anderer Prozess trainiert diesen Run: PID ${fmt.int(owner.pid)} (Kommandozeile). „Stoppen“ beendet ihn sauber.</p>`;
+}
+
 function runCard(run) {
   const st = run.status || {}, cfg = run.config || {};
   const total = st.total_steps || cfg.total_steps || 1;
@@ -143,7 +152,7 @@ function runCard(run) {
       <div><span>Ballkontakte/min</span><b>${fmt.num(run.last.touches_per_minute, 1)}</b></div>
       <div><span>Tempo</span><b>${run.last.steps_per_second && ACTIVE.has(st.state) ? fmt.int(run.last.steps_per_second) + "/s" : "–"}</b></div>
       <div><span>Bewertung</span><b>${score}</b></div>
-    </div></a>`;
+    </div>${externalNote(st)}</a>`;
 }
 
 function replayItem(r, current) {
@@ -263,12 +272,17 @@ async function pageTraining() {
 // ------------------------------------------------------------------ new run
 
 async function pageNewRun() {
-  const [{ presets, defaults, cpu_count: cpus = 2 }, opponents, runs] = await Promise.all([
+  const [{ presets, defaults, cpu_count: cpus = 2 }, opponents, runs, bench] = await Promise.all([
     api("/api/presets"), api("/api/opponents"), api("/api/runs"),
+    api("/api/benchmark").catch(() => null),
   ]);
-  // Am ehrlichsten ist der gemessene Wert: das schnellste Tempo, das auf diesem
-  // Rechner schon einmal erreicht wurde. Sonst eine vorsichtige Schätzung.
-  const measured = Math.max(0, ...runs.map((r) => r.last?.steps_per_second || 0));
+  const benchReport = bench?.report || null;
+  const suggested = benchReport?.suggested || null;
+  const benchSps = benchReport?.best?.steps_per_second || 0;
+  // Tempo: am ehrlichsten ist die Benchmark-Messung, sonst das schnellste
+  // bisherige Training, andernfalls eine Schätzung nach Kernanzahl.
+  const pastBest = Math.max(0, ...runs.map((r) => r.last?.steps_per_second || 0));
+  const measured = benchSps || pastBest;
   const guess = 1400 * Math.max(1, cpus - 1);
   const teacherReady = Boolean(opponents.teacher?.ready);
   const pyCmd = opponents.python || "python3";
@@ -281,14 +295,21 @@ async function pageNewRun() {
     const v = values();
     const workers = v.n_workers || Math.max(1, cpus - 1);
     const sps = measured || guess;
-    const speedHint = measured
-      ? `gemessen an deinem schnellsten Training`
-      : (v.teacher_opponent_prob > 0 ? "grobe Schätzung (mit Lehrer etwas langsamer)" : "grobe Schätzung");
+    const speedHint = benchSps
+      ? `gemessen mit dem Benchmark (${benchReport?.best?.workers || 1} Prozesse)`
+      : (pastBest
+        ? `gemessen an deinem schnellsten Training`
+        : (v.teacher_opponent_prob > 0 ? "grobe Schätzung (mit Lehrer etwas langsamer)" : "grobe Schätzung"));
     patch(view, `
       <div class="page-head"><div><div class="eyebrow"><a href="#/training">Training</a> / Neu</div><h1>Neues Training</h1>
         <p>Wähle eine Vorlage. Du kannst ein Training jederzeit stoppen und später fortsetzen – auch mit höherem Ziel.</p></div></div>
       <div class="split wide">
         <div class="card form">
+
+          ${suggested ? `<div class="banner info row between" style="margin-bottom:16px">
+            <div><b>Benchmark-Empfehlung vorhanden</b>: ${suggested.n_workers || "auto"} Prozesse, ${fmt.int(suggested.steps_per_iteration || 0)} Schritte pro Update.</div>
+            <button type="button" class="btn sm" data-action="apply-suggested">Übernehmen</button>
+          </div>` : ""}
           <div><div class="section-head"><h2>Vorlage</h2></div><div class="choice-grid">
             ${Object.entries(presets).map(([key, p]) => `<button type="button" class="choice ${key === form.preset ? "on" : ""}" data-action="preset" data-preset="${key}"><b>${h(p.label)}</b><span>${h(p.description)}</span></button>`).join("")}
           </div></div>
@@ -363,6 +384,15 @@ async function pageNewRun() {
   };
 
   page.actions = {
+    "apply-suggested": () => {
+      if (!suggested) return;
+      if (suggested.n_workers) form.overrides.n_workers = suggested.n_workers;
+      if (suggested.envs_per_worker) form.overrides.envs_per_worker = suggested.envs_per_worker;
+      if (suggested.steps_per_iteration) form.overrides.steps_per_iteration = suggested.steps_per_iteration;
+      toast("Übernommen", "Werte aus der Benchmark-Messung eingetragen.");
+      draw();
+      refreshHints();
+    },
     preset: (el) => { form.preset = el.dataset.preset; form.overrides = {}; view.querySelectorAll("[data-dirty]").forEach((i) => { if (i.id !== "name") delete i.dataset.dirty; }); draw(); },
     seg: (el) => {
       const key = el.dataset.key, value = Number(el.dataset.value);
@@ -480,6 +510,7 @@ async function pageRun(rawName) {
                       <button class="btn ghost danger" data-action="delete">${icon("trash")}Löschen</button>`}
         </div></div>
 
+      ${externalNote(st)}
       <div class="card"><div class="progress ${active ? "active" : ""}"><i style="width:${pct}%"></i></div>
         <div class="progress-meta"><span>${fmt.int(steps)} / ${fmt.int(total)} Schritte</span>
         <span>${active ? (eta ? `noch ca. ${fmt.duration(eta)}` : "läuft …") : `${pct.toFixed(1)} %`}</span></div></div>
