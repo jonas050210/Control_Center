@@ -368,7 +368,8 @@ svg.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.8; strok
 .meter-bar { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
 .meter-bar i { display: block; height: 100%; background: linear-gradient(90deg, #ff9a4d, var(--accent)); border-radius: inherit; transition: width .2s; }
 .controller { display: grid; gap: 7px; padding: 14px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
-.axis-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.axis-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) 42px; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.axis-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 500; font-size: 11.5px; }
 .axis { position: relative; height: 8px; border-radius: 99px; background: var(--surface-2); }
 .axis::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line-strong); }
 .axis i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 99px; transition: left .12s, width .12s; }
@@ -513,7 +514,10 @@ ol.flow span { color: var(--faint); font-size: 12.5px; }
 .estimate + .estimate { margin-top: 6px; }
 
 /* „Was die KI sieht": Zusatzwerte der Beobachtung (siehe rocketai/obs.py) */
-.sees { display: grid; gap: 6px; margin-top: 8px; }
+.sees { display: grid; gap: 10px; margin-top: 8px; }
+.see-group { display: grid; gap: 5px; }
+.see-group-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); padding-bottom: 2px; border-bottom: 1px solid var(--line); }
+.see-group-items { display: grid; gap: 4px; }
 .see-row {
   display: grid; grid-template-columns: minmax(0, 1fr) 88px 52px;
   align-items: center; gap: 8px; font-size: 12px;
@@ -525,6 +529,10 @@ ol.flow span { color: var(--faint); font-size: 12.5px; }
 .see-val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
 .see-row.warn .see-bar > i { background: var(--orange-team, #ff9a4d); }
 .see-row.warn .see-val { color: var(--orange-team, #ff9a4d); }
+.see-row.alert .see-bar > i { background: var(--danger, #ff6b6b); }
+.see-row.alert .see-val { color: var(--danger, #ff6b6b); font-weight: 700; }
+.see-row.flag-on .see-val { color: var(--accent); }
+.see-row.flag-on .see-bar > i { background: var(--accent); }
 
 .feature-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .feature {

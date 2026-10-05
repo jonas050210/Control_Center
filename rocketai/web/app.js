@@ -730,7 +730,7 @@ async function pageLive() {
       <div class="decision"><small>Entscheidung</small><div class="decision-label" id="decision">–</div></div>
       <div class="meter"><div class="meter-head"><span>Sicherheit</span><b id="conf-val">–</b></div><div class="meter-bar"><i id="conf-bar"></i></div></div>
       <div class="controller">
-        ${CONTROL_NAMES.map((n, i) => `<div class="axis-row"><span>${n}</span><div class="axis"><i id="ax${i}"></i></div></div>`).join("")}
+        ${CONTROL_NAMES.map((n, i) => `<div class="axis-row"><span>${n}</span><div class="axis"><i id="ax${i}"></i></div><b class="axis-val" id="ax${i}-val">0.00</b></div>`).join("")}
         <div class="buttons"><span class="btn-led" id="b-jump">Sprung</span><span class="btn-led" id="b-boost">Boost</span><span class="btn-led" id="b-drift">Drift</span></div>
       </div>
       <div><div class="meter-head"><span>Erwartung (Kritiker)</span><b id="value-val">–</b></div><div id="value-spark" class="spark-wrap"></div></div>
@@ -743,14 +743,26 @@ async function pageLive() {
 
   // „Was die KI sieht": die Zusatzwerte der Beobachtung (siehe rocketai/obs.py).
   // Die Legende kommt vom Server (/api/live → features), damit Python und
-  // Oberfläche nie auseinanderlaufen.
-  const seesRows = (features) => (features || []).map((f) => {
-    const key = f.key, format = f.format || "signed";
-    return `<div class="see-row" data-see="${h(key)}" title="${h(key)}">
-      <span class="see-label">${h(f.label)}</span>
-      <div class="see-bar"><i></i></div>
-      <b class="see-val">–</b></div>`;
-  }).join("");
+  // Oberfläche nie auseinanderlaufen. Gegliedert nach Ball, Lage und Auto.
+  const seesRows = (features) => {
+    const list = features || [];
+    const groups = {};
+    for (const f of list) {
+      const g = f.group || "other";
+      if (!groups[g]) groups[g] = { label: f.group_label || "Allgemein", items: [] };
+      groups[g].items.push(f);
+    }
+    return Object.entries(groups).map(([gKey, grp]) => `
+      <div class="see-group" data-group="${h(gKey)}">
+        <div class="see-group-title">${h(grp.label)}</div>
+        <div class="see-group-items">
+          ${grp.items.map((f) => `<div class="see-row" data-see="${h(f.key)}" title="${h(f.key)}">
+            <span class="see-label">${h(f.label)}</span>
+            <div class="see-bar"><i></i></div>
+            <b class="see-val">–</b></div>`).join("")}
+        </div>
+      </div>`).join("");
+  };
 
   const updateSees = (brain) => {
     const el = $("sees");
@@ -758,14 +770,17 @@ async function pageLive() {
     if (!el.dataset.ready) { el.innerHTML = seesRows(meta.features); el.dataset.ready = "1"; }
     const sees = brain.sees || {};
     el.querySelectorAll(".see-row").forEach((row) => {
-      const value = sees[row.dataset.see];
+      const key = row.dataset.see;
+      const value = sees[key];
       const bar = row.querySelector("i"), out = row.querySelector(".see-val");
       if (value == null) { bar.style.width = "0%"; out.textContent = "–"; return; }
-      const rowMeta = (meta.features || []).find((f) => f.key === row.dataset.see) || {};
+      const rowMeta = (meta.features || []).find((f) => f.key === key) || {};
       const format = rowMeta.format || "signed";
       if (format === "flag") {
-        bar.style.left = "0%"; bar.style.width = value >= 0.5 ? "100%" : "0%";
-        out.textContent = value >= 0.5 ? "ja" : "nein";
+        const active = value >= 0.5;
+        bar.style.left = "0%"; bar.style.width = active ? "100%" : "0%";
+        out.textContent = active ? "ja" : "nein";
+        row.classList.toggle("flag-on", active);
       } else if (format === "percent") {
         bar.style.left = "0%"; bar.style.width = `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
         out.textContent = `${Math.round(value * 100)} %`;
@@ -774,7 +789,9 @@ async function pageLive() {
         bar.style.width = `${Math.abs(Math.max(-1, Math.min(1, value))) * 50}%`;
         out.textContent = value >= 0 ? `+${fmt.num(value, 2)}` : fmt.num(value, 2);
       }
-      row.classList.toggle("warn", row.dataset.see === "own_goal_danger" && value > 0.5);
+      // Taktische Alarmfarben
+      row.classList.toggle("warn", key === "own_goal_danger" && value > 0.4);
+      row.classList.toggle("alert", key === "own_goal_danger" && value > 0.7);
     });
   };
 
@@ -789,12 +806,19 @@ async function pageLive() {
     // throttle, steer, pitch, yaw, roll are −1..1 → bar from the centre
     [c[0], c[1], c[2], c[3], c[4]].forEach((v, i) => {
       const bar = $(`ax${i}`);
-      bar.style.left = v < 0 ? `${50 + v * 50}%` : "50%";
-      bar.style.width = `${Math.abs(v) * 50}%`;
+      if (bar) {
+        bar.style.left = v < 0 ? `${50 + v * 50}%` : "50%";
+        bar.style.width = `${Math.abs(v) * 50}%`;
+      }
+      const valEl = $(`ax${i}-val`);
+      if (valEl) {
+        valEl.textContent = (v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2));
+      }
     });
-    $("b-jump").classList.toggle("on", c[5] > 0);
-    $("b-boost").classList.toggle("on", c[6] > 0);
-    $("b-drift").classList.toggle("on", c[7] > 0);
+    const jumpOn = c[5] > 0, boostOn = c[6] > 0, driftOn = c[7] > 0;
+    $("b-jump")?.classList.toggle("on", jumpOn);
+    $("b-boost")?.classList.toggle("on", boostOn);
+    $("b-drift")?.classList.toggle("on", driftOn);
     $("value-val").textContent = fmt.num(brain.value, 1);
     $("value-spark").innerHTML = sparkline(values.get(brain.car) || [], { width: 300, height: 54 });
     updateSees(brain);

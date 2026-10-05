@@ -88,6 +88,27 @@ EXTRA_FORMAT: dict[str, str] = {
     "on_ground": "flag",
     "supersonic": "flag",
 }
+EXTRA_GROUPS: dict[str, str] = {
+    "ball_x_rel": "ball",
+    "ball_y_rel": "ball",
+    "ball_z_rel": "ball",
+    "ball_distance": "ball",
+    "ball_speed": "ball",
+    "ball_spin": "ball",
+    "ball_height": "ball",
+    "own_goal_danger": "tactics",
+    "ball_in_our_half": "tactics",
+    "boost": "car",
+    "on_ground": "car",
+    "supersonic": "car",
+}
+
+GROUP_LABELS: dict[str, str] = {
+    "ball": "Ball & Distanz",
+    "tactics": "Taktische Lage",
+    "car": "Eigenes Auto",
+}
+
 
 
 def describe_features() -> list[dict[str, str]]:
@@ -97,6 +118,8 @@ def describe_features() -> list[dict[str, str]]:
             "key": key,
             "label": EXTRA_LABELS.get(key, key),
             "format": EXTRA_FORMAT.get(key, "signed"),
+            "group": EXTRA_GROUPS.get(key, "other"),
+            "group_label": GROUP_LABELS.get(EXTRA_GROUPS.get(key, "other"), "Allgemein"),
         }
         for key in EXTRA_FEATURES
     ]
