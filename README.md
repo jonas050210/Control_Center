@@ -27,6 +27,11 @@ python3 install.py   # einmalig: venv, PyTorch (CPU), RocketAI, RLBotServer
 python3 start.py     # öffnet http://127.0.0.1:8765
 ```
 
+**Windows ohne Kommandozeile:** einmal `install.cmd` doppelklicken, danach
+`start.cmd`. Beide liegen im Projektordner und reichen Optionen durch
+(z. B. `start.cmd --port 9000 --host 0.0.0.0`, damit auch das Handy im selben
+WLAN zuschauen kann). Fehlt Python, sagt `install.cmd` genau, was zu tun ist.
+
 Mit NVIDIA-Grafikkarte lohnt `python3 install.py --cuda`: Dann installiert
 RocketAI die CUDA-Variante von PyTorch, und der **Lernschritt** läuft auf der
 Grafikkarte (die Physik-Simulation bleibt auf der CPU — dort zählt jeder Kern).

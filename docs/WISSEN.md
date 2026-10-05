@@ -558,6 +558,11 @@ das in die Windows-Aufgabenplanung eintragen.
 
 **Starten**
 
+Unter **Windows** geht es auch ohne Kommandozeile: `install.cmd` einmal
+doppelklicken, danach `start.cmd` (Optionen werden durchgereicht, z. B.
+`start.cmd --port 9000 --host 0.0.0.0`). Fehlt Python, sagt `install.cmd`, wo
+es es herunterlädt.
+
 ```bash
 python3 install.py            # einmalig: Pakete, RLBot-Server
 python3 start.py              # Webbrowser-App
