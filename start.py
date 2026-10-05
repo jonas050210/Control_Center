@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import html
 import ipaddress
 import json
@@ -14,22 +15,26 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import unicodedata
 import uuid
 import webbrowser
 from datetime import datetime, timezone
 from functools import partial
+from hashlib import sha256
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit
+from typing import Iterator
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = Path.home() / ".control_center"
 DEFAULT_WORKSPACE = Path.home() / "Control_Center_Projects"
 MAX_BODY_BYTES = 10_000_000
 PROJECT_CONTENT_LOCK = threading.Lock()
-
-STARTER_PROJECTS: list[dict[str, object]] = []
+LIBRARY_LOCK = threading.RLock()
+CONTENT_SERVER_IDLE_SECONDS = 30 * 60
+MAX_SCAN_DIRECTORIES = 300
 
 STATUS_LABELS = {
     "idea": "Idee",
@@ -41,6 +46,28 @@ STATUS_LABELS = {
     "reference": "GUI-Vorlage",
 }
 
+PROJECT_ICONS = {"rocket", "arena", "dungeon", "hub", "gamepad", "spark", "plus"}
+PROJECT_COLORS = {"lime", "blue", "violet", "orange"}
+
+# Folders that are never treated as projects when the workspace is scanned.
+IGNORED_DIRECTORY_NAMES = {
+    ".git", ".svn", ".hg", ".cache", ".config", ".local", ".venv", "venv", "env",
+    "__pycache__", "node_modules", "site-packages", "vendor", "dist", "build",
+    "out", "target", "bin", "obj", ".next", ".nuxt", ".turbo", ".pytest_cache",
+    ".mypy_cache", ".ruff_cache", ".tox", ".gradle", ".idea", ".vscode",
+    "system volume information", "$recycle.bin", "recovery", "windows",
+    "program files", "program files (x86)", "programdata", "appdata",
+    "library", "applications", "snap", ".snapshots", "steamapps",
+}
+
+# Files that mark a folder as a real project (used by the nested scan).
+PROJECT_MARKER_FILES = {
+    "index.html", "package.json", "pyproject.toml", "requirements.txt",
+    "cargo.toml", "pom.xml", "go.mod", "gemfile", "composer.json",
+    "main.py", "main.js", "main.ts", "main.cpp", "app.py", "app.js",
+    "readme.md", "readme.txt", "readme", "setup.py", "makefile",
+}
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -50,7 +77,34 @@ def safe_slug(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
+    if len(slug) >= 3:
+        return slug[:56].strip("-") or "projekt"
+    # Names without latin letters would all collapse into the same fallback, so
+    # they keep their original characters instead (Japanese, Cyrillic, ...).
+    unicode_text = "".join(
+        char.lower() if char.isalnum() else "-" for char in unicodedata.normalize("NFC", value)
+    )
+    slug = re.sub(r"-+", "-", unicode_text).strip("-")
     return slug[:56].strip("-") or "projekt"
+
+
+def folder_signature(folder: Path) -> str:
+    """Stable fingerprint of a folder's direct content.
+
+    It is stored next to the folder path so a renamed or moved folder can be
+    recognised again without writing anything into the user's project folder.
+    """
+    try:
+        entries = sorted((child.name, child.is_dir()) for child in folder.iterdir())
+    except OSError:
+        return ""
+    if not entries:
+        # Empty folders all look the same, so they are matched by name only.
+        return ""
+    digest = sha256()
+    for name, is_directory in entries[:400]:
+        digest.update(f"{'d' if is_directory else 'f'}:{name}\n".encode("utf-8"))
+    return digest.hexdigest()[:16]
 
 
 def clean_text(value: object, limit: int, default: str = "") -> str:
@@ -75,10 +129,12 @@ def normalize_project(source: object, *, keep_folder: bool = True) -> dict[str, 
     if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", project_id):
         project_id = uuid.uuid4().hex
     raw_icon = source.get("icon")
-    icon = raw_icon if isinstance(raw_icon, str) and raw_icon in {"rocket", "arena", "dungeon", "hub", "gamepad", "spark", "plus"} else "hub"
+    icon = raw_icon if isinstance(raw_icon, str) and raw_icon in PROJECT_ICONS else "hub"
     raw_color = source.get("color")
-    color = raw_color if isinstance(raw_color, str) and raw_color in {"lime", "blue", "violet", "orange"} else "lime"
+    color = raw_color if isinstance(raw_color, str) and raw_color in PROJECT_COLORS else "lime"
     folder_path = source.get("folderPath") if keep_folder and isinstance(source.get("folderPath"), str) else None
+    raw_signature = source.get("folderSignature")
+    signature = raw_signature if isinstance(raw_signature, str) and re.fullmatch(r"[a-f0-9]{16}", raw_signature) else None
     return {
         "id": project_id,
         "title": title,
@@ -94,6 +150,7 @@ def normalize_project(source: object, *, keep_folder: bool = True) -> dict[str, 
         "notes": clean_text(source.get("notes"), 20_000),
         "nextSteps": steps,
         "folderPath": folder_path,
+        "folderSignature": signature,
         "lastOpened": source.get("lastOpened") if isinstance(source.get("lastOpened"), (int, float)) else None,
         "isDemo": bool(source.get("isDemo", False)),
         "createdAt": clean_text(source.get("createdAt"), 40, now_iso()),
@@ -113,6 +170,7 @@ class ProjectContentHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'")
         self.end_headers()
         self.wfile.write(body)
 
@@ -176,6 +234,7 @@ class ProjectContentHandler(SimpleHTTPRequestHandler):
         self._send_bytes(200, body.encode("utf-8"), "text/html; charset=utf-8")
 
     def do_GET(self) -> None:  # noqa: N802
+        setattr(self.server, "last_access", time.monotonic())
         host = urlsplit(f"//{self.headers.get('Host', '')}").hostname
         try:
             local = bool(host and (host.lower() == "localhost" or ipaddress.ip_address(host).is_loopback))
@@ -283,7 +342,7 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
     def _load_projects(self) -> list[dict[str, object]]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if not self.library_path.exists():
-            self._save_projects(STARTER_PROJECTS)
+            self._save_projects([])
         try:
             value = json.loads(self.library_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -300,13 +359,67 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         return projects
 
     def _save_projects(self, projects: list[dict[str, object]]) -> None:
+        """Write the library atomically.
+
+        Every write uses its own temporary file: two requests that save at the
+        same time must never share (and delete) the same temp file.
+        """
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temp_path = self.library_path.with_suffix(".tmp")
+        temp_path = self.library_path.with_name(f"{self.library_path.stem}.{uuid.uuid4().hex}.tmp")
         temp_path.write_text(json.dumps(projects, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         if os.name != "nt":
             self.data_dir.chmod(0o700)
             temp_path.chmod(0o600)
         temp_path.replace(self.library_path)
+        self._cleanup_temp_files()
+
+    def _cleanup_temp_files(self) -> None:
+        """Remove leftovers of interrupted writes."""
+        try:
+            for leftover in self.data_dir.glob(f"{self.library_path.stem}.*.tmp"):
+                if leftover.is_file():
+                    leftover.unlink()
+        except OSError:
+            pass
+
+    def _create_backup(self) -> str:
+        """Copy the current library into a dated backup file (max. 10 kept)."""
+        self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = self.data_dir / f"projects-backup-{stamp}-{uuid.uuid4().hex[:6]}.json"
+        shutil.copy2(self.library_path, backup_path)
+        if os.name != "nt":
+            backup_path.chmod(0o600)
+        old_backups = sorted(self.data_dir.glob("projects-backup-*.json"), reverse=True)
+        for old_backup in old_backups[10:]:
+            old_backup.unlink(missing_ok=True)
+        return backup_path.name
+
+    def _list_backups(self) -> list[dict[str, object]]:
+        backups: list[dict[str, object]] = []
+        if not self.data_dir.is_dir():
+            return backups
+        for path in sorted(self.data_dir.glob("projects-backup-*.json"), reverse=True)[:10]:
+            try:
+                stat = path.stat()
+                count = len(json.loads(path.read_text(encoding="utf-8")) or [])
+            except (OSError, ValueError):
+                count = 0
+            backups.append({
+                "name": path.name,
+                "created": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+                "size": stat.st_size,
+                "entries": count if isinstance(count, int) else 0,
+            })
+        return backups
+
+    @contextlib.contextmanager
+    def _library(self) -> "Iterator[list[dict[str, object]]]":
+        """Load, change and save the library without losing concurrent writes."""
+        with LIBRARY_LOCK:
+            projects = self._load_projects()
+            yield projects
+            self._save_projects(projects)
 
     def _project(self, project_id: str) -> tuple[list[dict[str, object]], dict[str, object] | None]:
         projects = self._load_projects()
@@ -318,12 +431,22 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
     def _workspace_path(self) -> Path:
         return self.workspace_root.expanduser().resolve()
 
-    def _save_workspace_path(self, raw_path: object) -> Path:
+    def _save_workspace_path(self, raw_path: object) -> tuple[Path, list[str]]:
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError("Bitte wähle den Hauptordner mit deinen Projekten aus.")
         workspace = Path(raw_path.strip()).expanduser().resolve(strict=True)
         if not workspace.is_dir():
             raise ValueError("Der ausgewählte Pfad ist kein Ordner.")
+        warnings: list[str] = []
+        try:
+            if workspace == Path(workspace.anchor) or workspace.parent == workspace:
+                raise ValueError("Bitte wähle einen Projektordner und nicht ein ganzes Laufwerk.")
+        except OSError:
+            pass
+        if workspace in {ROOT, self.data_dir}:
+            raise ValueError("Dieser Ordner gehört zum Control Center selbst und ist als Projektordner nicht geeignet.")
+        if workspace == Path.home():
+            warnings.append("Das ist dein Benutzerordner. Ein eigener Ordner nur für Projekte bleibt übersichtlicher.")
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         config_path = self.data_dir / "settings.json"
         temp_path = config_path.with_suffix(".tmp")
@@ -340,48 +463,140 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                     server.shutdown()
                     server.server_close()
                 type(self).project_content_servers.clear()
-        return workspace
+        return workspace, warnings
 
-    def _scan_workspace_projects(self) -> tuple[list[dict[str, object]], int, int]:
+    @staticmethod
+    def _is_ignored_directory(directory: Path) -> bool:
+        name = directory.name.lower()
+        return name.startswith(".") or name in IGNORED_DIRECTORY_NAMES
+
+    @staticmethod
+    def _looks_like_project(directory: Path) -> bool:
+        try:
+            names = {child.name.lower() for child in directory.iterdir()}
+        except OSError:
+            return False
+        return bool(names & PROJECT_MARKER_FILES)
+
+    def _candidate_directories(self, workspace: Path) -> list[Path]:
+        """Direct project folders plus one extra level for grouping folders."""
+        direct: list[Path] = []
+        nested: list[Path] = []
+        for candidate in workspace.iterdir():
+            try:
+                if not candidate.is_dir() or candidate.is_symlink():
+                    continue
+                resolved = candidate.resolve(strict=True)
+                resolved.relative_to(workspace)
+            except (OSError, ValueError):
+                continue
+            if self._is_ignored_directory(resolved):
+                continue
+            if self._looks_like_project(resolved):
+                direct.append(resolved)
+                continue
+            # Grouping folder: use the real projects inside instead of the group.
+            inner: list[Path] = []
+            try:
+                children = sorted(resolved.iterdir(), key=lambda item: item.name.casefold())
+            except OSError:
+                children = []
+            for child in children:
+                try:
+                    if not child.is_dir() or child.is_symlink():
+                        continue
+                    nested_resolved = child.resolve(strict=True)
+                    nested_resolved.relative_to(workspace)
+                except (OSError, ValueError):
+                    continue
+                if self._is_ignored_directory(nested_resolved):
+                    continue
+                if self._looks_like_project(nested_resolved):
+                    inner.append(nested_resolved)
+            if inner:
+                nested.extend(inner)
+            else:
+                direct.append(resolved)
+        direct.sort(key=lambda path: path.name.casefold())
+        nested.sort(key=lambda path: str(path).casefold())
+        for directory in nested:
+            if len(direct) >= MAX_SCAN_DIRECTORIES:
+                break
+            direct.append(directory)
+        return direct[:MAX_SCAN_DIRECTORIES]
+
+    def _known_folder(self, project: dict[str, object]) -> Path | None:
+        """The stored folder even when it lives outside the current workspace."""
+        raw = project.get("folderPath")
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            candidate = Path(raw).expanduser().resolve(strict=True)
+        except OSError:
+            return None
+        return candidate if candidate.is_dir() else None
+
+    def _scan_workspace_projects(self) -> tuple[list[dict[str, object]], int, int, list[str]]:
         workspace = self._workspace_path()
         if not workspace.is_dir():
             raise ValueError("Der verbundene Hauptordner ist nicht vorhanden. Wähle bitte den Ordner auf deinem Desktop erneut aus.")
-        directories: list[Path] = []
-        for candidate in workspace.iterdir():
-            try:
-                if candidate.is_dir() and not candidate.is_symlink():
-                    resolved = candidate.resolve(strict=True)
-                    resolved.relative_to(workspace)
-                    directories.append(resolved)
-            except (OSError, ValueError):
-                continue
-        directories.sort(key=lambda path: path.name.casefold())
-        available: dict[str, list[Path]] = {}
-        for directory in directories:
-            available.setdefault(safe_slug(directory.name), []).append(directory)
+        candidates = self._candidate_directories(workspace)
+        signatures: dict[Path, str] = {}
+        by_signature: dict[str, list[Path]] = {}
+        by_name: dict[str, list[Path]] = {}
+        by_slug: dict[str, list[Path]] = {}
+        for directory in candidates:
+            signature = folder_signature(directory)
+            signatures[directory] = signature
+            if signature:
+                by_signature.setdefault(signature, []).append(directory)
+            by_name.setdefault(directory.name.casefold(), []).append(directory)
+            by_slug.setdefault(safe_slug(directory.name), []).append(directory)
 
+        def take(mapping: dict[str, list[Path]], key: str, used: set[Path]) -> Path | None:
+            for option in mapping.get(key) or []:
+                if option not in used:
+                    used.add(option)
+                    return option
+            return None
+
+        warnings: list[str] = []
         projects = self._load_projects()
-        linked_paths: set[Path] = set()
+        used: set[Path] = set()
         linked = 0
         for project in projects:
-            old_folder = self._safe_project_folder(project)
-            matched = old_folder if old_folder and old_folder.parent == workspace else None
-            if matched is None:
-                options = available.get(safe_slug(str(project["title"])), [])
-                matched = next((folder for folder in options if folder not in linked_paths), None)
-            if matched is not None:
-                matched = matched.resolve(strict=True)
-                if project.get("folderPath") != str(matched):
-                    linked += 1
-                project["folderPath"] = str(matched)
-                project["isDemo"] = False
-                linked_paths.add(matched)
+            current = self._known_folder(project)
+            matched: Path | None = None
+            if current is not None and current in signatures:
+                matched = current
+                used.add(current)
             else:
+                stored_signature = project.get("folderSignature")
+                if current is not None:
+                    # The folder was renamed or moved: recognise it by content.
+                    stored_signature = folder_signature(current) or stored_signature
+                if isinstance(stored_signature, str) and stored_signature:
+                    matched = take(by_signature, stored_signature, used)
+                if matched is None:
+                    matched = take(by_name, str(project["title"]).strip().casefold(), used)
+                if matched is None:
+                    matched = take(by_slug, safe_slug(str(project["title"])), used)
+            if matched is not None:
+                changed = project.get("folderPath") != str(matched)
+                project["folderPath"] = str(matched)
+                project["folderSignature"] = signatures.get(matched) or folder_signature(matched)
+                project["isDemo"] = False
+                if changed:
+                    linked += 1
+            elif current is None and project.get("folderPath"):
+                # Only drop links whose folder really disappeared; folders of a
+                # different workspace stay saved and come back later.
                 project["folderPath"] = None
+                project["folderSignature"] = None
 
         added = 0
-        for directory in directories:
-            if directory in linked_paths:
+        for directory in candidates:
+            if directory in used:
                 continue
             title = clean_text(directory.name.replace("_", " ").replace("-", " "), 80)
             if not title:
@@ -396,14 +611,18 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                 "icon": "hub",
                 "color": "lime",
                 "folderPath": str(directory),
+                "folderSignature": signatures.get(directory),
                 "isDemo": False,
             })
             if project:
                 project["folderPath"] = str(directory)
                 projects.append(project)
+                used.add(directory)
                 added += 1
+        if len(candidates) >= MAX_SCAN_DIRECTORIES:
+            warnings.append(f"Es wurden nur die ersten {MAX_SCAN_DIRECTORIES} Ordner berücksichtigt.")
         self._save_projects(projects)
-        return projects, added, linked
+        return projects, added, linked, warnings
 
     def _start_project_content_server(self, project: dict[str, object], folder: Path) -> int:
         project_id = str(project["id"])
@@ -423,6 +642,7 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
             server.daemon_threads = True
             server.project_root = resolved_folder
+            server.last_access = time.monotonic()
             thread = threading.Thread(target=server.serve_forever, name=f"project-content-{project_id[:8]}", daemon=True)
             thread.start()
             type(self).project_content_servers[project_id] = server
@@ -443,6 +663,11 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         except OSError as error:
             self.send_error(503, f"Projekt-Webserver konnte nicht gestartet werden: {error}")
             return
+        with LIBRARY_LOCK:
+            projects, stored = self._project(parts[1])
+            if stored is not None:
+                stored["lastOpened"] = int(datetime.now().timestamp() * 1000)
+                self._save_projects(projects)
         location = f"http://127.0.0.1:{port}/"
         self.send_response(302)
         self.send_header("Location", location)
@@ -504,12 +729,79 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             return f"Ordner konnte nicht geöffnet werden: {error}"
 
     def _remote_project(self, project: dict[str, object]) -> dict[str, object]:
-        public = {key: value for key, value in project.items() if key not in {"notes", "nextSteps", "folderPath"}}
+        hidden = {"notes", "nextSteps", "folderPath", "folderAvailable", "folderSignature"}
+        public = {key: value for key, value in project.items() if key not in hidden}
         public["hasFolder"] = self._safe_project_folder(project) is not None
         return public
 
+    def _folder_inside_workspace(self, raw_path: object) -> Path | None:
+        workspace = self._workspace_path()
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        try:
+            candidate = Path(raw_path.strip()).expanduser().resolve(strict=True)
+            candidate.relative_to(workspace)
+        except (OSError, ValueError):
+            return None
+        return candidate if candidate.is_dir() else None
+
+    def _cross_site_request(self) -> bool:
+        """True for requests that a foreign website triggered (DNS rebinding)."""
+        return self.headers.get("Sec-Fetch-Site") in {"cross-site", "same-site"}
+
+    def _send_browse_result(self, query: str) -> None:
+        """List subfolders so the UI can pick a folder without a native dialog."""
+        params = parse_qs(query)
+        raw_path = (params.get("path") or [""])[0]
+        try:
+            current = Path(raw_path).expanduser().resolve(strict=True) if raw_path.strip() else Path.home().resolve()
+        except OSError:
+            self._send_error_json(400, "Dieser Ordner existiert nicht.")
+            return
+        if not current.is_dir():
+            self._send_error_json(400, "Dieser Pfad ist kein Ordner.")
+            return
+        entries: list[dict[str, object]] = []
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold())
+        except OSError as error:
+            self._send_error_json(403, f"Ordner kann nicht gelesen werden: {error}")
+            return
+        for child in children:
+            try:
+                if not child.is_dir() or child.is_symlink():
+                    continue
+                resolved = child.resolve(strict=True)
+            except OSError:
+                continue
+            if self._is_ignored_directory(resolved):
+                continue
+            entries.append({"name": child.name, "path": str(resolved)})
+        shortcut_candidates = (
+            ("Benutzerordner", Path.home()),
+            ("Desktop", Path.home() / "Desktop"),
+            ("Desktop (OneDrive)", Path.home() / "OneDrive" / "Desktop"),
+            ("Dokumente", Path.home() / "Documents"),
+            ("Aktueller Projektordner", self._workspace_path() if self.workspace_configured else None),
+        )
+        shortcuts = [
+            {"label": label, "path": str(path.resolve())}
+            for label, path in shortcut_candidates
+            if path is not None and path.is_dir()
+        ]
+        parent = current.parent if current.parent != current else None
+        self._send_json(200, {
+            "path": str(current),
+            "parent": str(parent) if parent else None,
+            "directories": entries[:400],
+            "shortcuts": shortcuts,
+        })
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler method name
         parsed = urlsplit(self.path)
+        if parsed.path.startswith("/api/") and self._cross_site_request():
+            self._send_error_json(403, "Anfrage von einer fremden Seite wurde blockiert.")
+            return
         if parsed.path == "/api/health":
             local = self._local_request()
             self._send_json(200, {
@@ -529,7 +821,21 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                 for project in projects:
                     folder = self._safe_project_folder(project)
                     project["folderPath"] = str(folder) if folder else None
+                    outside = None if folder else self._known_folder(project)
+                    project["folderAvailable"] = str(outside) if outside else None
             self._send_json(200, {"projects": projects})
+            return
+        if parsed.path == "/api/backups":
+            if not self._local_request():
+                self._send_error_json(403, "Sicherungen sind nur auf dem lokalen PC verfügbar.")
+                return
+            self._send_json(200, {"backups": self._list_backups()})
+            return
+        if parsed.path == "/api/browse":
+            if not self._local_request():
+                self._send_error_json(403, "Der Ordnerbrowser ist nur auf dem lokalen PC verfügbar.")
+                return
+            self._send_browse_result(urlsplit(self.path).query)
             return
         if parsed.path == "/api/settings":
             local = self._local_request()
@@ -576,11 +882,11 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                 self._send_error_json(400, "Ordnerpfad fehlt.")
                 return
             try:
-                workspace = self._save_workspace_path(payload.get("path"))
+                workspace, warnings = self._save_workspace_path(payload.get("path"))
             except (OSError, ValueError) as error:
                 self._send_error_json(400, f"Projektordner konnte nicht verbunden werden: {error}")
                 return
-            self._send_json(200, {"workspace": str(workspace)})
+            self._send_json(200, {"workspace": str(workspace), "warnings": warnings})
             return
 
         if parsed.path == "/api/workspace/select":
@@ -612,20 +918,21 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
                 self._send_json(200, {"cancelled": True})
                 return
             try:
-                workspace = self._save_workspace_path(selected)
+                workspace, warnings = self._save_workspace_path(selected)
             except (OSError, ValueError) as error:
                 self._send_error_json(400, f"Projektordner konnte nicht verbunden werden: {error}")
                 return
-            self._send_json(200, {"workspace": str(workspace)})
+            self._send_json(200, {"workspace": str(workspace), "warnings": warnings})
             return
 
         if parsed.path == "/api/workspace/scan":
             try:
-                projects, added, linked = self._scan_workspace_projects()
+                with LIBRARY_LOCK:
+                    projects, added, linked, warnings = self._scan_workspace_projects()
             except (OSError, ValueError) as error:
                 self._send_error_json(400, str(error))
                 return
-            self._send_json(200, {"projects": projects, "added": added, "linked": linked})
+            self._send_json(200, {"projects": projects, "added": added, "linked": linked, "warnings": warnings})
             return
 
         if parsed.path == "/api/projects":
@@ -646,18 +953,20 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
             if not project:
                 self._send_error_json(400, "Bitte gib einen Projektnamen ein.")
                 return
-            projects = self._load_projects()
-            if any(item["id"] == project["id"] for item in projects):
-                project["id"] = uuid.uuid4().hex
-            if bool(payload.get("createFolder")):
-                try:
-                    folder = self._create_folder(project)
-                except (OSError, ValueError) as error:
-                    self._send_error_json(500, f"Projektordner konnte nicht angelegt werden: {error}")
-                    return
-                project["folderPath"] = str(folder)
-            projects.insert(0, project)
-            self._save_projects(projects)
+            with LIBRARY_LOCK:
+                projects = self._load_projects()
+                if any(item["id"] == project["id"] for item in projects):
+                    project["id"] = uuid.uuid4().hex
+                if bool(payload.get("createFolder")):
+                    try:
+                        folder = self._create_folder(project)
+                    except (OSError, ValueError) as error:
+                        self._send_error_json(500, f"Projektordner konnte nicht angelegt werden: {error}")
+                        return
+                    project["folderPath"] = str(folder)
+                    project["folderSignature"] = folder_signature(folder)
+                projects.insert(0, project)
+                self._save_projects(projects)
             self._send_json(201, {"project": project})
             return
 
@@ -703,37 +1012,47 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
 
         parts = [unquote(part) for part in parsed.path.strip("/").split("/")]
         if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] in {"folder", "open"}:
-            projects, project = self._project(parts[2])
-            if not project:
+            try:
+                if parts[3] == "folder":
+                    project = self._ensure_project_folder(parts[2])
+                    self._send_json(200, {"project": project, "folderPath": project.get("folderPath")})
+                else:
+                    project = self._open_project_folder(parts[2])
+                    self._send_json(200, {"opened": True, "project": project, "folderPath": project.get("folderPath")})
+            except LookupError:
                 self._send_error_json(404, "Projekt nicht gefunden.")
+            except ValueError as error:
+                self._send_error_json(501, str(error))
+            except OSError as error:
+                self._send_error_json(500, f"Projektordner konnte nicht bearbeitet werden: {error}")
+            return
+
+        if parsed.path == "/api/backups":
+            try:
+                backup_name = self._create_backup() if self.library_path.exists() else None
+            except OSError as error:
+                self._send_error_json(500, f"Sicherung konnte nicht erstellt werden: {error}")
                 return
-            if parts[3] == "folder":
-                folder = self._safe_project_folder(project)
-                if folder is None:
-                    try:
-                        folder = self._create_folder(project)
-                    except (OSError, ValueError) as error:
-                        self._send_error_json(500, f"Projektordner konnte nicht angelegt werden: {error}")
-                        return
-                    project["folderPath"] = str(folder)
-                    project["updated"] = "Ordner angelegt"
-                    project["updatedAt"] = now_iso()
-                    self._save_projects(projects)
-                self._send_json(200, {"project": project, "folderPath": str(folder)})
+            self._send_json(200, {
+                "backupCreated": backup_name is not None,
+                "backupFile": backup_name,
+                "backups": self._list_backups(),
+            })
+            return
+
+        if parsed.path == "/api/backups/restore":
+            if not isinstance(payload, dict) or not isinstance(payload.get("backup"), str):
+                self._send_error_json(400, "Der Name der Sicherung fehlt.")
                 return
-            folder = self._safe_project_folder(project)
-            if folder is None:
-                self._send_error_json(404, "Für dieses Projekt gibt es noch keinen gültigen Ordner.")
+            try:
+                restored = self._restore_backup(payload["backup"])
+            except (OSError, ValueError) as error:
+                self._send_error_json(400, f"Sicherung konnte nicht gelesen werden: {error}")
                 return
-            open_error = self._open_folder(folder)
-            if open_error:
-                self._send_error_json(501, open_error)
+            if restored is None:
+                self._send_error_json(404, "Sicherung nicht gefunden.")
                 return
-            project["lastOpened"] = int(datetime.now().timestamp() * 1000)
-            project["updated"] = "Ordner geöffnet"
-            project["updatedAt"] = now_iso()
-            self._save_projects(projects)
-            self._send_json(200, {"opened": True, "folderPath": str(folder)})
+            self._send_json(200, {"restored": payload["backup"], "projects": restored, "backups": self._list_backups()})
             return
 
         self._send_error_json(404, "API-Endpunkt nicht gefunden.")
@@ -753,44 +1072,190 @@ class ControlCenterHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             self._send_error_json(400, "Änderungsdaten fehlen.")
             return
-        projects, project = self._project(parts[2])
-        if not project:
-            self._send_error_json(404, "Projekt nicht gefunden.")
-            return
-        for key in ("title", "description", "category", "notes", "updated"):
-            if key in payload:
-                max_length = 80 if key == "title" else 20_000 if key == "notes" else 500
-                value = clean_text(payload[key], max_length)
-                if key == "title" and not value:
-                    self._send_error_json(400, "Der Projektname darf nicht leer sein.")
+        with LIBRARY_LOCK:
+            projects, project = self._project(parts[2])
+            if not project:
+                self._send_error_json(404, "Projekt nicht gefunden.")
+                return
+            for key in ("title", "description", "category", "notes", "updated"):
+                if key in payload:
+                    max_length = 80 if key == "title" else 20_000 if key == "notes" else 500
+                    value = clean_text(payload[key], max_length)
+                    if key == "title" and not value:
+                        self._send_error_json(400, "Der Projektname darf nicht leer sein.")
+                        return
+                    project[key] = value
+            if "favorite" in payload:
+                project["favorite"] = bool(payload["favorite"])
+            if "lastOpened" in payload:
+                last_opened = payload["lastOpened"]
+                project["lastOpened"] = last_opened if isinstance(last_opened, (int, float)) else None
+            if "nextSteps" in payload:
+                steps = payload["nextSteps"]
+                if not isinstance(steps, list):
+                    self._send_error_json(400, "Nächste Schritte müssen als Liste gesendet werden.")
                     return
-                project[key] = value
-        if "favorite" in payload:
-            project["favorite"] = bool(payload["favorite"])
-        if "lastOpened" in payload:
-            last_opened = payload["lastOpened"]
-            project["lastOpened"] = last_opened if isinstance(last_opened, (int, float)) else None
-        if "nextSteps" in payload:
-            steps = payload["nextSteps"]
-            if not isinstance(steps, list):
-                self._send_error_json(400, "Nächste Schritte müssen als Liste gesendet werden.")
+                project["nextSteps"] = [clean_text(step, 180) for step in steps[:30] if isinstance(step, str) and step.strip()]
+            if "tags" in payload:
+                tags = payload["tags"]
+                if not isinstance(tags, list):
+                    self._send_error_json(400, "Schlagworte müssen als Liste gesendet werden.")
+                    return
+                project["tags"] = [tag for tag in (clean_text(item, 24) for item in tags[:10]) if tag]
+            if "icon" in payload:
+                if payload["icon"] not in PROJECT_ICONS:
+                    self._send_error_json(400, "Unbekanntes Symbol.")
+                    return
+                project["icon"] = payload["icon"]
+            if "color" in payload:
+                if payload["color"] not in PROJECT_COLORS:
+                    self._send_error_json(400, "Unbekannte Farbe.")
+                    return
+                project["color"] = payload["color"]
+            if "folderPath" in payload:
+                raw_folder = payload["folderPath"]
+                if raw_folder in (None, ""):
+                    project["folderPath"] = None
+                    project["folderSignature"] = None
+                else:
+                    folder = self._folder_inside_workspace(raw_folder)
+                    if folder is None:
+                        self._send_error_json(400, "Dieser Ordner liegt nicht im verbundenen Hauptordner.")
+                        return
+                    project["folderPath"] = str(folder)
+                    project["folderSignature"] = folder_signature(folder)
+            if "status" in payload:
+                status = payload["status"]
+                if status not in STATUS_LABELS:
+                    self._send_error_json(400, "Unbekannter Projektstatus.")
+                    return
+                project["status"] = status
+                project["statusLabel"] = STATUS_LABELS[status]
+            project["updated"] = "Gerade aktualisiert"
+            project["updatedAt"] = now_iso()
+            saved = dict(project)
+            self._save_projects(projects)
+        self._send_json(200, {"project": saved})
+
+    def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler method name
+        """Remove a library entry. Project folders on disk are never touched."""
+        if not self._write_allowed():
+            return
+        parts = [unquote(part) for part in urlsplit(self.path).path.strip("/").split("/")]
+        if len(parts) != 3 or parts[:2] != ["api", "projects"]:
+            self._send_error_json(404, "API-Endpunkt nicht gefunden.")
+            return
+        with LIBRARY_LOCK:
+            projects = self._load_projects()
+            remaining = [item for item in projects if item.get("id") != parts[2]]
+            if len(remaining) == len(projects):
+                self._send_error_json(404, "Projekt nicht gefunden.")
                 return
-            project["nextSteps"] = [clean_text(step, 180) for step in steps[:30] if isinstance(step, str) and step.strip()]
-        if "status" in payload:
-            status = payload["status"]
-            if status not in STATUS_LABELS:
-                self._send_error_json(400, "Unbekannter Projektstatus.")
-                return
-            project["status"] = status
-            project["statusLabel"] = STATUS_LABELS[status]
-        project["updated"] = "Gerade aktualisiert"
-        project["updatedAt"] = now_iso()
-        self._save_projects(projects)
-        self._send_json(200, {"project": project})
+            self._save_projects(remaining)
+        self._send_json(200, {"deleted": parts[2], "projects": remaining})
+
+    def _ensure_project_folder(self, project_id: str) -> dict[str, object]:
+        """Create the working folder of a project if it does not exist yet."""
+        with LIBRARY_LOCK:
+            projects, project = self._project(project_id)
+            if project is None:
+                raise LookupError(project_id)
+            folder = self._safe_project_folder(project)
+            if folder is None:
+                folder = self._create_folder(project)
+                project["folderPath"] = str(folder)
+                project["folderSignature"] = folder_signature(folder)
+                project["updated"] = "Ordner angelegt"
+                project["updatedAt"] = now_iso()
+                self._save_projects(projects)
+            return dict(project)
+
+    def _open_project_folder(self, project_id: str) -> dict[str, object]:
+        """Open the project folder in the file manager of the server machine."""
+        with LIBRARY_LOCK:
+            projects, project = self._project(project_id)
+            if project is None:
+                raise LookupError(project_id)
+            folder = self._safe_project_folder(project)
+            if folder is None:
+                raise ValueError("Für dieses Projekt gibt es noch keinen gültigen Ordner im verbundenen Hauptordner.")
+            open_error = self._open_folder(folder)
+            if open_error:
+                raise ValueError(open_error)
+            project["lastOpened"] = int(datetime.now().timestamp() * 1000)
+            project["updated"] = "Ordner geöffnet"
+            project["updatedAt"] = now_iso()
+            self._save_projects(projects)
+            return dict(project)
+
+    def _restore_backup(self, name: str) -> list[dict[str, object]] | None:
+        """Replace the library with an existing backup (a fresh backup is kept)."""
+        path = self.data_dir / Path(name).name
+        if not path.is_file() or not path.name.startswith("projects-backup-") or not path.name.endswith(".json"):
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, list):
+            return None
+        projects: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for item in value:
+            project = normalize_project(item)
+            if project and project["id"] not in seen:
+                projects.append(project)
+                seen.add(str(project["id"]))
+        with LIBRARY_LOCK:
+            if self.library_path.exists():
+                self._create_backup()
+            self._save_projects(projects)
+        return projects
 
     def log_message(self, format: str, *args: object) -> None:
         # Keep the preview log readable without suppressing request errors.
         super().log_message(format, *args)
+
+
+VERSION = "1.1.0"
+
+
+def other_instance_running(data_dir: Path) -> str | None:
+    """Best-effort check for a second Control Center using the same library."""
+    if os.name == "nt":
+        return None
+    lock_path = data_dir / "control-center.lock"
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if lock_path.exists():
+            raw = lock_path.read_text(encoding="utf-8").strip()
+            if raw.isdigit() and raw != str(os.getpid()):
+                try:
+                    os.kill(int(raw), 0)
+                except OSError:
+                    pass
+                else:
+                    return raw
+        lock_path.write_text(str(os.getpid()), encoding="utf-8")
+        if os.name != "nt":
+            lock_path.chmod(0o600)
+    except OSError:
+        return None
+    return None
+
+
+def reap_idle_content_servers(interval: float = 60.0) -> None:
+    """Stop project servers nobody used for a while."""
+    while True:
+        time.sleep(interval)
+        with PROJECT_CONTENT_LOCK:
+            for project_id, server in list(ControlCenterHandler.project_content_servers.items()):
+                last_access = getattr(server, "last_access", 0.0)
+                if time.monotonic() - last_access <= CONTENT_SERVER_IDLE_SECONDS:
+                    continue
+                try:
+                    server.shutdown()
+                    server.server_close()
+                except Exception:  # noqa: BLE001 - shutdown must never kill the reaper
+                    pass
+                ControlCenterHandler.project_content_servers.pop(project_id, None)
 
 
 def main() -> int:
@@ -798,6 +1263,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1", help="Interface to bind (default: localhost).")
     parser.add_argument("--port", type=int, default=8765, help="Port to serve on (default: 8765).")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically.")
+    parser.add_argument("--version", action="version", version=f"Control Center {VERSION}")
     parser.add_argument("--workspace", type=Path, default=None, help="Root folder for project directories (overrides the saved local setting).")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR, help="Folder for the local library JSON file.")
     args = parser.parse_args()
@@ -820,12 +1286,31 @@ def main() -> int:
     ControlCenterHandler.workspace_root = workspace_root
     ControlCenterHandler.workspace_configured = workspace_configured
 
+    other = other_instance_running(data_dir)
+    if other:
+        print(f"Hinweis: Control Center läuft bereits (Prozess {other}). Änderungen werden sonst doppelt geschrieben.")
+
     handler = partial(ControlCenterHandler, directory=str(ROOT))
-    server = ThreadingHTTPServer((args.host, args.port), handler)
+    ControlCenterHandler.protocol_version = "HTTP/1.1"
+    server: ThreadingHTTPServer | None = None
+    chosen_port = args.port
+    for candidate in range(args.port, args.port + 20):
+        try:
+            server = ThreadingHTTPServer((args.host, candidate), handler)
+        except OSError:
+            continue
+        chosen_port = candidate
+        break
+    if server is None:
+        print(f"Kein freier Port gefunden (versucht: {args.port} bis {args.port + 19}).", file=sys.stderr)
+        return 1
+    if chosen_port != args.port:
+        print(f"Port {args.port} ist belegt — Control Center nutzt Port {chosen_port}.")
     server.daemon_threads = True
+    threading.Thread(target=reap_idle_content_servers, name="content-server-reaper", daemon=True).start()
     url_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
-    url = f"http://{url_host}:{args.port}/"
-    print(f"Control Center läuft unter {url}")
+    url = f"http://{url_host}:{chosen_port}/"
+    print(f"Control Center {VERSION} läuft unter {url}")
     print(f"Projektordner: {workspace_root}")
     print("Bibliothek: lokal im Benutzerprofil; Änderungen von Netzwerkgeräten sind gesperrt.")
     print("Zum Beenden Ctrl+C drücken.")

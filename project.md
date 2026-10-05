@@ -2,7 +2,7 @@
 
 **Technischer Projektname:** `Control_Center`
 **Anzeigename:** Control Center
-**Stand:** 5. Oktober 2026
+**Stand:** 5. Oktober 2026 (Version 1.1)
 **Typ:** lokales, modular erweiterbares Projekt-Hub
 **Phase:** GUI plus lokale Projektbibliothek und Arbeitsordner-Funktionen
 
@@ -41,10 +41,28 @@ Der Fokus liegt auf **digitalen Spielen, Simulationen und Softwareprojekten**. D
 
 ### Bibliothek
 
-- Eine zentrale Liste mit Projekten und Ideen; Suche, Ideen-/Projektfilter und Raster- oder Listenansicht.
+- Eine zentrale Liste mit Projekten und Ideen; Suche, Filter (Alle, Projekte, Ideen, Favoriten, Ordner fehlt) und Raster- oder **Listenansicht**.
+- Die Listenansicht zeigt pro Zeile Status, Bereich, Ordnerzustand, nächste Schritte und „zuletzt geöffnet“.
+- Sortierung nach zuletzt geändert, Name, zuletzt geöffnet, neueste zuerst oder Status; Layout und Sortierung bleiben gespeichert.
+- Suche über Titel, Beschreibung, Bereich, Schlagworte, **Notizen und nächste Schritte**.
+- Favoriten zum Sammeln wichtiger Einträge.
 - Den vorhandenen Hauptordner auswählen und direkte Unterordner automatisch mit Bibliothekseinträgen verknüpfen.
 - Noch nicht gelistete Unterordner werden erst durch diese ausdrückliche Einlese-Aktion als Einträge übernommen; ihre Dateien werden nicht verändert.
-- `Ctrl+K` öffnet die Schnellaktions-Palette.
+- `Ctrl+K` öffnet die Schnellaktions-Palette, `/` springt in die Suche.
+
+### Eintrag bearbeiten
+
+- Bearbeiten-Dialog mit Notizen, nächsten Schritten, Status, Bereich, Schlagworte, Symbol, Farbe und Favorit.
+- Ordneraktionen im Dialog: Ordner wählen, Ordner anlegen, im Dateimanager öffnen, Verknüpfung lösen.
+- Einträge löschen entfernt **nur den Bibliothekseintrag**; Projektordner auf der Festplatte bleiben unberührt.
+
+### Einlesen des Projektordners
+
+- Versteckte Ordner (`.git`, `.cache`, …) sowie Build- und Abhängigkeitsordner (`node_modules`, `venv`, `dist`, …) werden übersprungen.
+- Projekte eine Ebene tiefer werden gefunden, ohne den Gruppierungsordner selbst als Projekt aufzunehmen.
+- Umbenannte oder verschobene Ordner werden über einen Fingerabdruck des Ordnerinhalts wiedererkannt — ohne Duplikate und ohne Dateien im Projektordner anzulegen.
+- Namen ohne lateinische Buchstaben bleiben unterscheidbar.
+- Ungeeignete Workspaces (Laufwerkswurzel) werden abgelehnt, der Benutzerordner erzeugt eine Warnung.
 
 ### Projekt öffnen
 
@@ -58,6 +76,8 @@ Der Fokus liegt auf **digitalen Spielen, Simulationen und Softwareprojekten**. D
 - Bibliothek als JSON-Datei exportieren.
 - JSON-Sicherung importieren; der Import ersetzt die Bibliotheks-Metadaten nach Bestätigung.
 - Vor dem Import wird eine datierte lokale Sicherung der aktuellen Bibliothek erstellt; maximal zehn Sicherungen bleiben erhalten.
+- Sicherungen sind in der Oberfläche einsehbar: **Sicherungen** zeigt die letzten zehn Stände mit Datum, Größe und Eintragszahl und stellt sie nach Bestätigung wieder her (dabei wird der aktuelle Stand vorher gesichert).
+- Beim Start und bei jedem Schreibvorgang wird die Bibliothek über eine eigene temporäre Datei atomar geschrieben; parallele Anfragen sind durch eine Sperre geschützt.
 - Ordnerpfade werden absichtlich nicht in portable Sicherungen übernommen; nach einem Import kann der Hauptordner erneut eingelesen werden.
 - Import löscht keine bereits bestehenden Ordner auf der Festplatte.
 
@@ -70,7 +90,7 @@ Die GUI passt sich an kleinere Bildschirme an. Sie ist eine Webseite, keine inst
 - Bibliotheksdatei: `~/.control_center/projects.json`.
 - Der anfängliche Standardordner ist `~/Control_Center_Projects/`; in der GUI kann stattdessen der vorhandene Projekt-Hauptordner auf dem Desktop ausgewählt werden.
 - Die ausgewählte Basis wird in `~/.control_center/settings.json` gespeichert und beim nächsten Start wiederverwendet.
-- Mit `--data-dir` und `--workspace` können Speicherorte beim Start angepasst werden.
+- Mit `--data-dir` und `--workspace` können Speicherorte beim Start angepasst werden; `--port`, `--host`, `--no-browser` und `--version` ergänzen den Start.
 - Die Bibliothek speichert Projektnamen, Status und optionale Beschreibungen; der eigentliche Code und die Projektdateien bleiben in den jeweiligen Ordnern.
 - Eine leere Installation startet ohne Demo-Projekte. Vorhandene Ordner werden erst nach der ausdrücklichen Aktion „Verbinden & einlesen“ aufgenommen.
 
@@ -79,6 +99,8 @@ Das Control Center selbst liefert die Projektdateien über einen zusätzlichen l
 ## Sicherheit und Grenzen des LAN-Zugriffs
 
 - Standardmäßig bindet der Server nur an `127.0.0.1`.
+- API-Anfragen, die von einer fremden Seite stammen (`Sec-Fetch-Site: cross-site`), werden blockiert — das schließt DNS-Rebinding aus.
+- Projekt-Dateiserver werden nach 30 Minuten ohne Zugriff automatisch beendet.
 - `--host 0.0.0.0` ist ein bewusstes Opt-in für Vorschau im vertrauenswürdigen LAN.
 - Netzwerkgeräte können nur die freigegebene read-only Bibliotheksübersicht abrufen.
 - Projektdateien werden von separaten loopback-only Servern auf zufälligen Ports ausgeliefert und nicht an Geräte im LAN oder an Arenas Vorschau freigegeben.
@@ -91,12 +113,17 @@ Die Arena-Vorschau läuft in einer Sandbox und nicht auf dem Nutzer-PC. Ein Aren
 ```text
 index.html    Seitenstruktur und Einstiegspunkt
 styles.css    dunkles Layout, limettengrüner Akzent, responsive GUI
-app.js        Bibliothek, Ordnerverbindung, Projektstart und JSON-Transfer
-start.py      Python-Standardbibliothek: lokale API und loopback-only Projektserver
-start.cmd     Starthelfer für Windows
-README.md     Kurzstart und Desktop-Ordnerverbindung
+app.js        Bibliothek, Liste/Raster, Bearbeiten-Dialog, Ordnerbrowser, Projektstart, JSON-Transfer
+start.py      Python-Standardbibliothek: lokale API, Scan-Logik und loopback-only Projektserver
+start.cmd     Starthelfer für Windows (mit Python-Prüfung)
+tests/        Unittest-Suite (Start, API, Scan, Sicherheit, Sicherungen)
+README.md     Kurzstart, Bedienung und Fehlerbehebung
 project.md    Projektvision, Funktionsumfang und Roadmap
 ```
+
+Wichtige API-Endpunkte: `GET /api/health`, `GET/POST/PATCH/DELETE /api/projects`, `POST /api/projects/import`,
+`POST /api/projects/<id>/folder`, `POST /api/projects/<id>/open`, `POST /api/workspace`, `POST /api/workspace/select`,
+`POST /api/workspace/scan`, `GET /api/browse`, `GET/POST /api/backups`, `POST /api/backups/restore`.
 
 Es werden keine externen Python-Pakete oder Frontend-CDNs benötigt. Die lokale JSON-API ist Bestandteil des kleinen Python-Startservers.
 
@@ -131,6 +158,8 @@ Auf dem Handy im selben WLAN wird die LAN-IP des Rechners mit Port `8765` geöff
 - Desktop-Ordnerauswahl und Bibliotheksscan auf Windows, macOS und Ubuntu/WSL prüfen.
 - Sonderfälle bei Namen, doppelten Ordnern und großen Projektdateien testen.
 - Ergänzen, wie ein Projekt ohne `index.html` seine passende Startseite mitteilt.
+- Metadaten aus dem Projektordner lesen (README-Auszug, git-Stand, Größe, erkannter Stack) und in Karte, Liste und Suche nutzen.
+- Markdown-Dateien in der Dateiansicht darstellen statt herunterzuladen.
 
 ### Später — konkrete Projektintegration
 
@@ -144,7 +173,7 @@ Auf dem Handy im selben WLAN wird die LAN-IP des Rechners mit Port `8765` geöff
 - Cloud- oder Geräte-Synchronisierung.
 - Benutzerkonten oder Mehrbenutzer-Berechtigungen.
 - Öffnen beliebiger externer Programme.
-- Projektordner umbenennen oder löschen.
+- Projektordner umbenennen oder löschen (Einträge in der Bibliothek lassen sich löschen — ein Ordner auf der Festplatte wird nie angefasst).
 - Ein vollwertiges Plugin-System.
 - RocketAI-Training, PPO, RocketSim oder RLBot.
 - Eine installierbare Handy-App.

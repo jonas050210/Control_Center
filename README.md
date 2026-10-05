@@ -4,12 +4,22 @@ Ein lokales Control Center für eine Bibliothek digitaler Projekte und Ideen. Du
 
 ## Starten
 
-Voraussetzung: Python 3; es werden keine externen Python-Pakete benötigt.
+Voraussetzung: **Python 3.9 oder neuer**; es werden keine externen Python-Pakete benötigt.
 
 - **Windows:** `start.cmd` doppelklicken.
 - **Ubuntu / WSL:** im Projektordner `python3 start.py` ausführen.
 
-Standardadresse: <http://127.0.0.1:8765>. Mit `Ctrl+C` wird der Server beendet.
+Standardadresse: <http://127.0.0.1:8765>. Ist der Port belegt, sucht sich Control Center automatisch den nächsten freien Port und zeigt ihn an. Mit `Ctrl+C` wird der Server beendet.
+
+Weitere Startoptionen:
+
+```bash
+python3 start.py --port 9000          # anderen Port benutzen
+python3 start.py --no-browser         # Browser nicht automatisch öffnen
+python3 start.py --workspace ~/Code   # Projektordner direkt festlegen
+python3 start.py --data-dir ~/.cc     # anderen Speicherort für die Bibliothek
+python3 start.py --version            # Version anzeigen
+```
 
 ## Projekte aus deinem Desktop-Ordner öffnen
 
@@ -18,9 +28,33 @@ Standardadresse: <http://127.0.0.1:8765>. Mit `Ctrl+C` wird der Server beendet.
 3. **Verbinden & einlesen** verknüpft passende Einträge und nimmt übrige vorhandene Unterordner in die Bibliothek auf. Es werden keine Projektdateien erstellt, kopiert oder verschoben.
 4. Klicke bei einem verbundenen Projekt auf **Projekt öffnen**. Enthält sein Ordner eine `index.html`, wird diese geladen; andernfalls erscheint eine Dateiansicht, in der du die Ordnerstruktur durchgehen kannst.
 
-Bibliotheksdaten liegen lokal in `~/.control_center/projects.json`. Der verbundene Hauptordner wird in `~/.control_center/settings.json` gespeichert. Mit `Ctrl+K` kannst du die Schnellaktionen-Palette für Suche, Ordnerverbindung, JSON-Export und -Import öffnen. Vor einem Import wird die aktuelle Bibliothek automatisch gesichert; die letzten zehn Sicherungen bleiben erhalten.
+Der eingebaute Ordnerbrowser funktioniert auf allen Systemen; ist ein Systemdialog verfügbar (Windows/macOS/mit tkinter), wird dieser zuerst benutzt.
 
-Die Arena-Vorschau läuft in einer Sandbox und hat keinen Zugriff auf Dateien auf deinem PC. Zum Verbinden und Öffnen des Desktop-Ordners musst du Control Center lokal auf diesem PC starten.
+## Bibliothek bedienen
+
+| Funktion | So geht es |
+|---|---|
+| **Listenansicht** | Umschalter oben rechts — zeigt Status, Bereich, Ordner, letzte Schritte und „zuletzt geöffnet“ pro Zeile |
+| **Sortieren** | Auswahl neben den Filtern: zuletzt geändert, Name, zuletzt geöffnet, neueste zuerst, Status |
+| **Filtern** | Alle · Projekte · Ideen · Favoriten · Ordner fehlt |
+| **Suchen** | Oben oder mit `/`; durchsucht Titel, Beschreibung, Bereich, Schlagworte, **Notizen und nächste Schritte** |
+| **Favoriten** | Stern auf der Karte oder in der Zeile |
+| **Bearbeiten** | Stift-Symbol: Notizen, nächste Schritte, Status, Bereich, Schlagworte, Symbol, Farbe, Favorit |
+| **Ordner** | Im Bearbeiten-Dialog: Ordner wählen, Ordner anlegen, im Dateimanager öffnen, Verknüpfung lösen |
+| **Löschen** | Mülleimer-Symbol — löscht **nur den Bibliothekseintrag**, dein Ordner auf der Festplatte bleibt unberührt |
+| **Sicherungen** | **Sicherungen**-Knopf: jetzt sichern, alte Stände anzeigen und wiederherstellen |
+
+Tastenkürzel: `Ctrl/⌘ + K` Schnellaktionen, `/` Suche, `Esc` Dialog schließen oder Suche leeren, `↑`/`↓` und `↵` in der Palette.
+
+Bibliotheksdaten liegen lokal in `~/.control_center/projects.json`. Der verbundene Hauptordner wird in `~/.control_center/settings.json` gespeichert. Vor einem Import wird die aktuelle Bibliothek automatisch gesichert; die letzten zehn Sicherungen bleiben erhalten.
+
+## Was der Scan kann
+
+- Versteckte Ordner (`.git`, `.cache`, …) und Build-/Abhängigkeitsordner (`node_modules`, `venv`, `dist`, …) werden übersprungen.
+- Projekte, die in einem Gruppierungsordner eine Ebene tiefer liegen, werden gefunden, ohne die Gruppe selbst als Projekt aufzunehmen (Gruppe ohne erkennbare Projekte bleibt ein Eintrag).
+- **Umbenannte oder verschobene Ordner werden wiedererkannt** (über einen Fingerabdruck des Ordnerinhalts, ohne Dateien im Projektordner anzulegen) — es entstehen keine Duplikate.
+- Namen ohne lateinische Buchstaben (z. B. japanisch, kyrillisch) bleiben unterscheidbar.
+- Ein Workspace auf Laufwerksebene wird abgelehnt, der Benutzerordner gibt eine Warnung.
 
 ## Handy im selben WLAN
 
@@ -33,6 +67,24 @@ python3 start.py --host 0.0.0.0 --port 8765 --no-browser
 ```
 
 Öffne danach auf dem Handy `http://<LAN-IP-deines-PCs>:8765`. Netzwerkgeräte erhalten eine **Leseansicht**; Erstellen, Ändern und Dateiaktionen bleiben auf dem Server-PC. Den Server nicht ungeschützt ins öffentliche Internet stellen. Bei WSL können zusätzliche Firewall- oder Netzwerkeinstellungen erforderlich sein.
+
+## Probleme lösen
+
+| Problem | Lösung |
+|---|---|
+| „Adresse wird bereits verwendet“ | Control Center weicht automatisch aus — die tatsächliche Adresse steht in der Konsole. Zwei Instanzen auf dieselbe Bibliothek werden mit einem Hinweis gemeldet. |
+| „Ordner wählen“ meldet „System-Dateiauswahl nicht verfügbar“ | Kein Problem: danach öffnet sich automatisch der eingebaute Ordnerbrowser. |
+| Ein Projekt zeigt „Ordner fehlt“ | **Verbinden & einlesen** erneut ausführen, oder im Bearbeiten-Dialog einen Ordner zuweisen. |
+| Dateien eines Projekts lassen sich nicht öffnen | Projektdateien werden nur auf dem PC ausgeliefert, auf dem sie liegen (loopback-only). |
+| Python fehlt (Windows) | `start.cmd` meldet das und bleibt offen: Python von <https://www.python.org/downloads/> installieren. |
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Die Tests starten einen echten Server auf einem freien Port mit temporärem Datenverzeichnis — es werden keine Python-Pakete benötigt.
 
 ## Dokumentation
 
