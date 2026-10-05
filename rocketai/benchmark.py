@@ -399,7 +399,11 @@ def suggested_config(report: dict[str, Any], base: TrainConfig | None = None) ->
         "steps_per_second"
     )
     if speed:
-        config.steps_per_iteration = int(max(20_000, min(1_000_000, speed * 1200)))
+        # Rund 20 Minuten sammeln + lernen pro Update — aber gedeckelt: Der
+        # Stapel liegt komplett im Speicher (200 000 Schritte ≈ 150 MB
+        # Beobachtungen, bei Nachahmung +90 MB Lehrer-Ziele) und wird pro Runde
+        # durch die Pipe zu den Workern geschickt. Mehr lohnt nicht.
+        config.steps_per_iteration = int(max(20_000, min(200_000, speed * 1200)))
     return config
 
 

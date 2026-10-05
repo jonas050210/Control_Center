@@ -464,8 +464,8 @@ def test_suggested_config_uses_measured_values_and_end_to_end_speed():
     assert config.envs_per_worker == 4  # vorher setzte die Empfehlung hier 1
     assert config.torch_threads == 15
     # Rund 20 Minuten sammeln+lernen bei 5 500 Schritte/s — gedeckelt, damit
-    # ein Update nicht unbegrenzt Speicher und Zeit frisst.
-    assert config.steps_per_iteration == min(1_000_000, int(5_500 * 1_200))
+    # ein Stapel nicht unbegrenzt Speicher frisst (200 000 ≈ 150 MB).
+    assert config.steps_per_iteration == min(200_000, int(5_500 * 1_200))
     small = suggested_config({**report, "effective": {"steps_per_second": 300}})
     assert small.steps_per_iteration >= 20_000
     config.validate()

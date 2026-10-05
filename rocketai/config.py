@@ -234,6 +234,12 @@ class TrainConfig:
                 "teacher_samples ist größer als steps_per_iteration: es werden alle Schritte "
                 "vom Lehrer bewertet."
             )
+        if self.steps_per_iteration > 200_000:
+            hints.append(
+                "steps_per_iteration über 200 000: Ein Stapel dieses Umfangs liegt komplett im "
+                "Speicher (~0,8 MB je 1 000 Schritte, mit Lehrer-Zielen mehr) und wird pro Runde "
+                "zu den Simulationsprozessen geschickt. 20 000-200 000 sind ein guter Bereich."
+            )
         if self.minibatch_size > self.steps_per_iteration:
             hints.append(
                 "minibatch_size ist größer als steps_per_iteration: es wird mit allen Daten "
