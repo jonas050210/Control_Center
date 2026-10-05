@@ -88,6 +88,7 @@ EXTRA_FORMAT: dict[str, str] = {
     "on_ground": "flag",
     "supersonic": "flag",
 }
+
 EXTRA_GROUPS: dict[str, str] = {
     "ball_x_rel": "ball",
     "ball_y_rel": "ball",
@@ -108,7 +109,6 @@ GROUP_LABELS: dict[str, str] = {
     "tactics": "Taktische Lage",
     "car": "Eigenes Auto",
 }
-
 
 
 def describe_features() -> list[dict[str, str]]:
