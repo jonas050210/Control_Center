@@ -227,6 +227,14 @@ async function pageOverview() {
           ${heroStep(3, "Echtes Spiel", app.rl?.ready, app.rl ? app.rl.verdict : "prüfe …")}
         </div>
       </div>
+      ${(() => {
+        const broken = runs.filter((r) => r.status.state === "interrupted");
+        if (!broken.length) return "";
+        return `<div class="banner warn row between section-sm"><div>
+          <b>${broken.length === 1 ? "Ein Training wurde unterbrochen" : `${broken.length} Trainings wurden unterbrochen`}</b>
+          <div class="small">${broken.map((r) => h(r.name)).join(", ")} – der Prozess läuft nicht mehr (Absturz, Neustart oder Herunterfahren). Es geht beim letzten Checkpoint weiter.</div></div>
+          <button class="btn primary" data-action="resume-interrupted">${icon("play")}Jetzt fortsetzen</button></div>`;
+      })()}
       <div class="grid cols-4 section">
         <div class="card stat"><div class="label">Aktive Trainings</div><div class="value">${active.length}</div><div class="foot">${speed ? fmt.int(speed) + " Schritte/s" : "nichts läuft"}</div></div>
         <div class="card stat"><div class="label">Trainierte Schritte</div><div class="value">${fmt.steps(totalSteps)}</div><div class="foot">über ${runs.length} Run${runs.length === 1 ? "" : "s"}</div></div>
@@ -244,7 +252,14 @@ async function pageOverview() {
         ${rlCard(app.rl, { compact: true })}
       </div>`);
   };
-  page.actions = { ...rlActions, watch: (el) => busy(el, () => startLive(`run:${el.dataset.run}`)) };
+  page.actions = {
+    ...rlActions,
+    watch: (el) => busy(el, () => startLive(`run:${el.dataset.run}`)),
+    "resume-interrupted": (el) => busy(el, async () => {
+      const done = await attempt(() => api("/api/runs/resume-interrupted", { method: "POST" }), "Fortsetzen fehlgeschlagen");
+      if (done) toast(done.started.length ? "Weiter geht's" : "Nichts zu tun", done.started.join(", ") || "Kein unterbrochenes Training gefunden");
+    }),
+  };
   await draw();
   refreshOnSnapshot(draw);
 }
@@ -279,10 +294,13 @@ async function pageNewRun() {
   const benchReport = bench?.report || null;
   const suggested = benchReport?.suggested || null;
   const benchSps = benchReport?.best?.steps_per_second || 0;
+  // Ende-zu-Ende (sammeln + lernen) — nur das ist eine ehrliche Zeitangabe.
+  const benchEffective = benchReport?.effective?.steps_per_second || 0;
+  const benchUpdateShare = benchReport?.effective?.update_share ?? null;
   // Tempo: am ehrlichsten ist die Benchmark-Messung, sonst das schnellste
   // bisherige Training, andernfalls eine Schätzung nach Kernanzahl.
   const pastBest = Math.max(0, ...runs.map((r) => r.last?.steps_per_second || 0));
-  const measured = benchSps || pastBest;
+  const measured = benchEffective || benchSps || pastBest;
   const guess = 1400 * Math.max(1, cpus - 1);
   const teacherReady = Boolean(opponents.teacher?.ready);
   const pyCmd = opponents.python || "python3";
@@ -295,8 +313,10 @@ async function pageNewRun() {
     const v = values();
     const workers = v.n_workers || Math.max(1, cpus - 1);
     const sps = measured || guess;
-    const speedHint = benchSps
-      ? `gemessen mit dem Benchmark (${benchReport?.best?.workers || 1} Prozesse)`
+    const speedHint = benchEffective
+      ? `gemessen inkl. Lernschritt (Ende-zu-Ende${benchUpdateShare != null ? `, Lernen ${Math.round(benchUpdateShare * 100)} % der Zeit` : ""})`
+      : benchSps
+      ? `nur Simulation gemessen (${benchReport?.best?.workers || 1} Prozesse, ${fmt.int(benchSps)} Schritte/s) – der Lernschritt kommt noch dazu`
       : (pastBest
         ? `gemessen an deinem schnellsten Training`
         : (v.teacher_opponent_prob > 0 ? "grobe Schätzung (mit Lehrer etwas langsamer)" : "grobe Schätzung"));
@@ -361,7 +381,7 @@ async function pageNewRun() {
           <div class="row end"><a class="btn ghost" href="#/training">Abbrechen</a><button class="btn primary" data-action="start">${icon("play")}Training starten</button></div>
         </div>
         <div class="card sticky"><div class="card-head"><h2>Schätzung</h2><span class="sub">${cpus} logische CPU-Kerne</span></div>
-          <div class="estimate"><span>Tempo ${measured ? "" : "(grob)"}</span><b>~${fmt.int(sps)} Schritte/s</b></div>
+          <div class="estimate"><span>Tempo ${benchEffective ? "" : measured ? "(ohne Lernen)" : "(grob)"}</span><b>~${fmt.int(sps)} Schritte/s</b></div>
           <p class="faint small" style="margin:-4px 0 10px">${speedHint}</p>
           <div class="estimate"><span>Dauer für ${fmt.steps(v.total_steps)}</span><b>~${fmt.duration(v.total_steps / sps)}</b></div>
           <div class="estimate"><span>Erster Checkpoint</span><b>nach ~${fmt.duration(Math.min(v.checkpoint_every_steps, v.total_steps) / sps)}</b></div>
@@ -516,7 +536,7 @@ async function pageRun(rawName) {
         <span>${active ? (eta ? `noch ca. ${fmt.duration(eta)}` : "läuft …") : `${pct.toFixed(1)} %`}</span></div></div>
 
       <div class="grid cols-4 section-sm">
-        <div class="card stat"><div class="label">Tempo</div><div class="value">${sps && active ? fmt.int(sps) : "–"}<small>Schritte/s</small></div>
+        <div class="card stat"><div class="label">Tempo (sammeln + lernen)</div><div class="value">${sps && active ? fmt.int(sps) : "–"}<small>Schritte/s</small></div>
           <div class="foot">${last.realtime_factor ? `≈ ${fmt.int(last.realtime_factor)}× Echtzeit` : "&nbsp;"}${st.device ? ` · lernt auf ${h(String(st.device).toUpperCase())}` : ""}</div></div>
         <div class="card stat"><div class="label">Eigene Ballkontakte</div><div class="value">${fmt.num(last.touches_per_minute, 1)}<small>pro Minute</small></div>
           <div class="foot">Gegner: ${fmt.num(last.touches_against_per_minute, 1)} mal</div></div>
@@ -525,6 +545,22 @@ async function pageRun(rawName) {
         <div class="card stat"><div class="label">Belohnung</div><div class="value">${fmt.num(last.episode_reward, 1)}<small>pro Episode</small></div>
           <div class="foot">${last.explained_variance != null ? `Kritiker erklärt ${Math.round(last.explained_variance * 100)} %` : "&nbsp;"}</div></div>
       </div>
+
+      ${last.collect_seconds || last.update_seconds ? (() => {
+        const collectS = last.collect_seconds || 0, updateS = last.update_seconds || 0;
+        const sum = collectS + updateS || 1;
+        const collectPct = Math.round((collectS / sum) * 100), updatePct = 100 - collectPct;
+        return `<div class="card section-sm"><div class="card-head"><h3>Tempo-Zerlegung</h3>
+          <span class="sub">letzte Runde · sammeln und lernen laufen nacheinander</span></div>
+          <div class="split-bar"><i class="sim" style="width:${collectPct}%"></i><i class="upd" style="width:${updatePct}%"></i></div>
+          <div class="estimate"><span>Sammeln (Simulation)</span><b>${fmt.num(collectS, 1)} s · ${collectPct} %</b></div>
+          <div class="estimate"><span>Lernen (PPO)</span><b>${fmt.num(updateS, 1)} s · ${updatePct} %</b></div>
+          <p class="faint small" style="margin:8px 0 0">${updatePct > 50
+            ? "Der Lernschritt bremst: Mehr Simulationsprozesse bringen jetzt nichts mehr. Hilft: weniger Epochen, <b>torch_threads</b> erhöhen (Lernprozess nimmt sonst nur einen Teil der Kerne) oder eine Grafikkarte."
+            : updatePct < 20
+              ? "Die Simulation bremst: Mehr Kerne bzw. mehr Prozesse (n_workers) helfen; der Lernschritt ist hier günstig."
+              : "Ausgewogen: Simulation und Lernschritt halten sich die Waage."}</p></div>`;
+      })() : ""}
 
       ${(data.run.hints || []).length ? `<div class="card section-sm hints"><div class="card-head"><h3>Hinweise zu dieser Einstellung</h3><span class="sub">läuft trotzdem</span></div>
         <ul>${data.run.hints.map((x) => `<li>${h(x)}</li>`).join("")}</ul></div>` : ""}
@@ -588,20 +624,43 @@ async function pageRun(rawName) {
       if (await attempt(() => api(`/api/runs/${enc}/stop`, { method: "POST" }))) { toast("Stopp angefordert", "Die aktuelle Runde wird noch beendet und gespeichert."); await load(); }
     }),
     resume: async (el) => {
-      const st = data.run.status, total = st.total_steps || data.run.config.total_steps;
-      let body = {};
-      if ((st.steps || 0) >= total) {
-        const answer = await modal({
-          title: "Weiter trainieren", body: `<p class="muted">Das Ziel von ${fmt.steps(total)} Schritten ist erreicht. Auf welches neue Gesamtziel soll weiter trainiert werden?</p>`,
-          fields: [{ id: "total", label: "Neues Ziel (Gesamtschritte)", type: "number", value: total * 2, min: total + 1000, step: 1000000, hint: "Das Training setzt beim letzten Stand fort." }],
-          confirm: "Weiter trainieren",
-        });
-        if (!answer) return;
-        if (!(answer.total > total)) return toast("Ungültiges Ziel", `Bitte mehr als ${fmt.int(total)} Schritte angeben.`, "error");
-        body = { total_steps: Math.round(answer.total) };
-      }
+      const st = data.run.status, cfg = data.run.config;
+      const total = st.total_steps || cfg.total_steps;
+      // Der Checkpoint sagt, wie weit es wirklich ist — der Status kann
+      // hinterherhinken (Absturz) oder noch fehlen (frischer Run).
+      const steps = Math.max(st.steps || 0, data.run.reached || 0,
+        ...(data.run.checkpoints || []).map((c) => c.steps || 0));
+      // Beim Fortsetzen lässt sich alles einstellen, was das Training steuert:
+      // Stufe, Lehrer-Anteil, Nachahmung, Prozesse und die Episodenlänge. So
+      // braucht man für „erst Stufe 1, dann der Lehrer“ keine config.json mehr.
+      const goal = Math.max(total, steps + 1_000_000);
+      const answer = await modal({
+        title: steps >= total ? "Weiter trainieren" : "Training fortsetzen",
+        body: `<p class="muted">Es geht beim letzten Checkpoint (${fmt.steps(steps)} Schritte) weiter. Ändere hier, was sich ändern soll – alles andere bleibt wie es ist.</p>`,
+        fields: [
+          { id: "total_steps", label: "Gesamtziel (Schritte)", type: "number", value: goal, min: steps + 1000, step: 1000000, hint: "Fortsetzen ohne Änderung: Ziel einfach stehen lassen." },
+          { id: "reward_stage", label: "Belohnungsstufe (1 Ball, 2 Tore, 3 komplett)", type: "number", value: cfg.reward_stage ?? 1, min: 1, hint: "Nur ohne Autopilot wirksam." },
+          { id: "teacher_opponent_prob", label: "Gegner: Lehrer-Anteil (0 bis 0.95)", type: "number", value: cfg.teacher_opponent_prob ?? 0, min: 0, step: 0.05, hint: "Der stärkste Hebel: gegen Nexto spielen." },
+          { id: "teacher_weight", label: "Nachahmung (0 = aus)", type: "number", value: cfg.teacher_weight ?? 0, min: 0, step: 0.1, hint: "0 schaltet den Lehrer als Vorbild wirklich ab." },
+          { id: "n_workers", label: "Simulations-Prozesse (0 = automatisch)", type: "number", value: cfg.n_workers ?? 0, min: 0 },
+          { id: "envs_per_worker", label: "Spiele pro Prozess", type: "number", value: cfg.envs_per_worker ?? 4, min: 1 },
+        ],
+        confirm: "Fortsetzen",
+      });
+      if (!answer) return;
+      if (!(answer.total_steps > steps)) return toast("Ungültiges Ziel", `Bitte mehr als ${fmt.int(steps)} Schritte angeben.`, "error");
+      const body = {
+        total_steps: Math.round(answer.total_steps),
+        reward_stage: Math.round(answer.reward_stage),
+        teacher_opponent_prob: answer.teacher_opponent_prob,
+        teacher_weight: answer.teacher_weight,
+        n_workers: Math.round(answer.n_workers),
+        envs_per_worker: Math.round(answer.envs_per_worker),
+      };
+      if (!cfg.auto_curriculum && body.reward_stage === cfg.reward_stage) delete body.reward_stage;
       await busy(el, async () => {
-        if (await attempt(() => api(`/api/runs/${enc}/resume`, { method: "POST", body }))) { toast("Training läuft wieder"); await load(); }
+        const ok = await attempt(() => api(`/api/runs/${enc}/resume`, { method: "POST", body }), "Fortsetzen fehlgeschlagen");
+        if (ok) { toast("Training läuft wieder", ""); await load(); }
       });
     },
     delete: async (el) => {
@@ -1223,17 +1282,17 @@ async function pageSetup() {
     ["Schlägt Rookie-Bots", 650e6],
     ["Schlägt Pro-Bots", 1.5e9],
   ];
-  const sps = measured?.best?.steps_per_second || 0;
+  const sps = measured?.effective?.steps_per_second || measured?.best?.steps_per_second || 0;
   const trainingHours = 4; // Annahme für die 24/7-Spalte
   const benchmarkCard = () => {
     const best = measured?.best;
     const rows = (measured?.scale || []).map((s) =>
-      `<tr><td>${s.workers} Prozesse × ${s.envs_per_worker} Spiel(e)</td><td class="num">${fmt.int(s.steps_per_second)}</td><td class="num">${fmt.int(s.decisions_per_second)}</td><td class="num">${fmt.int(s.realtime_factor)}×</td></tr>`).join("");
+      `<tr><td>${s.workers} ${s.workers === 1 ? "Prozess" : "Prozesse"} × ${s.envs_per_worker} ${s.envs_per_worker === 1 ? "Spiel" : "Spiele"}</td><td class="num">${fmt.int(s.steps_per_second)}</td><td class="num">${fmt.int(s.decisions_per_second)}</td><td class="num">${fmt.int(s.realtime_factor)}×</td></tr>`).join("");
     return `<div class="card"><div class="card-head"><h2>Geschwindigkeit messen</h2>
         <span class="sub">${measured ? "auf diesem Rechner gemessen" : "noch nicht gemessen"}</span></div>
-      <p class="muted small">Misst mit echten RocketSim-Spielen und einem echten PPO-Lernschritt, wie schnell dieser Rechner trainiert. Dauert ein paar Sekunden.</p>
-      ${rows ? `<div class="table-scroll"><table class="table"><thead><tr><th>Einstellung</th><th class="num">Schritte/s</th><th class="num">Entscheidungen/s</th><th class="num">Echtzeit</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
-      ${best ? `<p class="small">Beste Einstellung: <b>${best.workers} Prozesse × ${best.envs_per_worker} Spiel(e)</b> → ${fmt.int(measured.steps_per_day)} Schritte pro Tag (24/7).
+      <p class="muted small">Misst mit echten RocketSim-Spielen und einem echten PPO-Lernschritt, wie schnell dieser Rechner trainiert – inklusive mehrerer Einstellungen und dem <b>Ende-zu-Ende-Tempo</b>, mit dem die Zeitangaben in der App rechnen. Dauert je nach Kernezahl etwa eine Minute.</p>
+      ${rows ? `<div class="table-scroll"><table class="table"><thead><tr><th>Einstellung</th><th class="num">Schritte/s</th><th class="num">Entscheidungen/s je Auto</th><th class="num">Echtzeit</th></tr></thead><tbody>${rows}</tbody></table></div>` : ""}
+      ${best ? `<p class="small">Beste Einstellung: <b>${best.workers} ${best.workers === 1 ? "Prozess" : "Prozesse"} × ${best.envs_per_worker} ${best.envs_per_worker === 1 ? "Spiel" : "Spiele"}</b>${measured.effective ? ` · Ende-zu-Ende <b>${fmt.int(measured.effective.steps_per_second)} Schritte/s</b> → ${fmt.int(measured.steps_per_day)} Schritte pro Tag (24/7, Simulation ${Math.round((measured.effective.simulation_share || 0) * 100)} % / Lernen ${Math.round((measured.effective.update_share || 0) * 100)} %)` : ` → ${fmt.int(measured.steps_per_day)} Schritte pro Tag (24/7)`}.
         ${measured.update_cuda && measured.update_cpu ? `Lernschritt auf der Grafikkarte ${(measured.update_cuda.steps_per_second / Math.max(1, measured.update_cpu.steps_per_second)).toFixed(1)}× schneller als auf der CPU.` : ""}</p>` : ""}
       ${(measured?.advice || []).map((x) => `<p class="faint small">${h(x)}</p>`).join("")}
       <div class="row end"><button class="btn" data-action="benchmark" ${benchmarkBusy ? "disabled" : ""}>${icon("play")}${benchmarkBusy ? "Messt …" : "Jetzt messen (ca. 20 s)"}</button></div>

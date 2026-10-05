@@ -37,6 +37,7 @@ from .config import (
     RUN_NAME_PATTERN,
     TICK_SKIP,
     TICKS_PER_SECOND,
+    RunPaths,
     TrainConfig,
     preset_config,
     run_paths,
@@ -236,6 +237,32 @@ class AppState:
 STATE = AppState()
 
 
+def reached_steps(paths: RunPaths, status: dict[str, Any]) -> int:
+    """Wie weit ist der Run wirklich? Der Status kann hinterherhinken.
+
+    Nach einem Absturz steht in ``status.json`` eine ältere Zahl — oder beim
+    ersten Start noch keine. Der neueste Checkpoint weiß es besser, und genau
+    dort setzt der Trainer beim Fortsetzen an.
+    """
+    steps = int(status.get("steps") or 0)
+    # Nummerierte Checkpoints heißen nach ihrem Schrittstand — das ist auch
+    # dann eine brauchbare Untergrenze, wenn "latest.pt" (noch) fehlt.
+    if paths.checkpoints.exists():
+        numbered = [int(p.stem) for p in paths.checkpoints.glob("*.pt") if p.stem.isdigit()]
+        if numbered:
+            steps = max(steps, max(numbered))
+    latest = paths.checkpoints / "latest.pt"
+    if latest.exists():
+        from .model import load_checkpoint
+
+        try:
+            payload = load_checkpoint(latest)
+        except (OSError, ValueError, RuntimeError):
+            return steps
+        steps = max(steps, int(payload.get("steps") or 0))
+    return steps
+
+
 def run_summary(name: str) -> dict[str, Any]:
     paths = run_paths(name)
     config = read_json(paths.config, {})
@@ -264,6 +291,13 @@ def run_summary(name: str) -> dict[str, Any]:
                 "steps",
                 "steps_per_second",
                 "realtime_factor",
+                # Sammeln und Lernen getrennt: nur so sieht man, was bremst.
+                "collect_seconds",
+                "update_seconds",
+                "teacher_weight",
+                "teacher_loss",
+                "stage",
+                "episodes",
                 "episode_reward",
                 "touches_per_minute",
                 "touches_against_per_minute",
@@ -274,6 +308,7 @@ def run_summary(name: str) -> dict[str, Any]:
                 "time",
             )
         },
+        "reached": reached_steps(paths, status),
         "checkpoints": len(_checkpoints(name)),
         "evaluation": evaluations[-1] if evaluations else None,
         "modified": paths.root.stat().st_mtime if paths.root.exists() else 0,
@@ -341,7 +376,23 @@ class NewRun(BaseModel):
 
 
 class Resume(BaseModel):
+    """Einstellungen, die beim Fortsetzen geändert werden dürfen (None = lassen).
+
+    Vorher ließ sich nur das Gesamtziel anpassen — alles andere musste man von
+    Hand in ``runs/<name>/config.json`` schreiben.
+    """
+
     total_steps: int | None = None
+    reward_stage: int | None = None
+    auto_curriculum: bool | None = None
+    teacher_opponent_prob: float | None = None
+    teacher_weight: float | None = None
+    teacher_final_weight: float | None = None
+    n_workers: int | None = None
+    envs_per_worker: int | None = None
+    episode_seconds: float | None = None
+    no_touch_seconds: float | None = None
+    learning_rate: float | None = None
 
 
 class EvalRequest(BaseModel):
@@ -496,12 +547,31 @@ def create_app() -> FastAPI:
     @app.post("/api/runs/{name}/resume")
     def resume_run(name: str, request: Resume) -> dict[str, Any]:
         paths = _existing(name)
-        if request.total_steps:
+        changes = {key: value for key, value in request.model_dump().items() if value is not None}
+        if changes:
             config = TrainConfig.load(paths.config)
-            config.total_steps = request.total_steps
+            steps = reached_steps(paths, read_json(paths.status, {}))
+            total = int(changes.get("total_steps") or config.total_steps)
+            if total <= steps:
+                raise HTTPException(
+                    400,
+                    f"Das neue Ziel ({total:,}) muss über dem erreichten Stand ({steps:,}) "
+                    "liegen, sonst ist das Training sofort fertig.",
+                )
+            data = {**config.to_dict(), **changes}
+            try:
+                config = TrainConfig.from_dict(data)
+                config.validate()
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from error
             config.save(paths.config)
         STATE.start_training(name)
         return run_summary(name)
+
+    @app.post("/api/runs/resume-interrupted")
+    def resume_interrupted() -> dict[str, Any]:
+        """Alle unterbrochenen Trainings wieder starten (z. B. nach einem Neustart)."""
+        return {"started": resume_interrupted_runs()}
 
     @app.post("/api/runs/{name}/stop")
     def stop_run(name: str) -> dict[str, Any]:
@@ -837,11 +907,44 @@ def _snapshot() -> str:
     )
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
+def resume_interrupted_runs() -> list[str]:
+    """Startet jedes Training neu, dessen Prozess nicht mehr läuft.
+
+    Genau dafür ist der Zustand ``interrupted`` da: Der Run wollte laufen
+    (``status.json`` sagt *running*), aber es gibt weder einen lebenden Prozess
+    noch eine Dateisperre. Nach einem Absturz oder Neustart geht es damit
+    automatisch weiter — ``start.py --resume-interrupted``.
+    """
+    started: list[str] = []
+    for summary in list_runs():
+        if summary["status"]["state"] != "interrupted":
+            continue
+        name = summary["name"]
+        try:
+            STATE.start_training(name)
+        except HTTPException:
+            continue  # z. B. gerade von jemand anderem gestartet
+        started.append(name)
+    return started
+
+
+def serve(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+    resume_interrupted: bool = False,
+) -> None:
     import uvicorn
 
     url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
     print(f"RocketAI läuft auf {url}  (Beenden mit Strg+C)")
+    if resume_interrupted:
+        resumed = resume_interrupted_runs()
+        print(
+            f"Unterbrochene Trainings fortgesetzt: {', '.join(resumed)}"
+            if resumed
+            else "Keine unterbrochenen Trainings gefunden."
+        )
     if open_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     uvicorn.run(create_app(), host=host, port=port, log_level="warning")

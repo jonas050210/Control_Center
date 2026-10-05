@@ -113,7 +113,12 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     from .server import serve
 
-    serve(host=args.host, port=args.port, open_browser=not args.no_browser)
+    serve(
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+        resume_interrupted=args.resume_interrupted,
+    )
     return 0
 
 
@@ -232,6 +237,11 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8765)
     sv.add_argument("--no-browser", action="store_true")
+    sv.add_argument(
+        "--resume-interrupted",
+        action="store_true",
+        help="unterbrochene Trainings beim Start automatisch fortsetzen",
+    )
     sv.set_defaults(func=_cmd_serve)
 
     pl = sub.add_parser("play", help="Im echten Rocket League spielen (RLBot, offline)")

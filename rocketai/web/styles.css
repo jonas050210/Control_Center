@@ -559,3 +559,20 @@ ol.flow span { color: var(--faint); font-size: 12.5px; }
   border-color: rgba(90, 160, 255, .35);
   background: rgba(90, 160, 255, .08);
 }
+.banner.warn {
+  border-color: rgba(255, 196, 61, .4);
+  background: rgba(255, 196, 61, .09);
+}
+
+/* Tempo-Zerlegung: sammeln (Simulation) vs. lernen (PPO) */
+.split-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--surface-2);
+  margin: 4px 0 12px;
+}
+.split-bar > i { display: block; height: 100%; transition: width .6s ease; }
+.split-bar > i.sim { background: var(--accent); }
+.split-bar > i.upd { background: var(--warn, #ffc43d); }
