@@ -137,6 +137,21 @@ function externalNote(st) {
   return `<p class="faint small ext-note">Ein anderer Prozess trainiert diesen Run: PID ${fmt.int(owner.pid)} (Kommandozeile). „Stoppen“ beendet ihn sauber.</p>`;
 }
 
+// Ein Run, der "läuft" behauptet, aber seit Minuten nichts schreibt, ist
+// abgestürzt (Stromaus, Absturz, PC aus). Der Server rechnet das Alter aus,
+// hier steht nur der Klartext.
+function staleNote(st) {
+  const age = st && st.heartbeat_seconds;
+  if (age == null) return "";
+  if (st.state === "interrupted") {
+    return `<p class="faint small ext-note">Kein Lebenszeichen seit ${fmt.duration(age)} (letzter Eintrag). Beim Fortsetzen geht es beim letzten Checkpoint weiter.</p>`;
+  }
+  if (st.stale) {
+    return `<p class="faint small ext-note">Kein Lebenszeichen seit ${fmt.duration(age)} — der Prozess hängt oder schreibt nicht mehr.</p>`;
+  }
+  return "";
+}
+
 function runCard(run) {
   const st = run.status || {}, cfg = run.config || {};
   const total = st.total_steps || cfg.total_steps || 1;
@@ -148,6 +163,7 @@ function runCard(run) {
       <div class="meta">${cfg.auto_curriculum ? `<span class="badge accent">Autopilot</span> ` : ""}${cfg.team_size}v${cfg.team_size} · Stufe ${cfg.reward_stage}: ${h(STAGES[cfg.reward_stage] || "")}</div></div>${pill(st.state)}</div>
     <div><div class="progress ${ACTIVE.has(st.state) ? "active" : ""}"><i style="width:${pct}%"></i></div>
       <div class="progress-meta"><span>${fmt.steps(st.steps || 0)} / ${fmt.steps(total)} Schritte</span><span>${pct.toFixed(1)} %</span></div></div>
+    ${staleNote(st)}
     <div class="kv">
       <div><span>Ballkontakte/min</span><b>${fmt.num(run.last.touches_per_minute, 1)}</b></div>
       <div><span>Tempo</span><b>${run.last.steps_per_second && ACTIVE.has(st.state) ? fmt.int(run.last.steps_per_second) + "/s" : "–"}</b></div>
@@ -232,7 +248,7 @@ async function pageOverview() {
         if (!broken.length) return "";
         return `<div class="banner warn row between section-sm"><div>
           <b>${broken.length === 1 ? "Ein Training wurde unterbrochen" : `${broken.length} Trainings wurden unterbrochen`}</b>
-          <div class="small">${broken.map((r) => h(r.name)).join(", ")} – der Prozess läuft nicht mehr (Absturz, Neustart oder Herunterfahren). Es geht beim letzten Checkpoint weiter.</div></div>
+          <div class="small">${broken.map((r) => h(r.name) + (r.status.heartbeat_seconds != null ? ` (seit ${fmt.duration(r.status.heartbeat_seconds)})` : "")).join(", ")} – der Prozess läuft nicht mehr (Absturz, Neustart oder Herunterfahren). Es geht beim letzten Checkpoint weiter.</div></div>
           <button class="btn primary" data-action="resume-interrupted">${icon("play")}Jetzt fortsetzen</button></div>`;
       })()}
       <div class="grid cols-4 section">
@@ -531,6 +547,7 @@ async function pageRun(rawName) {
         </div></div>
 
       ${externalNote(st)}
+      ${staleNote(st)}
       <div class="card"><div class="progress ${active ? "active" : ""}"><i style="width:${pct}%"></i></div>
         <div class="progress-meta"><span>${fmt.int(steps)} / ${fmt.int(total)} Schritte</span>
         <span>${active ? (eta ? `noch ca. ${fmt.duration(eta)}` : "läuft …") : `${pct.toFixed(1)} %`}</span></div></div>
@@ -539,7 +556,7 @@ async function pageRun(rawName) {
         <div class="card stat"><div class="label">Tempo (sammeln + lernen)</div><div class="value">${sps && active ? fmt.int(sps) : "–"}<small>Schritte/s</small></div>
           <div class="foot">${last.realtime_factor ? `≈ ${fmt.int(last.realtime_factor)}× Echtzeit` : "&nbsp;"}${st.device ? ` · lernt auf ${h(String(st.device).toUpperCase())}` : ""}</div></div>
         <div class="card stat"><div class="label">Eigene Ballkontakte</div><div class="value">${fmt.num(last.touches_per_minute, 1)}<small>pro Minute</small></div>
-          <div class="foot">Gegner: ${fmt.num(last.touches_against_per_minute, 1)} mal</div></div>
+          <div class="foot">${last.touched_share != null ? `${Math.round(last.touched_share * 100)} % der Spiele berührt${last.first_touch_seconds != null ? `, erster Kontakt nach ${fmt.num(last.first_touch_seconds, 1)} s` : ""} · ` : ""}Gegner: ${fmt.num(last.touches_against_per_minute, 1)} mal</div></div>
         <div class="card stat"><div class="label">Eigene Tore</div><div class="value">${fmt.num(last.goals_per_minute, 2)}<small>pro Minute</small></div>
           <div class="foot">Gegentore: ${fmt.num(last.goals_against_per_minute, 2)} pro Minute</div></div>
         <div class="card stat"><div class="label">Belohnung</div><div class="value">${fmt.num(last.episode_reward, 1)}<small>pro Episode</small></div>

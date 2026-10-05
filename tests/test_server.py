@@ -231,3 +231,32 @@ def test_interrupted_runs_can_all_be_resumed(client, tmp_path):
     body = client.post("/api/runs/resume-interrupted").json()
     assert body["started"] == ["kaputt"]
     assert client.started == ["kaputt"]
+
+
+def test_status_shows_heartbeat_age_and_staleness(client):
+    """Ein "laufender" Run ohne Lebenszeichen bekommt Alter und Warnhinweis."""
+    import time
+
+    from rocketai.trainer import write_json
+
+    paths = make_run("herz")
+    write_json(
+        paths.status,
+        {"state": "running", "steps": 500, "updated": time.time() - 400},
+    )
+    status = client.get("/api/runs/herz").json()["status"]
+    assert status["state"] == "interrupted"
+    assert status["stale"] is True
+    assert 390 < status["heartbeat_seconds"] < 420
+
+    # Frischer Herzschlag: nicht abgestanden, kein Warnhinweis.
+    write_json(paths.status, {"state": "running", "steps": 500, "updated": time.time()})
+    fresh = client.get("/api/runs/herz").json()["status"]
+    assert fresh["stale"] is False
+    assert fresh["heartbeat_seconds"] < 5
+
+    # Fertige Runs sind nie "abgestanden", auch wenn sie alt sind.
+    write_json(paths.status, {"state": "finished", "steps": 9, "updated": 1.0})
+    done = client.get("/api/runs/herz").json()["status"]
+    assert done["stale"] is False
+    assert done["heartbeat_seconds"] > 1000

@@ -263,6 +263,22 @@ def reached_steps(paths: RunPaths, status: dict[str, Any]) -> int:
     return steps
 
 
+def heartbeat_age(status: dict[str, Any]) -> float | None:
+    """Sekunden seit dem letzten Lebenszeichen (``None``, wenn es keins gibt)."""
+    updated = status.get("updated")
+    if not updated:
+        return None
+    return round(max(0.0, time.time() - float(updated)), 1)
+
+
+def is_stale(status: dict[str, Any]) -> bool:
+    """Ein Run, der läuft, aber seit ``STALE_AFTER_SECONDS`` nichts mehr schreibt."""
+    if status.get("state") not in ("starting", "running", "evaluating"):
+        return False
+    age = heartbeat_age(status)
+    return age is not None and age > STALE_AFTER_SECONDS
+
+
 def run_summary(name: str) -> dict[str, Any]:
     paths = run_paths(name)
     config = read_json(paths.config, {})
@@ -281,6 +297,11 @@ def run_summary(name: str) -> dict[str, Any]:
         "status": {
             **status,
             "state": STATE.run_state(name, status),
+            # Wie lange das letzte Lebenszeichen her ist: Ein Run, der sich als
+            # "läuft" ausgibt, aber seit Minuten nichts schreibt, ist
+            # abgestürzt. Ohne diese Zahl müsste man raten.
+            "heartbeat_seconds": heartbeat_age(status),
+            "stale": is_stale(status),
             # Wer den Run gerade trainiert — auch ein Prozess außerhalb des
             # Servers (Kommandozeile). Die Oberfläche zeigt das an.
             "owner": lock_owner(paths.root),
@@ -301,6 +322,8 @@ def run_summary(name: str) -> dict[str, Any]:
                 "episode_reward",
                 "touches_per_minute",
                 "touches_against_per_minute",
+                "first_touch_seconds",
+                "touched_share",
                 "goals_per_minute",
                 "goals_against_per_minute",
                 "past_win_rate",

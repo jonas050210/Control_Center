@@ -209,9 +209,12 @@ class TrainConfig:
         if self.reward_stage == 1 and self.episode_seconds >= 180:
             hints.append(
                 "Lange Episoden auf Stufe 1 ("
-                f"{self.episode_seconds:.0f} s): Kurze Episoden bringen in der Anfangsphase deutlich "
-                "mehr Ballkontakte pro Stunde — oft probiert: episode_seconds 60, "
-                "no_touch_seconds 10. Die Situationen sind dann weniger abwechslungsreich."
+                f"{self.episode_seconds:.0f} s): Die Episoden enden meist am "
+                f"no_touch_seconds-Limit ({self.no_touch_seconds:.0f} s), nicht am Zeitlimit. "
+                "Kürzere Limits sind gemessen aber kein Gewinn (siehe docs/WISSEN.md 5.1): "
+                "mit 10 statt 30 s verliert der Balljäger-Bot ~9 % seiner Ballkontakte je "
+                "Simulationszeit, und eine junge KI (erster Kontakt im Median nach ~20 s) "
+                "verliert ihre Chance ganz."
             )
         if self.teacher_weight <= 0 < self.teacher_final_weight:
             hints.append(

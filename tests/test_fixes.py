@@ -469,3 +469,39 @@ def test_suggested_config_uses_measured_values_and_end_to_end_speed():
     small = suggested_config({**report, "effective": {"steps_per_second": 300}})
     assert small.steps_per_iteration >= 20_000
     config.validate()
+
+
+def test_teacher_stride_uses_the_round_budget():
+    """Der Vorrat richtet sich nach der ganzen Runde, nicht nach einem Prozess."""
+    from rocketai.rollout import teacher_stride
+
+    assert teacher_stride(50_000, 0) == 1  # 0 = jeder Schritt
+    assert teacher_stride(0, 6_000) == 1
+    assert teacher_stride(50_000, 6_000) == 8
+    assert teacher_stride(20_000, 6_000) == 3
+    # Mehr Fragen als Schritte: alles aufzeichnen.
+    assert teacher_stride(4_000, 20_000) == 1
+    # Abgerundet, damit der Vorrat die gefragte Dosis noch hergibt.
+    for steps, samples in ((50_000, 6_000), (20_000, 6_000), (100_000, 1_000)):
+        assert steps // teacher_stride(steps, samples) >= samples
+
+
+def test_first_touch_summary_separates_time_from_share():
+    """Ein fehlender Kontakt darf den Mittelwert nicht schönrechnen."""
+    from rocketai.trainer import first_touch_summary
+
+    assert first_touch_summary([]) == {"first_touch_seconds": None, "touched_share": None}
+    episodes = [
+        {"first_touch": 3.0},
+        {"first_touch": 5.0},
+        {"first_touch": None},
+        {"first_touch": 4.0},
+    ]
+    summary = first_touch_summary(episodes)
+    assert summary["first_touch_seconds"] == 4.0
+    assert summary["touched_share"] == 0.75
+    # Kein einziges Spiel berührt: Anteil 0, keine Zeit.
+    assert first_touch_summary([{"first_touch": None}]) == {
+        "first_touch_seconds": None,
+        "touched_share": 0.0,
+    }

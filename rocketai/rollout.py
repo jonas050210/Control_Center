@@ -135,6 +135,25 @@ class _Stream:
     teacher_slot: list[int] = field(default_factory=list)
 
 
+def teacher_stride(steps_per_iteration: int, teacher_samples: int) -> int:
+    """Wie viele Schritte zwischen zwei aufgezeichneten Lehrer-Fragen liegen.
+
+    Der Lernprozess beantwortet je Runde nur ``teacher_samples`` Fragen
+    (``complete_teacher_batch`` wählt sie gleichmäßig aus dem Vorrat). Wird
+    jeder Schritt aufgezeichnet, wandern je Runde zig MB durch die Pipe, die
+    nie gefragt werden. ``stride`` stichprobt deshalb schon in den
+    Simulationsprozessen — gleichmäßig über die Schritte, nicht als Block.
+
+    Gerechnet wird mit dem **Gesamt**budget der Runde, nicht mit dem Anteil
+    eines einzelnen Prozesses: Sonst liefert jeder Prozess fast die volle Dosis
+    und der Vorrat ist ein Vielfaches dessen, was gefragt wird. Abgerundet,
+    damit der Vorrat die gefragte Dosis noch hergibt.
+    """
+    if teacher_samples <= 0 or steps_per_iteration <= 0:
+        return 1
+    return max(1, steps_per_iteration // teacher_samples)
+
+
 def compute_gae(
     rewards: np.ndarray,
     values: np.ndarray,
@@ -214,6 +233,7 @@ class Collector:
         )
         self.order = [canonical_players(env.state) for env in self.envs]
         self.slot = [{agent: index for index, agent in enumerate(order)} for order in self.order]
+        # Wird in ``collect`` gesetzt: hängt am Stapel dieser Runde.
         self.stride = 1
         self.teacher_tick = 0
         self.table = lookup_table()
@@ -233,6 +253,8 @@ class Collector:
             "ticks": 0,
             "touches_own": 0,
             "touches_other": 0,
+            # None = in diesem Spiel nie berührt.
+            "first_touch": None,
             "goals_own": 0,
             "goals_other": 0,
             "opponent": "self",
@@ -284,7 +306,10 @@ class Collector:
         tick_skip = self.tick_skip
         recording = self.teacher_enabled and (teacher_weight is None or teacher_weight > 0)
         wanted = int(self.config.get("teacher_samples") or 0)
-        self.stride = 1 if (wanted <= 0 or not recording) else max(1, round(n_agent_steps / wanted))
+        # Gesamtbudget der Runde (n_agent_steps ist nur der Anteil dieses
+        # Prozesses); ohne Eintrag bleibt der eigene Anteil die Grundlage.
+        budget = int(self.config.get("steps_per_iteration") or n_agent_steps)
+        self.stride = 1 if (wanted <= 0 or not recording) else teacher_stride(budget, wanted)
         finished: list[_Stream] = []
         episodes: list[dict[str, Any]] = []
         parts: dict[str, float] = {}
@@ -340,6 +365,11 @@ class Collector:
                     # Team 0 = Blau = die lernende KI (siehe _new_episode).
                     if int(car.team_num) == 0:
                         episode["touches_own"] += car.ball_touches
+                        if car.ball_touches and episode["first_touch"] is None:
+                            # Stabileres Fortschrittssignal als "Kontakte pro
+                            # Minute": Wann erreicht die KI den Ball zum ersten
+                            # Mal? Der Balljäger-Bot braucht dafür ~3 s.
+                            episode["first_touch"] = episode["ticks"] / 120.0
                     else:
                         episode["touches_other"] += car.ball_touches
                 for name, value in env.shared_info.get("reward_parts", {}).items():
@@ -383,6 +413,7 @@ class Collector:
                         # "touches" = Ballkontakte der lernenden KI (Blau).
                         "touches": episode["touches_own"],
                         "touches_other": episode["touches_other"],
+                        "first_touch": episode["first_touch"],
                         "goals_own": episode["goals_own"],
                         "goals_other": episode["goals_other"],
                         "opponent": episode["opponent"],

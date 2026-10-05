@@ -108,10 +108,27 @@ def summarize(batch: Batch, update: dict[str, float]) -> dict[str, Any]:
         "touches_per_minute": own_touches * minute if minute else None,
         "touches_against_per_minute": other_touches * minute if minute else None,
         "touches_total": own_touches + other_touches,
+        **first_touch_summary(episodes),
         "reward_parts": {k: v / agent_steps for k, v in stats["reward_parts"].items()},
         **past_summary(episodes),
         **teacher_summary(episodes),
         **update,
+    }
+
+
+def first_touch_summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
+    """Wann erreichte die KI den Ball zum ersten Mal? (Stabiler als Kontakte/min.)
+
+    ``touched_share`` sagt, in wie vielen Spielen überhaupt ein Kontakt
+    zustande kam — bei einer KI, die den Ball noch nie trifft, wäre ein
+    Mittelwert über nur wenige Spiele irreführend.
+    """
+    if not episodes:
+        return {"first_touch_seconds": None, "touched_share": None}
+    times = [e["first_touch"] for e in episodes if e.get("first_touch") is not None]
+    return {
+        "first_touch_seconds": round(float(np.median(times)), 2) if times else None,
+        "touched_share": round(len(times) / len(episodes), 3),
     }
 
 
@@ -300,6 +317,7 @@ class Trainer:
         rows = batch.teacher_rows
         slots = batch.teacher_slots
         previous = batch.teacher_previous
+        recorded = int(len(rows))
         wanted = int(self.config.teacher_samples or 0)
         if wanted and len(rows) > wanted:  # keep it balanced across the batch
             pick = np.linspace(0, len(rows) - 1, wanted).round().astype(int)
@@ -313,6 +331,8 @@ class Trainer:
         batch.teacher_probs = targets
         batch.teacher_mask = mask
         return {
+            # recorded = aufgezeichnete Situationen, samples = wirklich gefragt.
+            "teacher_recorded": recorded,
             "teacher_samples": int(len(rows)),
             "teacher_weight": round(float(weight), 4),
             "teacher_seconds": round(time.perf_counter() - started, 3),
