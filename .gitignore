@@ -1,18 +1,13 @@
-# Python
-.venv/
+# Python runtime
 __pycache__/
-*.egg-info/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
+*.py[cod]
 
-# Training output (checkpoints, metrics, replays) - large and machine-local
-/runs/
-# Downloaded tools (RLBotServer) and local settings
-/tools/
-/.rocketai/
+# Local Control Center data / project workspaces
+.control_center/
+Control_Center_Projects/
 
-# OS / editor
+# OS and editor
 .DS_Store
 Thumbs.db
 *.swp
+.vscode/
