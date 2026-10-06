@@ -168,7 +168,7 @@ stilles Zurückfallen auf den Standard).
 | Gegner-Leiter | `stationary` → `mover` → `walker` → `full` | jede Phase bringt **eine** neue Lektion: erst zielen, dann einen *beweglichen* Gegner treffen, dann Gegenwehr überleben, dann alles zusammen |
 | „Bestes Modell“ | höchste Kill-Rate | ein Sieg nach HP-Vergleich am Zeitlimit wäre eine Belohnung fürs Verstecken |
 | Beobachtungs-Normalisierung | **`norm_obs=False`** | die Wahrnehmung ist schon auf [-1, 1] begrenzt, Nullen heißen „nie gesehen“ – laufende Mittelwerte würden genau diese Aussage verschieben (Rewards bleiben normalisiert) |
-| Sicht-Curriculum | Phase 1 `noisy` → 2 `coarse` → 3–4 `coarse_los` | erst mit vergebender Wahrnehmung lernen, am Ende das ehrliche Modell (Peak-Kill 27 % vs. 15 % im direkten Vergleich) |
+| Sicht-Curriculum (**optional**, `vision_curriculum`) | Phase 1 `noisy` → 2 `coarse` → 3–4 `coarse_los` | wer die ehrliche Sicht von Anfang an trainiert, schaltet es ab – gemessen ist sie kein Hindernis, sondern der bessere Start (Runde 4/5: 20/20 Siege + 12 Kills statt 0 Kills nach `noisy`-Vortraining) |
 | Automatische Bewertung | nach jedem Lauf (`eval_after_training`) | das Ergebnis wird gegen `stationary`/`walker`/`full` nachgemessen und als `models/best_model_eval.json` + Karte im Panel abgelegt – keine unbelegten Trainingszahlen |
 
 Das Training protokolliert **Siege und Kills getrennt** (`win_rate`, `kill_rate`):

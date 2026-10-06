@@ -324,6 +324,50 @@ class CurriculumOpponentTests(unittest.TestCase):
         self.assertNotIn("mover", {"walker", "shooter", "full"})
 
 
+class MetricsCsvSchemaTests(unittest.TestCase):
+    """The metrics file must survive new columns without losing values."""
+
+    def test_new_column_is_appended_and_old_rows_are_kept(self) -> None:
+        import csv
+        import tempfile
+        import threading
+        from pathlib import Path
+
+        from training.train import _append_csv
+
+        with tempfile.TemporaryDirectory(prefix="metrics-csv-") as temporary:
+            path = Path(temporary) / "training_metrics.csv"
+            lock = threading.Lock()
+            _append_csv(path, ["steps", "win_rate"], {"steps": 1, "win_rate": 0.5}, lock)
+            _append_csv(path, ["steps", "win_rate", "kill_rate"],
+                        {"steps": 2, "win_rate": 0.6, "kill_rate": 0.25}, lock)
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(list(rows[0]), ["steps", "win_rate", "kill_rate"])
+            self.assertEqual(rows[0]["win_rate"], "0.5")
+            self.assertEqual(rows[0]["kill_rate"], "")
+            self.assertEqual(rows[1]["kill_rate"], "0.25")
+            self.assertEqual(rows[1]["win_rate"], "0.6")
+
+    def test_unknown_extra_columns_of_a_file_are_kept(self) -> None:
+        import csv
+        import tempfile
+        import threading
+        from pathlib import Path
+
+        from training.train import _append_csv
+
+        with tempfile.TemporaryDirectory(prefix="metrics-csv-") as temporary:
+            path = Path(temporary) / "training_metrics.csv"
+            path.write_text("steps,renamed_metric\n1,7\n", encoding="utf-8")
+            _append_csv(path, ["steps"], {"steps": 2}, threading.Lock())
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(list(rows[0]), ["steps", "renamed_metric"])
+            self.assertEqual(rows[0]["renamed_metric"], "7")
+            self.assertEqual(rows[1]["steps"], "2")
+
+
 class CurriculumBacktrackTests(unittest.TestCase):
     """A phase that only produces defeats must be undone, not endured."""
 

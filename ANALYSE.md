@@ -281,9 +281,13 @@ die Platte geschrieben und in den Job-Snapshot geschoben, `final_model.zip` wird
 immer gespeichert (vorher nur, wenn kein „Bestes Modell" existierte). Eine
 abgebrochene Prüfung hinterlässt damit Teilergebnisse statt gar nichts.
 
-**Kosten/Hinweis:**
-früher (weniger Information). Empfehlung: mit `noisy`/`coarse` vortrainieren, dann
-auf `coarse_los` wechseln, und mehrere Seeds vergleichen
+**Kosten/Hinweis:** die ehrliche Sicht ist *kein* Trainingshindernis. Der Vergleich
+in Runde 4 kippt die frühere Annahme: mit `coarse_los` von Anfang an 20/20 Siege
+und 12 Kills gegen den passiven Gegner, mit dem `noisy`-Vortraining unter
+derselben Sicht 17/20 Siege und **0** Kills. Deshalb ist der Verifikationslauf
+(Runde 5) ohne Sicht-Curriculum gelaufen (`vision_curriculum=False`); das Flag ist
+im Panel/Config weiter vorhanden, falls jemand erst mit vergebender Wahrnehmung
+vortrainieren will. Unabhängig davon: mehrere Seeds vergleichen
 (`python3 tools/seed_sweep.py 2 100000`).
 
 ---

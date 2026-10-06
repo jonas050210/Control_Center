@@ -271,12 +271,42 @@ def vision_mode_for_phase(phase: int, fallback: str = "coarse_los") -> str:
     return VISION_CURRICULUM.get(min(4, max(1, int(phase))), fallback)
 
 
+def _csv_columns(path: Path, fieldnames: list[str]) -> list[str]:
+    """Column layout of a metrics CSV, widened when new fields show up.
+
+    Metrics are appended for the lifetime of the project, so the columns grow.
+    Earlier versions wrote the header only once and ran with
+    ``extrasaction="ignore"`` – every field added later (``kill_rate``) was then
+    silently dropped because the file already had an old header (measured: the
+    dashboard series stayed empty although the trainer tracked the value).
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return list(fieldnames)
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.reader(handle)
+        try:
+            existing = [name for name in next(reader)]
+        except StopIteration:
+            return list(fieldnames)
+    if set(existing) >= set(fieldnames):
+        return existing
+    columns = existing + [name for name in fieldnames if name not in existing]
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    return columns
+
+
 def _append_csv(path: Path, fieldnames: list[str], row: dict[str, Any], lock: threading.Lock) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with lock:
+        columns = _csv_columns(path, fieldnames)
         new_file = not path.exists() or path.stat().st_size == 0
         with path.open("a", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
             if new_file:
                 writer.writeheader()
             writer.writerow(row)
