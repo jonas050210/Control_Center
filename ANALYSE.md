@@ -253,6 +253,29 @@ zurückschießt: ab ~130k Steps fällt die Siegrate auf 0 %, die Episoden werden
   wurde abgeschnitten und der Bericht fehlte (der `SIGABRT` am Ende war die Folge,
   nicht die Ursache).
 
+### Runde 5: der Verifikationslauf (Curriculum mit Rücknahme) – es läuft
+
+Lauf: 260 000 Steps Budget, 800 s, 2 CPU-Kerne, Dust, **`coarse_los` von der
+ersten Episode an**, `norm_obs=False`, Curriculum mit Rücknahme.
+
+| Phase des Laufs | Ergebnis |
+| --- | --- |
+| Phase 1 (`stationary`, Pistol, 9 m) | Kill-Rate steigt 0 % → **96 %** (Fenster der letzten 50 Episoden bei 43k Steps), Siege 87 % |
+| Phase 2 (`mover`, SMG, 12,6 m), ab 92k Steps | Siege 96 % → 60 % → pendelt sich bei **26–34 % Siegen/Kills** ein |
+| Phase 3 (Gegenwehr) | Der Lauf **bricht nicht mehr ein**: statt 0 % (vorher) bleiben ~30 % Siege bis zum Budgetende |
+| Automatische Bewertung des besten Checkpoints (Phase 1, `coarse_los`, 8 Episoden/Gegner) | gegen `stationary`: **8/8 Siege, 8/8 mit bestätigtem Kill, TTK 6,1 s**, Trefferquote 52 % · gegen `walker`/`full`: 0/8 (die schießen zurück) |
+
+Vorher (ohne Rücknahme) endeten beide Läufe nach dem Phasenwechsel bei 0 % Siegen
+und ~4,5 s kurzen Episoden. Jetzt bleibt die Politik handlungsfähig, und die
+automatische Bewertung läuft bis zum Ende durch (der Status springt erst nach der
+Prüfung auf „fertig").
+
+**Was noch fehlt (ehrlich):** gegen Gegner, die selbst schießen, verliert der
+Phase-1-Checkpoint jedes Duell auf 9 m. Das ist die Aufgabe der Phasen 3/4 – sie
+brauchen aber deutlich mehr Steps, als ein Sandbox-Lauf von 13 Minuten liefert.
+Der Weg dahin ist jetzt messbar: Phase 1 gemeistert (8/8 Kills), Phase 2 auf
+Augenhöhe (Rücknahme verhindert den Absturz), Gegenwehr als nächste Hürde.
+
 **Zusätzlich abgesichert:** der Bewertungsbericht wird nach **jedem** Gegner auf
 die Platte geschrieben und in den Job-Snapshot geschoben, `final_model.zip` wird
 immer gespeichert (vorher nur, wenn kein „Bestes Modell" existierte). Eine

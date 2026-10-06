@@ -214,10 +214,14 @@ Gemessen auf dieser Maschine (CPU, 2 Worker, Dust, `norm_obs=False`,
   `coarse_los` zwar 17/20 Siege, aber **0 Kills**: die ehrliche Wahrnehmung
   braucht ihr eigenes Training – genau das macht der Lauf oben.
 
-Die verbleibende Bruchstelle ist die Gegenwehr (Phase 3): dort bricht die Politik
-in beiden Läufen ein. Deshalb geht das Curriculum jetzt **einen Schritt zurück**,
-wenn eine Phase nur Niederlagen produziert, und verlangt für den nächsten Versuch
-mehr. Details, Zahlen und Grenzen: ANALYSE.md § 0.
+Der Verifikationslauf (260k Steps, 800 s, `coarse_los` von Anfang an) bestätigt
+das: Phase 1 erreicht eine Kill-Rate von 96 % (50-Episoden-Fenster), die
+automatische Bewertung des besten Checkpoints meldet **8/8 Siege mit 8/8
+bestätigten Kills gegen den passiven Gegner (TTK 6,1 s)**. Gegen Gegner, die
+zurückschießen, verliert dieser Phase-1-Checkpoint noch jedes Duell – dafür sind
+die Phasen 3/4 da, und das Curriculum geht jetzt **einen Schritt zurück**, wenn
+eine neue Phase nur Niederlagen produziert (statt bis zum Budgetende
+durchzuhalten). Details, Zahlen und Grenzen: ANALYSE.md § 0.
 
 Zwei Details, die beim Nachprüfen wichtig sind:
 
