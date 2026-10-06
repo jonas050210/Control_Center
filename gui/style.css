@@ -1,0 +1,193 @@
+:root {
+  --arena-bg: #0a0a0a;
+  --arena-side: #111111;
+  --arena-panel: #141414;
+  --arena-green: #00ff41;
+  --arena-green-dim: #00cc33;
+  --arena-red: #ff0040;
+  --arena-amber: #ffaa00;
+  --arena-border: rgba(0, 255, 65, 0.72);
+}
+
+html, body, [class*="css"], .stApp {
+  background: var(--arena-bg) !important;
+  color: var(--arena-green) !important;
+  font-family: "Cascadia Code", "Cascadia Mono", "Consolas", "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", monospace !important;
+}
+
+.stApp {
+  background-image: radial-gradient(ellipse at top, rgba(0, 255, 65, 0.055), transparent 56%) !important;
+}
+
+[data-testid="stHeader"] {
+  background: rgba(10, 10, 10, 0.94) !important;
+  border-bottom: 1px solid rgba(0, 255, 65, 0.16);
+}
+
+[data-testid="stSidebar"] {
+  background: var(--arena-side) !important;
+  border-right: 1px solid rgba(0, 255, 65, 0.42);
+  box-shadow: 4px 0 24px rgba(0, 255, 65, 0.045);
+}
+
+[data-testid="stSidebar"] > div:first-child {
+  background: var(--arena-side) !important;
+}
+
+h1, h2, h3, h4, h5, p, label, li, small, span {
+  font-family: "Cascadia Code", "Cascadia Mono", "Consolas", "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", monospace !important;
+}
+
+h1, h2, h3 {
+  color: var(--arena-green) !important;
+  letter-spacing: 0.035em;
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.24);
+}
+
+p, label, [data-testid="stMarkdownContainer"] {
+  color: #b5e8bd;
+}
+
+[data-testid="stMetric"] {
+  background: var(--arena-panel);
+  border: 1px solid var(--arena-border);
+  border-radius: 4px;
+  padding: 12px 14px;
+  box-shadow: 0 0 13px rgba(0, 255, 65, 0.07), inset 0 0 15px rgba(0, 255, 65, 0.018);
+}
+
+[data-testid="stMetricLabel"] {
+  color: var(--arena-green-dim) !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.75rem !important;
+}
+
+[data-testid="stMetricValue"] {
+  color: var(--arena-green) !important;
+  text-shadow: 0 0 7px rgba(0, 255, 65, 0.28);
+}
+
+.stButton > button, .stDownloadButton > button {
+  min-height: 46px;
+  touch-action: manipulation;
+  color: var(--arena-green) !important;
+  background: #101510 !important;
+  border: 1px solid var(--arena-green) !important;
+  border-radius: 3px !important;
+  font-family: "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", monospace !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em;
+  transition: all 120ms ease-in-out;
+  box-shadow: 0 0 0 rgba(0, 255, 65, 0);
+}
+
+.stButton > button:hover, .stDownloadButton > button:hover {
+  background: #102416 !important;
+  color: #ffffff !important;
+  border-color: #7dff9b !important;
+  box-shadow: 0 0 14px rgba(0, 255, 65, 0.35), inset 0 0 12px rgba(0, 255, 65, 0.08) !important;
+}
+
+.stButton > button:focus, .stDownloadButton > button:focus {
+  box-shadow: 0 0 0 2px rgba(0, 255, 65, 0.24) !important;
+}
+
+[data-baseweb="select"] > div, [data-baseweb="input"] > div,
+[data-baseweb="textarea"] > div, [data-baseweb="popover"] {
+  background: #101410 !important;
+  border-color: #275d33 !important;
+  color: var(--arena-green) !important;
+}
+
+[data-baseweb="select"] *, [data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {
+  color: var(--arena-green) !important;
+  font-family: "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", monospace !important;
+}
+
+[data-baseweb="slider"] [role="slider"] {
+  background: var(--arena-green) !important;
+  border-color: var(--arena-green) !important;
+  box-shadow: 0 0 8px rgba(0, 255, 65, 0.55);
+}
+
+[data-baseweb="slider"] [data-testid="stTickBar"] {
+  background: #25452c !important;
+}
+
+[role="radiogroup"] label, [data-testid="stCheckbox"] label {
+  color: #b5e8bd !important;
+}
+
+[data-testid="stExpander"], [data-testid="stDataFrame"],
+[data-testid="stTable"], [data-testid="stCode"] {
+  background: var(--arena-panel) !important;
+  border: 1px solid rgba(0, 255, 65, 0.38) !important;
+  border-radius: 4px !important;
+}
+
+[data-testid="stDataFrame"] *, [data-testid="stTable"] * {
+  color: #b5e8bd !important;
+}
+
+[data-testid="stProgressBar"] > div > div > div > div {
+  background: linear-gradient(90deg, #008a20, var(--arena-green)) !important;
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.42);
+}
+
+[data-testid="stTabs"] [role="tab"] {
+  color: #8dbf96 !important;
+  font-family: "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", monospace !important;
+}
+
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+  color: var(--arena-green) !important;
+  border-bottom-color: var(--arena-green) !important;
+  text-shadow: 0 0 8px rgba(0, 255, 65, 0.3);
+}
+
+hr {
+  border-color: rgba(0, 255, 65, 0.25) !important;
+}
+
+.neural-logo {
+  color: var(--arena-green);
+  font-size: 1.15rem;
+  font-weight: 900;
+  line-height: 1.25;
+  letter-spacing: 0.035em;
+  text-shadow: 0 0 12px rgba(0, 255, 65, 0.5);
+  border: 1px solid var(--arena-green);
+  background: rgba(0, 255, 65, 0.04);
+  padding: 0.75rem 0.65rem;
+  margin: 0.25rem 0 1rem;
+  box-shadow: 0 0 15px rgba(0, 255, 65, 0.1), inset 0 0 16px rgba(0, 255, 65, 0.035);
+}
+
+.neon-card {
+  background: var(--arena-panel);
+  border: 1px solid var(--arena-border);
+  border-radius: 4px;
+  padding: 0.8rem 1rem;
+  box-shadow: 0 0 12px rgba(0, 255, 65, 0.065);
+}
+
+.status-good { color: var(--arena-green); text-shadow: 0 0 7px rgba(0, 255, 65, 0.35); }
+.status-warn { color: var(--arena-amber); text-shadow: 0 0 7px rgba(255, 170, 0, 0.3); }
+.status-bad { color: var(--arena-red); text-shadow: 0 0 7px rgba(255, 0, 64, 0.3); }
+
+code, pre, .stCode {
+  color: var(--arena-green) !important;
+  background: #070b08 !important;
+  font-family: "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", monospace !important;
+}
+
+[data-testid="stAlert"] {
+  background: #101510 !important;
+  border: 1px solid rgba(0, 255, 65, 0.36) !important;
+}
+
+[data-testid="stSpinner"] {
+  color: var(--arena-green) !important;
+}
