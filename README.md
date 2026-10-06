@@ -9,14 +9,21 @@ Install Python build tools and create a virtual environment:
 ```bash
 sudo apt update
 sudo apt install -y python3-venv python3-dev build-essential
-# WSL path for the OneDrive Desktop checkout (adjust the Windows username/drive if needed)
-cd "/mnt/c/Users/Jonas/OneDrive/Desktop/Control_Center-main"
 
 # Keep Python packages in WSL's Linux home instead of syncing a large .venv through OneDrive
 mkdir -p ~/.venvs
 python3 -m venv ~/.venvs/control-center
 source ~/.venvs/control-center/bin/activate
 python -m pip install --upgrade pip wheel
+```
+
+Now locate the checkout and `cd` into it. The folder name depends on how you got the code — `Control_Center` after `git clone`, `Control_Center-main` after extracting the GitHub ZIP — so don't guess the path:
+
+```bash
+# Find the repository, then cd into the folder it prints
+find /mnt/c/Users -maxdepth 7 -type d -iname "Control_Center*" 2>/dev/null
+cd "/mnt/c/Users/Jonas/OneDrive/Desktop/Control_Center-main"   # <- paste the real path from above
+ls requirements.txt   # must succeed: every command below runs from the repository root
 ```
 
 This project trains PPO on the CPU to leave the RTX 4060 Ti available for other work. For a smaller CPU-only PyTorch install, install that wheel before the rest of the requirements:
