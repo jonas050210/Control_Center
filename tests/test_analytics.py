@@ -117,6 +117,10 @@ class TrainingStatsTests(unittest.TestCase):
             self.assertEqual(summary["logged_episodes"], 3)
             self.assertEqual(payload["histogram"]["ttk"], [4.0])
             self.assertEqual(payload["summary"]["episodes"], 3)
+            # the panel plots both curves: a win at the time limit is not a kill
+            self.assertEqual(payload["series"]["kill_rate"], [33.0])
+            self.assertEqual(payload["series"]["win_rate"], [66.0])
+            self.assertAlmostEqual(summary["kill_rate"], 0.33, places=6)
             self.assertEqual(payload["weapons"], {"AK-47": 3})
 
     def test_missing_files_produce_an_empty_but_valid_payload(self) -> None:

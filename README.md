@@ -65,7 +65,7 @@ sudo apt update && sudo apt install -y python3-venv python3-dev build-essential
 | 🎮 ARENA | Zwei Kämpfer im Duell: Bots, trainierte Policies oder der Mensch steuern einen Agenten, Live-3D, Trails, Trefferzonen. |
 | 🔫 PLAYGROUND | Freies Üben mit Tastatursteuerung (inkl. Springen, Ducken, Sprinten, Lean), Trefferstatistik und Demo-Aufzeichnung für Imitation Learning. |
 | 🏋️ TRAINING | PPO-Training im Hintergrund-Thread: Start/Pause/Resume/Stop, Checkpoints, Curriculum-Phasen, Live-Metriken. |
-| 📊 STATS | Kennzahlen aus `logs/`: FPS, Reward, Win-Rate, Kill-TTK, Headshots, Waffen-/Gegner-Verteilung. |
+| 📊 STATS | Kennzahlen aus `logs/`: FPS, Reward, **Siege (grün) und Kills (orange)** als zwei Kurven, Kill-TTK, Headshots, Waffen-/Gegner-Verteilung. |
 | 🔧 BENCHMARK | 20-Sekunden-Durchsatztest über alle gültigen CPU-Konfigurationen (`workers × envs`), Ergebnis-Ranking. |
 | 🎯 TTK-TESTER | Time-to-Kill-Simulation über Waffen, Distanzen und Trials inkl. Lua-Export für Roblox. |
 | 🗺️ MAPS | Sechs Karten ansehen, Randomisieren, Deckung platzieren/löschen, Custom Map importieren/exportieren. |
@@ -169,7 +169,7 @@ stilles Zurückfallen auf den Standard).
 | „Bestes Modell“ | höchste Kill-Rate | ein Sieg nach HP-Vergleich am Zeitlimit wäre eine Belohnung fürs Verstecken |
 | Beobachtungs-Normalisierung | **`norm_obs=False`** | die Wahrnehmung ist schon auf [-1, 1] begrenzt, Nullen heißen „nie gesehen“ – laufende Mittelwerte würden genau diese Aussage verschieben (Rewards bleiben normalisiert) |
 | Sicht-Curriculum (**optional**, `vision_curriculum`) | Phase 1 `noisy` → 2 `coarse` → 3–4 `coarse_los` | wer die ehrliche Sicht von Anfang an trainiert, schaltet es ab – gemessen ist sie kein Hindernis, sondern der bessere Start (Runde 4/5: 20/20 Siege + 12 Kills statt 0 Kills nach `noisy`-Vortraining) |
-| Automatische Bewertung | nach jedem Lauf (`eval_after_training`) | das Ergebnis wird gegen `stationary`/`walker`/`full` nachgemessen und als `models/best_model_eval.json` + Karte im Panel abgelegt – keine unbelegten Trainingszahlen |
+| Automatische Bewertung | nach jedem Lauf (`eval_after_training`) | das Ergebnis wird gegen **dieselben vier Sprossen** wie das Curriculum nachgemessen (`stationary`/`mover`/`walker`/`full`) und als `models/best_model_eval.json` + Karte im Panel abgelegt – keine unbelegten Trainingszahlen. Die `mover`-Sprosse fehlte: ohne sie sagt der Bericht nicht, ob die Politik einen *beweglichen* Gegner treffen kann, bevor sie Gegenwehr überleben muss |
 
 Das Training protokolliert **Siege und Kills getrennt** (`win_rate`, `kill_rate`):
 ein „Sieg“ am Zeitlimit ist nur ein HP-Vergleich und kein Kill.
@@ -201,27 +201,35 @@ pro Episode und prüft den `observation_version`-Stempel des Checkpoints. Mit
 `--phase 1..4` die Curriculum-Bedingungen (Abstand) nachstellen, unter denen ein
 Checkpoint trainiert wurde. Mehrere Seeds vergleicht `tools/seed_sweep.py`.
 
-Gemessen auf dieser Maschine (CPU, 2 Worker, Dust, `norm_obs=False`,
+Gemessen auf dieser Maschine (CPU, 2 Kerne, 2 Worker, Dust, `norm_obs=False`,
 `tools/evaluate_policy.py` als unabhängige Nachmessung):
 
 * Zufallspolitik: 0/20 Siege.
-* **Mit der ehrlichen Wahrnehmung `coarse_los` von Anfang an trainiert**: der
-  beste Checkpoint eines 10-Minuten-Laufs (Phase 1, 9 m, Pistol) gewinnt gegen
-  den passiven Gegner **20/20 Episoden, davon 12 mit bestätigtem Kill**
-  (TTK 20,6 s, Trefferquote 19,5 %, 24 % blinde Frames) und **20/20 gegen den
-  beweglichen `mover`** – ohne dass die AI je eine Gegnerkoordinate gesehen hat.
+* **Der ausgelieferte Checkpoint** (`models/best_model.zip`, 42 500 Steps, Phase 1,
+  `coarse_los`, Phase 1 nachgestellt, AK-47, 12 Episoden je Gegner):
+  `stationary` **12/12 Siege, davon 7 mit bestätigtem Kill** (Ø 29 s, Trefferquote
+  21 %), `mover` 12/12 Siege (ohne Kill, Ø 45 s), `walker` 0/12 und `full` 0/12
+  (tot nach ~1 s) – ohne eine einzige Gegnerkoordinate in der Beobachtung.
+* **Trainingsläufe mit der ehrlichen Sicht von Anfang an** (260k/254k Steps,
+  600–800 s): Phase 1 erreicht eine Kill-Rate von **96–100 %** (50-Episoden-Fenster,
+  Fenster-Verlauf siehe ANALYSE.md), also nicht nur Siege am Zeitlimit. Die beste
+  Einzelmessung war **8/8 Siege mit 8/8 Kills gegen den passiven Gegner (TTK 6,1 s)**.
+* **Was noch nicht geht (ehrlich):** sobald der Gegner zurückschießt
+  (`walker`/`full`), verliert jeder bisher trainierte Checkpoint jedes Duell
+  (~1–2 s Episodenlänge). Das ist die Aufgabe der Phasen 3/4; in einem
+  Sandbox-Lauf reicht die Zeit nur bis zur zweiten Sprosse (`mover`), die
+  beweglich ist und deshalb Treffer verlangt – gemessen 70–80 % Siege, aber nur
+  2–6 % davon mit Kill.
 * Ein mit der *vergebenden* Wahrnehmung (`noisy`) trainiertes Netz erreicht unter
   `coarse_los` zwar 17/20 Siege, aber **0 Kills**: die ehrliche Wahrnehmung
   braucht ihr eigenes Training – genau das macht der Lauf oben.
 
-Der Verifikationslauf (260k Steps, 800 s, `coarse_los` von Anfang an) bestätigt
-das: Phase 1 erreicht eine Kill-Rate von 96 % (50-Episoden-Fenster), die
-automatische Bewertung des besten Checkpoints meldet **8/8 Siege mit 8/8
-bestätigten Kills gegen den passiven Gegner (TTK 6,1 s)**. Gegen Gegner, die
-zurückschießen, verliert dieser Phase-1-Checkpoint noch jedes Duell – dafür sind
-die Phasen 3/4 da, und das Curriculum geht jetzt **einen Schritt zurück**, wenn
-eine neue Phase nur Niederlagen produziert (statt bis zum Budgetende
-durchzuhalten). Details, Zahlen und Grenzen: ANALYSE.md § 0.
+Die Läufe zeigen außerdem, dass das Curriculum **eingreift statt zu verharren**:
+im 254k-Lauf nahm es eine Phase **dreimal zurück**, nachdem der Wechsel auf den
+schwierigeren Gegner 0 % Kills brachte, und die Politik blieb handlungsfähig
+(früher: Absturz auf 0 %, aus dem sie nicht mehr herauskam). Das Gate urteilt
+dabei nur über Episoden der *laufenden* Phase und die Leiter wird **eine Sprosse
+pro Freischaltung** erklommen. Details, Zahlen und Grenzen: ANALYSE.md § 0.
 
 Zwei Details, die beim Nachprüfen wichtig sind:
 

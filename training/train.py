@@ -55,7 +55,10 @@ class TrainingConfig:
     # training number that nobody verified.
     eval_after_training: bool = True
     eval_episodes: int = 8
-    eval_bots: tuple[str, ...] = ("stationary", "walker", "full")
+    # The same rungs the curriculum climbs: without `mover` the report cannot say
+    # whether the policy learned to track a moving target before it has to survive
+    # return fire - exactly the rung the phase-2 step measured as the weak spot.
+    eval_bots: tuple[str, ...] = ("stationary", "mover", "walker", "full")
     seed: int = 2026
     models_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "models")
     logs_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "logs")
@@ -312,6 +315,34 @@ def _append_csv(path: Path, fieldnames: list[str], row: dict[str, Any], lock: th
             writer.writerow(row)
 
 
+def curriculum_window_ready(kill_history, gate: float, min_episodes: int = 20) -> bool:
+    """Whether the last episodes of the *running* phase beat the gate.
+
+    The window must contain episodes of this phase only: right after a switch the
+    mixed window still holds the successes of the easier phase, which measured
+    advanced the curriculum on stale numbers (36.7 % "kill rate" seven seconds
+    after a step back, immediately followed by 0 %).
+    """
+    recent = list(kill_history)[-30:]
+    if len(recent) < min_episodes:
+        return False
+    return (sum(float(value) for value in recent) / len(recent)) >= gate
+
+
+def curriculum_next_phase(current_phase: int, ready: bool, progress_phase: int,
+                          max_phase: int = 4) -> int:
+    """One rung at a time - a jump skips the lesson of the skipped phase.
+
+    The phase schedule follows the training progress, so late in a run it already
+    asks for phase 3/4. Measured: after a step back to phase 1 the next satisfied
+    window jumped *straight* to phase 3 (`walker`, shooting back) and produced
+    0 % kills again - the ladder must be climbed step by step.
+    """
+    if not ready or progress_phase <= current_phase:
+        return current_phase
+    return min(int(max_phase), current_phase + 1)
+
+
 def curriculum_backtrack_needed(*, current_phase: int, episodes_in_phase: int,
                                 recent_kill_rate: float, gate: float,
                                 min_episodes: int = 40) -> bool:
@@ -398,8 +429,16 @@ def _evaluate_checkpoint(
                                "win_rate": best["win_rate"], "kill_rate": best["kill_rate"]}
             _store_evaluation(config, job, payload, key)
     except Exception as exc:  # a failed matchup must not kill a finished run
+        # Keep the reason next to the partial report: the run's log is a bounded
+        # buffer, so a message written here can be gone by the time anyone reads
+        # the report (measured: the evaluation stopped after the first opponent
+        # and the log line was already rotated away).
+        payload["error"] = f"{type(exc).__name__}: {exc}"
         job.log(f"{label}Automatic evaluation failed: {exc}")
-        return payload if runs else None
+        if not runs:
+            return None
+        _store_evaluation(config, job, payload, key)
+        return payload
     return payload
 
 
@@ -604,6 +643,9 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 # count when the running phase started (both drive the step-back).
                 self.phase_gate = config.curriculum_min_win_rate
                 self.phase_enter_episode = 0
+                # Kill flags since the current phase started: the gate must not
+                # judge a new phase by the successes of the previous one.
+                self.phase_kills: list[float] = []
                 self.metric_fields = [
                     "timestamp", "steps", "fps", "episodes", "win_rate", "avg_reward",
                     "avg_ttk", "headshot_pct", "accuracy", "elapsed", "map",
@@ -662,23 +704,23 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 recent = list(self.wins)[-window:]
                 return float(np.mean(recent)) if recent else 0.0
 
-            def _recent_kill_rate(self, window: int = 30) -> float:
+            def _recent_kill_rate(self, window: int = 30, history=None) -> float:
                 """Share of recent episodes that ended in a *confirmed* kill.
 
                 Winning on health at the time limit is not the same as winning:
                 it would reward hiding, so it never unlocks the next phase.
+                ``history`` selects the episodes to judge - the curriculum passes
+                the kill flags of the *running* phase (see
+                :func:`curriculum_window_ready`).
                 """
-                recent = list(self.kill_wins)[-window:]
+                recent = list((self.kill_wins if history is None else history))[-window:]
                 return float(np.mean(recent)) if recent else 0.0
 
             def _curriculum_ready(self) -> bool:
                 """True only when the running phase is demonstrably beaten."""
                 if not config.curriculum or self.current_phase >= 4:
                     return False
-                recent = list(self.kill_wins)[-30:]
-                if len(recent) < 20:
-                    return False
-                return float(np.mean(recent)) >= self.phase_gate
+                return curriculum_window_ready(self.phase_kills, self.phase_gate)
 
             def _curriculum_backtrack(self) -> bool:
                 """Undo a phase that only produces defeats.
@@ -694,7 +736,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 if not curriculum_backtrack_needed(
                     current_phase=self.current_phase,
                     episodes_in_phase=self.episode_count - self.phase_enter_episode,
-                    recent_kill_rate=self._recent_kill_rate(),
+                    recent_kill_rate=self._recent_kill_rate(history=self.phase_kills),
                     gate=self.phase_gate,
                 ):
                     return False
@@ -702,10 +744,12 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 self.phase_gate = min(0.8, self.phase_gate + 0.1)
                 self.current_phase = back
                 self.phase_enter_episode = self.episode_count
+                self.phase_kills.clear()
                 job.log(
                     f"Curriculum step back to phase {back}/4: only "
-                    f"{self._recent_kill_rate():.1%} confirmed kills since the switch "
-                    f"(gate for the next attempt: {self.phase_gate:.0%})."
+                    f"{self._recent_kill_rate(history=self.phase_kills):.1%} confirmed "
+                    f"kills in this phase (gate for the next attempt: "
+                    f"{self.phase_gate:.0%})."
                 )
                 if config.vision_curriculum:
                     self.vision_mode = vision_mode_for_phase(back, config.vision_mode)
@@ -749,6 +793,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     self.wins.append(win)
                     killed = bool(episode_metrics.get("killed"))
                     self.kill_wins.append(win if killed else 0.0)
+                    self.phase_kills.append(1.0 if killed else 0.0)
                     monitor_episode = info.get("episode", {})
                     reward = float(monitor_episode.get("r", 0.0))
                     self.episode_rewards.append(reward)
@@ -762,30 +807,43 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                                 event, job._csv_lock)
 
                 phase = self._phase_from_progress()
-                if phase > self.current_phase and not self._curriculum_ready():
+                ready = self._curriculum_ready()
+                phase_kill_rate = self._recent_kill_rate(history=self.phase_kills)
+                if phase > self.current_phase and not ready:
                     # ``now`` is only computed further down; the gate needs its
                     # own clock so the "hold" notice cannot crash the callback.
                     hold_now = time.monotonic()
                     if hold_now - self.last_curriculum_log >= 20.0:
                         self.last_curriculum_log = hold_now
+                        # Name the real reason: too few episodes of this phase
+                        # (the window must not judge the previous one) or a kill
+                        # rate below the gate - the old wording claimed "below the
+                        # gate" even when the rate was 100 % and only the count
+                        # was missing.
                         job.log(
                             "Curriculum holds at phase "
-                            f"{self.current_phase}/4 - kill rate "
-                            f"{self._recent_kill_rate():.1%} is below the "
-                            f"{config.curriculum_min_win_rate:.0%} gate."
+                            f"{self.current_phase}/4 - {len(self.phase_kills)} episodes "
+                            f"in this phase, kill rate {phase_kill_rate:.1%} "
+                            f"(gate {config.curriculum_min_win_rate:.0%})."
                         )
                     phase = self.current_phase
+                # One rung at a time: the schedule from the progress is only a
+                # ceiling, so a satisfied window cannot jump over a phase.
+                phase = curriculum_next_phase(self.current_phase, ready, phase)
                 if phase != self.current_phase:
                     self.current_phase = phase
                     self.phase_enter_episode = self.episode_count
+                    self.phase_kills.clear()
                     if config.vision_curriculum:
                         self.vision_mode = vision_mode_for_phase(phase, config.vision_mode)
                         try:
                             self.training_env.env_method("set_vision_mode", self.vision_mode)
                         except Exception as exc:
                             job.log(f"Could not update one or more perception models: {exc}")
+                    # Evidence that opened the gate: the kill rate of the phase
+                    # that was just left.
                     job.log(f"Curriculum advanced to phase {phase}/4 "
-                            f"(kill rate {self._recent_kill_rate():.1%}, "
+                            f"(kill rate {phase_kill_rate:.1%}, "
                             f"vision_mode={self.vision_mode}).")
                     try:
                         self.training_env.env_method("set_curriculum_phase", phase)

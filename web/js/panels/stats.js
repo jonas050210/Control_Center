@@ -16,8 +16,11 @@ export const statsPanel = {
       emptyMessage: 'Reward-Daten erscheinen nach dem ersten Trainings-Update.',
     }), { height: 300 });
     this.winChart = chartCanvas((ctx, w, hgt) => drawLine(ctx, w, hgt, {
-      series: [{ y: this.data?.series.win_rate || [], color: '#6cff88', width: 2.4, markers: true }],
-      xLabel: 'Timesteps (Index)', yLabel: 'Win Rate %', yMin: 0, yMax: 100,
+      series: [
+        { y: this.data?.series.win_rate || [], color: '#6cff88', width: 2.4, markers: true },
+        { y: this.data?.series.kill_rate || [], color: '#ffaa00', width: 2.4 },
+      ],
+      xLabel: 'Timesteps (Index)', yLabel: 'Prozent', yMin: 0, yMax: 100,
       emptyMessage: 'Win-Rate erscheint nach den ersten abgeschlossenen Episoden.',
     }), { height: 300 });
     this.ttkChart = chartCanvas((ctx, w, hgt) => {
@@ -56,7 +59,7 @@ export const statsPanel = {
       h('hr', { class: 'sep' }),
       h('div', { class: 'grid cols-2' },
         card('REWARD OVER TIME', this.rewardChart.canvas),
-        card('WIN-RATE CURVE', this.winChart.canvas)),
+        card('WIN-RATE (grün) vs. KILL-RATE (orange)', this.winChart.canvas)),
       h('div', { class: 'grid cols-2', style: { marginTop: '12px' } },
         card('TTK VERTEILUNG', this.ttkChart.canvas),
         card('WAFFEN-NUTZUNG', this.weaponChart.canvas)),
@@ -89,7 +92,8 @@ export const statsPanel = {
         metric('TOTAL STEPS', fmt.num(summary.steps)),
         metric('EPISODEN', fmt.num(summary.episodes)));
       mount(this.summaryMid,
-        metric('WIN RATE', fmt.percent(summary.win_rate)),
+        metric('WIN RATE', fmt.percent(summary.win_rate),
+          `Kills: ${fmt.percent(summary.kill_rate || 0)}`),
         metric('Ø REWARD', fmt.fixed(summary.avg_reward, 2)),
         metric('Ø TTK (KILLS)', `${fmt.fixed(summary.avg_ttk, 2)}s`,
           `${fmt.num(summary.kill_count || 0)} bestätigte Kills von ${fmt.num(summary.logged_episodes)} Episoden`),

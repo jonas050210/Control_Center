@@ -368,6 +368,39 @@ class MetricsCsvSchemaTests(unittest.TestCase):
             self.assertEqual(rows[1]["steps"], "2")
 
 
+class CurriculumGateWindowTests(unittest.TestCase):
+    """The gate may only judge episodes of the phase that is running."""
+
+    def test_ladder_is_climbed_one_rung_at_a_time(self) -> None:
+        from training.train import curriculum_next_phase
+
+        # The schedule asks for phase 4, but a satisfied window may only open
+        # the *next* rung - jumping to phase 3 skips `mover` and its lesson.
+        self.assertEqual(curriculum_next_phase(1, True, 4), 2)
+        self.assertEqual(curriculum_next_phase(2, True, 4), 3)
+        self.assertEqual(curriculum_next_phase(3, True, 4), 4)
+        self.assertEqual(curriculum_next_phase(4, True, 4), 4)
+        # Without a satisfied window nothing happens, even if the schedule is ahead.
+        self.assertEqual(curriculum_next_phase(2, False, 4), 2)
+        self.assertEqual(curriculum_next_phase(2, True, 2), 2)
+
+    def test_window_needs_enough_episodes_of_this_phase(self) -> None:
+        from training.train import curriculum_window_ready
+
+        # Right after a switch there is no evidence for the new phase yet - the
+        # window must not be filled with the successes of the easier one.
+        self.assertFalse(curriculum_window_ready([1.0, 1.0, 1.0], 0.35))
+        self.assertTrue(curriculum_window_ready([1.0] * 20, 0.35))
+        self.assertFalse(curriculum_window_ready([0.0] * 20, 0.35))
+        # A phase that had to be undone asks for more before the next attempt:
+        # 40 % cleared the old gate (35 %), but not the raised one (45 %).
+        self.assertTrue(curriculum_window_ready([1.0] * 8 + [0.0] * 12, 0.35))
+        self.assertFalse(curriculum_window_ready([1.0] * 8 + [0.0] * 12, 0.45))
+        # Only the most recent 30 episodes are judged.
+        self.assertTrue(curriculum_window_ready([0.0] * 20 + [1.0] * 30, 0.35))
+        self.assertFalse(curriculum_window_ready([1.0] * 30 + [0.0] * 30, 0.35))
+
+
 class CurriculumBacktrackTests(unittest.TestCase):
     """A phase that only produces defeats must be undone, not endured."""
 

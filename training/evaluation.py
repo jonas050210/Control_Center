@@ -203,6 +203,8 @@ def evaluate(*, model_path: str | Path | None = None, model: Any = None, normali
     env = build_env(map_name=map_name, weapon=weapon, opponent_weapon=opponent_weapon, bot=bot,
                     vision_mode=vision_mode, phase=phase, episode_seconds=episode_seconds,
                     frame_skip=frame_skip, seed=seed)
+    # Read the step width while the environment is alive (it is closed below).
+    frame_dt = float(getattr(env, "dt", 1.0 / 60.0))
     try:
         for episode in range(episodes):
             observation, _info = env.reset(seed=seed + episode)
@@ -248,7 +250,9 @@ def evaluate(*, model_path: str | Path | None = None, model: Any = None, normali
         "kill_rate": len(ttks) / episodes,
         "avg_ttk": float(np.mean(ttks)) if ttks else math.nan,
         "avg_frames": float(np.mean(frames)) if frames else 0.0,
-        "avg_seconds": float(np.mean(frames)) * frame_skip * (1.0 / 60.0) if frames else 0.0,
+        # ``physics_frames`` already counts physics steps (60 Hz); multiplying by
+        # ``frame_skip`` again reported episodes four times too long.
+        "avg_seconds": float(np.mean(frames)) * frame_dt if frames else 0.0,
         "contact_episodes": contacts,
         "avg_blind_ratio": float(np.mean(blind_ratios)) if blind_ratios else 0.0,
         "avg_accuracy": float(np.mean(accuracy)) if accuracy else 0.0,

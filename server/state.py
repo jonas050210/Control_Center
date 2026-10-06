@@ -755,12 +755,27 @@ class ServerState:
             return {"started": True, "run": self.training_snapshot(),
                     "estimated_steps": estimated_steps, "vision": vision}
 
+    @staticmethod
+    def _stored_evaluation() -> dict[str, Any] | None:
+        """The evaluation report of the last run, so a restart does not hide it.
+
+        The live job only knows the evaluation it produced itself; after a server
+        restart the panel showed "noch keine Bewertung" although the verified
+        report (and the checkpoint it belongs to) is on disk.
+        """
+        report = MODELS_DIR / "best_model_eval.json"
+        try:
+            payload = json.loads(report.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def training_snapshot(self) -> dict[str, Any]:
         with self.lock:
             job = self.training_job
             if job is None:
                 return {"status": "stopped", "metrics": {}, "logs": [], "error": None,
-                        "latest_checkpoint": None, "evaluation": None,
+                        "latest_checkpoint": None, "evaluation": self._stored_evaluation(),
                         "thread_alive": False, "config": None}
             snapshot = job.snapshot()
             config = job.config

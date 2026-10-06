@@ -238,7 +238,12 @@ class ApiTestCase(unittest.TestCase):
 
         hit = self.client.post("/api/aim/tap", json={"cell": target}).json()
         self.assertEqual(hit["game"]["hits"], 1)
-        miss = self.client.post("/api/aim/tap", json={"cell": (target + 4) % 9}).json()
+        # The drill moves the target after a hit, so the "miss" cell has to be
+        # taken from the *new* target - otherwise the tap can hit by chance and
+        # the assertion fails intermittently (measured: 1 in 5 runs).
+        current_target = hit["game"]["target"]
+        self.assertNotEqual(current_target, target)
+        miss = self.client.post("/api/aim/tap", json={"cell": (current_target + 1) % 9}).json()
         self.assertEqual(miss["game"]["misses"], 1)
         self.assertEqual(self.client.post("/api/aim/tap", json={}).status_code, 422)
 
@@ -348,6 +353,29 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(payload["status"], "stopped")
         self.assertIsNone(payload["config"])
         self.assertEqual(self.client.post("/api/training/bogus").status_code, 404)
+
+    def test_training_status_reports_the_stored_evaluation(self) -> None:
+        """A restart must not hide the verified report that is on disk."""
+        report = {"model": "best_model.zip", "phase": 1, "vision_mode": "coarse_los",
+                  "episodes_per_matchup": 8,
+                  "runs": [{"bot": "stationary", "win_rate": 1.0, "kill_rate": 0.5}],
+                  "win_rate_overall": 1.0, "kill_rate_overall": 0.5}
+        with tempfile.TemporaryDirectory(prefix="neural-arena-eval-") as temporary:
+            models = Path(temporary)
+            state_module.STATE.training_job = None
+            with patch.object(state_module, "MODELS_DIR", models):
+                # No report on disk yet -> the panel says "noch keine Bewertung".
+                self.assertIsNone(self.client.get("/api/training/status").json()["evaluation"])
+                (models / "best_model_eval.json").write_text(json.dumps(report), encoding="utf-8")
+                payload = self.client.get("/api/training/status").json()
+            self.assertEqual(payload["status"], "stopped")
+            self.assertEqual(payload["evaluation"]["model"], "best_model.zip")
+            self.assertEqual(payload["evaluation"]["runs"][0]["bot"], "stationary")
+
+            # A broken file must not break the endpoint either.
+            (models / "best_model_eval.json").write_text("{not json", encoding="utf-8")
+            with patch.object(state_module, "MODELS_DIR", models):
+                self.assertIsNone(self.client.get("/api/training/status").json()["evaluation"])
 
     def test_training_start_requires_ppo_dependencies(self) -> None:
         dependencies = dependency_status()

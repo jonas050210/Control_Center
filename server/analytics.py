@@ -137,7 +137,10 @@ def training_stats(logs_dir: Path = LOGS_DIR, live: dict[str, Any] | None = None
         "series": {
             "steps": _series(metrics_rows, "steps"),
             "reward": _series(metrics_rows, "avg_reward"),
+            # Both curves are plotted as percent: a win at the time limit is only a
+            # HP comparison, the kill rate is the honest number (see ANALYSE.md).
             "win_rate": _series(metrics_rows, "win_rate", 100.0),
+            "kill_rate": _series(metrics_rows, "kill_rate", 100.0),
             "fps": _series(metrics_rows, "fps"),
         },
         "histogram": {
@@ -157,6 +160,7 @@ def training_stats(logs_dir: Path = LOGS_DIR, live: dict[str, Any] | None = None
             "episodes": int(live_or_last("episodes") if live_metrics else
                             (_to_float(last.get("episodes"), 0.0) or 0.0)),
             "win_rate": float(np.mean(wins)) if wins else live_or_last("win_rate"),
+            "kill_rate": live_or_last("kill_rate"),
             "avg_reward": live_or_last("avg_reward"),
             "avg_ttk": float(np.mean(kill_ttks)) if kill_ttks
             else (0.0 if event_rows else live_or_last("avg_ttk")),

@@ -281,6 +281,21 @@ die Platte geschrieben und in den Job-Snapshot geschoben, `final_model.zip` wird
 immer gespeichert (vorher nur, wenn kein „Bestes Modell" existierte). Eine
 abgebrochene Prüfung hinterlässt damit Teilergebnisse statt gar nichts.
 
+**Kleinere Funde aus dem Verifikationslauf (behoben):**
+
+* **Die Metrik-CSV verschluckte neue Spalten.** Der Header wird nur beim Anlegen
+  der Datei geschrieben, danach lief der Writer mit `extrasaction="ignore"`. Weil
+  die laufende `logs/training_metrics.csv` noch aus der Zeit vor `kill_rate`
+  stammte, fiel **jeder** Kill-Rate-Wert lautlos weg – im Panel blieb die Spalte
+  leer, obwohl der Trainer die Zahl kennt. `_csv_columns()` liest jetzt die
+  vorhandene Kopfzeile, hängt neue Felder an und schreibt die Datei einmal um;
+  danach kostet es nur noch das Lesen einer Zeile.
+* **Die Kill-Rate war im STATS-Panel unsichtbar.** Die Kurve „WIN-RATE CURVE"
+  zeichnet jetzt beide Werte: **grün = Siege, orange = Kills** – die Kachel
+  „WIN RATE" nennt die Kill-Rate zusätzlich als Untertitel. Ein Sieg am Zeitlimit
+  ist nur ein HP-Vergleich, die ehrliche Zahl ist der Kill; ohne die zweite Kurve
+  sah ein Lauf mit 30 % „Siegen" und 0 Kills aus wie ein Erfolg.
+
 **Kosten/Hinweis:** die ehrliche Sicht ist *kein* Trainingshindernis. Der Vergleich
 in Runde 4 kippt die frühere Annahme: mit `coarse_los` von Anfang an 20/20 Siege
 und 12 Kills gegen den passiven Gegner, mit dem `noisy`-Vortraining unter
@@ -289,6 +304,75 @@ derselben Sicht 17/20 Siege und **0** Kills. Deshalb ist der Verifikationslauf
 im Panel/Config weiter vorhanden, falls jemand erst mit vergebender Wahrnehmung
 vortrainieren will. Unabhängig davon: mehrere Seeds vergleichen
 (`python3 tools/seed_sweep.py 2 100000`).
+
+### Runde 6: der lange Lauf – die Rücknahme greift, das Gate war zu großzügig
+
+Lauf: 254 000 Steps, 780 s Wanduhr, 2 CPU-Kerne, Dust, **`coarse_los` von der
+ersten Episode an**, 45-s-Episoden, Curriculum mit Rücknahme.
+
+| Zeit | Step | Ereignis |
+| --- | --- | --- |
+| 13:35:03 | 41 388 | bestes Modell gesichert (100 % Kills im 50-Episoden-Fenster, 83 % Siege) |
+| 13:35:57 | ~70 k | Phasensprung 1 → 2 (`mover`, 12,6 m) |
+| 13:36:55 | ~89 k | **Rücknahme auf Phase 1** (0 % Kills seit dem Wechsel), Gate hoch auf 35 % |
+| 13:37:02 | ~90 k | erneut Phase 2 – gemeldet mit „36,7 % Kills" aus dem **gemischten** Fenster |
+| 13:38:08 | ~110 k | Rücknahme (13,3 %), Gate 45 % · 13:38:13 Phase 2 (46,7 %) · 13:38:23 Phase 3 (`walker`) |
+| 13:38:26 | ~112 k | Rücknahme auf Phase 2 (0 % nach dem Wechsel auf den schießenden Gegner) |
+| 13:43:27 | 253 952 | `final_model`: Phase 2, 26 % Siege / 26 % Kills in den letzten 50 Episoden |
+
+Damit ist die Rücknahme **im echten Lauf dreimal** aktiv geworden (bisher nur
+durch Tests belegt) und der Absturz auf 0 % blieb aus. Zwei Dinge waren trotzdem
+falsch:
+
+* **Das Gate urteilte über ein gemischtes Fenster.** Unmittelbar nach einem
+  Phasenwechsel steckten im 30-Episoden-Fenster noch die Erfolge der leichteren
+  Phase – „36,7 % Kill-Rate" sieben Sekunden nach der Rücknahme, direkt gefolgt
+  von 0 %. `curriculum_window_ready()` zählt jetzt nur noch Episoden der
+  laufenden Phase (`phase_kills`, bei jedem Wechsel geleert).
+* **`avg_seconds` war viermal zu groß.** Die Physics-Frames wurden ein zweites
+  Mal mit `frame_skip` multipliziert (146,7 s statt 36,7 s pro Episode). Behoben,
+  mit Test (`tests/test_evaluation.py`).
+
+Die automatische Bewertung des besten Checkpoints (41k Steps, Phase 1,
+`coarse_los`): gegen `stationary` **8/8 Siege, aber nur 3/8 mit bestätigtem Kill**
+(Ø 36,7 s, Trefferquote 16 %), gegen `walker`/`full` 0/8. Der Lauf aus Runde 5 war
+hier besser (8/8 Kills): das Pendeln zwischen den Phasen kostet Präzision, weil
+die Politik gleichzeitig gegen stehende (9 m) und laufende Gegner (12,6 m)
+trainiert.
+
+**Nachbesserungen, die direkt aus diesem Lauf kommen (mit Gegenprobe):**
+
+* **Das Gate zählt nur die laufende Phase** (`curriculum_window_ready()` mit
+  `phase_kills`, bei jedem Wechsel geleert). Gegenprobe mit demselben Aufbau:
+  die „36,7 %"-Freischaltung auf Basis gemischter Fenster trat nicht mehr auf,
+  die Freischaltung verlangt jetzt 20 frische Episoden der laufenden Phase.
+* **Eine Sprosse pro Freischaltung** (`curriculum_next_phase()`). Gegenprobe:
+  nach der Rücknahme auf Phase 1 sprang der Lauf zuvor direkt auf Phase 3
+  (`walker`, schießt zurück) – im Kontrolllauf bleibt er bei
+  `1 → 2 → (Rücknahme) → 2` und überspringt keine Lektion mehr.
+* **Die Bewertung misst alle vier Sprossen** (`eval_bots` enthält `mover`) und
+  `avg_seconds` stimmt wieder mit der Simulation überein (Physics-Frames zählen
+  60 Hz, `frame_skip` wurde doppelt multipliziert: 146,7 s statt 36,7 s).
+* **Ein abgebrochener Bewertungslauf ist sichtbar**: der Bericht wird nach jedem
+  Gegner geschrieben, der Grund steht als `error` in der Datei, und
+  `training_snapshot()` liest `models/best_model_eval.json` auch nach einem
+  Server-Neustart (vorher stand im Panel „noch keine Bewertung", obwohl eine
+  verifizierte Datei daneben lag).
+
+**Der ausgelieferte Checkpoint kommt deshalb aus der produktiven Linie:** der
+beste Checkpoint des langen Laufs (44k Steps, Phase 1) gewann in der Nachmessung
+zwar 8/8 gegen `stationary`, aber **ohne einen einzigen Kill** (45-s-Zeitlimit,
+Trefferquote 16 %) – der frühere Phase-1-Checkpoint (`models/best_model.zip`,
+42,5k Steps, `coarse_los`) schafft dort **7 Kills in 12 Episoden** (Ø 29 s,
+Trefferquote 21 %) und ist damit das ehrlichere Ausstellungsstück. Sein Bericht
+liegt als `models/best_model_eval.json` daneben (`source` nennt das Werkzeug:
+`tools/evaluate_policy.py`, 12 Episoden je Gegner, Phase 1 nachgestellt).
+
+**Grenze, die bleibt:** keiner der Checkpoints gewinnt gegen Gegner, die
+zurückschießen (`walker`/`full`: 0/12, tot nach ~1 s). Das ist die Aufgabe der
+Phasen 3/4 – sie brauchen mehr Steps, als ein Sandbox-Lauf liefert. Der Weg
+dahin ist jetzt messbar, und das Curriculum fällt nicht mehr in ein Loch,
+sondern geht zurück und fragt später erneut mit höherem Gate.
 
 ---
 
