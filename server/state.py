@@ -633,6 +633,11 @@ class ServerState:
             if not rows:
                 return {"saved": 0, "path": relative_path(DEMOS_PATH)}
             DEMOS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            from training.imitation import archive_outdated_demos, write_demo_meta
+
+            archived = archive_outdated_demos(DEMOS_PATH)
+            if archived is not None:
+                self.notice(f"Old demonstration layout moved to {relative_path(archived)}.")
             state_fields = [f"state_{index}" for index in range(OBSERVATION_SIZE)]
             action_fields = [f"action_{index}" for index in range(ACTION_SIZE)]
             header_needed = not DEMOS_PATH.exists() or DEMOS_PATH.stat().st_size == 0
@@ -644,8 +649,6 @@ class ServerState:
                         [f"{float(value):.5f}" for value in observation]
                         + [str(int(value)) for value in action]
                     ) + "\n")
-            from training.imitation import write_demo_meta
-
             write_demo_meta(DEMOS_PATH, vision_mode=self.playground.vision_mode)
             self.playground.demo_rows = []
             self.notice(f"Added {len(rows):,} human demonstrations to data/demos.csv.")
@@ -740,6 +743,10 @@ class ServerState:
                 max_envs=int(payload.get("max_envs", 24)),
                 episode_seconds=float(payload.get("episode_seconds", 60.0)),
                 curriculum_min_win_rate=float(payload.get("curriculum_min_win_rate", 0.40)),
+                frame_skip=int(payload.get("frame_skip", 4)),
+                vision_curriculum=bool(payload.get("vision_curriculum", True)),
+                eval_after_training=bool(payload.get("eval_after_training", True)),
+                eval_episodes=int(payload.get("eval_episodes", 8)),
                 models_dir=MODELS_DIR,
                 logs_dir=LOGS_DIR,
             )
@@ -753,8 +760,8 @@ class ServerState:
             job = self.training_job
             if job is None:
                 return {"status": "stopped", "metrics": {}, "logs": [], "error": None,
-                        "latest_checkpoint": None, "thread_alive": False,
-                        "config": None}
+                        "latest_checkpoint": None, "evaluation": None,
+                        "thread_alive": False, "config": None}
             snapshot = job.snapshot()
             config = job.config
             snapshot["config"] = {
@@ -766,6 +773,13 @@ class ServerState:
                 "curriculum": config.curriculum,
                 "self_play": config.self_play,
                 "method": config.method,
+                "vision_mode": config.vision_mode,
+                "vision_curriculum": config.vision_curriculum,
+                "frame_skip": config.frame_skip,
+                "episode_seconds": config.episode_seconds,
+                "curriculum_min_win_rate": config.curriculum_min_win_rate,
+                "eval_after_training": config.eval_after_training,
+                "eval_episodes": config.eval_episodes,
             }
             return snapshot
 

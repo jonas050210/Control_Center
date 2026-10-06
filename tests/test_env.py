@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -132,6 +133,80 @@ class ShooterEnvironmentTests(unittest.TestCase):
         self.assertGreater(walker_damage, 0.0,
                            "the walker opponent never hit the player - no combat pressure")
         env.close()
+
+    def test_scripted_opponent_reaches_the_player_on_every_map(self) -> None:
+        """Cover used to freeze the duel: no sighting, no reward, no learning.
+
+        On Warehouse the opponent walked into a wall for the whole episode; both
+        fighters stayed blind and the map produced zero training signal. The bot
+        now steers around cover.
+        """
+        idle = np.asarray([1, 1, 1, 1, 0, 0, 0, 1, 0, 0], dtype=np.int64)
+        for map_name in ("Dust", "Arena", "Warehouse"):
+            with self.subTest(map=map_name):
+                env = ShooterEnv(map_name=map_name, curriculum=False, opponent_mode="walker",
+                                 frame_skip=4, max_episode_seconds=60.0, vision_mode="coarse_los",
+                                 seed=9)
+                env.reset(seed=9)
+                contact = False
+                damage = 0.0
+                for _ in range(1000):
+                    _, _, terminated, truncated, _ = env.step_duel(idle, env.heuristic_action(1))
+                    contact = contact or bool(env.enemy_view(0)["visible"])
+                    if terminated or truncated:
+                        break
+                damage = env._combatants[0].damage_taken
+                self.assertTrue(contact, f"the opponent never reached the player on {map_name}")
+                self.assertGreater(damage, 0.0, f"the opponent never fired on {map_name}")
+                env.close()
+
+    def test_mover_tracks_the_player_without_return_fire(self) -> None:
+        """The gentle curriculum rung: motion and aim, but no bullets.
+
+        Phase 2 used to jump straight from a passive opponent to a walker that
+        shoots back; a measured run then produced ~500 episodes without a single
+        win or kill. ``mover`` separates the two lessons.
+        """
+        idle = np.asarray([1, 1, 1, 1, 0, 0, 0, 1, 0, 0], dtype=np.int64)
+        env = ShooterEnv(map_name="Dust", curriculum=False, opponent_mode="mover",
+                         frame_skip=4, max_episode_seconds=45.0, vision_mode="coarse_los",
+                         seed=9)
+        env.reset(seed=9)
+        contact = False
+        for _ in range(800):
+            _, _, terminated, truncated, _ = env.step_duel(idle, env.heuristic_action(1))
+            contact = contact or bool(env.enemy_view(0)["visible"])
+            if terminated or truncated:
+                break
+        self.assertTrue(contact, "the mover never reached the player")
+        self.assertEqual(env._combatants[1].shots_fired, 0, "the mover must not fire")
+        self.assertEqual(env._combatants[0].damage_taken, 0.0)
+        env.close()
+
+    def test_unknown_opponent_mode_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            ShooterEnv(map_name="Dust", opponent_mode="terminator")
+
+    def test_kill_bonus_shrinks_over_the_episode(self) -> None:
+        from training.rewards import KILL_DECAY_FLOOR, KILL_BONUS, RewardEvents, shape_reward
+
+        base = dict(distance_before=10.0, distance_after=10.0, aim_error_radians=math.pi,
+                    kills=1, physics_steps=1, time_limit_seconds=60.0)
+        early = shape_reward(RewardEvents(elapsed_seconds=0.0, **base)).components["kills"]
+        late = shape_reward(RewardEvents(elapsed_seconds=55.0, **base)).components["kills"]
+        self.assertAlmostEqual(early, KILL_BONUS, places=6)
+        self.assertLess(late, early)
+        self.assertGreaterEqual(late, KILL_BONUS * KILL_DECAY_FLOOR - 1e-9)
+
+    def test_approach_bonus_requires_visual_contact(self) -> None:
+        from training.rewards import RewardEvents, shape_reward
+
+        common = dict(distance_before=10.0, distance_after=9.0, aim_error_radians=math.pi,
+                      physics_steps=1)
+        visible = shape_reward(RewardEvents(enemy_visible=True, **common))
+        hidden = shape_reward(RewardEvents(enemy_visible=False, **common))
+        self.assertAlmostEqual(visible.components.get("approach", 0.0), 0.01)
+        self.assertNotIn("approach", hidden.components)
 
     def test_weapons_and_ammo_reload(self) -> None:
         self.assertEqual(len(WEAPON_NAMES), 6)

@@ -27,6 +27,7 @@ from env.physics import (
     in_field_of_view,
     move_body,
     position_is_free,
+    position_is_free,
     ray_cylinder_hit,
     raycast_distance,
     raycast_scene,
@@ -53,6 +54,17 @@ ACTION_SIZE = len(ACTION_NVECS)
 #   "noisy"     - precise values plus seeded Gaussian noise
 #   "coarse"    - sector/bands, but the enemy is always treated as tracked
 #   "coarse_los"- sector/bands *and* real vision: cover hides the enemy
+# Opponent behaviours for the scripted bot. ``mover`` is the gentle rung of the
+# curriculum ladder: it moves and aims like the walker but never fires, so the
+# policy can learn to track a moving target before it has to survive return fire.
+OPPONENT_MODES: tuple[str, ...] = ("stationary", "mover", "walker", "shooter", "full")
+# Which opponent each curriculum phase uses (``None`` = automatic by phase).
+CURRICULUM_OPPONENTS: dict[int, str] = {
+    1: "stationary",
+    2: "mover",
+    3: "walker",
+    4: "full",
+}
 VISION_MODES = ("exact", "noisy", "coarse", "coarse_los")
 DEFAULT_VISION_MODE = "coarse_los"
 OBSERVATION_VERSION = 2
@@ -154,6 +166,7 @@ class Combatant:
     bot_stuck: int = 0
     bot_detour: int = 0
     bot_detour_sign: int = 1
+    bot_steer: float = 0.0
     bot_last_position: tuple[float, float] | None = None
 
     def forget(self) -> None:
@@ -168,6 +181,7 @@ class Combatant:
         self.bot_stuck = 0
         self.bot_detour = 0
         self.bot_detour_sign = 1
+        self.bot_steer = 0.0
         self.bot_last_position = None
 
     def seconds_since_seen(self, now: float) -> float | None:
@@ -207,6 +221,7 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
                 f"Unknown vision_mode {vision_mode!r}. Choose one of: {', '.join(VISION_MODES)}"
             )
         self.vision_mode = vision_mode
+        self.max_episode_seconds = float(max_episode_seconds)
         if frame_skip < 1:
             raise ValueError("frame_skip must be at least 1")
         if max_episode_seconds <= 0 or dt <= 0:
@@ -224,6 +239,11 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         self._max_distance = max(1.0, math.hypot(self.arena_map.width, self.arena_map.depth))
         self.curriculum = bool(curriculum)
         self.curriculum_phase = min(4, max(1, int(curriculum_phase)))
+        if opponent_mode is not None and opponent_mode not in OPPONENT_MODES:
+            raise ValueError(
+                f"Unknown opponent mode {opponent_mode!r}. Choose one of: "
+                f"{', '.join(OPPONENT_MODES)}"
+            )
         self.opponent_mode = opponent_mode
         self.opponent_snapshot: dict[str, Any] | None = None
         self.action_space = spaces.MultiDiscrete(np.asarray(ACTION_NVECS, dtype=np.int64))
@@ -272,6 +292,22 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         if self.curriculum_phase < 4:
             self.opponent_snapshot = None
 
+    def set_vision_mode(self, mode: str) -> None:
+        """Switch the perception model (used by the trainer's vision curriculum).
+
+        Memory is dropped on a switch: what was "sighted" under one perception
+        model must not be carried into a different one.
+        """
+        if mode not in VISION_MODES:
+            raise ValueError(
+                f"Unknown vision_mode {mode!r}. Choose one of: {', '.join(VISION_MODES)}"
+            )
+        if mode == self.vision_mode:
+            return
+        self.vision_mode = mode
+        for fighter in self._combatants:
+            fighter.forget()
+
     def set_opponent_snapshot(self, snapshot: dict[str, Any] | None) -> None:
         """Install a frozen, NumPy-only PPO policy copy for self-play episodes."""
         self.opponent_snapshot = snapshot
@@ -279,6 +315,36 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
     def set_map(self, arena_map: ArenaMap) -> None:
         """Replace the map template; the change takes effect on the next reset."""
         self.map_template = arena_map.copy()
+
+    # Curriculum spawn distance as a share of the map's spawn separation. The
+    # weapons are range limited (Pistol 35 m, damage falls off with distance), so
+    # on wide maps the early phases have to start closer: measured on Dust, a
+    # perfectly aimed Pistol hits 0 % of its shots at 36 m but ~24 % at 8 m.
+    # A first run with 45 % for phase 2 (16.2 m, SMG vs. a bot that shoots back)
+    # was a cliff: ~500 consecutive episodes without a single win or kill. The
+    # ramp is therefore flatter. Phase 4 always uses the real spawn points.
+    CURRICULUM_DISTANCE_FACTORS: dict[int, float] = {1: 0.25, 2: 0.35, 3: 0.6, 4: 1.0}
+
+    def _curriculum_spawns(
+        self, first: tuple[float, float], second: tuple[float, float]
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
+        """Pull the fighters closer together in the early curriculum phases."""
+        if not self.curriculum or self.curriculum_phase >= 4:
+            return first, second
+        factor = self.CURRICULUM_DISTANCE_FACTORS.get(self.curriculum_phase, 1.0)
+        center_x = (first[0] + second[0]) / 2.0
+        center_y = (first[1] + second[1]) / 2.0
+        # If cover sits on the pulled-in point, try slightly further out before
+        # falling back to the real spawn points.
+        for candidate in (factor, min(1.0, factor + 0.1), min(1.0, factor + 0.25)):
+            moved = [
+                (center_x + (point[0] - center_x) * candidate,
+                 center_y + (point[1] - center_y) * candidate)
+                for point in (first, second)
+            ]
+            if all(position_is_free(self.arena_map, x, y) for x, y in moved):
+                return (moved[0], moved[1])
+        return first, second
 
     def _phase_weapon_names(self) -> tuple[str, str]:
         if not self.curriculum:
@@ -294,39 +360,6 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         player_name = self._fixed_weapon_name or str(self.np_random.choice(WEAPON_NAMES))
         enemy_name = self._fixed_opponent_weapon or str(self.np_random.choice(WEAPON_NAMES))
         return player_name, enemy_name
-
-    # Fraction of the map spawn separation used per curriculum phase. Measured on
-    # Dust: at the full 36 m even a *perfect* shooter lands 0 % (Pistol) / 1.8 %
-    # (AK-47) of its shots, so an early phase out there can never teach a kill.
-    # The first phase starts inside effective range and the distance grows.
-    CURRICULUM_SPAWN_SCALE = {1: 0.25, 2: 0.45, 3: 0.7, 4: 1.0}
-
-    def _curriculum_spawns(self, first: tuple[float, float],
-                           second: tuple[float, float]) -> tuple[tuple[float, float],
-                                                                 tuple[float, float]]:
-        """Pull the spawns together in the early curriculum phases.
-
-        Non-curriculum matches (arena, playground, evaluation) always use the
-        real map spawns.
-        """
-        if not self.curriculum:
-            return first, second
-        scale = self.CURRICULUM_SPAWN_SCALE.get(self.curriculum_phase, 1.0)
-        if scale >= 1.0:
-            return first, second
-        center_x = (first[0] + second[0]) / 2.0
-        center_y = (first[1] + second[1]) / 2.0
-
-        def pulled(point: tuple[float, float]) -> tuple[float, float]:
-            return (center_x + (point[0] - center_x) * scale,
-                    center_y + (point[1] - center_y) * scale)
-
-        first_pos, second_pos = pulled(first), pulled(second)
-        # Never place a fighter inside cover or off the map.
-        if not (position_is_free(self.arena_map, *first_pos)
-                and position_is_free(self.arena_map, *second_pos)):
-            return first, second
-        return first_pos, second_pos
 
     def reset(
         self,
@@ -498,6 +531,9 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
                     distance_before=before_distance,
                     distance_after=after_distance,
                     aim_error_radians=aim_error,
+                    enemy_visible=bool(self._tracked(index)),
+                    elapsed_seconds=self.elapsed,
+                    time_limit_seconds=self.max_episode_seconds,
                     hits=frame_events[index]["hits"],
                     headshots=frame_events[index]["headshots"],
                     kills=frame_events[index]["kills"],
@@ -669,9 +705,8 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
 
         mode = self.opponent_mode
         if mode is None:
-            mode = {1: "stationary", 2: "walker", 3: "shooter", 4: "full"}.get(
-                self.curriculum_phase, "full"
-            ) if self.curriculum else "full"
+            mode = (CURRICULUM_OPPONENTS.get(self.curriculum_phase, "full")
+                    if self.curriculum else "full")
         dx, dy = target.body.x - own.body.x, target.body.y - own.body.y
         distance = max(1e-6, math.hypot(dx, dy))
         desired_yaw = math.atan2(dx, dy)
@@ -680,13 +715,13 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
             (target.body.z + target.body.height * 0.75) - (own.body.z + own.body.eye_height), distance
         )
         pitch_error = desired_pitch - own.body.pitch
-        if mode in {"walker", "shooter", "full"}:
+        if mode in {"mover", "walker", "shooter", "full"}:
             if abs(yaw_error) > 0.02:
                 default[2] = 2 if yaw_error > 0 else 0
             if abs(pitch_error) > 0.02:
                 default[3] = 2 if pitch_error > 0 else 0
 
-        if mode in {"walker", "full"}:
+        if mode in {"mover", "walker", "full"}:
             if distance > 8.0:
                 default[0] = 2
             elif distance < 4.0:
@@ -701,12 +736,13 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
             if mode == "full" and self.physics_frames % 90 < 25:
                 default[6] = 1
 
-        self._avoid_obstacles(agent_index, default)
+        self._avoid_obstacles(agent_index, default, target_bearing=desired_yaw)
 
-        # Every moving opponent shoots back - otherwise the training opponent is
-        # harmless, the policy has no reason to fire and simply farms the aim
-        # bonus. The walker is the gentle introduction: it fires every third
-        # chance with a wider tolerance.
+        # ``mover`` deliberately never fires: it exists only in early curriculum
+        # phases, where a harmless opponent is the point. ``walker`` is the first
+        # one that shoots back (every third chance, wider tolerance). Normalising
+        # the aim bonus (0.005/step) removed the reason the harmless variant was
+        # abandoned earlier - it can no longer be farmed for more than a kill.
         may_fire = mode in {"walker", "shooter", "full"}
         aligned = math.sqrt(yaw_error * yaw_error + pitch_error * pitch_error) < math.radians(
             {"walker": 14, "shooter": 12}.get(mode, 9)
@@ -719,13 +755,17 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         return default
 
     def _avoid_obstacles(self, agent_index: int, action: np.ndarray,
-                         notice: float = 0.004, detour_frames: int = 45) -> None:
-        """Let the scripted opponent slide around cover instead of freezing.
+                         target_bearing: float | None = None, notice: float = 0.004,
+                         detour_frames: int = 70) -> None:
+        """Steer the scripted opponent around cover instead of freezing.
 
-        The bot has no path planner: when it walks straight into a crate or
-        pillar it stops and - because cover also blocks its view - the whole duel
-        used to stall. This detects "wanted to advance but did not move" and
-        strafes along the more open side for a moment.
+        The bot has no path planner. Walking straight into a crate or wall used to
+        freeze the whole duel - on Warehouse the opponent never reached the player
+        within the episode, so that map produced *no* sighting, *no* reward and
+        *no* training signal at all. When "wants to advance but does not move" is
+        detected, the bot now looks for the most promising free direction from its
+        ray fan, turns there and keeps moving; the normal aiming logic (and with
+        it the firing decision) resumes as soon as it is unstuck.
         """
         fighter = self._combatants[0 if agent_index <= 0 else 1]
         position = (fighter.body.x, fighter.body.y)
@@ -740,16 +780,30 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
             fighter.bot_stuck = 0
         if fighter.bot_detour <= 0 and fighter.bot_stuck >= 6:
             origin = (fighter.body.x, fighter.body.y, fighter.body.z + fighter.body.eye_height)
-            reach = max(self.arena_map.width, self.arena_map.depth) * 0.6
-            right = raycast_distance(origin, fighter.body.yaw + math.pi / 4.0, 0.0, self.arena_map, reach)
-            left = raycast_distance(origin, fighter.body.yaw - math.pi / 4.0, 0.0, self.arena_map, reach)
-            fighter.bot_detour_sign = 1 if right >= left else -1
+            base = fighter.body.yaw if target_bearing is None else target_bearing
+            best_angle: float | None = None
+            best_score = float("-inf")
+            for step in (-3, -2, -1, 1, 2, 3):
+                angle = wrap_angle(base + step * math.pi / 4.0)
+                free = min(raycast_distance(origin, angle, 0.0, self.arena_map, 18.0), 18.0)
+                if free < 1.5:
+                    continue
+                # Prefer open space that still heads roughly toward the target.
+                score = min(free, 12.0) - 2.4 * abs(step)
+                if score > best_score:
+                    best_score, best_angle = score, angle
+            if best_angle is None:
+                fighter.bot_detour = 0
+                fighter.bot_stuck = 0
+                return
+            fighter.bot_steer = best_angle
             fighter.bot_detour = detour_frames
             fighter.bot_stuck = 0
         if fighter.bot_detour > 0:
             fighter.bot_detour -= 1
-            action[0] = 2
-            action[1] = 2 if fighter.bot_detour_sign > 0 else 0
+            error = wrap_angle(fighter.bot_steer - fighter.body.yaw)
+            action[2] = 2 if error > 0.06 else (0 if error < -0.06 else 1)
+            action[0] = 2 if abs(error) < math.radians(60) else 1
 
     @staticmethod
     def _snapshot_action(observation: np.ndarray, snapshot: dict[str, Any] | None = None) -> np.ndarray:
@@ -779,12 +833,6 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         return np.asarray(result, dtype=np.int64)
 
     # ------------------------------------------------------------ perception
-    def set_vision_mode(self, mode: str) -> None:
-        """Switch how much the agents are allowed to perceive (see VISION_MODES)."""
-        if mode not in VISION_MODES:
-            raise ValueError(f"Unknown vision_mode {mode!r}. Choose one of: {', '.join(VISION_MODES)}")
-        self.vision_mode = mode
-
     def enemy_view(self, agent_index: int = 0) -> dict[str, Any]:
         """What agent ``agent_index`` currently perceives about the opponent.
 

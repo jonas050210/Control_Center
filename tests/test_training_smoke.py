@@ -18,6 +18,103 @@ HAS_PPO_DEPENDENCIES = (
 
 @unittest.skipUnless(HAS_PPO_DEPENDENCIES, "Install Stable-Baselines3 and PyTorch to run PPO integration tests.")
 class PPOTrainingSmokeTests(unittest.TestCase):
+    def test_perception_curriculum_and_automatic_evaluation(self) -> None:
+        """A finished run must switch perception per phase and verify itself."""
+        with tempfile.TemporaryDirectory(prefix="neural-arena-eval-") as temporary_directory:
+            root = Path(temporary_directory)
+            config = TrainingConfig(
+                duration_seconds=0,
+                total_timesteps=2_048,
+                n_workers=1,
+                envs_per_worker=1,
+                map_name="Dust",
+                curriculum=True,
+                vision_curriculum=True,
+                vision_mode="coarse_los",
+                eval_after_training=True,
+                eval_episodes=1,
+                eval_bots=("stationary",),
+                self_play=False,
+                method="Pure RL",
+                max_envs=1,
+                episode_seconds=20.0,
+                models_dir=root / "models",
+                logs_dir=root / "logs",
+            )
+            controller = TrainingController(config)
+            controller.start()
+            controller._thread.join(timeout=300)
+            snapshot = controller.snapshot()
+            self.assertFalse(snapshot["thread_alive"], "training + evaluation timed out")
+            self.assertEqual(snapshot["status"], "complete", snapshot.get("error"))
+            evaluation = snapshot.get("evaluation")
+            self.assertIsNotNone(evaluation, "the run did not evaluate its checkpoint")
+            self.assertEqual(len(evaluation["runs"]), 1)
+            run = evaluation["runs"][0]
+            for key in ("win_rate", "kill_rate", "avg_blind_ratio", "episodes"):
+                self.assertIn(key, run)
+            self.assertTrue((root / "models" / "best_model_eval.json").exists())
+            # Perception curriculum: phase 1 must train the forgiving model.
+            from training.train import vision_mode_for_phase
+
+            self.assertEqual(vision_mode_for_phase(1), "noisy")
+            self.assertEqual(vision_mode_for_phase(4), "coarse_los")
+
+    def test_automatic_evaluation_reports_both_perception_models(self) -> None:
+        """The retained model and the target-perception model are both verified."""
+        import json
+
+        from training.train import _evaluate_best_checkpoint
+
+        with tempfile.TemporaryDirectory(prefix="neural-arena-target-") as temporary_directory:
+            root = Path(temporary_directory)
+            config = TrainingConfig(
+                duration_seconds=0,
+                total_timesteps=1_024,
+                n_workers=1,
+                envs_per_worker=1,
+                map_name="Dust",
+                curriculum=True,
+                vision_curriculum=True,
+                vision_mode="coarse_los",
+                eval_after_training=True,
+                eval_episodes=1,
+                eval_bots=("stationary",),
+                self_play=False,
+                method="Pure RL",
+                max_envs=1,
+                episode_seconds=15.0,
+                models_dir=root / "models",
+                logs_dir=root / "logs",
+            )
+            controller = TrainingController(config)
+            controller.start()
+            controller._thread.join(timeout=300)
+            self.assertFalse(controller.snapshot()["thread_alive"], "training timed out")
+
+            # Pretend the retained checkpoint came from the forgiving phase 1 and
+            # the end state from the target perception - exactly what the vision
+            # curriculum produces over a long run.
+            models = root / "models"
+            (models / "best_model.zip").write_bytes((models / "final_model.zip").read_bytes())
+            for name, mode, phase in (("best_model", "noisy", 1), ("final_model", "coarse_los", 4)):
+                meta = json.loads((models / f"final_model_meta.json").read_text(encoding="utf-8"))
+                meta.update({"vision_mode": mode, "phase": phase})
+                (models / f"{name}_meta.json").write_text(json.dumps(meta), encoding="utf-8")
+                (models / f"{name}_vecnormalize.pkl").write_bytes(
+                    (models / "final_model_vecnormalize.pkl").read_bytes())
+
+            _evaluate_best_checkpoint(config, controller)
+            evaluation = controller.snapshot()["evaluation"]
+            self.assertIsNotNone(evaluation)
+            self.assertEqual(evaluation["model"], "best_model.zip")
+            self.assertEqual(evaluation["vision_mode"], "noisy")
+            self.assertEqual(evaluation["runs"][0]["bot"], "stationary")
+            self.assertIn("target", evaluation)
+            self.assertEqual(evaluation["target"]["vision_mode"], "coarse_los")
+            self.assertIsNotNone(evaluation["target"]["win_rate_overall"])
+            self.assertTrue((models / "best_model_eval.json").exists())
+
     def test_curriculum_gate_holds_a_phase_without_crashing(self) -> None:
         """A withheld curriculum phase must be logged, not raise.
 

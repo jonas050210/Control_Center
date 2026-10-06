@@ -138,7 +138,14 @@ Dazu die eigenen Werte (Position, Blickrichtung, 8 Wand-Raycasts, HP, Munition,
 Bewegungszustand, Timer). Der Zielbonus im Reward greift nur bei Sichtkontakt –
 belohnt wird also nichts, was der Agent nicht wissen kann.
 
-**Vier Modi** (`vision_mode`, im ARENA- und TRAINING-Panel wählbar):
+**Fünf Gegner-Verhalten** (`opponent_mode`): `stationary` (steht, schießt nie),
+`mover` (läuft und zielt, schießt nicht – die Zwischenstufe fürs Curriculum),
+`walker` (schießt zurück, weite Toleranz), `shooter` (zielt genau), `full`
+(taktisch, springt, sprintet). Im ARENA-Panel zusätzlich als „Passive" und
+„Mover" wählbar; unbekannte Werte werden abgelehnt statt still als `stationary`
+zu laufen.
+
+**Vier Sicht-Modi** (`vision_mode`, im ARENA- und TRAINING-Panel wählbar):
 
 * `coarse_los` (**Standard**): echte Sicht – Deckung blendet den Gegner wirklich aus.
 * `coarse`: Sektor/Bänder, aber der Gegner gilt immer als verfolgt.
@@ -154,11 +161,15 @@ stilles Zurückfallen auf den Standard).
 
 | Hebel | Standard | Warum |
 | --- | --- | --- |
-| `gamma` | **0.995** | 15 Entscheidungen/s × 0,99 = nur ~100 Steps Horizont; Suchen+Zielen+Töten dauert länger. 0.995 ≈ 200 Steps. |
+| `gamma` | **0.99** (SB3-Standard, im Panel einstellbar) | 15 Entscheidungen/s × 0,99 ≈ 100 Steps Horizont; gemessen war der längere Horizont (0,995 ≈ 200 Steps) **nicht** der Engpass. |
 | Episodenlänge | 60 s (im Panel einstellbar) | kürzere Runden = mehr Kämpfe pro Minute |
 | `curriculum_min_win_rate` | 35–40 % **Kill**-Rate | die nächste Phase wird erst freigeschaltet, wenn die aktuelle wirklich gewonnen wird |
-| Startabstand der Phasen | 25 / 45 / 70 / 100 % der Kartendistanz | auf Kartendistanz (Dust: 36 m) treffen selbst perfekt zielende Schützen nur 0–1,8 % – eine frühe Phase dort kann keinen Kill lehren |
+| Startabstand der Phasen | 25 / 35 / 60 / 100 % der Kartendistanz (Dust: 9 / 12,6 / 21,6 / 36 m) | auf Kartendistanz (Dust: 36 m) treffen selbst perfekt zielende Schützen nur 0–1,8 % – eine frühe Phase dort kann keinen Kill lehren. Der Sprung auf 45 % (16,2 m) war gemessen eine Klippe: ~500 Episoden ohne Sieg oder Kill |
+| Gegner-Leiter | `stationary` → `mover` → `walker` → `full` | jede Phase bringt **eine** neue Lektion: erst zielen, dann einen *beweglichen* Gegner treffen, dann Gegenwehr überleben, dann alles zusammen |
 | „Bestes Modell“ | höchste Kill-Rate | ein Sieg nach HP-Vergleich am Zeitlimit wäre eine Belohnung fürs Verstecken |
+| Beobachtungs-Normalisierung | **`norm_obs=False`** | die Wahrnehmung ist schon auf [-1, 1] begrenzt, Nullen heißen „nie gesehen“ – laufende Mittelwerte würden genau diese Aussage verschieben (Rewards bleiben normalisiert) |
+| Sicht-Curriculum | Phase 1 `noisy` → 2 `coarse` → 3–4 `coarse_los` | erst mit vergebender Wahrnehmung lernen, am Ende das ehrliche Modell (Peak-Kill 27 % vs. 15 % im direkten Vergleich) |
+| Automatische Bewertung | nach jedem Lauf (`eval_after_training`) | das Ergebnis wird gegen `stationary`/`walker`/`full` nachgemessen und als `models/best_model_eval.json` + Karte im Panel abgelegt – keine unbelegten Trainingszahlen |
 
 Das Training protokolliert **Siege und Kills getrennt** (`win_rate`, `kill_rate`):
 ein „Sieg“ am Zeitlimit ist nur ein HP-Vergleich und kein Kill.
@@ -166,7 +177,7 @@ ein „Sieg“ am Zeitlimit ist nur ein HP-Vergleich und kein Kill.
 ## 6. Tests
 
 ```bash
-python3 -m unittest discover -s tests -v      # 87 Tests in ~20 s
+python3 -m unittest discover -s tests -v      # Tests in ~25 s
 ```
 
 Die Suite deckt Umgebung/Physik, Karten-JSON, Rewards, Minigames, TTK-Simulation,
@@ -190,10 +201,27 @@ pro Episode und prüft den `observation_version`-Stempel des Checkpoints. Mit
 `--phase 1..4` die Curriculum-Bedingungen (Abstand) nachstellen, unter denen ein
 Checkpoint trainiert wurde. Mehrere Seeds vergleicht `tools/seed_sweep.py`.
 
-Gemessen auf dieser Maschine (CPU, 2 Worker, `coarse_los`): Zufallspolitik
-0/20 Siege – trainierter Checkpoint unter Phase-1-Bedingungen 10/10 Siege mit
-bestätigten Kills (TTK ≈ 20 s), auf Kartendistanz 0 Kills (dort trifft niemand,
-siehe ANALYSE.md).
+Gemessen auf dieser Maschine (CPU, 2 Worker, 250k-Steps-Lauf, Dust): Zufallspolitik
+0/20 Siege. Der beste Checkpoint eines 10-Minuten-Laufs (Phase 1, `noisy`
+Sicht-Curriculum, `norm_obs=False`) gewinnt gegen den passiven Gegner
+**20/20 Episoden, alle mit bestätigtem Kill, TTK 14,3 s** (Trefferquote 67,6 %) und
+verliert gegen den beweglichen `mover` kein einziges (15 Siege, 2 Kills,
+5 Unentschieden). Unter der **Ziel-Wahrnehmung `coarse_los`** (Sektor + Deckung,
+ohne Training in diesem Modus) bleiben es 17/20 Siege, aber **0 Kills**: die
+ehrliche Wahrnehmung braucht eigenes Training – dafür sind die Phasen 3/4 des
+Sicht-Curriculums da. Details, Zahlen und Grenzen: ANALYSE.md § 0.
+
+Zwei Details, die beim Nachprüfen wichtig sind:
+
+* Läufe schreiben **immer** einen Endstand (`final_model.zip`); die Bewertung nimmt
+  `best_model.zip`, sonst `final_model.zip`. Sie prüft den besten Checkpoint unter
+  *seiner* gestempelten Wahrnehmung und zusätzlich das Endmodell unter der
+  Ziel-Wahrnehmung – die Karte „BEWERTUNG DES BESTEN MODELLS" zeigt beide Blöcke.
+* Die `*_vecnormalize.pkl`-Datei wird mit einem eigenen, defensiven Loader gelesen
+  (`training/evaluation.py: load_normalizer`): SB3 entfernt beim Speichern das
+  umgebende Vektor-Env, ein naives `pickle.load` + Attributzugriff endet sonst in
+  einer `RecursionError`. Die ARENA-Inferenz nutzt denselben Loader und
+  normalisiert nur Checkpoints mit `norm_obs=True`.
 
 Aufgezeichnete Demos (`data/demos.csv`) tragen einen Sidecar
 `data/demos_meta.json` mit `observation_version`; ein veralteter Datensatz wird

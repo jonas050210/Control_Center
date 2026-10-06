@@ -38,11 +38,24 @@ class TrainingConfig:
     # once the current phase is actually being won. Without this gate a 120k-step
     # run measurably collapsed (67.9% -> 0.0%) when the timer forced phase 3 + 4.
     curriculum_min_win_rate: float = 0.40
+    # Episodes the "best checkpoint" watch averages over. A short window chases
+    # single lucky kills; a long one averages a peak away.
+    best_window_episodes: int = 50
     # Configurable, because the discount horizon is a real lever here: at 15
     # decisions per second (frame_skip 4) gamma=0.99 reaches ~100 steps while
     # gamma=0.995 reaches ~200. Measured on this machine the long horizon was not
     # the bottleneck, so the SB3 default stays - raise it for longer fights.
     gamma: float = 0.99
+    frame_skip: int = 4
+    # Perception curriculum: easy perception first, the honest full model later.
+    # Measured: with `noisy` the kill rate rose to 27% in 100k steps, with the
+    # final `coarse_los` model to 15% - the last phase still trains the real thing.
+    vision_curriculum: bool = True
+    # Automatic evaluation right after the run, so a result is never just a
+    # training number that nobody verified.
+    eval_after_training: bool = True
+    eval_episodes: int = 8
+    eval_bots: tuple[str, ...] = ("stationary", "walker", "full")
     seed: int = 2026
     models_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "models")
     logs_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "logs")
@@ -58,6 +71,12 @@ class TrainingConfig:
         self.episode_seconds = min(300.0, max(10.0, float(self.episode_seconds)))
         self.curriculum_min_win_rate = min(1.0, max(0.0, float(self.curriculum_min_win_rate)))
         self.gamma = min(0.9999, max(0.9, float(self.gamma)))
+        self.frame_skip = max(1, min(8, int(self.frame_skip)))
+        self.eval_episodes = max(1, min(50, int(self.eval_episodes)))
+        self.best_window_episodes = max(20, min(200, int(self.best_window_episodes)))
+        self.eval_bots = tuple(self.eval_bots) or ("stationary",)
+        if not isinstance(self.eval_bots, tuple):
+            self.eval_bots = tuple(self.eval_bots)
         self.models_dir = Path(self.models_dir)
         self.logs_dir = Path(self.logs_dir)
         from env.shooter_env import VISION_MODES
@@ -81,6 +100,7 @@ class TrainingController:
         self.resume_event.set()
         self.save_requested = threading.Event()
         self._status = "stopped"
+        self._evaluation: dict[str, Any] | None = None
         self._logs: deque[str] = deque(maxlen=300)
         self._metrics: dict[str, Any] = {
             "timesteps": 0,
@@ -109,6 +129,7 @@ class TrainingController:
             self.save_requested.clear()
             self._status = "starting"
             self._error = None
+            self._evaluation = None
             self._started_at = time.monotonic()
             self._logs.clear()
             self._log_locked("Starting CPU PPO trainer.")
@@ -150,7 +171,8 @@ class TrainingController:
         self._logs.append(f"[{stamp}] {message}")
 
     def update(self, *, status: str | None = None, metrics: dict[str, Any] | None = None,
-               error: str | None = None, checkpoint: str | None = None) -> None:
+               error: str | None = None, checkpoint: str | None = None,
+               evaluation: dict[str, Any] | None = None) -> None:
         with self._lock:
             if status is not None:
                 self._status = status
@@ -160,6 +182,8 @@ class TrainingController:
                 self._error = error
             if checkpoint is not None:
                 self._latest_checkpoint = checkpoint
+            if evaluation is not None:
+                self._evaluation = evaluation
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -170,6 +194,7 @@ class TrainingController:
                 "logs": list(self._logs),
                 "error": self._error,
                 "latest_checkpoint": self._latest_checkpoint,
+                "evaluation": self._evaluation,
                 "thread_alive": alive,
                 "started_at": self._started_at,
                 "paused": self._status == "paused",
@@ -233,6 +258,19 @@ def export_policy_snapshot(model: Any, vec_normalize: Any | None = None) -> dict
             "action_nvec": tuple(ACTION_NVECS)}
 
 
+VISION_CURRICULUM: dict[int, str] = {1: "noisy", 2: "coarse", 3: "coarse_los", 4: "coarse_los"}
+"""Perception per curriculum phase: learn to shoot under easy perception first.
+
+Phase 1-2 stay coarse but forgiving (noise / no cover gating), so the policy can
+learn to aim and kill at all; phases 3-4 run the honest model that the arena uses.
+"""
+
+
+def vision_mode_for_phase(phase: int, fallback: str = "coarse_los") -> str:
+    """Vision mode the trainer uses in a curriculum phase."""
+    return VISION_CURRICULUM.get(min(4, max(1, int(phase))), fallback)
+
+
 def _append_csv(path: Path, fieldnames: list[str], row: dict[str, Any], lock: threading.Lock) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with lock:
@@ -242,6 +280,160 @@ def _append_csv(path: Path, fieldnames: list[str], row: dict[str, Any], lock: th
             if new_file:
                 writer.writeheader()
             writer.writerow(row)
+
+
+def _checkpoint_metadata(checkpoint: Path) -> dict[str, Any]:
+    """Read the sidecar stamp of a checkpoint (empty dict when there is none)."""
+    meta_path = checkpoint.with_name(f"{checkpoint.stem}_meta.json")
+    if not meta_path.exists():
+        return {}
+    try:
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _evaluate_checkpoint(
+    config: TrainingConfig,
+    job: TrainingController,
+    checkpoint: Path,
+    *,
+    vision_mode: str,
+    phase: int,
+    seed: int,
+    key: str | None = None,
+    label: str = "",
+) -> dict[str, Any] | None:
+    """Play one checkpoint against every configured opponent.
+
+    The report is written after *every* matchup and pushed into the job snapshot,
+    so a crash (the sandbox can abort a process while it tears down its workers)
+    cannot erase a verification that was already measured.
+    """
+    # ``train_ppo`` imports numpy locally, so the module-level helpers must not
+    # assume it is available.
+    import numpy as np
+
+    from training.evaluation import evaluate, summarize
+
+    meta = _checkpoint_metadata(checkpoint)
+    episode_seconds = float(meta.get("episode_seconds") or config.episode_seconds)
+    frame_skip = max(1, int(meta.get("frame_skip") or config.frame_skip))
+    try:
+        from training.evaluation import load_policy
+
+        model, normalizer = load_policy(checkpoint)
+    except Exception as exc:
+        job.log(f"{label}Automatic evaluation failed to load {checkpoint.name}: {exc}")
+        return None
+    runs: list[dict[str, Any]] = []
+    payload: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "model": checkpoint.name,
+        "phase": phase,
+        "vision_mode": vision_mode,
+        "episodes_per_matchup": config.eval_episodes,
+        "runs": runs,
+    }
+    try:
+        for bot in config.eval_bots:
+            result = evaluate(
+                model=model, normalizer=normalizer, bot=bot, phase=phase,
+                episodes=config.eval_episodes, vision_mode=vision_mode,
+                map_name=config.map_name, episode_seconds=episode_seconds,
+                frame_skip=frame_skip, seed=seed,
+            )
+            result["policy"] = str(checkpoint)
+            runs.append(result)
+            job.log("  " + (f"{label}" if label else "") + summarize(result))
+            payload["win_rate_overall"] = float(np.mean([run["win_rate"] for run in runs]))
+            payload["kill_rate_overall"] = float(np.mean([run["kill_rate"] for run in runs]))
+            best = max(runs, key=lambda run: (run["kill_rate"], run["win_rate"]))
+            payload["best"] = {"bot": best["bot"], "phase": best["phase"],
+                               "win_rate": best["win_rate"], "kill_rate": best["kill_rate"]}
+            _store_evaluation(config, job, payload, key)
+    except Exception as exc:  # a failed matchup must not kill a finished run
+        job.log(f"{label}Automatic evaluation failed: {exc}")
+        return payload if runs else None
+    return payload
+
+
+def _store_evaluation(config: TrainingConfig, job: TrainingController,
+                      payload: dict[str, Any], key: str | None) -> None:
+    """Publish the (partial) evaluation to the panel and to ``models/``."""
+    snapshot = dict(payload)
+    if key:
+        # A second checkpoint is measured under the *target* perception; it is
+        # attached to the existing report instead of overwriting it.
+        target = dict(payload)
+        target.pop("target", None)
+        target["runs"] = list(payload.get("runs") or [])
+        current = dict(job.snapshot().get("evaluation") or {})
+        current["target"] = target
+        snapshot = current
+    try:
+        (config.models_dir / "best_model_eval.json").write_text(
+            json.dumps(snapshot, indent=2), encoding="utf-8")
+    except OSError as exc:
+        job.log(f"Could not store the evaluation report: {exc}")
+    job.update(evaluation=snapshot)
+
+
+def _evaluate_best_checkpoint(config: TrainingConfig, job: TrainingController) -> None:
+    """Verify the retained checkpoint by playing it - training numbers are not proof.
+
+    A run can look fine internally and still lose every fight; this plays the
+    best checkpoint against the bot and stores the result next to the model, so
+    "does it actually work" is answered by matches, not by the loss curve.
+    """
+    checkpoint = config.models_dir / "best_model.zip"
+    if not checkpoint.is_file():
+        final_model = config.models_dir / "final_model.zip"
+        if final_model.is_file():
+            checkpoint = final_model
+    if not checkpoint.is_file():
+        # ``Path("")`` would silently mean "." and then looks like a file that
+        # exists - only a real path from the job may be used as a fallback.
+        candidate = job.snapshot().get("checkpoint")
+        candidate_path = Path(candidate) if isinstance(candidate, str) and candidate else None
+        if candidate_path is not None and candidate_path.is_file():
+            checkpoint = candidate_path
+    if not checkpoint.is_file():
+        job.log("Automatic evaluation skipped: no checkpoint was written.")
+        return
+    meta = _checkpoint_metadata(checkpoint)
+    phase = min(4, max(1, int(meta.get("phase", 4) or 4)))
+    # The checkpoint was trained with *its* perception model and episode length -
+    # measuring it under the final settings of the run would compare apples with
+    # oranges (the vision curriculum starts with the forgiving `noisy` mode).
+    vision_mode = str(meta.get("vision_mode") or config.vision_mode)
+    job.log(f"Automatic evaluation of {checkpoint.name} "
+            f"({config.eval_episodes} episodes per opponent, phase {phase}, "
+            f"vision_mode={vision_mode}) ...")
+    report = _evaluate_checkpoint(config, job, checkpoint, vision_mode=vision_mode,
+                                 phase=phase, seed=config.seed)
+    if report is None:
+        return
+    job.log(f"Evaluation summary: {report.get('win_rate_overall', 0.0):.0%} wins, "
+            f"{report.get('kill_rate_overall', 0.0):.0%} kills (Ø over all opponents, "
+            f"vision_mode={vision_mode}).")
+
+    # With the perception curriculum the retained checkpoint may still be a
+    # phase-1 model (forgiving `noisy` vision). The honest question - "does the
+    # target perception work?" - is answered by the *final* model under the target
+    # mode, so it is measured as well instead of being left to the reader.
+    final_model = config.models_dir / "final_model.zip"
+    if not final_model.is_file() or final_model == checkpoint:
+        return
+    final_meta = _checkpoint_metadata(final_model)
+    final_mode = str(final_meta.get("vision_mode") or config.vision_mode)
+    if final_mode == vision_mode:
+        return
+    final_phase = min(4, max(1, int(final_meta.get("phase", phase) or phase)))
+    job.log(f"Target perception check: {final_model.name} with vision_mode={final_mode} ...")
+    _evaluate_checkpoint(config, job, final_model, vision_mode=final_mode, phase=final_phase,
+                         seed=config.seed + 1000, key="target", label="target ")
 
 
 def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
@@ -271,6 +463,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
         max_envs=config.max_envs,
         vision_mode=config.vision_mode,
         max_episode_seconds=config.episode_seconds,
+        frame_skip=config.frame_skip,
     )
     job.update(metrics={"effective_envs": parallelism.effective_envs})
     if parallelism.effective_envs < config.n_workers * config.envs_per_worker:
@@ -287,9 +480,16 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
         vec_env = VecNormalize.load(str(vec_normalize_path), vec_env_base)
         vec_env.training = True
         vec_env.norm_reward = True
-        job.log(f"Loaded observation statistics from {vec_normalize_path.name}.")
+        job.log(
+            f"Loaded observation statistics from {vec_normalize_path.name} "
+            f"(norm_obs={bool(vec_env.norm_obs)})."
+        )
     else:
-        vec_env = VecNormalize(vec_env_base, norm_obs=True, norm_reward=True, clip_obs=10.0)
+        # The perception observation is already bounded to [-1, 1] and its zeros
+        # are meaningful ("never seen"), so running-statistic normalisation would
+        # rescale exactly the values the policy has to interpret. Rewards are
+        # still normalised.
+        vec_env = VecNormalize(vec_env_base, norm_obs=False, norm_reward=True, clip_obs=10.0)
 
     model = None
     callback = None
@@ -355,6 +555,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 self.best_win_rate, self.best_kill_rate = self._load_best_score()
                 self.best_seen_kill = self.best_kill_rate
                 self.last_best_episode = 0
+                self.vision_mode = config.vision_mode
                 self.metric_fields = [
                     "timestamp", "steps", "fps", "episodes", "win_rate", "avg_reward",
                     "avg_ttk", "headshot_pct", "accuracy", "elapsed", "map",
@@ -394,6 +595,15 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     f"PPO live: {parallelism.effective_envs} vector envs, CPU device, "
                     f"{config.map_name} map."
                 )
+                self.vision_mode = config.vision_mode
+                if config.curriculum and config.vision_curriculum:
+                    self.vision_mode = vision_mode_for_phase(1, config.vision_mode)
+                    try:
+                        self.training_env.env_method("set_vision_mode", self.vision_mode)
+                        job.log(f"Perception curriculum: phase 1 trains with vision_mode="
+                                f"{self.vision_mode}.")
+                    except Exception as exc:
+                        job.log(f"Perception curriculum notice: {exc}")
                 if config.curriculum:
                     try:
                         self.training_env.env_method("set_curriculum_phase", 1)
@@ -480,8 +690,15 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     phase = self.current_phase
                 if phase != self.current_phase:
                     self.current_phase = phase
+                    if config.vision_curriculum:
+                        self.vision_mode = vision_mode_for_phase(phase, config.vision_mode)
+                        try:
+                            self.training_env.env_method("set_vision_mode", self.vision_mode)
+                        except Exception as exc:
+                            job.log(f"Could not update one or more perception models: {exc}")
                     job.log(f"Curriculum advanced to phase {phase}/4 "
-                            f"(kill rate {self._recent_kill_rate():.1%}).")
+                            f"(kill rate {self._recent_kill_rate():.1%}, "
+                            f"vision_mode={self.vision_mode}).")
                     try:
                         self.training_env.env_method("set_curriculum_phase", phase)
                     except Exception as exc:
@@ -601,11 +818,16 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 50k boundary can fall into a bad phase and then the *only*
                 checkpoint on disk is a worthless one.
                 """
-                recent = list(self.kill_wins)[-30:]
-                if len(recent) < 20:
+                # The window is a real trade-off: too short and single lucky kills
+                # win, too long and a peak is averaged away. Any improvement over
+                # the retained score qualifies, because the 15-episode spacing
+                # already limits how often a checkpoint may be written.
+                window = config.best_window_episodes
+                recent = list(self.kill_wins)[-window:]
+                if len(recent) < max(20, window * 3 // 5):
                     return
                 kill = float(np.mean(recent))
-                if kill <= self.best_seen_kill + 0.05:
+                if kill <= self.best_seen_kill:
                     return
                 if self.episode_count - self.last_best_episode < 15:
                     return
@@ -623,6 +845,8 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     return
                 if kind == "best":
                     base = config.models_dir / "best_model"
+                elif kind == "final":
+                    base = config.models_dir / "final_model"
                 else:
                     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     base = config.models_dir / f"manual_{stamp}"
@@ -645,7 +869,10 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     # Policy checkpoints are only valid for the observation
                     # layout they were trained on (see server/policies.py).
                     "observation_version": OBSERVATION_VERSION,
-                    "vision_mode": config.vision_mode,
+                    "vision_mode": getattr(self, "vision_mode", config.vision_mode),
+                    "vision_curriculum": bool(config.vision_curriculum),
+                    "frame_skip": config.frame_skip,
+                    "episode_seconds": config.episode_seconds,
                 }
                 with base.with_name(f"{base.name}_meta.json").open("w", encoding="utf-8") as handle:
                     json.dump(metadata, handle, indent=2)
@@ -659,6 +886,10 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
 
         callback = ArenaTrainingCallback()
         job.update(status="running")
+        job.log(
+            f"Observation normalisation: {bool(vec_env.norm_obs)} (structured perception "
+            f"values are not rescaled by default)."
+        )
         job.log(
             f"PPO configured: lr=3e-4 linear, n_steps=2048, batch=256, epochs=10, "
             f"gamma={config.gamma}, gae=0.95, clip=0.2, ent_coef=0.01."
@@ -684,6 +915,16 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
             final_metrics["fps"] = max(0.0, (model.num_timesteps - callback.base_timesteps)
                                          / max(1e-6, final_metrics["elapsed"]))
         job.update(metrics=final_metrics)
+        if callback is not None:
+            # Always leave the end state of the run on disk: it is the model a
+            # user would load next, and the automatic evaluation compares it with
+            # the retained "best" checkpoint under the target perception.
+            try:
+                callback._save_checkpoint("final", force=True)
+            except Exception as exc:
+                job.log(f"Final checkpoint could not be written: {exc}")
+        if config.eval_after_training:
+            _evaluate_best_checkpoint(config, job)
     finally:
         if vec_env is not None:
             vec_env.close()

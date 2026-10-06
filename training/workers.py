@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import multiprocessing
 import os
 import threading
@@ -62,6 +63,7 @@ def _environment_factory(
     initial_phase: int,
     max_episode_seconds: float,
     vision_mode: str = "coarse_los",
+    frame_skip: int = 4,
 ) -> Callable[[], Any]:
     """Create one Monitor-wrapped environment with a process-safe factory."""
     def make_one() -> Any:
@@ -70,7 +72,7 @@ def _environment_factory(
 
         env = ShooterEnv(
             map_name=map_name,
-            frame_skip=4,
+            frame_skip=frame_skip,
             max_episode_seconds=max_episode_seconds,
             curriculum=curriculum,
             curriculum_phase=initial_phase,
@@ -92,6 +94,7 @@ def make_vector_env(
     max_envs: int | None = 24,
     start_method: str | None = None,
     vision_mode: str = "coarse_los",
+    frame_skip: int = 4,
 ) -> tuple[Any, Parallelism]:
     """Construct DummyVecEnv for one env or SubprocVecEnv for parallel rollouts.
 
@@ -115,6 +118,7 @@ def make_vector_env(
             initial_phase=initial_phase,
             max_episode_seconds=max_episode_seconds,
             vision_mode=vision_mode,
+            frame_skip=frame_skip,
         )
         for rank in range(parallelism.effective_envs)
     ]
@@ -122,11 +126,26 @@ def make_vector_env(
         return DummyVecEnv(factories), parallelism
 
     methods = multiprocessing.get_all_start_methods()
-    if start_method is None:
-        start_method = "forkserver" if "forkserver" in methods else "spawn"
-    if start_method not in methods:
-        start_method = "spawn" if "spawn" in methods else methods[0]
-    return SubprocVecEnv(factories, start_method=start_method), parallelism
+    preferred = start_method or ("forkserver" if "forkserver" in methods else "spawn")
+    if preferred not in methods:
+        preferred = "spawn" if "spawn" in methods else methods[0]
+    # ``forkserver``/``spawn`` re-import the caller's main module in every child.
+    # A script without an ``if __name__ == "__main__":`` guard then aborts while
+    # bootstrapping; ``fork`` inherits the loaded process and keeps training
+    # working, so it is the documented fallback instead of a hard failure.
+    candidates = [preferred, *(m for m in ("forkserver", "spawn", "fork") if m != preferred)]
+    for method in candidates:
+        if method not in methods:
+            continue
+        try:
+            return SubprocVecEnv(factories, start_method=method), parallelism
+        except RuntimeError as exc:
+            if "bootstrapping" not in str(exc):
+                raise
+            logging.getLogger(__name__).warning(
+                "Start method %r failed (%s); falling back to another one.", method, exc
+            )
+    raise RuntimeError("No usable multiprocessing start method for the training workers.")
 
 
 def valid_benchmark_configurations() -> list[tuple[int, int]]:

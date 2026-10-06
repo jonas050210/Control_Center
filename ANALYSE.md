@@ -34,6 +34,12 @@ auch dann, wenn eine Säule dazwischen war. Gemessen: Gegner hinter einer Säule
 Vergleich). Wählbar im ARENA- und TRAINING-Panel; `/api/meta` liefert Feldnamen,
 Version und Modi, `/api/arena/perception` den Wahrnehmungszustand.
 
+**Fünf Gegner-Verhalten** (`opponent_mode`, validiert): `stationary` (steht),
+`mover` (läuft und zielt, **schießt nicht**), `walker` (schießt zurück, weite
+Toleranz), `shooter` (zielt genau), `full` (taktisch, springt, Sprint). Im
+ARENA-Panel sind „Passive" und „Mover" zusätzlich wählbar; ein unbekannter Wert
+wird mit `ValueError`/HTTP 400 abgelehnt statt still als `stationary` zu laufen.
+
 **Zusätzliche Fixes und Verbesserungen dieser Runde:**
 
 1. **Bot-Navigation**: Der heuristische Gegner blieb an Kisten/Säulen stehen
@@ -64,6 +70,10 @@ Version und Modi, `/api/arena/perception` den Wahrnehmungszustand.
 | derselbe Checkpoint auf Kartendistanz (36 m) | 0 Kills (20 Unentschieden) |
 | derselbe Checkpoint gegen `walker`/`shooter`/`full` (die schießen zurück) | 0 Siege, 20 Niederlagen |
 | Trainings-Kill-Rate im 100k-Lauf (geschlossener Abstand) | 0 % → 15 %, `best_model` mit 13,8 % |
+
+*Aufnahme dieser Runde. `models/` ist nicht versioniert: die Checkpoints in dieser
+Tabelle existieren nicht mehr, die Läufe dahinter sind seither mit der neuen
+Gegner-Leiter und `norm_obs=False` wiederholt worden (siehe „Runde 3").*
 
 **Was daraus folgt (und was nicht):** Der Trainer lernt nachweisbar, einen
 passiven Gegner in Reichweite zu finden, anzuvisieren und zu töten – mit der
@@ -130,7 +140,91 @@ her (Standard 4 = echte Spawns).
    veraltete Datensätze werden beim Laden abgelehnt statt Behavioral Cloning mit
    falschen Spalten zu füttern.
 
-**Kosten/Hinweis:** Mit dem ehrlichen Sichtmodell braucht das Training länger als
+10. **Die automatische Bewertung starb an einem abgeschnittenen Checkpoint**:
+   `VecNormalize.save()` entfernt beim Pickeln das umgebende Vektor-Env. Wird die
+   Datei danach mit `pickle.load` gelesen, landet jeder Zugriff auf ein fehlendes
+   Attribut in der Endlosrekursion von SB3s `VecEnv.__getattr__`
+   (`RecursionError`) – der Lauf endete mit „Automatic evaluation failed", das
+   Panel blieb leer. Jetzt liest ein eigener Loader (`load_normalizer`) nur die
+   reinen Statistikzahlen und verträgt auch gekappte Objekte; dieselbe Funktion
+   versorgt die ARENA-Inferenz. Regressionstests in `tests/test_policies.py`.
+11. **`norm_obs=False`**: Die Wahrnehmung ist bereits auf [-1, 1] begrenzt und
+   Nullen bedeuten „nie gesehen" – eine laufende Mittelwert-/Varianz-Normalisierung
+   verschiebt genau diese Aussage. Neue Läufe trainieren deshalb auf den rohen
+   Zahlen (`VecNormalize(norm_obs=False, norm_reward=True)`); alte Checkpoints mit
+   `norm_obs=True` werden weiter normalisiert (`normalize()` prüft das Flag).
+12. **Start-Methode konnte das Training killen**: `forkserver`/`spawn` importieren
+   das aufrufende Skript in jedem Kindprozess neu. Ohne
+   `if __name__ == "__main__":`-Schutz bricht das Training mit einer irreführenden
+   `RuntimeError` ab – genau das passierte beim Messlauf. `make_vector_env` fällt
+   jetzt automatisch auf `fork` zurück, statt zu sterben.
+13. **Kurze Läufe speicherten keinen Checkpoint**: Die Bewertung fand nichts zum
+   Nachprüfen. Am Ende jedes Laufs wird jetzt `final_model.*` geschrieben, und die
+   Bewertung nimmt `best_model` → `final_model` → Pfad aus dem Job.
+
+### Runde 3: warum nichts gelernt wurde – und was es behoben hat
+
+**Befund 1: `VecNormalize(norm_obs=True)` hat das Lernsignal zerstört.** Die
+Wahrnehmung ist bereits auf [-1, 1] begrenzt, viele Werte sind **exakt 0** und
+bedeuten „nicht gesehen" (Sichtkontakt 0, Gedächtnis 0, Gegner-HP-Band 0). Die
+laufende Mittelwert-/Varianz-Normalisierung verschiebt genau diese Nullen zu
+Zufallszahlen und zerstört damit die einzige Information, die das Netz über
+Deckung hat. Gemessen:
+
+| Lauf (2 CPU-Kerne, Dust, `coarse_los`) | Kill-Rate in Phase 1 |
+| --- | --- |
+| frühere Läufe mit `norm_obs=True` (100k Steps) | Peak 15 % |
+| Lauf mit `norm_obs=False` (62k Steps, Sicht-Curriculum) | **100 %** (30/30 Episoden mit bestätigtem Kill) |
+
+Das ist kein sauberer A/B-Test (dazwischen kamen Kürzere Episoden und das
+Sicht-Curriculum), aber die Größenordnung – 15 % gegen 100 % – ist eindeutig,
+und die Begründung ist strukturell: Nullen, die „nie gesehen" heißen, darf man
+nicht weg-normieren.
+
+**Befund 2: die Phase-2-Klippe.** Der Sprung von `stationary` (steht still,
+schießt nie) auf `walker` (läuft **und** schießt zurück) bei gleichzeitig
+größerem Abstand (16,2 m) und neuer Waffe (SMG) war zu groß: der Lauf lieferte
+**~500 Episoden hintereinander ohne einen einzigen Sieg oder Kill** und blieb
+dort bis zum Budget-Ende. Der Fehler steckte zusätzlich im Code: zwei
+`_curriculum_spawns`-Definitionen, die ältere überschrieb die neuere (dasselbe
+Muster wie beim Vision-Modus). Jetzt:
+
+* eine einzige Distanzrampe **9,0 / 12,6 / 21,6 / 36,0 m** (Phase 4 = Kartenspawns),
+* eine Gegner-Leiter, die pro Phase **genau eine** neue Lektion bringt:
+  `stationary` → **`mover`** (läuft und zielt, schießt nicht) → `walker`
+  (erste Gegenwehr) → `full`,
+* unbekannte Gegnermodi werden abgelehnt (`ValueError`/HTTP 400) statt still als
+  `stationary` zu laufen; im Test steht, dass `mover` niemals schießt.
+
+### Runde 3: gemessen (250k-Steps-Budget, 600 s, 2 CPU-Kerne, Dust)
+
+| Bedingung | Ergebnis |
+| --- | --- |
+| Trainingslauf Phase 1 (`stationary`, Pistol, 9 m, `norm_obs=False`) | Kill-Rate im 100-Episoden-Fenster bis **100 %**; bester Checkpoint (38 664 Steps) 79,6 % Kills / 89,2 % Siege |
+| Phase 2 (`mover`, SMG, 12,6 m) | Siege 70–80 %, davon nur 2–6 % mit bestätigtem Kill → das Freischalt-Gate (25 % Kills) blieb zu |
+| Phase 3/4 | nie erreicht; ab ~170k Steps brach die Politik ein (0 % Siege, sehr kurze Episoden) – Gegenfeuer ist die nächste Lernhürde |
+| bester Checkpoint, Phase 1, `noisy` (**wie trainiert**), gegen `stationary` | **20/20 Siege, 20/20 bestätigte Kills, TTK 14,3 s**, Trefferquote 67,6 %, 1 % blinde Frames |
+| derselbe Checkpoint gegen `mover` (läuft, schießt nicht), `noisy` | 15/20 Siege (davon 2 Kills), 5 Unentschieden, **0 Niederlagen** |
+| derselbe Checkpoint unter der **Ziel-Wahrnehmung `coarse_los`** | 17/20 Siege, aber **0 Kills** (2,2 % Trefferquote, 52–59 % blind) |
+
+**Was das heißt:** Der Trainer lernt mit der ehrlichen Beobachtung und der
+kill-basierten Belohnung wirklich zu kämpfen – 20/20 Siege *mit bestätigtem Kill*
+gegen den passiven Gegner, im Schnitt nach 14 s. Die zweite Zeile ist die
+ehrliche Einschränkung: das Ziel-Sichtmodell `coarse_los` (Sektor, Deckung,
+Gedächtnis) überträgt sich **nicht von selbst** auf ein Netz, das mit `noisy`
+trainiert wurde – dafür muss mit `coarse_los` weitertrainiert werden. Genau das
+ist der Zweck der Phasen 3/4 im Sicht-Curriculum, die dieser Lauf wegen des
+Kill-Gates nicht mehr erreicht hat. Deshalb bewertet die automatische Auswertung
+jetzt **beide** Modelle: den besten Checkpoint unter seiner eigenen Wahrnehmung
+und das Endmodell unter der Ziel-Wahrnehmung (`evaluation.target` im Panel).
+
+**Nebenbei gefunden und behoben:** die automatische Bewertung starb am Ende des
+Laufs am Prozess-Abbruch beim Aufräumen der Worker (`SIGABRT`, kein Python-Fehler)
+und hinterließ **keinen** Bericht. Der Bericht wird jetzt nach **jedem** Gegner
+geschrieben und in den Job-Snapshot geschoben; außerdem wird `final_model.zip`
+immer gespeichert (vorher nur, wenn kein „Bestes Modell" existierte).
+
+**Kosten/Hinweis:**
 früher (weniger Information). Empfehlung: mit `noisy`/`coarse` vortrainieren, dann
 auf `coarse_los` wechseln, und mehrere Seeds vergleichen
 (`python3 tools/seed_sweep.py 2 100000`).

@@ -203,11 +203,12 @@ export const arenaPanel = {
   renderPerception(perception) {
     if (!perception || !perception.player) return;
     const p = perception.player;
-    const sectors = 12;
-    const bearing = Math.atan2(p.bearing_sin, p.bearing_cos);
-    const sector = ((Math.round((bearing + Math.PI / sectors) / (Math.PI / 12)) % 24) + 24) % 24;
+    // Sector centres sit at multiples of 30°, so the sector index is simply the
+    // quantised bearing divided by that step - no extra rounding fudge.
+    const sectorStep = Math.PI / 6;
+    const sector = ((Math.round(bearing / sectorStep) % 12) + 12) % 12;
     const direction = p.memory
-      ? `Sektor ${Math.min(sectors, sector + 1)}/12 (${fmt.fixed((bearing * 180) / Math.PI, 0)}°)`
+      ? `Sektor ${sector + 1}/12 (${fmt.fixed((bearing * 180) / Math.PI, 0)}°)`
       : 'keine Richtung bekannt';
     const since = p.seconds_since_seen === null || p.seconds_since_seen === undefined
       ? 'nie gesehen'

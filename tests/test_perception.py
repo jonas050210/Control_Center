@@ -307,8 +307,96 @@ class EpisodeStatTests(unittest.TestCase):
         env.close()
 
 
+class CurriculumOpponentTests(unittest.TestCase):
+    """The opponent ladder must add one new lesson per phase, not two."""
+
+    def test_phase_ladder_and_modes_are_consistent(self) -> None:
+        from env.shooter_env import CURRICULUM_OPPONENTS, OPPONENT_MODES
+
+        self.assertEqual(CURRICULUM_OPPONENTS[1], "stationary")
+        self.assertEqual(CURRICULUM_OPPONENTS[2], "mover")
+        self.assertEqual(CURRICULUM_OPPONENTS[3], "walker")
+        self.assertEqual(CURRICULUM_OPPONENTS[4], "full")
+        for mode in CURRICULUM_OPPONENTS.values():
+            self.assertIn(mode, OPPONENT_MODES)
+        # Phase 2 introduces movement, phase 3 return fire: the harmless mode has
+        # to stay harmless, otherwise both lessons arrive at once again.
+        self.assertNotIn("mover", {"walker", "shooter", "full"})
+
+
+class DemoArchiveTests(unittest.TestCase):
+    """Demos recorded with another layout must never be silently mixed."""
+
+    def test_outdated_demo_file_is_moved_aside(self) -> None:
+        import json
+        import tempfile
+        from pathlib import Path as _Path
+
+        from training.imitation import archive_outdated_demos, write_demo_meta
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = _Path(folder) / "demos.csv"
+            path.write_text("state_0,action_0\n1,2\n", encoding="utf-8")
+            write_demo_meta(path, vision_mode="coarse_los", samples=1)
+            meta = path.with_name("demos_meta.json")
+            meta.write_text(json.dumps({"observation_version": 1}), encoding="utf-8")
+            archived = archive_outdated_demos(path)
+            self.assertIsNotNone(archived)
+            self.assertFalse(path.exists())
+            self.assertTrue(archived.exists())
+            self.assertTrue(archived.with_name(f"{archived.stem}_meta.json").exists())
+
+    def test_current_demo_file_stays_untouched(self) -> None:
+        import tempfile
+        from pathlib import Path as _Path
+
+        from training.imitation import archive_outdated_demos, write_demo_meta
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = _Path(folder) / "demos.csv"
+            path.write_text("state_0,action_0\n1,2\n", encoding="utf-8")
+            write_demo_meta(path, vision_mode="coarse_los", samples=1)
+            self.assertIsNone(archive_outdated_demos(path))
+            self.assertTrue(path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
+
+class VisionModeSwitchTests(unittest.TestCase):
+    """The trainer's perception curriculum switches modes between phases."""
+
+    def test_switching_mode_clears_memory_and_keeps_the_layout(self) -> None:
+        env = ShooterEnv(map_name="Dust", curriculum=False, frame_skip=4,
+                         vision_mode="exact", seed=4)
+        observation, _ = env.reset(seed=4)
+        self.assertEqual(observation.shape, (OBSERVATION_SIZE,))
+        # exact mode always knows the opponent, so a sighting must exist
+        self.assertIsNotNone(env._combatants[0].last_seen_time)
+
+        env.set_vision_mode("coarse_los")
+        self.assertEqual(env.vision_mode, "coarse_los")
+        self.assertIsNone(env._combatants[0].last_seen_time,
+                          "switching perception must drop the old memory")
+        switched, _ = env.reset(seed=4)
+        self.assertEqual(switched.shape, (OBSERVATION_SIZE,))
+        self.assertNotEqual(float(np.abs(observation).sum()), float(np.abs(switched).sum()))
+        env.close()
+
+    def test_unknown_mode_is_rejected(self) -> None:
+        env = ShooterEnv(map_name="Dust", frame_skip=4, seed=4)
+        with self.assertRaises(ValueError):
+            env.set_vision_mode("clairvoyant")
+        env.close()
+
+    def test_trainer_vision_curriculum_gets_stricter(self) -> None:
+        from training.train import vision_mode_for_phase
+
+        modes = [vision_mode_for_phase(phase) for phase in (1, 2, 3, 4)]
+        self.assertEqual(modes, ["noisy", "coarse", "coarse_los", "coarse_los"])
+        # the last phase must train exactly what the arena plays
+        self.assertEqual(modes[-1], DEFAULT_VISION_MODE)
+
 
 class CurriculumSpawnTests(unittest.TestCase):
     """Early curriculum phases must start inside weapon range.
@@ -333,6 +421,10 @@ class CurriculumSpawnTests(unittest.TestCase):
         self.assertLess(distances[2], distances[3])
         self.assertLess(distances[3], distances[4])
         self.assertLess(distances[1], 12.0)
+        # A first run used 45 % (16.2 m) for phase 2 and then produced ~500
+        # episodes in a row without a single win or kill - the step from the
+        # passive phase-1 opponent to one that shoots back needs a flatter ramp.
+        self.assertLess(distances[2], 15.0)
 
         plain = ShooterEnv(map_name="Dust", curriculum=False, frame_skip=4, seed=11)
         self.assertAlmostEqual(self._distance(plain), distances[4], places=3)
@@ -350,4 +442,3 @@ class CurriculumSpawnTests(unittest.TestCase):
                         self.assertTrue(position_is_free(env.arena_map, fighter.body.x,
                                                          fighter.body.y))
                 env.close()
-

@@ -29,7 +29,8 @@ PLAY_ACTIONS: dict[str, dict[str, Any]] = {
     "wait": {"repeat": 1},
 }
 
-BOT_BEHAVIORS = {"Tactical": "full", "Shooter": "shooter", "Walker": "walker"}
+BOT_BEHAVIORS = {"Tactical": "full", "Shooter": "shooter", "Walker": "walker",
+                "Mover": "mover", "Passive": "stationary"}
 HEURISTIC = "Heuristic AI"
 
 

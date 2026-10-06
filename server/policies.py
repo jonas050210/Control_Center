@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import pickle
 from pathlib import Path
 from typing import Any
 
@@ -90,8 +89,11 @@ class PolicyCache:
             normalizer = None
             sidecar = path.with_name(f"{path.stem}_vecnormalize.pkl")
             if sidecar.exists():
-                with sidecar.open("rb") as handle:
-                    normalizer = pickle.load(handle)
+                # Share the loader with the trainer: it survives sidecars whose
+                # wrapped vector env was stripped while pickling.
+                from training.evaluation import load_normalizer
+
+                normalizer = load_normalizer(sidecar)
             result: tuple[Any | None, Any | None, str | None] = (model, normalizer, None)
         except Exception as exc:  # noqa: BLE001 - surfaced to the UI as a message
             result = (None, None, f"Could not load {path.name}: {type(exc).__name__}: {exc}")
@@ -112,12 +114,10 @@ class PolicyCache:
         model, normalizer, error = self.load(model_name, models_dir)
         if model is None:
             return env.heuristic_action(agent_index), error
-        policy_observation = observation
-        if normalizer is not None and getattr(normalizer, "obs_rms", None) is not None:
-            mean = np.asarray(normalizer.obs_rms.mean, dtype=np.float32)
-            variance = np.asarray(normalizer.obs_rms.var, dtype=np.float32)
-            policy_observation = np.clip(
-                (observation - mean) / np.sqrt(np.maximum(variance, 1e-8) + 1e-8), -10.0, 10.0
-            ).astype(np.float32)
+        from training.evaluation import normalize
+
+        # ``norm_obs=False`` checkpoints (the current default) expect the raw
+        # perception vector; only legacy runs were trained on rescaled values.
+        policy_observation = normalize(np.asarray(observation, dtype=np.float32), normalizer)
         action, _ = model.predict(policy_observation, deterministic=True)
         return np.asarray(action, dtype=np.int64).reshape(-1), None

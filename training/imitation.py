@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import select
@@ -44,6 +45,34 @@ def write_demo_meta(path: str | Path, vision_mode: str | None = None,
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return meta_path
+
+
+def archive_outdated_demos(path: str | Path) -> Path | None:
+    """Move a demo CSV with an outdated layout aside before appending new rows.
+
+    Appending would mix two column layouts in one file and then overwrite the
+    sidecar with the new version - a combination the loader cannot detect any
+    more. The old file is kept (renamed with its observation version), so nothing
+    is lost.
+    """
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    meta_path = demo_meta_path(path)
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    version = int(meta.get("observation_version", OBSERVATION_VERSION))
+    if version == OBSERVATION_VERSION:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    archived = path.with_name(f"{path.stem}_v{version}_{stamp}{path.suffix}")
+    path.replace(archived)
+    meta_path.replace(demo_meta_path(archived))
+    return archived
 
 
 def load_demo_data(path: str | Path) -> tuple[np.ndarray, np.ndarray]:

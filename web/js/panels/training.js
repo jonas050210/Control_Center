@@ -35,6 +35,9 @@ export const trainingPanel = {
       vision: store.meta.default_vision_mode || 'coarse_los',
       episodeSeconds: store.training.defaults.episodeSeconds ?? 60,
       gate: store.training.defaults.gate ?? 40,
+      frameSkip: store.training.defaults.frameSkip ?? 4,
+      visionCurriculum: store.training.defaults.visionCurriculum ?? true,
+      autoEvaluate: store.training.defaults.autoEvaluate ?? true,
       checkpoint: null,
       running: false,
     };
@@ -117,7 +120,22 @@ export const trainingPanel = {
       this.visionSelect.appendChild(h('option', { value: mode, text: VISION_LABELS[mode] || mode }));
     }
     this.visionSelect.value = this.state.vision;
-    this.visionSelect.addEventListener('change', () => { this.state.vision = this.visionSelect.value; });
+    this.visionSelect.addEventListener('change', () => {
+      this.state.vision = this.visionSelect.value;
+      // The curriculum overrides the start mode per phase - say so instead of
+      // silently training something else than what the dropdown shows.
+      this.visionHint.textContent = this.state.visionCurriculum
+        ? `Startet mit Rauschen (Phase 1) und wird mit jeder Phase strenger bis ${this.state.vision}.`
+        : 'Feste Sicht für den ganzen Lauf.';
+    });
+    this.visionHint = h('p', { class: 'hint' });
+
+    this.frameInput = h('input', { type: 'number', min: 1, max: 8, step: 1, value: this.state.frameSkip });
+    this.frameInput.addEventListener('change', () => {
+      this.state.frameSkip = Math.min(8, Math.max(1, Number(this.frameInput.value) || 4));
+      this.frameInput.value = this.state.frameSkip;
+      this.renderEstimate();
+    });
 
     this.estimate = h('p', { class: 'hint' });
     this.form = h('div');
@@ -129,6 +147,8 @@ export const trainingPanel = {
     this.progressBar = h('div', { class: 'bar' }, h('span', { style: { width: '0%' } }));
     this.progressText = h('p', { class: 'hint' });
     this.errorHost = h('div');
+    this.evaluationHost = h('div', { class: 'hint', text: 'Noch keine Bewertung - sie läuft automatisch am Ende eines Trainingslaufs.' });
+    this.evaluationCard = null;
 
     mount(root,
       h('h2', { text: '🏋️ PPO TRAINING · CPU WORKER CONTROL' }),
@@ -147,12 +167,18 @@ export const trainingPanel = {
             h('label', { class: 'field' }, 'ENVS PRO WORKER ', this.envsValue), this.envsRange)),
         h('div', { class: 'row', style: { marginTop: '10px' } },
           checkboxField('4-Phasen Curriculum', true, (checked) => { this.state.curriculum = checked; }),
+          checkboxField('Sicht-Curriculum (leichte Wahrnehmung zuerst)', true,
+            (checked) => { this.state.visionCurriculum = checked; }),
+          checkboxField('Nach dem Lauf automatisch bewerten', true,
+            (checked) => { this.state.autoEvaluate = checked; }),
           checkboxField('Frozen Self-Play ab Phase 3', true, (checked) => { this.state.selfPlay = checked; }),
           this.checkpointField),
         h('div', { class: 'row', style: { marginTop: '10px' } },
-          field('SICHT DER AI (WAHRNEHMUNG)', this.visionSelect),
+          field('SICHT DER AI (ZIEL-WAHRNEHMUNG)', this.visionSelect),
           field('EPISODENLÄNGE (SEKUNDEN)', this.episodeInput),
-          field('FREISCHALTUNG: KILL-RATE %', this.gateInput)),
+          field('FREISCHALTUNG: KILL-RATE %', this.gateInput),
+          field('FRAME-SKIP (PHYSIK-FRAMES PRO ENTSCHEIDUNG)', this.frameInput)),
+        this.visionHint,
         this.estimate),
       h('div', { class: 'row', style: { marginTop: '12px' } },
         this.startButton = button('🚀 Start Training', () => this.start()),
@@ -162,6 +188,8 @@ export const trainingPanel = {
       h('hr', { class: 'sep' }),
       card('LIVE STATUS', this.statusCard, this.progressText, this.progressBar,
         this.metricsRow, this.metricsRow2),
+      h('div', { style: { height: '12px' } }),
+      this.evaluationCard = card('BEWERTUNG DES BESTEN MODELLS (AUTOMATISCH)', this.evaluationHost),
       h('div', { style: { height: '12px' } }),
       card('LIVE WORKER LOG', this.logNode));
 
@@ -237,6 +265,9 @@ export const trainingPanel = {
       vision: this.state.vision,
       episode_seconds: this.state.episodeSeconds,
       curriculum_min_win_rate: this.state.gate / 100,
+      frame_skip: this.state.frameSkip,
+      vision_curriculum: this.state.visionCurriculum,
+      eval_after_training: this.state.autoEvaluate,
     };
     try {
       const response = await api.trainingStart(payload);
@@ -312,6 +343,32 @@ export const trainingPanel = {
       metric('Ø TTK', `${fmt.fixed(metrics.avg_ttk || 0, 2)}s`),
       metric('ACCURACY', fmt.percent(metrics.accuracy || 0)),
       metric('HEADSHOT-ANTEIL', fmt.percent(metrics.headshot_pct || 0)));
+
+    if (this.evaluationHost) {
+      const evaluation = snapshot.evaluation;
+      if (!evaluation) {
+        setText(this.evaluationHost, 'Noch keine Bewertung - sie läuft automatisch am Ende eines Trainingslaufs.');
+      } else {
+        const runGrid = (runs) => h('div', { class: 'grid cols-3' },
+          ...(runs || []).map((run) => metric(
+            `GEGEN ${String(run.bot).toUpperCase()}`,
+            `${fmt.percent(run.win_rate || 0)} Siege · ${fmt.percent(run.kill_rate || 0)} Kills`)));
+        const target = evaluation.target;
+        mount(this.evaluationHost,
+          h('p', { class: 'hint', text: `${evaluation.model} · Phase ${evaluation.phase} · `
+            + `${evaluation.episodes_per_matchup} Episoden pro Gegner · `
+            + `Sicht: ${evaluation.vision_mode || '?'} · `
+            + `${fmt.percent(evaluation.win_rate_overall || 0)} Siege, `
+            + `${fmt.percent(evaluation.kill_rate_overall || 0)} Kills (Ø)` }),
+          runGrid(evaluation.runs),
+          target ? h('p', { class: 'hint', text: `Ziel-Wahrnehmung mit dem Endmodell `
+            + `(${target.model}, Sicht ${target.vision_mode}): `
+            + `${fmt.percent(target.win_rate_overall || 0)} Siege, `
+            + `${fmt.percent(target.kill_rate_overall || 0)} Kills (Ø) – `
+            + `das ist der ehrliche Test gegen die volle Sicht.` }) : null,
+          target ? runGrid(target.runs) : null);
+      }
+    }
 
     const logs = (snapshot.logs || []).slice(-40).join('\n') || 'Warte auf den ersten PPO-Callback…';
     setText(this.logNode, logs);
