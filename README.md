@@ -4,6 +4,10 @@ Headless 3D-Shooter-Trainingssandbox (Gymnasium + Stable-Baselines3 PPO) mit ein
 eigenen Web-Oberfläche. **Simulation, Physik und Training laufen in Python; alle
 3D-Szenen und Diagramme rendert der Browser** (three.js/WebGL + Canvas 2D).
 
+**Die AI sieht nur, was sie sehen kann:** keine Gegner-Koordinaten, sondern grobe
+Richtungs-Sektoren, Entfernungs- und HP-Bänder, Sichtlinie und Gedächtnis – sie
+kann nicht durch Wände zielen (Details unter „5. Wahrnehmung der AI").
+
 * Kein Streamlit, kein Plotly, kein pandas, kein Pygame, kein X11/Display nötig.
 * Läuft komplett offline, sobald `install.py` einmal durchgelaufen ist.
 * Entwickelt für WSL-Ubuntu mit CPU-Training; bedient wird über den Browser.
@@ -86,7 +90,7 @@ Dazu die kleinen Panels für Statushinweise: Kopfzeile mit Server-/Trainingsstat
 ├── training/
 │   ├── train.py            # PPO im Hintergrund-Thread, Curriculum, Checkpoints, CSV-Logging
 │   ├── workers.py          # CPU-Kernwahl, VecEnv-Aufbau, Benchmark-Runner, CPU-Job-Lock
-│   ├── rewards.py          # nachvollziehbares Reward-Shaping
+│   ├── rewards.py          # nachvollziehbares Reward-Shaping (Zielbonus nur bei Sicht)
 │   ├── imitation.py        # Behavior Cloning aus aufgezeichneten Demos
 │   └── weapon_lab.py       # TTK-Simulation + Lua-Export
 ├── server/                 # FastAPI-Backend (JSON-API, hält den gesamten Zustand)
@@ -107,24 +111,95 @@ Dazu die kleinen Panels für Statushinweise: Kopfzeile mit Server-/Trainingsstat
 │   │   ├── app.js          # Navigation, Panels, Toasts, Statuspoller
 │   │   └── panels/*.js     # acht Panels
 │   └── vendor/             # three.js (von install.py geladen, CDN als Fallback)
+├── tools/evaluate_policy.py # Checkpoint/Zufallspolitik gegen den Bot messen
 ├── data/demos.csv          # Start-Datensatz für Imitation Learning (41 Spalten)
 ├── models/                 # Checkpoints (*.zip) und best_model.json
 ├── logs/                   # training_metrics.csv, heatmap_events.csv
 └── tests/                  # unittest-Suite, headless (ohne Browser/GPU)
+    └── dom/                # optionale jsdom-Tests für Frontend und 3D-Geometrie
 ```
 
-## 5. Tests
+## 5. Wahrnehmung der AI (Observation-Version 2)
+
+Die Beobachtung hat 31 Werte (`OBSERVATION_SIZE`), aber der Gegner wird **nicht**
+mehr als exakte Position geliefert. Stattdessen (Indizes 5–12):
+
+| Wert | Bedeutung |
+| --- | --- |
+| `enemy_bearing_sin/cos` | Richtung zum Gegner, auf 12 Sektoren (30°) gerundet – null Information, wenn er nie gesehen wurde |
+| `enemy_distance_band` | Entfernungsband: <5, 5–10, 10–20, 20–35, 35–60, >60 m |
+| `enemy_visible` | Sichtkontakt jetzt? (120°-Sichtkegel **und** freie Sichtlinie auf Augenhöhe) |
+| `enemy_hp_band` | Gegner-HP in 4 Bändern (>75 %, 50–75 %, 25–50 %, <25 %), unbekannt = 0 |
+| `enemy_time_since_seen` | −1 = nie/verblasst, 0 = jetzt, 1 = vor 5 s (Gedächtnis, danach vergessen) |
+| `enemy_memory_sin/cos` | exakte Richtung des letzten Sichtkontakts (nur Gesehenes, 0/0 wenn nichts) |
+| `enemy_alive` (Index 22) | lebt der Gegner? |
+
+Dazu die eigenen Werte (Position, Blickrichtung, 8 Wand-Raycasts, HP, Munition,
+Bewegungszustand, Timer). Der Zielbonus im Reward greift nur bei Sichtkontakt –
+belohnt wird also nichts, was der Agent nicht wissen kann.
+
+**Vier Modi** (`vision_mode`, im ARENA- und TRAINING-Panel wählbar):
+
+* `coarse_los` (**Standard**): echte Sicht – Deckung blendet den Gegner wirklich aus.
+* `coarse`: Sektor/Bänder, aber der Gegner gilt immer als verfolgt.
+* `noisy`: exakte Werte plus Rauschen (Zwischenstufe fürs Training).
+* `exact`: altes Verhalten (kennt Position durch Wände) – nur zum Vergleich.
+
+Checkpoints tragen einen Stempel (`*_meta.json` mit `observation_version` und
+`vision_mode`); alte Modelle werden mit klarer Meldung abgelehnt statt falsch
+benutzt. Ein unbekannter Wert für `vision` wird mit HTTP 400 abgelehnt (kein
+stilles Zurückfallen auf den Standard).
+
+### Trainingsrezept
+
+| Hebel | Standard | Warum |
+| --- | --- | --- |
+| `gamma` | **0.995** | 15 Entscheidungen/s × 0,99 = nur ~100 Steps Horizont; Suchen+Zielen+Töten dauert länger. 0.995 ≈ 200 Steps. |
+| Episodenlänge | 60 s (im Panel einstellbar) | kürzere Runden = mehr Kämpfe pro Minute |
+| `curriculum_min_win_rate` | 35–40 % **Kill**-Rate | die nächste Phase wird erst freigeschaltet, wenn die aktuelle wirklich gewonnen wird |
+| Startabstand der Phasen | 25 / 45 / 70 / 100 % der Kartendistanz | auf Kartendistanz (Dust: 36 m) treffen selbst perfekt zielende Schützen nur 0–1,8 % – eine frühe Phase dort kann keinen Kill lehren |
+| „Bestes Modell“ | höchste Kill-Rate | ein Sieg nach HP-Vergleich am Zeitlimit wäre eine Belohnung fürs Verstecken |
+
+Das Training protokolliert **Siege und Kills getrennt** (`win_rate`, `kill_rate`):
+ein „Sieg“ am Zeitlimit ist nur ein HP-Vergleich und kein Kill.
+
+## 6. Tests
 
 ```bash
-python3 -m unittest discover -s tests -v      # 56 Tests in unter einer Sekunde
+python3 -m unittest discover -s tests -v      # 87 Tests in ~20 s
 ```
 
 Die Suite deckt Umgebung/Physik, Karten-JSON, Rewards, Minigames, TTK-Simulation,
-den CPU-Job-Lock, alle API-Routen (FastAPI `TestClient`), Szenen-Payloads und die
-Analytics-Aufbereitung ab. Das PPO-Integrationstest läuft nur mit installiertem
-Stable-Baselines3 und wird sonst übersprungen.
+den CPU-Job-Lock, alle API-Routen (FastAPI `TestClient`), Szenen-Payloads, die
+Analytics-Aufbereitung und die **Wahrnehmung** ab (`test_perception.py`: Sektoren,
+Bänder, Sichtkegel, Deckung, Gedächtnis, Leak-Tests). Mit installiertem
+Stable-Baselines3 läuft zusätzlich der PPO-Integrationstest (`test_training_smoke.py`).
 
-## 6. API
+### Trainieren und bewerten
+
+```bash
+# im TRAINING-Panel der Oberfläche: Dauer, Karte, Sichtmodus, Episodenlänge, Start
+python3 tools/evaluate_policy.py --random --episodes 20          # Zufalls-Baseline
+python3 tools/evaluate_policy.py --model best_model.zip --episodes 30
+```
+
+`tools/evaluate_policy.py` spielt nur ab (kein Training) und berichtet Siege,
+Unentschieden, Niederlagen, Time-to-Kill (nur bestätigte Kills), den Blindanteil
+pro Episode und prüft den `observation_version`-Stempel des Checkpoints. Mit
+`--bots stationary|walker|shooter|full` lässt sich der Gegner festlegen und mit
+`--phase 1..4` die Curriculum-Bedingungen (Abstand) nachstellen, unter denen ein
+Checkpoint trainiert wurde. Mehrere Seeds vergleicht `tools/seed_sweep.py`.
+
+Gemessen auf dieser Maschine (CPU, 2 Worker, `coarse_los`): Zufallspolitik
+0/20 Siege – trainierter Checkpoint unter Phase-1-Bedingungen 10/10 Siege mit
+bestätigten Kills (TTK ≈ 20 s), auf Kartendistanz 0 Kills (dort trifft niemand,
+siehe ANALYSE.md).
+
+Aufgezeichnete Demos (`data/demos.csv`) tragen einen Sidecar
+`data/demos_meta.json` mit `observation_version`; ein veralteter Datensatz wird
+beim Laden abgelehnt, statt Behavioral Cloning mit falschen Spalten zu füttern.
+
+## 7. API
 
 Alles, was die Oberfläche tut, geht über JSON-Routen unter `/api/...`
 (u. a. `/api/health`, `/api/meta`, `/api/arena/*`, `/api/playground/*`,
@@ -132,7 +207,7 @@ Alles, was die Oberfläche tut, geht über JSON-Routen unter `/api/...`
 `/api/ttk/simulate`, `/api/maps/*`). Die interaktive Dokumentation liefert
 **http://127.0.0.1:8501/api/docs** (Swagger UI von FastAPI).
 
-## 7. Aufräumen / Analyse
+## 8. Aufräumen / Analyse
 
 `ANALYSE.md` enthält die Deep-Analyse des Projekts: was erledigt ist, welche
 Bugs gefunden wurden, was als Nächstes sinnvoll ist und was gelöscht werden darf

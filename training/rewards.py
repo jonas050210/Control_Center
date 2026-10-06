@@ -26,6 +26,18 @@ class RewardBreakdown:
     components: dict[str, float] = field(default_factory=dict)
 
 
+AIM_BONUS = 0.005
+"""Per-step reward for keeping the crosshair on a visible opponent.
+
+The bonus exists for credit assignment, not as a goal of its own: over a 30 s
+episode at 15 decisions/s it adds up to ~2.25, which stays below the +5 kill
+bonus. It used to be 0.05, i.e. ~22 per episode - farming the crosshair earned
+ten times more than actually killing the opponent, and the measured symptom was
+a PPO policy that kept winning on health at the time limit without ever firing
+a lethal shot (0 % kill rate in 250k steps).
+"""
+
+
 def shape_reward(events: RewardEvents) -> RewardBreakdown:
     """Apply the project reward contract and return auditable components.
 
@@ -37,7 +49,7 @@ def shape_reward(events: RewardEvents) -> RewardBreakdown:
     if events.distance_after < events.distance_before - 0.02:
         components["approach"] = 0.01
     aim_window = 0.17453292519943295  # ten degrees
-    components["aim"] = 0.05 * max(0.0, 1.0 - max(0.0, events.aim_error_radians) / aim_window)
+    components["aim"] = AIM_BONUS * max(0.0, 1.0 - max(0.0, events.aim_error_radians) / aim_window)
     headshots = min(max(0, events.hits), max(0, events.headshots))
     body_hits = max(0, events.hits) - headshots
     components["hits"] = float(body_hits)

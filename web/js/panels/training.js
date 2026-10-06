@@ -32,6 +32,9 @@ export const trainingPanel = {
       curriculum: true,
       selfPlay: true,
       map: 'Dust',
+      vision: store.meta.default_vision_mode || 'coarse_los',
+      episodeSeconds: store.training.defaults.episodeSeconds ?? 60,
+      gate: store.training.defaults.gate ?? 40,
       checkpoint: null,
       running: false,
     };
@@ -81,6 +84,41 @@ export const trainingPanel = {
     for (const name of this.meta.maps) this.mapSelect.appendChild(h('option', { value: name, text: name }));
     this.mapSelect.addEventListener('change', () => { this.state.map = this.mapSelect.value; });
 
+    // Short episodes finish more fights per minute - the single biggest
+    // throughput lever for PPO in a 1v1 arena.
+    this.episodeInput = h('input', {
+      type: 'number', min: 15, max: 300, step: 5, value: this.state.episodeSeconds,
+    });
+    this.episodeInput.addEventListener('change', () => {
+      this.state.episodeSeconds = Math.min(300, Math.max(15, Number(this.episodeInput.value) || 60));
+      this.episodeInput.value = this.state.episodeSeconds;
+      this.renderEstimate();
+    });
+
+    // The curriculum only moves on once the current phase is actually beaten;
+    // 0 % disables the gate (pure time-based ramp, the old behaviour).
+    this.gateInput = h('input', {
+      type: 'number', min: 0, max: 100, step: 5, value: this.state.gate,
+    });
+    this.gateInput.addEventListener('change', () => {
+      this.state.gate = Math.min(100, Math.max(0, Number(this.gateInput.value) || 0));
+      this.gateInput.value = this.state.gate;
+    });
+
+    // Perception: how much the policy is allowed to see of the opponent.
+    const VISION_LABELS = {
+      coarse_los: 'Realistisch: Deckung + Sichtkegel',
+      coarse: 'Grob, aber immer verfolgt',
+      noisy: 'Exakt mit Rauschen',
+      exact: 'Exakt (alt, kennt Position durch Wände)',
+    };
+    this.visionSelect = h('select');
+    for (const mode of this.meta.vision_modes || ['coarse_los']) {
+      this.visionSelect.appendChild(h('option', { value: mode, text: VISION_LABELS[mode] || mode }));
+    }
+    this.visionSelect.value = this.state.vision;
+    this.visionSelect.addEventListener('change', () => { this.state.vision = this.visionSelect.value; });
+
     this.estimate = h('p', { class: 'hint' });
     this.form = h('div');
 
@@ -111,6 +149,10 @@ export const trainingPanel = {
           checkboxField('4-Phasen Curriculum', true, (checked) => { this.state.curriculum = checked; }),
           checkboxField('Frozen Self-Play ab Phase 3', true, (checked) => { this.state.selfPlay = checked; }),
           this.checkpointField),
+        h('div', { class: 'row', style: { marginTop: '10px' } },
+          field('SICHT DER AI (WAHRNEHMUNG)', this.visionSelect),
+          field('EPISODENLÄNGE (SEKUNDEN)', this.episodeInput),
+          field('FREISCHALTUNG: KILL-RATE %', this.gateInput)),
         this.estimate),
       h('div', { class: 'row', style: { marginTop: '12px' } },
         this.startButton = button('🚀 Start Training', () => this.start()),
@@ -192,6 +234,9 @@ export const trainingPanel = {
       self_play: this.state.selfPlay,
       resume_checkpoint: this.state.checkpoint,
       max_envs: this.meta.max_envs,
+      vision: this.state.vision,
+      episode_seconds: this.state.episodeSeconds,
+      curriculum_min_win_rate: this.state.gate / 100,
     };
     try {
       const response = await api.trainingStart(payload);
@@ -260,7 +305,8 @@ export const trainingPanel = {
       metric('TOTAL STEPS', fmt.num(metrics.timesteps || 0)),
       metric('STEPS / SEK', fmt.num(metrics.fps || 0)),
       metric('EPISODEN', fmt.num(metrics.episodes || 0)),
-      metric('WIN RATE', fmt.percent(metrics.win_rate || 0)));
+      metric('WIN RATE', fmt.percent(metrics.win_rate || 0)),
+      metric('DAVON KILLS', fmt.percent(metrics.kill_rate || 0)));
     mount(this.metricsRow2,
       metric('Ø EPISODE REWARD', fmt.fixed(metrics.avg_reward || 0, 2)),
       metric('Ø TTK', `${fmt.fixed(metrics.avg_ttk || 0, 2)}s`),

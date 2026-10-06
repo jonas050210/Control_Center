@@ -25,8 +25,8 @@ EVENT_FIELDS = [
     "death_y", "kill_x", "kill_y",
 ]
 METRIC_FIELDS = [
-    "timestamp", "steps", "fps", "episodes", "win_rate", "avg_reward", "avg_ttk",
-    "headshot_pct", "accuracy", "elapsed", "map",
+    "timestamp", "steps", "fps", "episodes", "win_rate", "kill_rate", "avg_reward",
+    "avg_ttk", "headshot_pct", "accuracy", "elapsed", "map",
 ]
 
 
@@ -106,7 +106,8 @@ class TrainingStatsTests(unittest.TestCase):
             ])
             write_csv(logs / "training_metrics.csv", METRIC_FIELDS, [{
                 "timestamp": "2026-01-01T00:00:00+00:00", "steps": 4096, "fps": 220,
-                "episodes": 3, "win_rate": 0.66, "avg_reward": 1.2, "avg_ttk": 4.0,
+                "episodes": 3, "win_rate": 0.66, "kill_rate": 0.33,
+                "avg_reward": 1.2, "avg_ttk": 4.0,
                 "headshot_pct": 0.3, "accuracy": 0.4, "elapsed": 18, "map": "Dust",
             }])
             payload = training_stats(logs)

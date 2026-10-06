@@ -7,6 +7,12 @@ import {
   button, card, feed, field, fmt, h, metric, mount, setText, toast, warnBox,
 } from '../dom.js';
 
+function bandLabel(value, labels) {
+  if (!value) return 'unbekannt';
+  const index = Math.min(labels.length - 1, Math.max(0, Math.round((value + 1) / 2 * labels.length - 0.5)));
+  return labels[index];
+}
+
 export const arenaPanel = {
   id: 'arena',
   label: '🎮 ARENA',
@@ -20,6 +26,7 @@ export const arenaPanel = {
       modelA: meta.models[0],
       modelB: meta.models[0],
       detail: 'Balanced',
+      vision: meta.default_vision_mode || 'coarse_los',
       configured: false,
       sceneKey: null,
       errors: [],
@@ -32,6 +39,7 @@ export const arenaPanel = {
     this.modelA = h('select');
     this.modelB = h('select');
     this.detailSelect = h('select');
+    this.visionSelect = h('select');
     for (const [node, values, key] of [
       [this.mapSelect, meta.maps, 'map'],
       [this.weaponA, meta.weapons, 'weaponA'],
@@ -39,6 +47,7 @@ export const arenaPanel = {
       [this.modelA, meta.models, 'modelA'],
       [this.modelB, meta.models, 'modelB'],
       [this.detailSelect, Object.keys(meta.detail_presets), 'detail'],
+      [this.visionSelect, meta.vision_modes || ['coarse_los'], 'vision'],
     ]) {
       for (const value of values) node.appendChild(h('option', { value, text: value }));
       node.value = this.state[key];
@@ -57,6 +66,7 @@ export const arenaPanel = {
     this.feedNode = h('div', { class: 'feed' });
     this.errorHost = h('div');
     this.scoreHost = h('div', { class: 'legend' });
+    this.perceptionHost = h('div');
 
     const settings = card('MATCH SETUP',
       h('div', { class: 'row' },
@@ -66,14 +76,17 @@ export const arenaPanel = {
       h('div', { class: 'row', style: { marginTop: '10px' } },
         field('AGENT 1 POLICY', this.modelA),
         field('AGENT 2 POLICY', this.modelB),
-        field('3D DETAIL', this.detailSelect)),
+        field('3D DETAIL', this.detailSelect),
+        field('SICHT DER AI', this.visionSelect)),
       h('div', { class: 'row', style: { marginTop: '10px' } },
         this.startButton, this.stepButton, this.resetButton));
+    this.perceptionCard = card('👁 WAS DIE AI SIEHT (AGENT 1)', this.perceptionHost);
 
     mount(root,
       h('h2', { text: '🎮 3D ARENA · LIVE MATCH CONTROL' }),
       h('p', { class: 'hint', text: 'Die Simulation läuft headless in Python; die 3D-Szene wird direkt im Browser mit WebGL gerendert (kein Plotly, kein Streamlit). Maus: drehen · Rad: zoomen · Shift+Ziehen: verschieben.' }),
       settings,
+      this.perceptionCard,
       this.errorHost,
       h('hr', { class: 'sep' }),
       h('div', { class: 'row', style: { alignItems: 'flex-start' } },
@@ -120,6 +133,7 @@ export const arenaPanel = {
       model_a: this.state.modelA,
       model_b: this.state.modelB,
       detail: this.state.detail,
+      vision: this.state.vision,
     };
     try {
       const response = await api.arenaConfig(payload);
@@ -130,7 +144,7 @@ export const arenaPanel = {
       store.arena.detail = this.state.detail;
       store.arena.models = { a: response.models.a, b: response.models.b };
       this.scene.setStatic(response.static);
-      this.applyFrame(response.frame);
+      this.applyFrame(response.frame, response.perception);
       this.renderErrors(response.load_errors);
       this.renderMessages(response.messages);
       this.updateRunButton();
@@ -144,7 +158,7 @@ export const arenaPanel = {
     try {
       const response = await api.arenaStep(count);
       this.state.running = Boolean(response.running) && (!quiet || response.running);
-      this.applyFrame(response.frame);
+      this.applyFrame(response.frame, response.perception);
       this.renderMessages(response.messages);
       if (response.new_messages?.length) {
         this.trackResults(response.new_messages);
@@ -186,9 +200,39 @@ export const arenaPanel = {
     this.startButton.classList.toggle('active', this.state.running);
   },
 
-  applyFrame(frame) {
+  renderPerception(perception) {
+    if (!perception || !perception.player) return;
+    const p = perception.player;
+    const sectors = 12;
+    const bearing = Math.atan2(p.bearing_sin, p.bearing_cos);
+    const sector = ((Math.round((bearing + Math.PI / sectors) / (Math.PI / 12)) % 24) + 24) % 24;
+    const direction = p.memory
+      ? `Sektor ${Math.min(sectors, sector + 1)}/12 (${fmt.fixed((bearing * 180) / Math.PI, 0)}°)`
+      : 'keine Richtung bekannt';
+    const since = p.seconds_since_seen === null || p.seconds_since_seen === undefined
+      ? 'nie gesehen'
+      : `vor ${fmt.fixed(p.seconds_since_seen, 1)} s`;
+    const bands = ['<5 m', '5–10 m', '10–20 m', '20–35 m', '35–60 m', '>60 m'];
+    const health = ['<25 %', '25–50 %', '50–75 %', '>75 %'];
+    mount(this.perceptionHost,
+      h('div', { class: 'grid cols-4' },
+        metric('SICHTKONTAKT', p.visible ? 'JA' : 'NEIN',
+          p.visible ? 'Ziel im 120°-Kegel, Sichtlinie frei' : 'verdeckt oder außerhalb des Kegels'),
+        metric('RICHTUNG (GROB)', direction,
+          p.visible ? 'frisch gesehen' : since),
+        metric('ENTFERNUNG (BAND)', bandLabel(p.distance_band, bands),
+          `Sichtfeld ${perception.field_of_view_degrees || 120}°`),
+        metric('GEGNER-HP (GROB)', bandLabel(p.hp_band, health),
+          `Modus: ${perception.vision_mode}`)),
+      h('p', { class: 'hint', text: 'Die AI bekommt keine Koordinaten: nur 12 Richtungs-Sektoren, '
+        + 'Entfernungs- und HP-Bänder sowie ein Gedächtnis („zuletzt gesehen vor X s"). '
+        + 'Deckung blendet sie wirklich aus.' }));
+  },
+
+  applyFrame(frame, perception) {
     if (!frame) return;
     this.scene.setFrame(frame);
+    if (perception) this.renderPerception(perception);
     const [first, second] = frame.agents || [];
     mount(this.telemetry,
       this.agentCard(first, 'AGENT 1', 'green'),

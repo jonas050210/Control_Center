@@ -6,6 +6,137 @@ wurden, was noch offen ist, was verbessert werden kann und was gelöscht gehört
 
 ---
 
+## 0. Runde 2: Die AI sieht nur noch, was sie sehen kann
+
+**Auftrag:** „…die ai weiß nicht direkt wo sie hinschießen muss, also reinforcement learning."
+
+**Vorher (der Leak):** Die Beobachtung lieferte die exakte Gegnerposition, die exakte
+Entfernung, den exakten Zielwinkel, die Gegner-Blickrichtung und die exakte Gegner-HP –
+auch dann, wenn eine Säule dazwischen war. Gemessen: Gegner hinter einer Säule
+(`has_line_of_sight == False`), trotzdem `Obs[5] = 0.60` → x = 12.0 exakt,
+`Obs[10] = −0.823` → 5.00 m exakt, `Obs[11] = 0.000` → Zielfehler 0°.
+
+**Jetzt (Observation-Version 2, 31 Werte wie vorher):**
+
+* Richtung nur als **Sektor** von 12 (30°-Raster, Fehler ≤ 15°) als Sinus/Cosinus.
+* Entfernung nur als **Band** (<5, 5–10, 10–20, 20–35, 35–60, >60 m).
+* Gegner-HP nur als **Band** (4 Stufen), unbekannt = neutral.
+* **Sichtkontakt-Bit**: 120°-Sichtkegel **und** freie Sichtlinie auf Augenhöhe.
+* **Gedächtnis**: Richtung/Distanz/HP des letzten Sichtkontakts plus „zuletzt
+  gesehen vor X s"; nach 5 s verblasst es vollständig.
+* **Leak-Test**: zwei Gegnerpositionen im selben Sektor und Band liefern hinter
+  Deckung exakt identische Beobachtungen (Test in `tests/test_perception.py`).
+* **Reward fair**: Der Zielbonus greift nur bei Sichtkontakt und ist klein
+  (0,005/Step ≈ 2,2 pro 30-s-Episode) – siehe „Pazifisten-Bug" unten.
+
+**Vier Modi** (`vision_mode`): `coarse_los` (Standard, echte Sicht), `coarse`
+(Sektor/Bänder ohne Deckung), `noisy` (exakt + Rauschen), `exact` (alt, nur zum
+Vergleich). Wählbar im ARENA- und TRAINING-Panel; `/api/meta` liefert Feldnamen,
+Version und Modi, `/api/arena/perception` den Wahrnehmungszustand.
+
+**Zusätzliche Fixes und Verbesserungen dieser Runde:**
+
+1. **Bot-Navigation**: Der heuristische Gegner blieb an Kisten/Säulen stehen
+   (auf Arena z. B. an der Säule bei x = ±12) – mit Deckung dazwischen fror das
+   Duell ein, es gab **keinen Sichtkontakt und kein Trainingssignal**. Jetzt
+   erkennt der Bot „will vorwärts, bewegt sich nicht" und weicht 45 Frames lang
+   zur offeneren Seite aus (Seiten-Raycasts). Ergebnis: Duelle enden in ~50–80
+   Frames statt 7200.
+2. **Checkpoint-Stempel**: `*_meta.json` neben jedem Checkpoint enthält
+   `observation_version` und `vision_mode`; der Modell-Cache lehnt alte Layouts
+   mit klarer Meldung ab, statt still Unsinn zu rechnen.
+3. **Episodenlänge konfigurierbar** (TRAINING-Panel, Standard 60 s statt 120 s):
+   kürzere Episoden = mehr abgeschlossene Kämpfe pro Minute = deutlich mehr
+   Lernsignal. Vorher: 22 Episoden in 5 Minuten.
+4. **`tools/evaluate_policy.py`**: bewertet einen Checkpoint oder die
+   Zufallspolitik (Siege, Time-to-Kill nur bei bestätigten Kills, Blindanteil).
+5. **UI**: „👁 WAS DIE AI SIEHT" im ARENA-Panel (Sektor, Band, Sichtkontakt,
+   Gedächtnis) – man sieht live, dass die AI hinter Deckung nichts weiß.
+
+### Ehrliche Messwerte (alle auf dieser Maschine, CPU, 2 Worker)
+
+| Messung | Ergebnis |
+| --- | --- |
+| Zufallspolitik (`--random --episodes 20`) | 0 Siege, 20 Niederlagen, Ø 7,7 s, 31 % blind |
+| Trainingstempo | 400–550 Steps/s, 100 000 Steps ≈ 4 min |
+| Trainierter Checkpoint (`models/best_model.zip`, 28k Steps, `coarse_los`) unter Phase-1-Bedingungen (9 m Abstand, `stationary`) | **10/10 Siege, alle mit bestätigtem Kill, TTK 20,4 s**, 40 % blinde Frames |
+| derselbe Checkpoint, Phase-2-Abstand (16 m) | 20/20 Siege, aber nur 3 Kills (TTK 40 s) – der Rest HP-Entscheidungen |
+| derselbe Checkpoint auf Kartendistanz (36 m) | 0 Kills (20 Unentschieden) |
+| derselbe Checkpoint gegen `walker`/`shooter`/`full` (die schießen zurück) | 0 Siege, 20 Niederlagen |
+| Trainings-Kill-Rate im 100k-Lauf (geschlossener Abstand) | 0 % → 15 %, `best_model` mit 13,8 % |
+
+**Was daraus folgt (und was nicht):** Der Trainer lernt nachweisbar, einen
+passiven Gegner in Reichweite zu finden, anzuvisieren und zu töten – mit der
+ehrlichen Sichtwahrnehmung und ohne je dessen Koordinaten zu sehen. Gegen einen
+Gegner, der selbst schießt, reicht ein Sandbox-Lauf von 4–10 Minuten nicht: dafür
+braucht PPO hier Millionen Steps. Diese Grenze wird nicht schöngeredet.
+
+### Der entscheidende Struktur-Fund: die Kartendistanz ist außerhalb der Reichweite
+
+Gemessen mit **perfekter Zielausrichtung** (Bot im `shooter`-Modus, Gegner passiv)
+auf Dust:
+
+| Waffe | Abstand | Schüsse | Treffer | Trefferquote |
+| --- | --- | --- | --- | --- |
+| Pistol | 36 m (Karten-Spawns) | 139 | 0 | **0 %** |
+| AK-47 | 36 m | 275 | 5 | **1,8 %** |
+| Pistol | 7,8 m (nach Annäherung) | 17 | 4 | 23,5 % |
+| AK-47 | 7,8 m | 34 | 4 | 11,8 % |
+
+Auf Kartendistanz kann **niemand** treffen – auch nicht der Skript-Bot, auch nicht
+mit perfektem Ziel. Deshalb:
+
+* brach das Curriculum in Phase 1/2 zusammen (der Agent musste erst laufen lernen),
+* sah man in Trainingsläufen „Siege" ohne einen einzigen Kill,
+* stieg die Kill-Rate erst, nachdem die frühen Curriculum-Phasen näher starten.
+
+**Behoben:** Die Curriculum-Phasen starten jetzt mit 25 %, 45 % bzw. 70 % der
+Kartendistanz (Phase 4 = volle Distanz, ARENA/Playground unverändert), mit
+Kollisionsprüfung (`position_is_free`) und Tests. Kartendistanzen auf Dust:
+Phase 1 = 9 m, Phase 2 = 16,2 m, Phase 3 = 25,2 m, Phase 4 = 36 m.
+
+`tools/evaluate_policy.py --phase N` stellt dieselben Bedingungen zum Nachmessen
+her (Standard 4 = echte Spawns).
+
+### Gefundene und behobene Fehler dieser Runde
+
+1. **Wahrnehmungs-Leak** (exakte Gegnerposition/HP durch Wände) – behoben,
+   Leak-Tests in `tests/test_perception.py`.
+2. **Pazifisten-Bug in der Belohnung**: Der Zielbonus war 0,05/Step ≈ 22 pro
+   Episode, ein Kill bringt +5. Der Agent farmte also die ganze Runde den
+   Crosshair-Bonus statt zu schießen; Ergebnis waren 0 Kills bei „35 % Siegen".
+   Jetzt 0,005/Step (≈2,2/Episode), mit Test-Regel „Episode-Zielbonus < Kill-Bonus".
+3. **Der Trainings-Gegner `walker` schoss nie** (`may_fire` nur `shooter`/`full`):
+   gegen einen harmlosen Gegner gab es keinen Grund zu kämpfen. Jetzt schießt der
+   Walker (jede 3. Gelegenheit, 14°-Toleranz) – Regressionstest.
+4. **Curriculum lief nach Zeit statt nach Können**: Der Lauf sprang von Phase 2
+   (68 % „Siege") auf 0 %, weil die Phase rein nach Timesteps wechselte. Jetzt
+   schaltet die nächste Phase erst frei, wenn die **Kill**-Rate der letzten 30
+   Episoden über der Schwelle liegt (Standard 40 %, im Panel einstellbar, 0 = aus).
+5. **Absturz im Gate** (`UnboundLocalError: now`) – der Lauf starb nach 50k
+   Steps; Regressionstest `test_curriculum_gate_holds_a_phase_without_crashing`.
+6. **„Bestes Modell" wurde nach Siegen gewählt** (also nach HP-Vergleichen am
+   Zeitlimit, was Verstecken belohnt) und nur an 50k-Grenzen geprüft – traf die
+   Grenze eine schlechte Phase, war der einzige gespeicherte Checkpoint
+   wertlos. Jetzt laufende Bewertung nach Kill-Rate (Verbesserung ≥ 5 Prozentpunkte,
+   mindestens 15 neue Episoden), Altbestände ohne Kill-Stempel werden nicht
+   überschrieben.
+7. **`heatmap_events.csv` verlor das `killed`-Flag**: Die Analytics konnte
+   Zeitlimit-Entscheidungen nicht von echten Kills trennen. Spalte ergänzt.
+8. **Tippfehler im Sichtmodus fiel still auf den Standard zurück** (ARENA,
+   PLAYGROUND, TRAINING) – jetzt HTTP 400 mit Klartext.
+9. **`data/demos.csv` war noch im alten Beobachtungs-Layout**: neu aufgezeichnet
+   (1 600 Zustände, `coarse_los`) und mit `data/demos_meta.json` gestempelt;
+   veraltete Datensätze werden beim Laden abgelehnt statt Behavioral Cloning mit
+   falschen Spalten zu füttern.
+
+**Kosten/Hinweis:** Mit dem ehrlichen Sichtmodell braucht das Training länger als
+früher (weniger Information). Empfehlung: mit `noisy`/`coarse` vortrainieren, dann
+auf `coarse_los` wechseln, und mehrere Seeds vergleichen
+(`python3 tools/seed_sweep.py 2 100000`).
+
+---
+
 ## 1. Umbau: Streamlit raus, FastAPI + WebGL rein
 
 **Vorher:** acht Streamlit-Tabs (`gui/`), alle 3D-Szenen als Plotly-Figuren

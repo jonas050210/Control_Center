@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pickle
 from pathlib import Path
 from typing import Any
@@ -39,12 +40,41 @@ class PolicyCache:
             oldest = next(iter(self._cache))
             self._cache.pop(oldest, None)
 
+    @staticmethod
+    def _observation_guard(path: Path) -> str | None:
+        """Reject checkpoints trained on an older observation layout.
+
+        Feeding a policy the wrong layout silently produces nonsense actions, so
+        a version stamp next to the model is checked before loading. Missing
+        metadata is accepted for the models that ship with the repository.
+        """
+        from env.shooter_env import OBSERVATION_VERSION
+
+        meta_path = path.with_name(f"{path.stem}_meta.json")
+        if not meta_path.exists():
+            return None
+        try:
+            with meta_path.open("r", encoding="utf-8") as handle:
+                meta = json.load(handle)
+        except (OSError, ValueError) as exc:
+            return f"Could not read {meta_path.name}: {exc}"
+        version = int(meta.get("observation_version", OBSERVATION_VERSION))
+        if version != OBSERVATION_VERSION:
+            return (
+                f"{path.name} was trained for observation version {version}; "
+                f"this build uses version {OBSERVATION_VERSION}. Please retrain."
+            )
+        return None
+
     def load(self, model_name: str, models_dir: Path) -> tuple[Any | None, Any | None, str | None]:
         if model_name == HEURISTIC:
             return None, None, None
         path = models_dir / model_name
         if not path.exists():
             return None, None, f"Model file not found: {path.name}"
+        guard = self._observation_guard(path)
+        if guard is not None:
+            return None, None, guard
         try:
             cache_key = f"{path}:{path.stat().st_mtime_ns}"
         except OSError as exc:

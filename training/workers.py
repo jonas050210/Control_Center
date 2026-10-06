@@ -61,6 +61,7 @@ def _environment_factory(
     curriculum: bool,
     initial_phase: int,
     max_episode_seconds: float,
+    vision_mode: str = "coarse_los",
 ) -> Callable[[], Any]:
     """Create one Monitor-wrapped environment with a process-safe factory."""
     def make_one() -> Any:
@@ -74,6 +75,7 @@ def _environment_factory(
             curriculum=curriculum,
             curriculum_phase=initial_phase,
             seed=seed,
+            vision_mode=vision_mode,
         )
         return Monitor(env)
     return make_one
@@ -89,6 +91,7 @@ def make_vector_env(
     max_episode_seconds: float = 120.0,
     max_envs: int | None = 24,
     start_method: str | None = None,
+    vision_mode: str = "coarse_los",
 ) -> tuple[Any, Parallelism]:
     """Construct DummyVecEnv for one env or SubprocVecEnv for parallel rollouts.
 
@@ -99,6 +102,10 @@ def make_vector_env(
     """
     from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
+    from env.shooter_env import VISION_MODES
+
+    if vision_mode not in VISION_MODES:
+        raise ValueError(f"Unknown vision_mode {vision_mode!r}. Choose one of: {', '.join(VISION_MODES)}")
     parallelism = resolve_parallelism(n_workers, envs_per_worker, max_envs)
     factories = [
         _environment_factory(
@@ -107,6 +114,7 @@ def make_vector_env(
             curriculum=curriculum,
             initial_phase=initial_phase,
             max_episode_seconds=max_episode_seconds,
+            vision_mode=vision_mode,
         )
         for rank in range(parallelism.effective_envs)
     ]

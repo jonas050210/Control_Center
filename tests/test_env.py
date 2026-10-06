@@ -12,9 +12,10 @@ from gymnasium.utils.env_checker import check_env
 
 from env.map_io import load_map, map_from_json, save_map
 from env.maps import ArenaObject, MAP_NAMES, create_map
-from env.shooter_env import ACTION_NVECS, OBSERVATION_SIZE, ShooterEnv
+from env.shooter_env import (ACTION_NVECS, OBSERVATION_SIZE, OBSERVATION_VERSION,
+                             ShooterEnv)
 from env.weapons import WEAPON_NAMES, get_weapon
-from training.imitation import load_demo_data
+from training.imitation import demo_meta_path, load_demo_data
 from training.rewards import RewardEvents, shape_reward
 from training.weapon_lab import simulate_duels
 from training.train import TrainingConfig, TrainingController
@@ -112,6 +113,26 @@ class ShooterEnvironmentTests(unittest.TestCase):
             self.assertGreater(metrics["ttk"], 0.0)
         env.close()
 
+    def test_training_opponents_actually_return_fire(self) -> None:
+        """A harmless opponent makes the policy farm the aim bonus instead of shooting.
+
+        Regression: the walker used to be a pure moving target. With no incoming
+        damage the reward for holding the crosshair outweighed any reason to fire,
+        and PPO learned to survive the time limit without a single kill.
+        """
+        env = ShooterEnv(map_name="Dust", opponent_mode="walker", frame_skip=4,
+                         max_episode_seconds=45.0, vision_mode="coarse_los", seed=3)
+        env.reset(seed=3)
+        for _ in range(700):
+            _, _, terminated, truncated, _ = env.step_duel(env.heuristic_action(0),
+                                                          env.heuristic_action(1))
+            if terminated or truncated:
+                break
+        walker_damage = env._combatants[1].damage_dealt
+        self.assertGreater(walker_damage, 0.0,
+                           "the walker opponent never hit the player - no combat pressure")
+        env.close()
+
     def test_weapons_and_ammo_reload(self) -> None:
         self.assertEqual(len(WEAPON_NAMES), 6)
         for name in WEAPON_NAMES:
@@ -150,7 +171,13 @@ class ShooterEnvironmentTests(unittest.TestCase):
         self.assertAlmostEqual(breakdown.components["hits"], 1.0)
         self.assertAlmostEqual(breakdown.components["headshots"], 2.5)
         self.assertAlmostEqual(breakdown.components["kills"], 5.0)
-        self.assertAlmostEqual(breakdown.total, 8.146)
+        self.assertAlmostEqual(breakdown.total, 8.101)
+        # Design rule: farming the crosshair for a whole episode must never be
+        # worth more than a kill (this is what made the policy pacifist before).
+        from training.rewards import AIM_BONUS
+
+        episode_aim_bonus = AIM_BONUS * 30 * 15  # 30 s at 15 decisions per second
+        self.assertLess(episode_aim_bonus, breakdown.components["kills"])
 
     def test_starter_demos_and_benchmark_matrix_are_valid(self) -> None:
         demo_path = Path(__file__).resolve().parents[1] / "data" / "demos.csv"
@@ -160,6 +187,21 @@ class ShooterEnvironmentTests(unittest.TestCase):
         self.assertTrue(np.all(states >= -1.0) and np.all(states <= 1.0))
         self.assertTrue(all(np.all(actions[:, column] < categories)
                             for column, categories in enumerate(ACTION_NVECS)))
+        # The dataset is only meaningful together with the layout it was recorded
+        # with: a sidecar mismatch must fail loudly instead of training on garbage.
+        meta = json.loads(demo_meta_path(demo_path).read_text(encoding="utf-8"))
+        self.assertEqual(meta["observation_version"], OBSERVATION_VERSION)
+
+    def test_demo_dataset_with_old_layout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            demos = root / "demos.csv"
+            demos.write_text("state_0,state_1,action_0\n0.1,0.2,1\n", encoding="utf-8")
+            (root / "demos_meta.json").write_text(
+                json.dumps({"observation_version": OBSERVATION_VERSION - 1}), encoding="utf-8")
+            with self.assertRaises(ValueError) as context:
+                load_demo_data(demos)
+            self.assertIn("observation version", str(context.exception))
         configurations = valid_benchmark_configurations()
         self.assertTrue(configurations)
         self.assertTrue(all(workers * envs <= 24 for workers, envs in configurations))

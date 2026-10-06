@@ -11,6 +11,7 @@ models/*.pt
 models/*.json
 data/custom_map.json
 logs/*.csv
+logs/*.log
 logs/*.monitor.csv
 logs/tensorboard/
 

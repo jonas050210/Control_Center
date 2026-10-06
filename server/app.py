@@ -50,6 +50,11 @@ def create_app() -> FastAPI:
     def arena_state() -> dict[str, Any]:
         return STATE.arena_state()
 
+    @app.get("/api/arena/perception")
+    def arena_perception() -> dict[str, Any]:
+        """What the agents currently perceive (bearing sector, band, line of sight)."""
+        return STATE.arena_perception()
+
     @app.post("/api/arena/run")
     def arena_run(payload: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
         body = payload or {}

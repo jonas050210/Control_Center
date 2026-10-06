@@ -61,6 +61,13 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(len(meta["weapons"]), 6)
         self.assertEqual(meta["observation_size"], 31)
         self.assertEqual(meta["action_size"], 10)
+        # Perception contract: the frontend renders the "what does the AI see"
+        # box and the vision dropdown straight from this metadata.
+        self.assertEqual(meta["observation_version"], 2)
+        self.assertEqual(len(meta["observation_fields"]), meta["observation_size"])
+        self.assertEqual(meta["vision_modes"],
+                         ["exact", "noisy", "coarse", "coarse_los"])
+        self.assertEqual(meta["default_vision_mode"], "coarse_los")
         self.assertIn("Heuristic AI", meta["models"])
         self.assertEqual(meta["max_envs"], 24)
         self.assertGreater(meta["cpu"]["logical"], 0)
@@ -115,6 +122,58 @@ class ApiTestCase(unittest.TestCase):
         }).json()
         self.assertEqual(config["models"]["a"], "Heuristic AI")
 
+    def test_arena_perception_contract_and_vision_switch(self) -> None:
+        # Default vision mode is the honest one; the arena starts behind cover.
+        config = self.client.post("/api/arena/config", json={"map": "Arena"}).json()
+        self.assertEqual(config["vision"], "coarse_los")
+        perception = config["perception"]
+        self.assertEqual(perception["vision_mode"], "coarse_los")
+        self.assertEqual(perception["field_of_view_degrees"], 120.0)
+        player = perception["player"]
+        for key in ("visible", "bearing_sin", "bearing_cos", "distance_band", "hp_band",
+                    "seconds_since_seen", "blind_steps", "visible_steps",
+                    "memory", "memory_sin", "memory_cos"):
+            with self.subTest(key=key):
+                self.assertIn(key, player)
+        # Sector quantisation: bearing and memory are unit vectors or exactly zero.
+        for sin_key, cos_key in (("bearing_sin", "bearing_cos"), ("memory_sin", "memory_cos")):
+            length = player[sin_key] ** 2 + player[cos_key] ** 2
+            with self.subTest(vector=sin_key):
+                self.assertAlmostEqual(length, 1.0 if length > 0.5 else 0.0, places=5)
+
+        # Standalone perception endpoint mirrors the config payload.
+        standalone = self.client.get("/api/arena/perception").json()
+        self.assertEqual(standalone["vision_mode"], "coarse_los")
+        self.assertIn("player", standalone)
+
+        # Switching to the legacy exact mode is reported everywhere.
+        exact = self.client.post("/api/arena/config", json={"vision": "exact"}).json()
+        self.assertEqual(exact["vision"], "exact")
+        self.assertEqual(exact["perception"]["vision_mode"], "exact")
+        self.assertEqual(self.client.get("/api/arena/perception").json()["vision_mode"], "exact")
+
+        # Unknown values are rejected instead of silently falling back.
+        bad = self.client.post("/api/arena/config", json={"vision": "xray"})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("vision", json.dumps(bad.json()).lower())
+
+        # Stepping returns a fresh perception snapshot with monotone counters.
+        self.client.post("/api/arena/config", json={"vision": "coarse_los"})
+        stepped = self.client.post("/api/arena/step", json={"steps": 12}).json()
+        self.assertIn("perception", stepped)
+        stepped_player = stepped["perception"]["player"]
+        self.assertGreaterEqual(stepped_player["blind_steps"] + stepped_player["visible_steps"],
+                                player["blind_steps"] + player["visible_steps"])
+
+    def test_playground_accepts_vision_mode(self) -> None:
+        payload = self.client.post("/api/playground/config", json={
+            "map": "Dust", "vision": "noisy",
+        }).json()
+        self.assertEqual(payload["vision"], "noisy")
+        self.assertEqual(self.client.post(
+            "/api/playground/config", json={"vision": "nonsense"}).status_code, 400)
+        self.client.post("/api/playground/config", json={"vision": "coarse_los"})
+
     # ------------------------------------------------------------ playground
     def test_playground_actions_recording_and_demo_export(self) -> None:
         config = self.client.post("/api/playground/config", json={
@@ -143,6 +202,13 @@ class ApiTestCase(unittest.TestCase):
         saved = self.client.post("/api/playground/demos/save").json()
         self.assertGreater(saved["saved"], 0)
         self.assertTrue(state_module.DEMOS_PATH.exists())
+        # The exported demos must carry the observation layout they were recorded
+        # with, otherwise imitation training would silently learn from stale columns.
+        from env.shooter_env import OBSERVATION_VERSION
+        from training.imitation import demo_meta_path
+
+        meta = json.loads(demo_meta_path(state_module.DEMOS_PATH).read_text(encoding="utf-8"))
+        self.assertEqual(meta["observation_version"], OBSERVATION_VERSION)
         afterwards = self.client.post("/api/playground/action",
                                       json={"press": "wait", "recording": False}).json()
         self.assertEqual(afterwards["demo_count"], 0)

@@ -29,9 +29,20 @@ class TrainingConfig:
     curriculum: bool = True
     self_play: bool = True
     method: str = "Pure RL"
+    vision_mode: str = "coarse_los"
     resume_checkpoint: str | None = None
     imitation_path: str | None = None
     max_envs: int = 24
+    episode_seconds: float = 60.0
+    # A curriculum must not outrun the policy: the opponent is only made harder
+    # once the current phase is actually being won. Without this gate a 120k-step
+    # run measurably collapsed (67.9% -> 0.0%) when the timer forced phase 3 + 4.
+    curriculum_min_win_rate: float = 0.40
+    # Configurable, because the discount horizon is a real lever here: at 15
+    # decisions per second (frame_skip 4) gamma=0.99 reaches ~100 steps while
+    # gamma=0.995 reaches ~200. Measured on this machine the long horizon was not
+    # the bottleneck, so the SB3 default stays - raise it for longer fights.
+    gamma: float = 0.99
     seed: int = 2026
     models_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "models")
     logs_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "logs")
@@ -42,8 +53,19 @@ class TrainingConfig:
         self.n_workers = max(1, int(self.n_workers))
         self.envs_per_worker = max(1, int(self.envs_per_worker))
         self.max_envs = max(1, int(self.max_envs))
+        # Shorter episodes mean more finished fights per minute: hiding until the
+        # time limit is the worst case for reinforcement learning.
+        self.episode_seconds = min(300.0, max(10.0, float(self.episode_seconds)))
+        self.curriculum_min_win_rate = min(1.0, max(0.0, float(self.curriculum_min_win_rate)))
+        self.gamma = min(0.9999, max(0.9, float(self.gamma)))
         self.models_dir = Path(self.models_dir)
         self.logs_dir = Path(self.logs_dir)
+        from env.shooter_env import VISION_MODES
+
+        if self.vision_mode not in VISION_MODES:
+            raise ValueError(
+                f"Unknown vision_mode {self.vision_mode!r}. Choose one of: {', '.join(VISION_MODES)}"
+            )
 
 
 class TrainingController:
@@ -65,6 +87,7 @@ class TrainingController:
             "fps": 0.0,
             "episodes": 0,
             "win_rate": 0.0,
+            "kill_rate": 0.0,
             "avg_reward": 0.0,
             "avg_ttk": 0.0,
             "headshot_pct": 0.0,
@@ -246,6 +269,8 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
         curriculum=config.curriculum,
         initial_phase=1 if config.curriculum else 4,
         max_envs=config.max_envs,
+        vision_mode=config.vision_mode,
+        max_episode_seconds=config.episode_seconds,
     )
     job.update(metrics={"effective_envs": parallelism.effective_envs})
     if parallelism.effective_envs < config.n_workers * config.envs_per_worker:
@@ -295,7 +320,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 n_steps=2048,
                 batch_size=256,
                 n_epochs=10,
-                gamma=0.99,
+                gamma=config.gamma,
                 gae_lambda=0.95,
                 clip_range=0.2,
                 ent_coef=0.01,
@@ -319,31 +344,46 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 self.next_checkpoint = (self.base_timesteps // 50_000 + 1) * 50_000
                 self.current_phase = 1 if config.curriculum else 4
                 self.wins: deque[float] = deque(maxlen=100)
+                self.last_curriculum_log = 0.0
+                self.kill_wins: deque[float] = deque(maxlen=100)
                 self.episode_rewards: deque[float] = deque(maxlen=100)
                 self.ttks: deque[float] = deque(maxlen=100)
                 self.kill_ttks: deque[float] = deque(maxlen=100)
                 self.accuracies: deque[float] = deque(maxlen=100)
                 self.headshot_rates: deque[float] = deque(maxlen=100)
                 self.episode_count = 0
-                self.best_win_rate = self._load_best_rate()
+                self.best_win_rate, self.best_kill_rate = self._load_best_score()
+                self.best_seen_kill = self.best_kill_rate
+                self.last_best_episode = 0
                 self.metric_fields = [
                     "timestamp", "steps", "fps", "episodes", "win_rate", "avg_reward",
                     "avg_ttk", "headshot_pct", "accuracy", "elapsed", "map",
+                    "kill_rate",
                 ]
                 self.event_fields = [
-                    "timestamp", "episode", "map", "win", "draw", "ttk", "weapon",
+                    "timestamp", "episode", "map", "win", "draw", "killed", "ttk", "weapon",
                     "opponent_weapon", "distance", "shots_fired", "bullets_fired", "hits", "headshots",
                     "accuracy", "headshot_pct", "avg_kill_distance", "death_x", "death_y",
                     "kill_x", "kill_y",
                 ]
 
-            def _load_best_rate(self) -> float:
+            def _load_best_score(self) -> tuple[float, float]:
+                """Return (kill rate, win rate) of the retained checkpoint.
+
+                Checkpoints saved before the kill rate existed are scored with a
+                kill rate of 0, so a new run has to produce a confirmed kill
+                before it may overwrite an already useful model.
+                """
                 metadata = config.models_dir / "best_model.json"
-                try:
-                    with metadata.open("r", encoding="utf-8") as handle:
-                        return float(json.load(handle).get("best_win_rate", -1.0))
-                except (OSError, ValueError, TypeError):
-                    return -1.0
+                if metadata.exists():
+                    try:
+                        with metadata.open(encoding="utf-8") as handle:
+                            payload = json.load(handle)
+                        return (float(payload.get("best_kill_rate", 0.0)),
+                                float(payload.get("best_win_rate", -1.0)))
+                    except (OSError, ValueError, TypeError):
+                        pass
+                return -1.0, -1.0
 
             def _on_training_start(self) -> None:
                 self.started_at = time.monotonic()
@@ -359,6 +399,28 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                         self.training_env.env_method("set_curriculum_phase", 1)
                     except Exception as exc:
                         job.log(f"Curriculum initialization notice: {exc}")
+
+            def _recent_win_rate(self, window: int = 30) -> float:
+                recent = list(self.wins)[-window:]
+                return float(np.mean(recent)) if recent else 0.0
+
+            def _recent_kill_rate(self, window: int = 30) -> float:
+                """Share of recent episodes that ended in a *confirmed* kill.
+
+                Winning on health at the time limit is not the same as winning:
+                it would reward hiding, so it never unlocks the next phase.
+                """
+                recent = list(self.kill_wins)[-window:]
+                return float(np.mean(recent)) if recent else 0.0
+
+            def _curriculum_ready(self) -> bool:
+                """True only when the running phase is demonstrably beaten."""
+                if not config.curriculum or self.current_phase >= 4:
+                    return False
+                recent = list(self.kill_wins)[-30:]
+                if len(recent) < 20:
+                    return False
+                return float(np.mean(recent)) >= config.curriculum_min_win_rate
 
             def _phase_from_progress(self) -> int:
                 if not config.curriculum:
@@ -388,6 +450,8 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     self.episode_count += 1
                     win = float(episode_metrics.get("win", 0.0))
                     self.wins.append(win)
+                    killed = bool(episode_metrics.get("killed"))
+                    self.kill_wins.append(win if killed else 0.0)
                     monitor_episode = info.get("episode", {})
                     reward = float(monitor_episode.get("r", 0.0))
                     self.episode_rewards.append(reward)
@@ -401,9 +465,23 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                                 event, job._csv_lock)
 
                 phase = self._phase_from_progress()
+                if phase > self.current_phase and not self._curriculum_ready():
+                    # ``now`` is only computed further down; the gate needs its
+                    # own clock so the "hold" notice cannot crash the callback.
+                    hold_now = time.monotonic()
+                    if hold_now - self.last_curriculum_log >= 20.0:
+                        self.last_curriculum_log = hold_now
+                        job.log(
+                            "Curriculum holds at phase "
+                            f"{self.current_phase}/4 - kill rate "
+                            f"{self._recent_kill_rate():.1%} is below the "
+                            f"{config.curriculum_min_win_rate:.0%} gate."
+                        )
+                    phase = self.current_phase
                 if phase != self.current_phase:
                     self.current_phase = phase
-                    job.log(f"Curriculum advanced to phase {phase}/4.")
+                    job.log(f"Curriculum advanced to phase {phase}/4 "
+                            f"(kill rate {self._recent_kill_rate():.1%}).")
                     try:
                         self.training_env.env_method("set_curriculum_phase", phase)
                     except Exception as exc:
@@ -414,14 +492,12 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 if job.save_requested.is_set():
                     job.save_requested.clear()
                     self._save_checkpoint("manual", force=True)
-                if self.num_timesteps >= self.next_checkpoint:
-                    self.next_checkpoint = (self.num_timesteps // 50_000 + 1) * 50_000
-                    self._consider_best_checkpoint()
 
                 now = time.monotonic()
                 elapsed = max(1e-6, now - self.started_at)
                 fps = max(0.0, (self.num_timesteps - self.base_timesteps) / elapsed)
                 win_rate = float(np.mean(self.wins)) if self.wins else 0.0
+                kill_rate = float(np.mean(self.kill_wins)) if self.kill_wins else 0.0
                 avg_reward = float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0
                 # Time-to-kill only counts episodes that ended in a confirmed kill;
                 # time-limit decisions and defeats are excluded.
@@ -435,6 +511,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     "fps": fps,
                     "episodes": self.episode_count,
                     "win_rate": win_rate,
+                    "kill_rate": kill_rate,
                     "avg_reward": avg_reward,
                     "avg_ttk": avg_ttk,
                     "headshot_pct": headshot_pct,
@@ -444,11 +521,13 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     "effective_envs": parallelism.effective_envs,
                 }
                 if now - self.last_update >= 1.0:
+                    self._update_best_watch()
                     job.update(metrics=metrics)
                     job.update(status="paused" if not job.resume_event.is_set() else "running")
                     job.log(
                         f"steps={self.num_timesteps:,} | {fps:,.0f} steps/s | "
-                        f"episodes={self.episode_count} | win={win_rate:.1%}"
+                        f"episodes={self.episode_count} | win={win_rate:.1%} "
+                        f"(kills {kill_rate:.1%})"
                     )
                     self.last_update = now
                 if now - self.last_csv >= 2.0:
@@ -458,6 +537,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                         "fps": round(fps, 4),
                         "episodes": self.episode_count,
                         "win_rate": round(win_rate, 6),
+                        "kill_rate": round(kill_rate, 6),
                         "avg_reward": round(avg_reward, 6),
                         "avg_ttk": round(avg_ttk, 6),
                         "headshot_pct": round(headshot_pct, 6),
@@ -474,6 +554,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 elapsed = max(1e-6, time.monotonic() - self.started_at) if self.started_at else 0.0
                 fps = max(0.0, (self.num_timesteps - self.base_timesteps) / max(1e-6, elapsed))
                 win_rate = float(np.mean(self.wins)) if self.wins else 0.0
+                kill_rate = float(np.mean(self.kill_wins)) if self.kill_wins else 0.0
                 avg_reward = float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0
                 # Time-to-kill only counts episodes that ended in a confirmed kill;
                 # time-limit decisions and defeats are excluded.
@@ -494,6 +575,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "steps": self.num_timesteps, "fps": round(fps, 4),
                     "episodes": self.episode_count, "win_rate": round(win_rate, 6),
+                    "kill_rate": round(kill_rate, 6),
                     "avg_reward": round(avg_reward, 6), "avg_ttk": round(avg_ttk, 6),
                     "headshot_pct": round(headshot_pct, 6), "accuracy": round(accuracy, 6),
                     "elapsed": round(elapsed, 3), "map": config.map_name,
@@ -510,17 +592,31 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 except Exception as exc:
                     job.log(f"Self-play snapshot could not be installed; phase-four bot remains active: {exc}")
 
-            def _consider_best_checkpoint(self) -> None:
-                if not self.wins:
-                    job.log("50,000-step checkpoint check: waiting for completed episodes before scoring.")
+            def _update_best_watch(self) -> None:
+                """Retain the checkpoint with the highest recent kill rate.
+
+                Kills come first: a win on health at the time limit rewards hiding
+                and would keep a worse model. The rolling window is checked
+                continuously instead of only at fixed step boundaries, because a
+                50k boundary can fall into a bad phase and then the *only*
+                checkpoint on disk is a worthless one.
+                """
+                recent = list(self.kill_wins)[-30:]
+                if len(recent) < 20:
                     return
+                kill = float(np.mean(recent))
+                if kill <= self.best_seen_kill + 0.05:
+                    return
+                if self.episode_count - self.last_best_episode < 15:
+                    return
+                self.best_seen_kill = kill
+                self.last_best_episode = self.episode_count
                 rate = float(np.mean(self.wins))
-                if rate > self.best_win_rate + 1e-9:
-                    self.best_win_rate = rate
-                    self._save_checkpoint("best", force=True, win_rate=rate)
-                    job.log(f"New best checkpoint retained at {rate:.1%} rolling win rate.")
-                else:
-                    job.log(f"Checkpoint not retained; win rate {rate:.1%} did not improve {self.best_win_rate:.1%}.")
+                self.best_kill_rate = max(self.best_kill_rate, kill)
+                self.best_win_rate = max(self.best_win_rate, rate)
+                self._save_checkpoint("best", force=True, win_rate=rate)
+                job.log(f"New best checkpoint retained: {kill:.1%} kills in the last "
+                        f"{len(recent)} episodes ({rate:.1%} wins).")
 
             def _save_checkpoint(self, kind: str, force: bool, win_rate: float | None = None) -> None:
                 if not force:
@@ -534,6 +630,8 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 self.model.save(str(base))
                 normalizer_path = base.with_name(f"{base.name}_vecnormalize.pkl")
                 self.training_env.save(str(normalizer_path))
+                from env.shooter_env import OBSERVATION_VERSION
+
                 metadata = {
                     "saved_at": datetime.now(timezone.utc).isoformat(),
                     "kind": kind,
@@ -541,11 +639,19 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     "win_rate": win_rate if win_rate is not None else (
                         float(np.mean(self.wins)) if self.wins else 0.0
                     ),
+                    "kill_rate": float(np.mean(self.kill_wins)) if self.kill_wins else 0.0,
                     "map": config.map_name,
                     "phase": self.current_phase,
+                    # Policy checkpoints are only valid for the observation
+                    # layout they were trained on (see server/policies.py).
+                    "observation_version": OBSERVATION_VERSION,
+                    "vision_mode": config.vision_mode,
                 }
+                with base.with_name(f"{base.name}_meta.json").open("w", encoding="utf-8") as handle:
+                    json.dump(metadata, handle, indent=2)
                 if kind == "best":
                     metadata["best_win_rate"] = float(metadata["win_rate"])
+                    metadata["best_kill_rate"] = float(metadata["kill_rate"])
                     with (config.models_dir / "best_model.json").open("w", encoding="utf-8") as handle:
                         json.dump(metadata, handle, indent=2)
                 job.update(checkpoint=str(model_path))
@@ -555,7 +661,11 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
         job.update(status="running")
         job.log(
             f"PPO configured: lr=3e-4 linear, n_steps=2048, batch=256, epochs=10, "
-            f"gamma=0.99, gae=0.95, clip=0.2, ent_coef=0.01."
+            f"gamma={config.gamma}, gae=0.95, clip=0.2, ent_coef=0.01."
+        )
+        job.log(
+            f"Perception: vision_mode={config.vision_mode} "
+            f"(the agent only sees bearing sectors, distance bands and line of sight)."
         )
         model.learn(
             total_timesteps=config.total_timesteps,

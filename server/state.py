@@ -18,7 +18,15 @@ from typing import Any
 
 from env.map_io import map_from_json, save_map, load_map
 from env.maps import ArenaMap, ArenaObject, MAP_NAMES, create_map, randomize_cover, serialize_map
-from env.shooter_env import ACTION_SIZE, OBSERVATION_SIZE, ShooterEnv
+from env.shooter_env import (
+    ACTION_SIZE,
+    DEFAULT_VISION_MODE,
+    OBSERVATION_FIELDS,
+    OBSERVATION_SIZE,
+    OBSERVATION_VERSION,
+    VISION_MODES,
+    ShooterEnv,
+)
 from env.weapons import WEAPON_NAMES, get_weapon
 from server import analytics, scene
 from server.actions import BOT_BEHAVIORS, HEURISTIC, PLAY_ACTIONS, action_from_controls
@@ -56,6 +64,7 @@ class ArenaSession:
     scene_key: str | None = None
     models: tuple[str, str] = (HEURISTIC, HEURISTIC)
     detail_count: int = DETAIL_PRESETS["Balanced"]
+    vision_mode: str = DEFAULT_VISION_MODE
     running: bool = False
     messages: list[str] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -73,6 +82,7 @@ class PlaygroundSession:
     result: dict[str, Any] | None = None
     recording: bool = False
     demo_rows: list[tuple[list[float], list[int]]] = field(default_factory=list)
+    vision_mode: str = DEFAULT_VISION_MODE
     stance: int = 0
     sprint: bool = False
 
@@ -120,6 +130,10 @@ class ServerState:
             "play_actions": sorted(PLAY_ACTIONS),
             "action_size": ACTION_SIZE,
             "observation_size": OBSERVATION_SIZE,
+            "observation_version": OBSERVATION_VERSION,
+            "observation_fields": list(OBSERVATION_FIELDS),
+            "vision_modes": list(VISION_MODES),
+            "default_vision_mode": DEFAULT_VISION_MODE,
             "cpu": {"physical": physical, "logical": logical,
                     "auto_workers": auto_worker_count()},
             "benchmark_configs": [list(item) for item in valid_benchmark_configurations()],
@@ -246,6 +260,20 @@ class ServerState:
         notices, self.notices = self.notices, []
         return notices
 
+    @staticmethod
+    def _vision_mode(payload: dict[str, Any], fallback: str) -> str:
+        """Validate a requested vision mode instead of silently guessing.
+
+        A typo used to fall back to the default, which silently trained or
+        rendered the wrong perception model - the user must see the error.
+        """
+        vision = str(payload.get("vision", fallback))
+        if vision not in VISION_MODES:
+            raise ValueError(
+                f"Unknown vision mode {vision!r}. Choose one of: {', '.join(VISION_MODES)}"
+            )
+        return vision
+
     # ----------------------------------------------------------------- arena
     def arena_configure(self, payload: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
@@ -263,13 +291,15 @@ class ServerState:
                 model_b = HEURISTIC
             detail_name = str(payload.get("detail", "Balanced"))
             detail_count = DETAIL_PRESETS.get(detail_name, DETAIL_PRESETS["Balanced"])
+            vision = self._vision_mode(payload, self.arena.vision_mode)
 
             arena_map = self.map_for(map_name)
             layout_signature = _layout_signature(arena_map)
-            signature = (map_name, weapon_a, weapon_b, layout_signature, detail_count)
+            signature = (map_name, weapon_a, weapon_b, layout_signature, detail_count, vision)
             session = self.arena
             session.models = (model_a, model_b)
             session.detail_count = detail_count
+            session.vision_mode = vision
             if session.signature != signature or session.env is None:
                 if session.env is not None:
                     session.env.close()
@@ -281,6 +311,7 @@ class ServerState:
                     opponent_mode="full",
                     frame_skip=4,
                     max_episode_seconds=120.0,
+                    vision_mode=vision,
                 )
                 session.env.reset()
                 session.signature = signature
@@ -296,6 +327,8 @@ class ServerState:
                 "running": session.running,
                 "messages": session.messages[-ARENA_EVENT_FEED:],
                 "models": {"a": model_a, "b": model_b},
+                "vision": vision,
+                "perception": session.env.perception_snapshot(),
                 "load_errors": self._arena_model_errors(),
             }
 
@@ -346,6 +379,7 @@ class ServerState:
                 "new_messages": new_messages,
                 "messages": session.messages[-ARENA_EVENT_FEED:],
                 "events_logged": len(session.events),
+                "perception": env.perception_snapshot(),
                 "load_errors": errors,
             }
 
@@ -378,6 +412,13 @@ class ServerState:
         session.messages.extend(messages)
         session.messages = session.messages[-ARENA_EVENT_FEED:]
         return messages
+
+    def arena_perception(self) -> dict[str, Any]:
+        """Perception snapshot for the 'what does the AI see' box in the ARENA panel."""
+        session = self.arena
+        if session.env is None:
+            return {}
+        return session.env.perception_snapshot()
 
     def arena_state(self) -> dict[str, Any]:
         with self.lock:
@@ -419,9 +460,11 @@ class ServerState:
             detail_count = DETAIL_PRESETS.get(detail_name, DETAIL_PRESETS["Balanced"])
 
             arena_map = self.map_for(map_name)
+            vision = self._vision_mode(payload, self.playground.vision_mode)
             signature = (map_name, player_weapon, enemy_weapon, bot_label, _layout_signature(arena_map),
-                         detail_count)
+                         detail_count, vision)
             session = self.playground
+            session.vision_mode = vision
             session.bot_label = bot_label
             session.detail_count = detail_count
             if session.signature != signature or session.env is None:
@@ -435,6 +478,7 @@ class ServerState:
                     opponent_mode=ai_mode,
                     frame_skip=4,
                     max_episode_seconds=120.0,
+                    vision_mode=vision,
                 )
                 session.env.reset()
                 session.signature = signature
@@ -449,6 +493,7 @@ class ServerState:
                 "scene_key": static["key"],
                 "frame": scene.match_frame(session.env),
                 "bot": bot_label,
+                "vision": vision,
                 "recording": session.recording,
                 "demo_count": len(session.demo_rows),
                 "stance": session.stance,
@@ -599,6 +644,9 @@ class ServerState:
                         [f"{float(value):.5f}" for value in observation]
                         + [str(int(value)) for value in action]
                     ) + "\n")
+            from training.imitation import write_demo_meta
+
+            write_demo_meta(DEMOS_PATH, vision_mode=self.playground.vision_mode)
             self.playground.demo_rows = []
             self.notice(f"Added {len(rows):,} human demonstrations to data/demos.csv.")
             return {"saved": len(rows), "path": relative_path(DEMOS_PATH)}
@@ -673,6 +721,7 @@ class ServerState:
                 if not (MODELS_DIR / str(resume_checkpoint)).exists():
                     raise ValueError(f"Checkpoint {resume_checkpoint} does not exist in models/.")
                 resume_checkpoint = str(MODELS_DIR / str(resume_checkpoint))
+            vision = self._vision_mode(payload, DEFAULT_VISION_MODE)
             imitation_path = str(MODELS_DIR / "behavior_clone.pt") if method.startswith("Imitation") else None
             estimated_steps = max(50_000, int(duration_seconds * 1_500))
             config = TrainingConfig(
@@ -685,16 +734,19 @@ class ServerState:
                 curriculum=bool(payload.get("curriculum", True)),
                 self_play=bool(payload.get("self_play", True)),
                 method=method,
+                vision_mode=vision,
                 resume_checkpoint=resume_checkpoint,
                 imitation_path=imitation_path,
                 max_envs=int(payload.get("max_envs", 24)),
+                episode_seconds=float(payload.get("episode_seconds", 60.0)),
+                curriculum_min_win_rate=float(payload.get("curriculum_min_win_rate", 0.40)),
                 models_dir=MODELS_DIR,
                 logs_dir=LOGS_DIR,
             )
             self.training_job = TrainingController(config)
             self.training_job.start()
             return {"started": True, "run": self.training_snapshot(),
-                    "estimated_steps": estimated_steps}
+                    "estimated_steps": estimated_steps, "vision": vision}
 
     def training_snapshot(self) -> dict[str, Any]:
         with self.lock:
