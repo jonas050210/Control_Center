@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NEURAL ARENA · Control Center</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./css/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="logo">⚡ NEURAL ARENA<br /><small>CONTROL CENTER · v3.0</small></div>
+      <nav id="nav"></nav>
+      <div class="side-card" id="training-badge">
+        <span class="card-label">TRAINING</span>
+        <b class="status-bad" id="training-badge-value">● STOPPED</b>
+      </div>
+      <div class="side-card" id="connection-card">
+        <span class="card-label">SERVER</span>
+        <b class="status-warn" id="connection-value">● VERBINDE…</b>
+      </div>
+      <p class="side-foot">
+        HEADLESS SIMULATION · CPU PARALLEL<br />
+        FASTAPI + WEBGL · KEIN STREAMLIT
+      </p>
+    </aside>
+    <main>
+      <header>
+        <h1>⚡ NEURAL ARENA</h1>
+        <p class="sub">CYBERNETIC TRAINING SANDBOX / HEADLESS MODE ACTIVE / BROWSER-RENDERED 3D</p>
+      </header>
+      <div id="panel-host"></div>
+    </main>
+  </div>
+  <div id="toast-host" aria-live="polite"></div>
+  <noscript>Dieses Control Center benötigt JavaScript (WebGL-Rendering im Browser).</noscript>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

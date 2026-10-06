@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import select
@@ -12,7 +13,8 @@ from typing import Any
 
 import numpy as np
 
-from env.shooter_env import ACTION_NVECS, ACTION_SIZE, OBSERVATION_SIZE, ShooterEnv
+from env.shooter_env import (ACTION_NVECS, ACTION_SIZE, OBSERVATION_SIZE,
+                             OBSERVATION_VERSION, ShooterEnv)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,11 +27,74 @@ def _ordered_columns(fieldnames: list[str], prefix: str) -> list[str]:
     return sorted(columns, key=lambda name: int(name[len(prefix):]) if name[len(prefix):].isdigit() else name)
 
 
+def demo_meta_path(path: str | Path) -> Path:
+    """Sidecar next to a demo CSV: ``data/demos.csv`` -> ``data/demos_meta.json``."""
+    path = Path(path)
+    return path.with_name(f"{path.stem}_meta.json")
+
+
+def write_demo_meta(path: str | Path, vision_mode: str | None = None,
+                    samples: int | None = None) -> Path:
+    """Stamp a demo file with the observation layout it was recorded with."""
+    meta_path = demo_meta_path(path)
+    payload: dict[str, Any] = {"observation_version": OBSERVATION_VERSION}
+    if vision_mode:
+        payload["vision_mode"] = vision_mode
+    if samples is not None:
+        payload["samples"] = int(samples)
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return meta_path
+
+
+def archive_outdated_demos(path: str | Path) -> Path | None:
+    """Move a demo CSV with an outdated layout aside before appending new rows.
+
+    Appending would mix two column layouts in one file and then overwrite the
+    sidecar with the new version - a combination the loader cannot detect any
+    more. The old file is kept (renamed with its observation version), so nothing
+    is lost.
+    """
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    meta_path = demo_meta_path(path)
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    version = int(meta.get("observation_version", OBSERVATION_VERSION))
+    if version == OBSERVATION_VERSION:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    archived = path.with_name(f"{path.stem}_v{version}_{stamp}{path.suffix}")
+    path.replace(archived)
+    meta_path.replace(demo_meta_path(archived))
+    return archived
+
+
 def load_demo_data(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
-    """Load indexed state/action columns or JSON ``state,action`` pairs."""
+    """Load indexed state/action columns or JSON ``state,action`` pairs.
+
+    A demo file recorded with an older observation layout is rejected: the
+    columns would still line up, but state 5 would mean something completely
+    different, and behavioural cloning would learn nonsense.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Demo file not found: {path}")
+    meta_path = demo_meta_path(path)
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        version = int(meta.get("observation_version", OBSERVATION_VERSION))
+        if version != OBSERVATION_VERSION:
+            raise ValueError(
+                f"{path.name} was recorded with observation version {version}, this build "
+                f"uses {OBSERVATION_VERSION}. Record new demonstrations "
+                "(`python -m training.imitation record`) or delete the file."
+            )
     states: list[list[float]] = []
     actions: list[list[int]] = []
     with path.open("r", newline="", encoding="utf-8") as handle:

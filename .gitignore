@@ -1,20 +1,22 @@
+# Python
 __pycache__/
 *.py[cod]
 .venv/
 .env
-.streamlit/secrets.toml
 
-# Runtime-trained weights and metrics
+# Runtime data: trained weights, metrics and recordings are written by the app
 models/*.zip
 models/*.pkl
 models/*.pt
 models/*.json
 data/custom_map.json
 logs/*.csv
+logs/*.log
 logs/*.monitor.csv
 logs/tensorboard/
 
-# Local cache files
+# Local tooling
+node_modules/
 .DS_Store
 
 # Downloadable source bundle

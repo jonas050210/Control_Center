@@ -106,6 +106,12 @@ def _body_collides(body: AgentBody, arena_map: ArenaMap, x: float, y: float, z: 
     return False
 
 
+def position_is_free(arena_map: ArenaMap, x: float, y: float, radius: float = 0.34) -> bool:
+    """True when a fighter-sized body fits at x/y without touching cover."""
+    body = AgentBody(x, y, ground_height(arena_map, x, y))
+    return not _body_collides(body, arena_map, x, y, body.z, radius)
+
+
 def move_body(
     body: AgentBody,
     arena_map: ArenaMap,
@@ -315,6 +321,46 @@ def ray_cylinder_hit(
         if body.z <= hit_z <= body.z + body.height:
             return distance, hit_z >= body.z + 0.8 * body.height
     return None
+
+
+# Human-ish perception limits used by the environment's observation builder.
+VISION_FOV_DEGREES = 120.0
+VISION_RANGE_METRES = 120.0
+
+
+def field_of_view_degrees() -> float:
+    """Horizontal field of view an agent can perceive at once."""
+    return VISION_FOV_DEGREES
+
+
+def in_field_of_view(source: AgentBody, target: AgentBody,
+                     fov_degrees: float = VISION_FOV_DEGREES) -> bool:
+    """True when the target lies inside the horizontal view cone of the source."""
+    dx, dy = target.x - source.x, target.y - source.y
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return True
+    bearing = math.atan2(dx, dy)
+    return abs(wrap_angle(bearing - source.yaw)) <= math.radians(fov_degrees) * 0.5
+
+
+def can_see(
+    source: AgentBody,
+    target: AgentBody,
+    arena_map: ArenaMap,
+    *,
+    fov_degrees: float = VISION_FOV_DEGREES,
+    max_distance: float = VISION_RANGE_METRES,
+) -> bool:
+    """Full perception check: alive, inside the view cone, unobstructed line of sight."""
+    if not source.alive or not target.alive:
+        return False
+    dx, dy = target.x - source.x, target.y - source.y
+    horizontal = math.hypot(dx, dy)
+    if horizontal > max_distance:
+        return False
+    if not in_field_of_view(source, target, fov_degrees):
+        return False
+    return has_line_of_sight(source, target, arena_map)
 
 
 def has_line_of_sight(source: AgentBody, target: AgentBody, arena_map: ArenaMap) -> bool:

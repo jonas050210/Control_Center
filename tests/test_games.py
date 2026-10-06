@@ -1,11 +1,11 @@
-"""Unit tests for the small session-state playground games."""
+"""Unit tests for the playground mini-games and human control encoding."""
 
 from __future__ import annotations
 
 import unittest
 
-from gui.games import aim_tap, new_aim_game, new_dodge_game, step_dodge_game
-from gui.tabs.playground import _make_action
+from server.actions import make_action
+from server.minigames import aim_tap, new_aim_game, new_dodge_game, step_dodge_game
 
 
 class PlaygroundGameTests(unittest.TestCase):
@@ -46,8 +46,8 @@ class PlaygroundGameTests(unittest.TestCase):
         self.assertEqual(game["hits"], 1)
 
     def test_human_shooter_action_matches_multidiscrete_encoding(self) -> None:
-        action = _make_action(move=1, strafe=-1, yaw=-1, pitch=1, shoot=True,
-                              sprint=True, stance=2, jump=True)
+        action = make_action(move=1, strafe=-1, yaw=-1, pitch=1, shoot=True,
+                             sprint=True, stance=2, jump=True)
         self.assertEqual(action.tolist(), [2, 0, 0, 2, 1, 1, 2, 1, 1, 0])
 
 

@@ -1,0 +1,5 @@
+{
+  "observation_version": 2,
+  "vision_mode": "coarse_los",
+  "samples": 1600
+}

@@ -1,8 +1,24 @@
-gymnasium>=0.29.0
-stable-baselines3>=2.2.0
-streamlit>=1.30.0
-plotly>=5.18.0
+# NEURAL ARENA · Laufzeit-Abhängigkeiten (nur Simulation + Web-Backend)
+#
+# Installation (empfohlen, legt .venv an und lädt die Web-Assets):
+#     python install.py
+#
+# Ohne install.py:
+#     python -m pip install -r requirements.txt
+#
+# Ohne Streamlit, Plotly und pandas: Das Frontend rendert die 3D-Szenen selbst
+# (three.js/WebGL) und zeichnet alle Diagramme auf Canvas.
+#
+# PPO-Training (PyTorch + Stable-Baselines3) ist optional und steht in
+# requirements-training.txt – die Installation über install.py wählt für
+# PyTorch automatisch das kleine CPU-Wheel.
+
+# --- Simulation und Backend -------------------------------------------------
 numpy>=1.24.0
-pandas>=2.0.0
+gymnasium>=0.29.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
 psutil>=5.9.0
-torch>=2.0.0
+
+# --- Tests (FastAPI TestClient) --------------------------------------------
+httpx>=0.26.0

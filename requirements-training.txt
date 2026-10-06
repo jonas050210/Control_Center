@@ -1,0 +1,17 @@
+# NEURAL ARENA · optionale Trainings-Abhängigkeiten (PPO)
+#
+# Nur nötig für das TRAINING- und das BENCHMARK-Panel. Ohne diese Pakete läuft
+# die App vollständig, nur Training/Benchmark melden "nicht verfügbar".
+#
+# Empfohlen (kleines CPU-Wheel, ~200 MB statt ~2,5 GB CUDA-Paket):
+#     python install.py                  # macht genau das
+#
+# Manuell:
+#     python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+#     python -m pip install -r requirements-training.txt
+#
+# ACHTUNG: Ein normales "pip install torch" zieht unter Linux die CUDA-Variante
+# samt NVIDIA-Paketen. Dieses Projekt trainiert bewusst auf der CPU.
+
+torch>=2.0.0
+stable-baselines3>=2.2.0
