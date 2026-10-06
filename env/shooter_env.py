@@ -79,7 +79,10 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
     ) -> None:
         super().__init__()
         if render_mode is not None:
-            raise ValueError("ShooterEnv is headless and has no display render mode; use the Streamlit Plotly viewer.")
+            raise ValueError(
+                "ShooterEnv is headless and has no display render mode; use get_snapshot() and "
+                "the browser renderer of the control center."
+            )
         if frame_skip < 1:
             raise ValueError("frame_skip must be at least 1")
         if max_episode_seconds <= 0 or dt <= 0:
@@ -649,7 +652,7 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         }
 
     def get_snapshot(self) -> dict[str, Any]:
-        """Return JSON-friendly world state for the Streamlit Plotly renderer."""
+        """Return JSON-friendly world state for the browser renderer."""
         agents = [self._combatant_summary(index) for index in range(2)]
         for index, agent in enumerate(agents):
             agent["agent"] = index + 1
@@ -686,6 +689,10 @@ class ShooterEnv(gym.Env[np.ndarray, np.ndarray]):
         metrics = {
             "win": win,
             "draw": draw,
+            # ``ttk`` is only a real time-to-kill when the opponent actually died.
+            # On a time-limit decision (or a defeat/draw) the match clock is logged
+            # instead, so analytics must filter on this flag.
+            "killed": bool(not second.body.alive),
             "ttk": self.elapsed,
             "distance": self._distance_between(),
             "shots_fired": first.shots_fired,

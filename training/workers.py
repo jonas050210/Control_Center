@@ -38,7 +38,7 @@ def cpu_core_counts() -> tuple[int, int]:
 
 
 def auto_worker_count(max_workers: int = 20) -> int:
-    """Leave one physical core available to Streamlit and the operating system."""
+    """Leave one physical core for the web server and the operating system."""
     physical, _ = cpu_core_counts()
     return max(1, min(int(max_workers), physical - 1 if physical > 1 else 1))
 
@@ -211,7 +211,7 @@ def run_benchmark_combo(
 
 
 class BenchmarkRunner:
-    """Thread-safe full benchmark runner used by the Streamlit dashboard."""
+    """Thread-safe full benchmark runner driven by the control center API."""
 
     def __init__(self, seconds_per_combo: float = 20.0, map_name: str = "Dust") -> None:
         self.seconds_per_combo = float(seconds_per_combo)

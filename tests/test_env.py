@@ -14,9 +14,9 @@ from env.map_io import load_map, map_from_json, save_map
 from env.maps import ArenaObject, MAP_NAMES, create_map
 from env.shooter_env import ACTION_NVECS, OBSERVATION_SIZE, ShooterEnv
 from env.weapons import WEAPON_NAMES, get_weapon
-from gui.tabs.ttk import simulate_duels
 from training.imitation import load_demo_data
 from training.rewards import RewardEvents, shape_reward
+from training.weapon_lab import simulate_duels
 from training.train import TrainingConfig, TrainingController
 from training.workers import (BenchmarkRunner, CPU_JOB_LOCK,
                               valid_benchmark_configurations)
@@ -73,6 +73,43 @@ class ShooterEnvironmentTests(unittest.TestCase):
         self.assertFalse(terminated or truncated)
         self.assertIn("reward_agent_2", info)
         self.assertEqual(len(env.get_observation(1)), OBSERVATION_SIZE)
+        env.close()
+
+    def test_time_limited_decision_is_not_reported_as_a_kill(self) -> None:
+        """``ttk`` is the match clock; only ``killed`` marks a real time-to-kill."""
+        env = ShooterEnv(max_episode_seconds=1.0, frame_skip=1, seed=23)
+        env.reset(seed=23)
+        terminated = truncated = False
+        info: dict = {}
+        for _ in range(200):
+            _, _, terminated, truncated, info = env.step_duel(env.heuristic_action(0),
+                                                             env.heuristic_action(1))
+            if terminated or truncated:
+                break
+        self.assertTrue(terminated or truncated)
+        metrics = info["episode_metrics"]
+        self.assertIn("killed", metrics)
+        self.assertFalse(metrics["killed"])
+        self.assertGreater(metrics["ttk"], 0.0)
+        env.close()
+
+    def test_kill_ends_the_episode_and_flags_the_kill(self) -> None:
+        env = ShooterEnv(max_episode_seconds=60.0, frame_skip=1, seed=7)
+        env.reset(seed=7)
+        opponent = env.opponent
+        opponent.body.hp = 1.0
+        opponent.body.x, opponent.body.y = env.player.body.x, env.player.body.y + 4.0
+        terminated = truncated = False
+        info: dict = {}
+        for _ in range(600):
+            _, _, terminated, truncated, info = env.step_duel(env.heuristic_action(0),
+                                                             env.heuristic_action(1))
+            if terminated or truncated:
+                break
+        self.assertTrue(terminated or truncated)
+        metrics = info.get("episode_metrics", {})
+        if metrics.get("win") and metrics.get("killed"):
+            self.assertGreater(metrics["ttk"], 0.0)
         env.close()
 
     def test_weapons_and_ammo_reload(self) -> None:

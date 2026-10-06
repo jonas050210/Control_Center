@@ -321,6 +321,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 self.wins: deque[float] = deque(maxlen=100)
                 self.episode_rewards: deque[float] = deque(maxlen=100)
                 self.ttks: deque[float] = deque(maxlen=100)
+                self.kill_ttks: deque[float] = deque(maxlen=100)
                 self.accuracies: deque[float] = deque(maxlen=100)
                 self.headshot_rates: deque[float] = deque(maxlen=100)
                 self.episode_count = 0
@@ -391,6 +392,8 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     reward = float(monitor_episode.get("r", 0.0))
                     self.episode_rewards.append(reward)
                     self.ttks.append(float(episode_metrics.get("ttk", 0.0)))
+                    if episode_metrics.get("killed"):
+                        self.kill_ttks.append(float(episode_metrics.get("ttk", 0.0)))
                     self.accuracies.append(float(episode_metrics.get("accuracy", 0.0)))
                     self.headshot_rates.append(float(episode_metrics.get("headshot_pct", 0.0)))
                     event = {**episode_metrics, "timestamp": datetime.now(timezone.utc).isoformat()}
@@ -420,7 +423,9 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 fps = max(0.0, (self.num_timesteps - self.base_timesteps) / elapsed)
                 win_rate = float(np.mean(self.wins)) if self.wins else 0.0
                 avg_reward = float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0
-                avg_ttk = float(np.mean(self.ttks)) if self.ttks else 0.0
+                # Time-to-kill only counts episodes that ended in a confirmed kill;
+                # time-limit decisions and defeats are excluded.
+                avg_ttk = float(np.mean(self.kill_ttks)) if self.kill_ttks else 0.0
                 accuracy = float(np.mean(self.accuracies)) if self.accuracies else 0.0
                 headshot_pct = float(np.mean(self.headshot_rates)) if self.headshot_rates else 0.0
                 progress = min(1.0, max(0.0, (self.num_timesteps - self.base_timesteps)
@@ -470,7 +475,9 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 fps = max(0.0, (self.num_timesteps - self.base_timesteps) / max(1e-6, elapsed))
                 win_rate = float(np.mean(self.wins)) if self.wins else 0.0
                 avg_reward = float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0
-                avg_ttk = float(np.mean(self.ttks)) if self.ttks else 0.0
+                # Time-to-kill only counts episodes that ended in a confirmed kill;
+                # time-limit decisions and defeats are excluded.
+                avg_ttk = float(np.mean(self.kill_ttks)) if self.kill_ttks else 0.0
                 accuracy = float(np.mean(self.accuracies)) if self.accuracies else 0.0
                 headshot_pct = float(np.mean(self.headshot_rates)) if self.headshot_rates else 0.0
                 final_metrics = {

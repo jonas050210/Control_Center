@@ -1,4 +1,8 @@
-"""Pure game-state helpers for small browser-playable RL training drills."""
+"""Pure game-state helpers for the browser-playable RL training drills.
+
+Moved verbatim from ``gui/games.py`` so the drills no longer depend on a UI
+framework: the state is a plain dictionary that the API serializes.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +31,7 @@ def new_dodge_game(seed: int | None = None) -> dict[str, Any]:
 
 
 def step_dodge_game(game: dict[str, Any], dx: int = 0, dy: int = 0) -> dict[str, Any]:
-    """Advance one dodge turn and mutate/return the session-state game object."""
+    """Advance one dodge turn and mutate/return the game object."""
     if not game.get("active", False):
         return game
     size = DODGE_GRID_SIZE
@@ -111,3 +115,30 @@ def aim_tap(game: dict[str, Any], cell: int, now: float | None = None) -> bool:
     game["misses"] += 1
     game["streak"] = 0
     return False
+
+
+def public_aim_game(game: dict[str, Any] | None, now: float | None = None) -> dict[str, Any] | None:
+    """Return a JSON-serializable aim-drill view (the RNG object is stripped)."""
+    if game is None:
+        return None
+    if now is None:
+        now = time.monotonic()
+    duration = float(game["duration"])
+    elapsed = max(0.0, now - float(game["started_at"]))
+    hits = int(game["hits"])
+    misses = int(game["misses"])
+    reactions = [float(value) for value in game["reaction_ms"]]
+    return {
+        "active": bool(game["active"]) and elapsed < duration,
+        "target": int(game["target"]),
+        "hits": hits,
+        "misses": misses,
+        "streak": int(game["streak"]),
+        "best_streak": int(game["best_streak"]),
+        "duration": duration,
+        "remaining": max(0.0, duration - elapsed),
+        "accuracy": hits / max(1, hits + misses),
+        "avg_reaction_ms": (sum(reactions) / len(reactions)) if reactions else 0.0,
+        "reaction_ms": reactions[-40:],
+        "seed": int(game["seed"]),
+    }

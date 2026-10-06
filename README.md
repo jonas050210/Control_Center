@@ -1,159 +1,139 @@
-# NEURAL ARENA v2.0
+# NEURAL ARENA · Control Center
 
-**NEURAL ARENA** is a headless 3D shooter training sandbox built with Gymnasium, Stable-Baselines3 PPO, and a cyberpunk-green Streamlit control center. Simulation and physics run in Python; all arena visuals are rendered in the browser with Plotly. It does not import Pygame, open a game window, or require X11/a display server, so it is suitable for WSL Ubuntu.
+Headless 3D-Shooter-Trainingssandbox (Gymnasium + Stable-Baselines3 PPO) mit einer
+eigenen Web-Oberfläche. **Simulation, Physik und Training laufen in Python; alle
+3D-Szenen und Diagramme rendert der Browser** (three.js/WebGL + Canvas 2D).
 
-## 1. WSL Ubuntu setup
+* Kein Streamlit, kein Plotly, kein pandas, kein Pygame, kein X11/Display nötig.
+* Läuft komplett offline, sobald `install.py` einmal durchgelaufen ist.
+* Entwickelt für WSL-Ubuntu mit CPU-Training; bedient wird über den Browser.
 
-Install Python build tools and create a virtual environment:
-
-```bash
-sudo apt update
-sudo apt install -y python3-venv python3-dev build-essential
-
-# Keep Python packages in WSL's Linux home instead of syncing a large .venv through OneDrive
-mkdir -p ~/.venvs
-python3 -m venv ~/.venvs/control-center
-source ~/.venvs/control-center/bin/activate
-python -m pip install --upgrade pip wheel
-```
-
-Now locate the checkout and `cd` into it. The folder name depends on how you got the code — `Control_Center` after `git clone`, `Control_Center-main` after extracting the GitHub ZIP — so don't guess the path:
+## 1. Schnellstart
 
 ```bash
-# Find the repository, then cd into the folder it prints
-find /mnt/c/Users -maxdepth 7 -type d -iname "Control_Center*" 2>/dev/null
-cd "/mnt/c/Users/Jonas/OneDrive/Desktop/Control_Center-main"   # <- paste the real path from above
-ls requirements.txt   # must succeed: every command below runs from the repository root
+cd /pfad/zu/Control_Center
+python3 install.py        # legt .venv an, installiert alles, lädt die Web-Assets
+python3 start.py          # startet den Server und öffnet den Browser
 ```
 
-This project trains PPO on the CPU to leave the RTX 4060 Ti available for other work. For a smaller CPU-only PyTorch install, install that wheel before the rest of the requirements:
+`install.py` und `start.py` sind eigenständige Skripte ohne Fremdabhängigkeiten:
+Sie laufen mit dem System-Python und wechseln danach automatisch in `.venv`.
+
+Danach läuft das Control Center unter **http://127.0.0.1:8501**.
+Beenden mit **STRG+C**.
+
+### Optionen
 
 ```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install -r requirements.txt
+python3 install.py --skip-torch      # ohne PyTorch/SB3 (kein PPO-Training)
+python3 install.py --no-venv         # in den aktuellen Interpreter installieren
+python3 install.py --force-assets    # three.js erneut herunterladen
+python3 install.py --remove-legacy   # Streamlit/Plotly/pandas ohne Rückfrage löschen
+python3 install.py --keep-legacy     # nicht nach dem Aufräumen von Altlasten fragen
+
+python3 start.py --port 8600         # anderer Port (belegte Ports werden übersprungen)
+python3 start.py --host 0.0.0.0      # Zugriff aus Windows/LAN erlauben
+python3 start.py --no-browser        # Browser nicht automatisch öffnen
+python3 start.py --reload            # Auto-Reload für die Entwicklung
 ```
 
-Run the dashboard from the repository root:
+## 2. WSL-Ubuntu Hinweise
 
 ```bash
-streamlit run gui/app.py --server.address 127.0.0.1 --server.port 8501
+sudo apt update && sudo apt install -y python3-venv python3-dev build-essential
 ```
 
-Open **http://localhost:8501** in the Windows desktop browser. The project is intended to run on the local PC through WSL Ubuntu; it does not open a separate game window or need Pygame/X11. No public hosting or remote game service is required.
+* **Browser öffnen:** `start.py` erkennt WSL und nutzt `wslview`, `cmd.exe` bzw.
+  `powershell.exe`, um die Seite im Windows-Browser zu öffnen. Klappt das nicht,
+  einfach die angezeigte URL manuell aufrufen – die Ausgabe nennt sie immer.
+* **Speicherort:** Das Projekt darf unter `/mnt/c/...` liegen; die virtuelle
+  Umgebung `.venv` gehört in das Projektverzeichnis oder nach `~/.venvs`
+  (nichts, was durch OneDrive synchronisiert wird).
+* **Windows-Firewall:** Mit `--host 0.0.0.0` ist der Server aus Windows erreichbar;
+  Windows fragt ggf. nach einer Freigabe für Python.
+* **GPU:** Das Training läuft bewusst auf der CPU (`install.py` installiert das
+  CPU-Wheel von PyTorch), damit die GPU für andere Arbeit frei bleibt.
 
-## 2. Project layout
+## 3. Panels
+
+| Panel | Zweck |
+| --- | --- |
+| 🎮 ARENA | Zwei Kämpfer im Duell: Bots, trainierte Policies oder der Mensch steuern einen Agenten, Live-3D, Trails, Trefferzonen. |
+| 🔫 PLAYGROUND | Freies Üben mit Tastatursteuerung (inkl. Springen, Ducken, Sprinten, Lean), Trefferstatistik und Demo-Aufzeichnung für Imitation Learning. |
+| 🏋️ TRAINING | PPO-Training im Hintergrund-Thread: Start/Pause/Resume/Stop, Checkpoints, Curriculum-Phasen, Live-Metriken. |
+| 📊 STATS | Kennzahlen aus `logs/`: FPS, Reward, Win-Rate, Kill-TTK, Headshots, Waffen-/Gegner-Verteilung. |
+| 🔧 BENCHMARK | 20-Sekunden-Durchsatztest über alle gültigen CPU-Konfigurationen (`workers × envs`), Ergebnis-Ranking. |
+| 🎯 TTK-TESTER | Time-to-Kill-Simulation über Waffen, Distanzen und Trials inkl. Lua-Export für Roblox. |
+| 🗺️ MAPS | Sechs Karten ansehen, Randomisieren, Deckung platzieren/löschen, Custom Map importieren/exportieren. |
+| 🔥 HEATMAP | Kill-/Death-Zonen pro Karte, gefiltert nach Waffe, Episode und Distanz. |
+
+Dazu die kleinen Panels für Statushinweise: Kopfzeile mit Server-/Trainingsstatus.
+
+## 4. Projektstruktur
 
 ```text
 .
+├── install.py              # Einrichtung: venv, Pakete, Web-Assets, Selbsttest
+├── start.py                # Start: uvicorn, Browser öffnen, WSL-Erkennung
+├── requirements.txt        # Laufzeit (Simulation + Backend)
+├── requirements-training.txt  # optional: PyTorch (CPU) + Stable-Baselines3
 ├── env/
-│   ├── shooter_env.py      # Gymnasium 3D duel, MultiDiscrete actions, normalized observations
-│   ├── weapons.py          # Six weapon classes and reload/ammo/recoil mechanics
-│   ├── maps.py             # Six 3D maps, cover objects, randomization, spawn points
-│   ├── map_io.py           # Validated, atomic Custom-map JSON import/export
-│   └── physics.py          # Movement, stance, gravity, collision, ray casting
+│   ├── shooter_env.py      # Gymnasium-Umgebung: Duell, MultiDiscrete-Aktionen, 31er-Observation
+│   ├── weapons.py          # sechs Waffen mit Magazin, Reload, Rückstoß
+│   ├── maps.py             # sechs Karten, Deckung, Spawns, Randomisierung
+│   ├── map_io.py           # validierter, atomarer Custom-Map-Import/-Export
+│   └── physics.py          # Bewegung, Stance, Gravitation, Kollision, Raycast
 ├── training/
-│   ├── train.py            # Background-thread PPO, 4-phase curriculum, self-play/checkpoints
-│   ├── workers.py          # CPU worker selection, VecEnv setup, 20-second benchmark runner
-│   ├── rewards.py          # Auditable reward shaping components
-│   └── imitation.py        # Behavior cloning and raw-terminal demonstration recorder
-├── gui/
-│   ├── app.py              # Streamlit navigation and session setup
-│   ├── common.py           # Shared theme, paths, and session helpers
-│   ├── games.py            # Aim-drill and dodge-survival state logic
-│   ├── visuals.py          # Batched, low-poly Plotly 3D scenes and procedural detail
-│   ├── style.css           # Neon-green cyberpunk theme
-│   └── tabs/               # Arena, human Playground, training, stats, benchmark, TTK, maps, heatmap
-├── data/demos.csv          # Small starter set of valid state/action examples
-├── models/                 # PPO/BC checkpoints are written here at runtime
-├── logs/                   # Training and episode heatmap CSV logs are written here
-├── tests/test_env.py       # Headless Gymnasium and reward contract smoke tests
-├── tests/test_games.py     # Aim, dodge, and human-control tests
-├── tests/test_playground_ui.py  # Headless Streamlit control smoke test
-├── tests/test_visuals.py   # 3D scene detail and WebGL trace-budget tests
-└── requirements.txt
+│   ├── train.py            # PPO im Hintergrund-Thread, Curriculum, Checkpoints, CSV-Logging
+│   ├── workers.py          # CPU-Kernwahl, VecEnv-Aufbau, Benchmark-Runner, CPU-Job-Lock
+│   ├── rewards.py          # nachvollziehbares Reward-Shaping
+│   ├── imitation.py        # Behavior Cloning aus aufgezeichneten Demos
+│   └── weapon_lab.py       # TTK-Simulation + Lua-Export
+├── server/                 # FastAPI-Backend (JSON-API, hält den gesamten Zustand)
+│   ├── app.py              # Routen
+│   ├── state.py            # Session-Zustand, Arena-/Playground-/Trainingssteuerung
+│   ├── scene.py            # Szenen- und Frame-Payloads für den Renderer
+│   ├── analytics.py        # Stats, Heatmap, Benchmark-Aufbereitung
+│   ├── minigames.py        # Aim-Driller und Dodge-Grid
+│   ├── actions.py          # Tastenzuordnung → Aktionsvektor
+│   ├── policies.py         # Modell-Cache für trainierte Checkpoints
+│   └── config.py           # Pfade, Presets, Abhängigkeitsstatus
+├── web/                    # Frontend ohne Build-Schritt (ES-Module)
+│   ├── index.html          # Importmap auf web/vendor/three.module.min.js
+│   ├── css/style.css       # Cyberpunk-Grün-Palette
+│   ├── js/
+│   │   ├── scene.js        # Arena3D: three.js-Renderer für Matches, Maps, Zielscheiben, Dodge
+│   │   ├── charts.js       # Canvas-2D-Diagramme (ersetzt Plotly)
+│   │   ├── app.js          # Navigation, Panels, Toasts, Statuspoller
+│   │   └── panels/*.js     # acht Panels
+│   └── vendor/             # three.js (von install.py geladen, CDN als Fallback)
+├── data/demos.csv          # Start-Datensatz für Imitation Learning (41 Spalten)
+├── models/                 # Checkpoints (*.zip) und best_model.json
+├── logs/                   # training_metrics.csv, heatmap_events.csv
+└── tests/                  # unittest-Suite, headless (ohne Browser/GPU)
 ```
 
-## 3. Environment contract
-
-`env.shooter_env.ShooterEnv` is a Gymnasium environment compatible with SB3 PPO and Gymnasium's five-value `step()` API. One policy plays Agent 1 against a scripted opponent. `step_duel(action_a, action_b)` is available for browser-side policy-versus-policy matches.
-
-- **Action space:** `MultiDiscrete([3, 3, 3, 3, 2, 2, 3, 3, 2, 2])`. In order: forward/back, strafe, yaw, pitch, shoot, sprint, stand/crouch/prone, lean, jump, reload. Controls can be combined in one action.
-- **Observation space:** 31 `float32` values clipped to `[-1, 1]`: own/enemy 3D positions and rotations, distance and aim angles, eight ray distances, both health values, magazine/ammo values, movement/stance/air state, and shot/reload timers.
-- **Physics:** 60 Hz, four physics frames per policy action by default, vertical gravity and jumps, walkable ramps/upper floors, AABB cover collision, cylinder hitboxes, spread raycasts, upper-20%-of-hitbox headshots, and distance falloff.
-- **Episodes:** end on a fighter's death or truncate at 120 simulated seconds. `reset()` returns `(observation, info)` and `step()` returns `(observation, reward, terminated, truncated, info)`.
-- **Maps:** Dust, Warehouse, Highrise, Arena, Sniper Alley, and an empty Custom sandbox. Cover is data-driven and can be randomized or edited in the Maps tab.
-- **Weapons:** Pistol, SMG, AK-47, Shotgun (10 pellet rays), Sniper, and LMG.
-
-Quick smoke test after installing dependencies:
+## 5. Tests
 
 ```bash
-python - <<'PY'
-from env.shooter_env import ShooterEnv
-
-env = ShooterEnv(map_name="Dust", seed=7)
-obs, info = env.reset()
-print("observation:", obs.shape, obs.min(), obs.max(), info)
-for _ in range(10):
-    obs, reward, terminated, truncated, info = env.step(env.action_space.sample())
-    if terminated or truncated:
-        obs, info = env.reset()
-print("headless environment OK")
-env.close()
-PY
-
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v      # 56 Tests in unter einer Sekunde
 ```
 
-The unit suite includes map JSON validation, sample-demo checks, reward and worker-lock tests, deterministic mini-game checks, headless Playground AppTests, and 3D scene/trace-budget checks (including 400 props rendered in one mesh). The one-rollout PPO integration test runs automatically when both Stable-Baselines3 and PyTorch are installed; otherwise it is reported as skipped.
+Die Suite deckt Umgebung/Physik, Karten-JSON, Rewards, Minigames, TTK-Simulation,
+den CPU-Job-Lock, alle API-Routen (FastAPI `TestClient`), Szenen-Payloads und die
+Analytics-Aufbereitung ab. Das PPO-Integrationstest läuft nur mit installiertem
+Stable-Baselines3 und wird sonst übersprungen.
 
-## 4. PPO training
+## 6. API
 
-Open **TRAINING** in the dashboard to select duration, workers, environments per worker, curriculum/self-play, map, and training method. PPO executes in a daemon worker thread, so Streamlit stays responsive. Stop and pause requests are checked at vector steps; worker environments are closed in the training thread's `finally` path.
+Alles, was die Oberfläche tut, geht über JSON-Routen unter `/api/...`
+(u. a. `/api/health`, `/api/meta`, `/api/arena/*`, `/api/playground/*`,
+`/api/training/*`, `/api/stats`, `/api/heatmap`, `/api/benchmark/*`,
+`/api/ttk/simulate`, `/api/maps/*`). Die interaktive Dokumentation liefert
+**http://127.0.0.1:8501/api/docs** (Swagger UI von FastAPI).
 
-The default PPO setup uses CPU, linear learning-rate decay from `3e-4`, `n_steps=2048`, batch size 256, 10 epochs, `gamma=0.99`, `gae_lambda=0.95`, `clip_range=0.2`, and `ent_coef=0.01`. Observation/reward normalization is applied with `VecNormalize` and saved alongside a model. Worker auto-detection leaves a physical core available; the dashboard caps the environment pool at 24 processes for the target 12-core CPU. A process-wide CPU-job lock prevents a full benchmark and PPO run from saturating the same machine simultaneously.
+## 7. Aufräumen / Analyse
 
-Curriculum phases progress with training timesteps:
-
-1. Stationary pistol opponent and pistol-only aiming.
-2. Slow-moving SMG opponent for tracking.
-3. AK-47 opponent returns fire for dodge learning.
-4. Full scripted opponent and randomized weapons. If self-play is enabled, the phase-three/best actor is exported as a frozen NumPy MLP and installed in workers without importing a renderer or opening a window.
-
-A rolling win-rate improvement at each 50,000-step check updates `models/best_model.zip` and `models/best_model_vecnormalize.pkl`; the prior best is overwritten rather than retaining unscored snapshots. **Save Checkpoint** creates a timestamped manual checkpoint. Training telemetry is appended to `logs/training_metrics.csv`, and episode events to `logs/heatmap_events.csv`.
-
-Resume a policy with **Resume Checkpoint**. The normalizer sidecar is loaded automatically when it is present next to the `.zip` model.
-
-## 5. Imitation learning and recording
-
-The repository includes a small starter dataset at `data/demos.csv`. Selecting **Imitation → RL** trains a 31-input categorical MLP on the training thread if `models/behavior_clone.pt` does not exist, then copies its actor weights into PPO for fine-tuning.
-
-Train the clone separately:
-
-```bash
-python -m training.imitation train --input data/demos.csv --output models/behavior_clone.pt --epochs 80
-```
-
-Record additional examples from an interactive WSL terminal (not a display server):
-
-```bash
-python -m training.imitation record --map Dust --weapon Pistol --output data/demos.csv
-```
-
-Recorder keys: **W/S** forward/back, **A/D** strafe, **J/L** yaw, **I/K** pitch, **Space** fire, **X** sprint, **C** crouch, **P** prone, **B/N** lean, **R** reload, and **Q** quit. The CSV stores one normalized state and discrete action per policy step.
-
-## 6. Dashboard tabs
-
-- **ARENA:** select map, weapons, and optional saved PPO policies; start/pause/reset/step matches; inspect low-poly 3D fighters, detailed cover, HP, facing and grouped bullet trails. Choose Performance, Balanced, or Ultra scene detail.
-- **PLAYGROUND:** fight a Gymnasium bot or saved PPO `.zip` policy using desktop controls for movement, aim, fire, reload, stance and sprint; rotate the 3D scene with the mouse. Includes a detailed 3D target gallery, 3D projectile-dodge arena, selectable graphics quality, and downloadable human imitation demonstrations.
-- **TRAINING:** background PPO controller, progress, metrics, live worker log, pause/stop, and checkpoint controls.
-- **STATS:** reward/win-rate curves, TTK and weapon-use charts, CPU and RAM monitor.
-- **BENCHMARK:** measures every valid worker × envs-per-worker pair from the requested matrix, skipping products above 24. Each case has a 20-second stepping window after its worker pool starts. The best throughput can be copied to the Training controls.
-- **TTK-TESTER:** tune two weapons, simulate 1,000–100,000 duels, inspect win rate/TTK/accuracy/DPS, and copy a Roblox Lua weapon table.
-- **MAPS:** shaded 3D cover preview with a detail preset, map stats, random cover generation, Custom object editing, and validated JSON import/export. The Custom layout autosaves locally to `data/custom_map.json` and is reused by Arena and training.
-- **HEATMAP:** filter completed episodes by map, weapon, distance, and episode range; deaths are red, unrecorded/safe areas green, and kill zones yellow.
-
-All Plotly figures explicitly use the `#0a0a0a` / `#141414` dark palette and neon-green typography. The Streamlit session state stores navigation choices, match state, benchmark/training controllers, and browser-side episode events.
-
-## 7. Runtime files
-
-Model binaries and run logs are generated at runtime under `models/` and `logs/`; the editable Custom layout is saved locally as `data/custom_map.json`. These runtime artifacts are git-ignored. The included starter demo CSV is tracked so the imitation path is usable immediately after dependency installation.
+`ANALYSE.md` enthält die Deep-Analyse des Projekts: was erledigt ist, welche
+Bugs gefunden wurden, was als Nächstes sinnvoll ist und was gelöscht werden darf
+(z. B. noch installierte Streamlit-/Plotly-/pandas-Reste).
