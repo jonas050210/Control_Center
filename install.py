@@ -56,6 +56,8 @@ class Installer:
         self.args = args
         self.python = Path(args.python) if args.python else Path(sys.executable)
         self.steps: list[str] = []
+        # None = not attempted (--skip-torch), otherwise the result of the step.
+        self.torch_installed: bool | None = None
 
     # -------------------------------------------------------------- reporting
     def log(self, message: str) -> None:
@@ -97,14 +99,23 @@ class Installer:
         self.python = python
         return self.python
 
-    def run(self, command: list[str], *, quiet: bool = False) -> None:
+    def run(self, command: list[str], *, quiet: bool = False, strict: bool = True) -> bool:
+        """Run a command; with ``strict=False`` a failure only warns.
+
+        Optional steps (PyTorch, the training stack) must not abort the whole
+        installation – the app itself runs without them.
+        """
         pretty = " ".join(str(part) for part in command)
         self.log(f"$ {pretty}")
         result = subprocess.run(command, cwd=PROJECT_ROOT,
                                 stdout=subprocess.DEVNULL if quiet else None,
                                 stderr=subprocess.STDOUT if quiet else None)
-        if result.returncode != 0 and not quiet:
-            self.fail(f"Befehl fehlgeschlagen: {pretty}")
+        if result.returncode != 0:
+            if strict:
+                self.fail(f"Befehl fehlgeschlagen: {pretty}")
+            self.warn(f"Schritt fehlgeschlagen (wird übersprungen): {pretty}")
+            return False
+        return True
 
     def upgrade_pip(self) -> None:
         self.run([str(self.python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"])
@@ -112,6 +123,7 @@ class Installer:
     def install_requirements(self) -> None:
         """Install the runtime requirements, plus the optional PPO training stack."""
         if self.args.skip_torch:
+            self.torch_installed = False
             self.log("--skip-torch: PyTorch/Stable-Baselines3 werden ausgelassen (kein PPO-Training).")
             if REQUIREMENTS.exists():
                 self.run([str(self.python), "-m", "pip", "install", "-r", str(REQUIREMENTS)])
@@ -119,11 +131,22 @@ class Installer:
                 self.run([str(self.python), "-m", "pip", "install", *CORE_REQUIREMENTS])
             return
         self.log("Installiere PyTorch als CPU-Wheel (kleiner als das CUDA-Paket) …")
-        self.run([str(self.python), "-m", "pip", "install", "torch", "--index-url", TORCH_CPU_INDEX])
-        if TRAINING_REQUIREMENTS_FILE.exists():
-            self.run([str(self.python), "-m", "pip", "install", "-r", str(TRAINING_REQUIREMENTS_FILE)])
+        torch_ok = self.run(
+            [str(self.python), "-m", "pip", "install", "torch", "--index-url", TORCH_CPU_INDEX],
+            strict=False,
+        )
+        self.torch_installed = bool(torch_ok)
+        if torch_ok:
+            if TRAINING_REQUIREMENTS_FILE.exists():
+                self.run([str(self.python), "-m", "pip", "install", "-r", str(TRAINING_REQUIREMENTS_FILE)],
+                         strict=False)
+            else:
+                self.run([str(self.python), "-m", "pip", "install", *TRAINING_REQUIREMENTS], strict=False)
         else:
-            self.run([str(self.python), "-m", "pip", "install", *TRAINING_REQUIREMENTS])
+            self.warn(
+                "PyTorch konnte nicht installiert werden (kein Netz zu download.pytorch.org?). "
+                "Das Control Center läuft ohne PPO-Training weiter; später erneut versuchen."
+            )
         if REQUIREMENTS.exists():
             self.log(f"Installiere Laufzeit-Abhängigkeiten aus {REQUIREMENTS.name} …")
             self.run([str(self.python), "-m", "pip", "install", "-r", str(REQUIREMENTS)])
@@ -240,7 +263,15 @@ class Installer:
             self.warn(f"Fehlende Pakete: {missing}. install.py erneut ohne --skip-torch ausführen.")
         else:
             self.log("Alle Kernpakete importierbar.")
-        self.log(f"PPO-Training verfügbar: {'ja' if training else 'nein (--skip-torch?)'}")
+        if training:
+            self.log("PPO-Training verfügbar: ja")
+        elif self.torch_installed is False and not self.args.skip_torch:
+            self.warn(
+                "PPO-Training nicht verfügbar: PyTorch/Stable-Baselines3 fehlen. "
+                "Meist war download.pytorch.org nicht erreichbar – install.py später erneut ausführen."
+            )
+        else:
+            self.log("PPO-Training verfügbar: nein (mit --skip-torch installiert)")
 
         smoke = (
             "from env.shooter_env import ShooterEnv;"
