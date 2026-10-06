@@ -324,6 +324,28 @@ class CurriculumOpponentTests(unittest.TestCase):
         self.assertNotIn("mover", {"walker", "shooter", "full"})
 
 
+class CurriculumBacktrackTests(unittest.TestCase):
+    """A phase that only produces defeats must be undone, not endured."""
+
+    def test_phase_is_undone_after_a_collapse(self) -> None:
+        from training.train import curriculum_backtrack_needed
+
+        self.assertTrue(curriculum_backtrack_needed(
+            current_phase=3, episodes_in_phase=45, recent_kill_rate=0.0, gate=0.25))
+        self.assertTrue(curriculum_backtrack_needed(
+            current_phase=2, episodes_in_phase=40, recent_kill_rate=0.11, gate=0.25))
+
+    def test_healthy_phase_and_first_phase_are_kept(self) -> None:
+        from training.train import curriculum_backtrack_needed
+
+        self.assertFalse(curriculum_backtrack_needed(
+            current_phase=1, episodes_in_phase=200, recent_kill_rate=0.0, gate=0.25))
+        self.assertFalse(curriculum_backtrack_needed(
+            current_phase=3, episodes_in_phase=20, recent_kill_rate=0.0, gate=0.25))
+        self.assertFalse(curriculum_backtrack_needed(
+            current_phase=3, episodes_in_phase=80, recent_kill_rate=0.3, gate=0.25))
+
+
 class DemoArchiveTests(unittest.TestCase):
     """Demos recorded with another layout must never be silently mixed."""
 

@@ -218,11 +218,45 @@ Kill-Gates nicht mehr erreicht hat. Deshalb bewertet die automatische Auswertung
 jetzt **beide** Modelle: den besten Checkpoint unter seiner eigenen Wahrnehmung
 und das Endmodell unter der Ziel-Wahrnehmung (`evaluation.target` im Panel).
 
-**Nebenbei gefunden und behoben:** die automatische Bewertung starb am Ende des
-Laufs am Prozess-Abbruch beim Aufräumen der Worker (`SIGABRT`, kein Python-Fehler)
-und hinterließ **keinen** Bericht. Der Bericht wird jetzt nach **jedem** Gegner
-geschrieben und in den Job-Snapshot geschoben; außerdem wird `final_model.zip`
-immer gespeichert (vorher nur, wenn kein „Bestes Modell" existierte).
+### Runde 4: der Trainer lernt mit der ehrlichen Sicht (der eigentliche Beleg)
+
+Der entscheidende Lauf dieser Runde trainiert **von der ersten Episode an mit
+`coarse_los`** (Sektor, Band, Deckung, Gedächtnis – keine Koordinaten, kein
+`noisy`-Vortraining). Ergebnis nach 32 000 Steps: Kill-Rate **60 %** (Fenster der
+letzten 50 Episoden), 76 % Siege – und die unabhängige Nachmessung mit
+`tools/evaluate_policy.py` auf dem gespeicherten Checkpoint:
+
+| Bedingung (Phase 1, 9 m, Pistol vs Pistol, `coarse_los`) | Ergebnis |
+| --- | --- |
+| Gegner `stationary` | **20/20 Siege, davon 12 mit bestätigtem Kill**, TTK 20,6 s, Trefferquote 19,5 %, 24 % blinde Frames |
+| Gegner `mover` (läuft, schießt nicht) | **20/20 Siege**, 0 Niederlagen |
+
+Das ist der Beweis, der in Runde 3 noch fehlte: **mit der ehrlichen Wahrnehmung
+entstehen echte Kills.** Vorher hatte ich nur ein mit `noisy` trainiertes Netz
+unter `coarse_los` gemessen (0 Kills) – der Unterschied war das Training, nicht
+die Wahrnehmung.
+
+**Die verbleibende Bruchstelle ist die Gegenwehr.** Beide Läufe dieser Runde
+brechen ein, sobald das Curriculum auf die nächste Stufe schaltet, in der der Bot
+zurückschießt: ab ~130k Steps fällt die Siegrate auf 0 %, die Episoden werden
+~4,5 s kurz, und der Lauf erholt sich im restlichen Budget nicht mehr
+(≈2 000 Episoden ohne Sieg). Zwei Konsequenzen sind umgesetzt:
+
+* **Curriculum mit Rücknahme**: Steigt die Phase auf, wird nach 40 Episoden
+  geprüft; liegt die Kill-Rate unter der Hälfte der Schwelle, geht der Lauf eine
+  Phase zurück und verlangt für den nächsten Versuch 10 Prozentpunkte mehr
+  (`curriculum_backtrack_needed`, eigene Tests). Eine Phase, die nur Niederlagen
+  produziert, wird nicht mehr bis zum Budgetende durchgehalten.
+* **Status erst nach der Prüfung**: `complete` wird erst gesetzt, wenn die
+  automatische Bewertung durch ist. Vorher beendeten Clients (und mein
+  Mess-Harness) den Prozess genau dann, wenn „fertig" dastand – die Bewertung
+  wurde abgeschnitten und der Bericht fehlte (der `SIGABRT` am Ende war die Folge,
+  nicht die Ursache).
+
+**Zusätzlich abgesichert:** der Bewertungsbericht wird nach **jedem** Gegner auf
+die Platte geschrieben und in den Job-Snapshot geschoben, `final_model.zip` wird
+immer gespeichert (vorher nur, wenn kein „Bestes Modell" existierte). Eine
+abgebrochene Prüfung hinterlässt damit Teilergebnisse statt gar nichts.
 
 **Kosten/Hinweis:**
 früher (weniger Information). Empfehlung: mit `noisy`/`coarse` vortrainieren, dann

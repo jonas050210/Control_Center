@@ -282,6 +282,20 @@ def _append_csv(path: Path, fieldnames: list[str], row: dict[str, Any], lock: th
             writer.writerow(row)
 
 
+def curriculum_backtrack_needed(*, current_phase: int, episodes_in_phase: int,
+                                recent_kill_rate: float, gate: float,
+                                min_episodes: int = 40) -> bool:
+    """Whether the curriculum should undo a phase that cannot be won.
+
+    Measured twice: after the scripted opponent started shooting back, both runs
+    collapsed to 0 % wins with ~4 s episodes and never recovered within the
+    budget. A curriculum that cannot step back throws a working policy away.
+    """
+    if current_phase <= 1 or episodes_in_phase < min_episodes:
+        return False
+    return recent_kill_rate < gate / 2.0
+
+
 def _checkpoint_metadata(checkpoint: Path) -> dict[str, Any]:
     """Read the sidecar stamp of a checkpoint (empty dict when there is none)."""
     meta_path = checkpoint.with_name(f"{checkpoint.stem}_meta.json")
@@ -556,6 +570,10 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 self.best_seen_kill = self.best_kill_rate
                 self.last_best_episode = 0
                 self.vision_mode = config.vision_mode
+                # Curriculum state: the gate currently in force and the episode
+                # count when the running phase started (both drive the step-back).
+                self.phase_gate = config.curriculum_min_win_rate
+                self.phase_enter_episode = 0
                 self.metric_fields = [
                     "timestamp", "steps", "fps", "episodes", "win_rate", "avg_reward",
                     "avg_ttk", "headshot_pct", "accuracy", "elapsed", "map",
@@ -630,7 +648,46 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 recent = list(self.kill_wins)[-30:]
                 if len(recent) < 20:
                     return False
-                return float(np.mean(recent)) >= config.curriculum_min_win_rate
+                return float(np.mean(recent)) >= self.phase_gate
+
+            def _curriculum_backtrack(self) -> bool:
+                """Undo a phase that only produces defeats.
+
+                Measured twice: after the opponent started shooting back (phase 3),
+                both runs collapsed to 0 % wins with ~4 s episodes and never
+                recovered inside the budget. A curriculum that cannot step back
+                throws away a working policy, so the run returns to the last phase
+                it could beat and asks for a *higher* kill rate before retrying.
+                """
+                if not config.curriculum:
+                    return False
+                if not curriculum_backtrack_needed(
+                    current_phase=self.current_phase,
+                    episodes_in_phase=self.episode_count - self.phase_enter_episode,
+                    recent_kill_rate=self._recent_kill_rate(),
+                    gate=self.phase_gate,
+                ):
+                    return False
+                back = self.current_phase - 1
+                self.phase_gate = min(0.8, self.phase_gate + 0.1)
+                self.current_phase = back
+                self.phase_enter_episode = self.episode_count
+                job.log(
+                    f"Curriculum step back to phase {back}/4: only "
+                    f"{self._recent_kill_rate():.1%} confirmed kills since the switch "
+                    f"(gate for the next attempt: {self.phase_gate:.0%})."
+                )
+                if config.vision_curriculum:
+                    self.vision_mode = vision_mode_for_phase(back, config.vision_mode)
+                    try:
+                        self.training_env.env_method("set_vision_mode", self.vision_mode)
+                    except Exception as exc:
+                        job.log(f"Could not update one or more perception models: {exc}")
+                try:
+                    self.training_env.env_method("set_curriculum_phase", back)
+                except Exception as exc:
+                    job.log(f"Could not update one or more environment phases: {exc}")
+                return True
 
             def _phase_from_progress(self) -> int:
                 if not config.curriculum:
@@ -690,6 +747,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                     phase = self.current_phase
                 if phase != self.current_phase:
                     self.current_phase = phase
+                    self.phase_enter_episode = self.episode_count
                     if config.vision_curriculum:
                         self.vision_mode = vision_mode_for_phase(phase, config.vision_mode)
                         try:
@@ -705,6 +763,8 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                         job.log(f"Could not update one or more environment phases: {exc}")
                     if phase == 4 and config.self_play:
                         self._activate_self_play()
+                else:
+                    self._curriculum_backtrack()
 
                 if job.save_requested.is_set():
                     job.save_requested.clear()
@@ -904,10 +964,7 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
             reset_num_timesteps=resume_path is None,
             progress_bar=False,
         )
-        if job.stop_event.is_set():
-            job.update(status="stopped")
-        elif job.snapshot()["status"] != "complete":
-            job.update(status="complete")
+        stopped = job.stop_event.is_set()
         final_metrics = dict(job.snapshot()["metrics"])
         final_metrics["timesteps"] = int(model.num_timesteps)
         if callback.started_at:
@@ -923,8 +980,12 @@ def train_ppo(config: TrainingConfig, job: TrainingController) -> None:
                 callback._save_checkpoint("final", force=True)
             except Exception as exc:
                 job.log(f"Final checkpoint could not be written: {exc}")
-        if config.eval_after_training:
+        if config.eval_after_training and not stopped:
+            # The status only flips to "complete" after the verification, so a
+            # client that stops watching on "complete" cannot miss the report (and
+            # the panel shows the run as busy while the checkpoint is playing).
             _evaluate_best_checkpoint(config, job)
+        job.update(status="stopped" if stopped else "complete")
     finally:
         if vec_env is not None:
             vec_env.close()

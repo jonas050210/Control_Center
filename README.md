@@ -201,15 +201,23 @@ pro Episode und prüft den `observation_version`-Stempel des Checkpoints. Mit
 `--phase 1..4` die Curriculum-Bedingungen (Abstand) nachstellen, unter denen ein
 Checkpoint trainiert wurde. Mehrere Seeds vergleicht `tools/seed_sweep.py`.
 
-Gemessen auf dieser Maschine (CPU, 2 Worker, 250k-Steps-Lauf, Dust): Zufallspolitik
-0/20 Siege. Der beste Checkpoint eines 10-Minuten-Laufs (Phase 1, `noisy`
-Sicht-Curriculum, `norm_obs=False`) gewinnt gegen den passiven Gegner
-**20/20 Episoden, alle mit bestätigtem Kill, TTK 14,3 s** (Trefferquote 67,6 %) und
-verliert gegen den beweglichen `mover` kein einziges (15 Siege, 2 Kills,
-5 Unentschieden). Unter der **Ziel-Wahrnehmung `coarse_los`** (Sektor + Deckung,
-ohne Training in diesem Modus) bleiben es 17/20 Siege, aber **0 Kills**: die
-ehrliche Wahrnehmung braucht eigenes Training – dafür sind die Phasen 3/4 des
-Sicht-Curriculums da. Details, Zahlen und Grenzen: ANALYSE.md § 0.
+Gemessen auf dieser Maschine (CPU, 2 Worker, Dust, `norm_obs=False`,
+`tools/evaluate_policy.py` als unabhängige Nachmessung):
+
+* Zufallspolitik: 0/20 Siege.
+* **Mit der ehrlichen Wahrnehmung `coarse_los` von Anfang an trainiert**: der
+  beste Checkpoint eines 10-Minuten-Laufs (Phase 1, 9 m, Pistol) gewinnt gegen
+  den passiven Gegner **20/20 Episoden, davon 12 mit bestätigtem Kill**
+  (TTK 20,6 s, Trefferquote 19,5 %, 24 % blinde Frames) und **20/20 gegen den
+  beweglichen `mover`** – ohne dass die AI je eine Gegnerkoordinate gesehen hat.
+* Ein mit der *vergebenden* Wahrnehmung (`noisy`) trainiertes Netz erreicht unter
+  `coarse_los` zwar 17/20 Siege, aber **0 Kills**: die ehrliche Wahrnehmung
+  braucht ihr eigenes Training – genau das macht der Lauf oben.
+
+Die verbleibende Bruchstelle ist die Gegenwehr (Phase 3): dort bricht die Politik
+in beiden Läufen ein. Deshalb geht das Curriculum jetzt **einen Schritt zurück**,
+wenn eine Phase nur Niederlagen produziert, und verlangt für den nächsten Versuch
+mehr. Details, Zahlen und Grenzen: ANALYSE.md § 0.
 
 Zwei Details, die beim Nachprüfen wichtig sind:
 
